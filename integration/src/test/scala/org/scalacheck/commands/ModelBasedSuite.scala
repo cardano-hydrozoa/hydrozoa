@@ -154,6 +154,7 @@ final class AnyCommand[State, Sut](
     /** Advances the model state (the Result half of runState is erased). */
     val advanceState: State => State,
     /** Time delay to advance before running. */
+    // TODO: this is used in SUT but comes from CommandModel instance which is misleading
     val delay: FiniteDuration,
     /** Runs the command and returns a postcondition predicate over the state *before* the command
       * ran.
@@ -289,6 +290,14 @@ trait ModelBasedSuite {
     /** A custom command generator modificator like resize or something like that (noop by default).
       */
     def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] => (g: Gen[A]) => g
+
+    /** Hook fired once per test case after the command sequence has been generated and before SUT
+      * startup. The default implementation logs the flat command sequence with cumulative time;
+      * suites can override to print extra diagnostics (e.g. a per-peer command table) and may call
+      * `super.onTestCaseGenerated(...)` to keep the default log alongside their own.
+      */
+    def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): IO[Unit] =
+        loggerIO.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
 
     // ===================================
     // SUT
@@ -473,8 +482,7 @@ trait ModelBasedSuite {
         testCase: TestCase,
         startupSut: State => IO[Sut]
     ): Prop = {
-        val size = testCase.commands.size
-        logger.info(s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, size)}\n")
+        onTestCaseGenerated(testCase.initialState, testCase.commands).unsafeRunSync()
 
         val (_sut, p, s, lastCmd, _) =
             if useTestControl

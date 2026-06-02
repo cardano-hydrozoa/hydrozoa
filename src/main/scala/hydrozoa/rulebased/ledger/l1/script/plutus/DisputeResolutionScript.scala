@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
-import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
@@ -38,7 +38,7 @@ object DisputeResolutionValidator extends Validator {
     given ToData[DisputeRedeemer] = ToData.derived
 
     case class VoteRedeemer(
-        blockHeader: BlockHeader.Minor.Onchain,
+        sec: StandaloneEvacuationCommitment.Onchain,
         multisig: List[Signature]
     )
 
@@ -215,7 +215,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // The multisig field of voteRedeemer must have signatures of the blockHeader
                 // field of voteRedeemer for all the public keys in the peers field of treasury.
-                val msg = voteRedeemer.blockHeader.toData |> serialiseData
+                val msg = voteRedeemer.sec.toData |> serialiseData
                 require(
                   treasuryDatum.peers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
@@ -243,7 +243,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
-                  voteRedeemer.blockHeader.versionMajor == treasuryDatum.versionMajor,
+                  voteRedeemer.sec.versionMajor == treasuryDatum.versionMajor,
                   VoteMajorVersionCheck
                 )
 
@@ -264,11 +264,11 @@ object DisputeResolutionValidator extends Validator {
                 voteOutputDatum.voteStatus match {
                     case VoteStatus.Voted(commitment, versionMinor) =>
                         require(
-                          versionMinor == voteRedeemer.blockHeader.versionMinor,
+                          versionMinor == voteRedeemer.sec.versionMinor,
                           VoteOutputDatumCheck
                         )
                         require(
-                          commitment == voteRedeemer.blockHeader.commitment,
+                          commitment == voteRedeemer.sec.commitment,
                           VoteOutputDatumCheck
                         )
                     case _ => fail(VoteOutputDatumCheck)

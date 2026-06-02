@@ -21,6 +21,22 @@ final case class NodeConfig private (
     override val nodePrivateConfig: NodePrivateConfig,
 ) extends NodeConfig.Section {
     override transparent inline def nodeConfig: NodeConfig = this
+
+    // Safety invariant: a peer's CardanoLiaison must poll at least
+    // `cardanoLiaisonPollingPeriodSafetyFactor` times within `depositMaturityDuration`,
+    // so that by the time a deposit is mature every peer has observed it on L1. Otherwise
+    // the leader (which has seen the deposit) and a follower (which hasn't yet) will disagree
+    // on whether to absorb or refund, breaking consensus.
+    private val pollingPeriod =
+        nodePrivateConfig.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+    private val maxPollingPeriod = headConfig.maxCardanoLiaisonPollingPeriod
+    require(
+      pollingPeriod <= maxPollingPeriod,
+      s"cardanoLiaisonPollingPeriod ($pollingPeriod) exceeds the maximum allowed for this " +
+          s"head's depositMaturityDuration (${headConfig.depositMaturityDuration}): " +
+          s"$maxPollingPeriod (= depositMaturityDuration / " +
+          s"${hydrozoa.config.head.multisig.timing.TxTiming.cardanoLiaisonPollingPeriodSafetyFactor})"
+    )
 }
 
 object NodeConfig {

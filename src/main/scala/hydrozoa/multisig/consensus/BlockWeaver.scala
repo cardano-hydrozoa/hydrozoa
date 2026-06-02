@@ -92,7 +92,7 @@ object BlockWeaver {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.MultiSigned |
+    type Request = PreStart.type | UserRequestWithId | BlockBrief.Next | Block.SoftConfirmed |
         PollResults | LocalFinalizationTrigger.Triggered.type | Wakeup
 
     case object PreStart
@@ -122,6 +122,17 @@ object BlockWeaver {
 
         final def logStateTransition: IO[Unit] =
             logger.info(s"Becoming $stateName.")
+
+        /** Wrap a reactive state in `Some` and emit the "Becoming X" log only if the receiver (the
+          * previous state) has a different [[stateName]]. Same-name self-loops (e.g. `pure(this)`
+          * or `pure(copy(...))`) suppress the log so it doesn't drown the rest of the trace.
+          */
+        final def pure[S <: State.Reactive](newState: S): IO[Some[S]] = {
+            val log =
+                if newState.stateName == this.stateName then IO.unit
+                else newState.logStateTransition
+            log >> IO.pure(Some(newState))
+        }
 
         final def sendStartBlock(config: Config)(blockNumber: BlockNumber): IO[Unit] = for {
             now <- realTimeQuantizedInstant(config.slotConfig)
@@ -188,12 +199,6 @@ object BlockWeaver {
                       nextBlockNumber = BlockNumber.zero.increment
                     ).act(config)
             } yield state.get
-
-        /** If the next state is reactive, then the transition into it is pure because no immediate
-          * actions need to be taken.
-          */
-        private def pure[S <: State.Reactive](state: S): IO[Some[S]] =
-            state.logStateTransition >> IO.pure(Some(state))
 
         /** A state with a mempool can store requests in its mempool. */
         sealed trait WithMempool extends State {
@@ -338,9 +343,9 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
-                        case bc: Block.MultiSigned =>
+                        case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -524,9 +529,9 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
-                        case bc: Block.MultiSigned =>
+                        case bc: Block.SoftConfirmed =>
                             logger.trace(
-                              s"Ignoring confirmed block ${bc.blockNum}."
+                              s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
                         case unexpected: Unexpected =>
@@ -689,7 +694,7 @@ object BlockWeaver {
                                     else pure(this.copy(isBlockStarted = Started))
                             } yield res
 
-                        case bc: Block.MultiSigned.NonFinal =>
+                        case bc: Block.SoftConfirmed.NonFinal =>
                             def completeBlockRegular =
                                 sendCompleteRegularBlockAsLeader(config) >>
                                     DecidingRole(
@@ -769,7 +774,7 @@ object BlockWeaver {
 
                 private def scheduleWakeupFiber(
                     config: Config,
-                    bc: Block.MultiSigned.NonFinal
+                    bc: Block.SoftConfirmed.NonFinal
                 ): IO[Unit] =
                     for {
                         now <- realTimeQuantizedInstant(config.slotConfig)
@@ -783,16 +788,33 @@ object BlockWeaver {
                             )
                         sleepDuration = wakeupInstant - now
                         _ <-
-                            if sleepDuration.finiteDuration.toSeconds <= 0L
-                            then
+                            if sleepDuration.finiteDuration.toMillis <= 0L
+                            then {
+                                // Non-positive sleep duration: the chosen wakeup target is already
+                                // at or before `now`, which is legitimate. The dominant case is a
+                                // deposit-driven wakeup: `mDepositDecisionWakeupTime` is set from
+                                // a pending deposit's `absorptionStartTime` (a fixed wall-time
+                                // anchor from when the deposit was registered) and is selected
+                                // here when it precedes `forcedMajorBlockWakeupTime`. Between the
+                                // moment the previous block's header was sealed (carrying that
+                                // ddwt) and the moment confirmation for that block reaches us
+                                // here, virtual time can advance past the ddwt. Observed in the
+                                // stage4 20-peer head: a major-block transition (block 45 in
+                                // run logged 2026-02-11) advanced virtual time ~43s during
+                                // cross-peer ack collection, leaving sleepDuration = -43s.
+                                //
+                                // The right action is "fire the wakeup immediately" — the same
+                                // Wakeup message `sleepSendWakeup` would send after sleeping.
+                                // The `Ignoring wakeup for preceding block N` guard handles any
+                                // race between this dispatch and a subsequent state change.
+                                //
+                                // See:
+                                //   https://linear.app/gummiworm-labs/issue/GUM-111/should-negative-weavers-wakeups-be-permitted
                                 logger.info(
-                                  s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
-                                ) >> IO.raiseError(
-                                  new RuntimeException(
-                                    s"negative wakeup sleep duration, now=${now}, wakeupInstant=${wakeupInstant}, sleepDuration=${sleepDuration}"
-                                  )
-                                )
-                            else
+                                  "non-positive wakeup sleep duration, firing immediately: " +
+                                      s"now=$now, wakeupInstant=$wakeupInstant, sleepDuration=$sleepDuration"
+                                ) >> (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
+                            } else
                                 logger.info(
                                   s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
                                 ) >> sleepSendWakeup(sleepDuration).start.void
@@ -818,7 +840,7 @@ object BlockWeaver {
                     Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
                 type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.MultiSigned & BlockType.Final)
+                    (Block.SoftConfirmed & BlockType.Final)
 
                 private[State] def apply(
                     state: State,
@@ -844,7 +866,7 @@ object BlockWeaver {
                 override val logger: Logger[IO],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
-                previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
                 // wakeupFiber: Fiber[IO, Throwable, Unit]
             ) extends Reactive {
                 override transparent inline def stateName: String = "Leader.AwaitingRequest"
@@ -917,11 +939,11 @@ object BlockWeaver {
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Leader.AwaitingRequest
 
-                type Unexpected = PreStart.type | BlockBrief.Next | Block.MultiSigned
+                type Unexpected = PreStart.type | BlockBrief.Next | Block.SoftConfirmed
 
                 private[State] def apply(
                     state: State,
-                    previousBlockConfirmed: Block.MultiSigned.NonFinal,
+                    previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
                     // wakeupFiber: Fiber[IO, Throwable, Unit]
                 ): Leader.AwaitingRequest =
                     import state.*

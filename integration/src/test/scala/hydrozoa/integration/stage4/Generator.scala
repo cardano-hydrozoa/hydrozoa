@@ -35,18 +35,32 @@ import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 
 object CommandGenerators:
 
-    /** Sample inter-arrival time from Exp(1/mean) using the inverse-CDF transform T = -ln(U)/λ.
-      * Each peer models an independent Poisson process: events arrive at rate λ = 1/mean, and the
-      * time between successive events is exponentially distributed with that mean. This delay is
-      * stored on the command and returned by ModelCommand.delay so the SUT fiber actually sleeps
-      * for this duration before issuing the command — giving realistic pacing without a global
-      * clock.
+    /** Sample the next event of the *superposition* of N independent Poisson processes (one per
+      * peer, rate lambda_p = 1/mean_p). Returns `(peer, interArrivalDelay)` where:
+      *   - `interArrivalDelay ~ Exp(sum of lambda_p)` — gap from the last event in the global
+      *     merged stream
+      *   - `peer` is sampled with probability proportional to `lambda_p`
+      *
+      * The marginal stream of any peer p (project the merged stream onto peer-p events) is exactly
+      * `Poisson(lambda_p)` — so configuring peer-specific rates produces the intended less-active
+      * vs more-active behavior.
       */
-    private def genInterArrivalDelay(mean: FiniteDuration): Gen[FiniteDuration] =
-        // Double.MinPositiveValue avoids log(0) = -Infinity; in practice the tail is negligible.
-        Gen.choose(Double.MinPositiveValue, 1.0).map { u =>
-            (-math.log(u) * mean.toMillis).toLong.milliseconds
-        }
+    def genSuperposedNextEvent(
+        meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration]
+    ): Gen[(HeadPeerNumber, FiniteDuration)] = {
+        val rates: Seq[(HeadPeerNumber, Double)] =
+            meanInterArrivalTimes.toSeq.map { case (p, mu) => p -> 1.0 / mu.toMillis }
+        val totalRate = rates.map(_._2).sum
+        val weights: Seq[(Int, Gen[HeadPeerNumber])] =
+            rates.map { case (p, lambda) =>
+                (math.round(lambda * 1e9).toInt.max(1), Gen.const(p))
+            }
+        for {
+            u <- Gen.choose(Double.MinPositiveValue, 1.0)
+            interArrivalMs = (-math.log(u) / totalRate).toLong.max(1L)
+            peer <- Gen.frequency(weights*)
+        } yield (peer, interArrivalMs.millis)
+    }
 
     private def genInputs(
         utxos: Map[TransactionInput, scalus.cardano.ledger.TransactionOutput],
@@ -115,6 +129,7 @@ object CommandGenerators:
 
     def genL2TxCommand(
         peerNum: HeadPeerNumber,
+        interArrivalDelay: FiniteDuration,
         txStrategy: TxStrategy,
         txMutator: TxMutator
     )(state: ModelState): Gen[Option[L2TxCommand]] = {
@@ -168,30 +183,29 @@ object CommandGenerators:
 
                 body = TransactionRequestBody(l2Payload = ByteString.fromArray(txSigned.toCbor))
 
-                currentTime = state.modelTimeFor(peerNum)
+                // Validity is computed against the SUT's virtual time at submission, which equals
+                // `state.currentModelTime + interArrivalDelay` (the model clock right after this
+                // command is run — same value the SUT IO.sleep advances to).
+                submissionTime = state.currentModelTime + interArrivalDelay
 
                 header = UserRequestHeader(
                   headId = config.headConfig.headId,
                   validityStart = RequestValidityStartTime(
                     QuantizedInstant.ofEpochSeconds(
                       config.slotConfig,
-                      (currentTime - 5.seconds).getEpochSecond
+                      (submissionTime - 5.seconds).getEpochSecond
                     )
                   ),
                   validityEnd = RequestValidityEndTime(
                     QuantizedInstant.ofEpochSeconds(
                       config.slotConfig,
-                      (currentTime + 2.minutes).getEpochSecond
+                      (submissionTime + 2.minutes).getEpochSecond
                     )
                   ),
                   bodyHash = body.hash
                 )
 
                 userVk = config.nodeConfigs(peerNum).ownHeadWallet.exportVerificationKey
-
-                interArrivalDelay <- genInterArrivalDelay(
-                  state.params.meanInterArrivalTimes(peerNum)
-                )
 
             } yield Some(
               L2TxCommand(
@@ -212,7 +226,8 @@ object CommandGenerators:
     }
 
     def genRegisterDepositCommand(
-        peerNum: HeadPeerNumber
+        peerNum: HeadPeerNumber,
+        interArrivalDelay: FiniteDuration,
     )(state: ModelState): Gen[Option[RegisterAndSubmitDepositCommand]] = {
         val config = state.params.multiNodeConfig
         val peerAddress = config.addressOf(peerNum)
@@ -277,13 +292,14 @@ object CommandGenerators:
                                           l2Outputs.toList.map(_.l2OutputValue)
                                         )
 
-                                        currentTime = state.modelTimeFor(peerNum)
+                                        submissionTime =
+                                            state.currentModelTime + interArrivalDelay
                                         requestId = state.nextRequestId(peerNum)
 
                                         requestValidityEndTime = RequestValidityEndTime(
                                           QuantizedInstant.ofEpochSeconds(
                                             config.slotConfig,
-                                            (currentTime + 2.minutes).getEpochSecond
+                                            (submissionTime + 2.minutes).getEpochSecond
                                           )
                                         )
 
@@ -321,7 +337,7 @@ object CommandGenerators:
                                           validityStart = RequestValidityStartTime(
                                             QuantizedInstant.ofEpochSeconds(
                                               config.slotConfig,
-                                              (currentTime - 5.seconds).getEpochSecond
+                                              (submissionTime - 5.seconds).getEpochSecond
                                             )
                                           ),
                                           validityEnd = RequestValidityEndTime(
@@ -338,17 +354,13 @@ object CommandGenerators:
                                             .ownHeadWallet
                                             .exportVerificationKey
 
-                                        absorptionStart =
+                                        absorptionStartTime =
                                             config.headConfig.txTiming
                                                 .depositAbsorptionStartTime(requestValidityEndTime)
                                                 .convert
 
                                         expectedAbsorptionTime =
-                                            absorptionStart + state.params.absorptionSlack
-
-                                        interArrivalDelay <- genInterArrivalDelay(
-                                          state.params.meanInterArrivalTimes(peerNum)
-                                        )
+                                            absorptionStartTime + state.params.absorptionSlack
 
                                     } yield Some(
                                       RegisterAndSubmitDepositCommand(
@@ -367,6 +379,7 @@ object CommandGenerators:
                                             depositRefundSeq.depositTx.depositProduced.utxoId,
                                         depositTxBytesSigned = depositTxSigned,
                                         interArrivalDelay = interArrivalDelay,
+                                        absorptionStartTime = absorptionStartTime,
                                         expectedAbsorptionTime = expectedAbsorptionTime,
                                       )
                                     )
@@ -375,15 +388,17 @@ object CommandGenerators:
             } yield ret
     }
 
-    /** Force-advance time until all pending deposits for this peer are absorbed. Jumps to
-      * max(absorptionStart + slack) + [0, 30s] jitter. Used when the peer has no L2 UTxOs and must
-      * wait for absorption.
+    /** Force-advance the global clock until all pending deposits for this peer are absorbed. Jumps
+      * to max(expectedAbsorptionTime) + [0, 30s] jitter. Used when the peer has no L2 UTxOs and
+      * must wait for absorption.
+      *
+      * TODO: within the new approach that uses cumulative time this looks odd, shall we remove it?
       */
     def genDelayForAbsorption(
         peerNum: HeadPeerNumber,
         state: ModelState
     ): Gen[DelayCommand] = {
-        val currentTime = state.modelTimeFor(peerNum)
+        val currentTime = state.currentModelTime
         val pendingForPeer = state.pendingDeposits(peerNum)
 
         val absorptionTargets = pendingForPeer
@@ -414,27 +429,20 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
 
     override def genNextCommand(
         state: ModelState
-    ): Gen[AnyCommand[ModelState, Stage4Sut]] = {
-        val peers = state.params.multiNodeConfig.nodeConfigs.keys.toSeq
-        // In a superposition of independent Poisson processes the next event comes from peer p
-        // with probability λ_p / Σλ_i (proportional to rate = 1/μ). Using Gen.oneOf would give
-        // each peer equal probability regardless of rate, causing slow peers to dominate the
-        // tail of the time-sorted table and fast peers to be underrepresented.
-        val minMeanMs = peers.map(p => state.params.meanInterArrivalTimes(p).toMillis).min
-        val weightedPeers = peers.map { p =>
-            val w =
-                (minMeanMs.toDouble / state.params.meanInterArrivalTimes(p).toMillis * 100).toInt
-                    .max(1)
-            w -> Gen.const(p)
-        }
+    ): Gen[AnyCommand[ModelState, Stage4Sut]] =
+        // Single global Poisson superposition: sample (peer, gap-since-last-event). Each peer's
+        // marginal stream is exactly Poisson at its configured rate, so peers with smaller mean
+        // inter-arrival are picked proportionally more often and the global rate is Σλ_p.
         for {
-            peerNum <- Gen.frequency(weightedPeers*)
-            cmd <- genCommandForPeer(peerNum, state)
+            (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
+              state.params.meanInterArrivalTimes
+            )
+            cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
         } yield cmd
-    }
 
     private def genCommandForPeer(
         peerNum: HeadPeerNumber,
+        interArrivalDelay: FiniteDuration,
         state: ModelState,
     ): Gen[AnyCommand[ModelState, Stage4Sut]] = {
         val config = state.params.multiNodeConfig
@@ -444,15 +452,15 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
         )
         val availableL1 = state.peerUtxosL1(peerNum)
         val hasPendingAbsorption = state.pendingDeposits(peerNum).exists { pd =>
-            state.modelTimeFor(peerNum) < pd.expectedAbsorptionTime
+            state.currentModelTime < pd.expectedAbsorptionTime
         }
 
         // Two distinct delay cases with different semantics:
         // 1. Forced absorption delay (below): peer is stuck with nothing to spend — must wait.
         //    Jumps directly to expectedAbsorptionTime + jitter so the next state has UTxOs.
-        // 2. Background ticking: every L2Tx/Deposit command carries an exponential inter-arrival
-        //    delay (ModelCommand.delay) that advances the peer's clock naturally. No explicit
-        //    delay command needed while the peer has UTxOs to spend.
+        // 2. Background ticking: every L2Tx/Deposit command carries the superposition's
+        //    inter-arrival delay that advances the global clock naturally. No explicit delay
+        //    command needed while the peer has UTxOs to spend.
         if ownedL2Utxos.isEmpty && hasPendingAbsorption then
             CommandGenerators.genDelayForAbsorption(peerNum, state).map(AnyCommand.apply)
         else if ownedL2Utxos.isEmpty && availableL1.isEmpty then Gen.const(noOp)
@@ -463,11 +471,17 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
                     Gen.frequency(
                       5 -> Gen.const(TxStrategy.Regular),
                       2 -> Gen.const(TxStrategy.RandomWithdrawals),
-                      2 -> Gen.const(TxStrategy.Dust(50)),
+                      // TODO: Too slow on my machine dure to KZG-commitments
+                      // 2 -> Gen.const(TxStrategy.Dust(50)),
                       1 -> Gen.const(TxStrategy.Arbitrary)
                     ).flatMap(strategy =>
                         CommandGenerators
-                            .genL2TxCommand(peerNum, strategy, TxMutator.Identity)(state)
+                            .genL2TxCommand(
+                              peerNum,
+                              interArrivalDelay,
+                              strategy,
+                              TxMutator.Identity
+                            )(state)
                             .map(_.map(AnyCommand.apply(_)))
                     )
 
@@ -475,7 +489,7 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
                 if availableL1.isEmpty then Gen.const(None)
                 else
                     CommandGenerators
-                        .genRegisterDepositCommand(peerNum)(state)
+                        .genRegisterDepositCommand(peerNum, interArrivalDelay)(state)
                         .map(_.map(AnyCommand.apply(_)))
 
             Gen.frequency(

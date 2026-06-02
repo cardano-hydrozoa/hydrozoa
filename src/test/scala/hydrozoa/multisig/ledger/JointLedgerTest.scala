@@ -21,22 +21,20 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{ConsensusActor, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
-import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toEvacuationKey}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
-import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger, given}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -48,12 +46,12 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Block as _, BlockHeader as _, Coin, *}
+import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
 import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
+import test.*
 import test.Generators.Hydrozoa.*
 import test.given
-import test.{TestMFixedEnv, *}
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
@@ -99,12 +97,12 @@ object JointLedgerTestHelpers {
     val jlTest = TestMFixedEnv[TestR]()
     import jlTest.*
 
-    /** An agent of this test, pretending to be a [[ConsensusActor]] for [[JointLedger]]. */
+    /** An agent of this test, pretending to be a [[FastConsensusActor]] for [[JointLedger]]. */
     final case class ConsensusAgent() extends Actor[IO, ConsensusAgent.Request] {
         private val blocks = Ref.unsafe[IO, ConsensusAgent.State](Vector.empty)
 
         override def receive: Receive[IO, ConsensusAgent.Request] = {
-            case block: Block.Unsigned.Next => blocks.update(_ :+ block)
+            case block: BlockBrief.Next => blocks.update(_ :+ block)
             case m: ConsensusAgent.GetState.Sync =>
                 for {
                     response <- blocks.get
@@ -114,8 +112,13 @@ object JointLedgerTestHelpers {
         }
     }
 
+    /** No-op stand-in for [[StackComposer]] in tests that don't exercise slow-consensus paths. */
+    final case class StackComposerSink() extends Actor[IO, StackComposer.Request] {
+        override def receive: Receive[IO, StackComposer.Request] = { case _ => IO.unit }
+    }
+
     object ConsensusAgent {
-        type State = Vector[Block.Unsigned.Next]
+        type State = Vector[BlockBrief.Next]
 
         case object GetState extends SyncRequest[IO, GetState.type, ConsensusAgent.State] {
             type Sync = SyncRequest.Envelope[IO, GetState.type, ConsensusAgent.State]
@@ -123,7 +126,7 @@ object JointLedgerTestHelpers {
             def ?: : this.Send = SyncRequest.send(_, this)
         }
 
-        type Request = ConsensusActor.Request | GetState.Sync
+        type Request = FastConsensusActor.Request | GetState.Sync
     }
 
     val defaultInitializer: PropertyM[IO, TestR] = {
@@ -148,6 +151,7 @@ object JointLedgerTestHelpers {
             system <- PropertyM.run(ActorSystem[IO]("JointLedger").allocated.map(_._1))
 
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
+            stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             tracerLocal <- PropertyM.run(Tracer.makeLocal)
@@ -156,7 +160,8 @@ object JointLedgerTestHelpers {
                 JointLedger(
                   config,
                   JointLedger.Connections(
-                    consensusActor = consensusAgent.narrowRequest[ConsensusActor.Request],
+                    fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
+                    stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
@@ -605,7 +610,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                       DepositsMap.Entry(event.requestId, txSeq.depositTx.depositProduced)
               }
 
-              depositsMap <- getJointLedgerState.map(_.l1LedgerState.deposits)
+              depositsMap <- getJointLedgerState.map(_.deposits)
 
               // Test statistic:  make sure that ties are actually occurring in some samples
               _ <- lift(PropertyM.monitor[IO](Prop.collect {
@@ -688,7 +693,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
           _ <- for {
               jlState <- getJointLedgerState
-              dlState = jlState.l1LedgerState
+              dlState = jlState
 
               _ <- assertWith(
                 msg =
@@ -699,10 +704,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 msg = "Correct deposit(s) in state",
                 condition = dlState.deposits.depositUtxos.head == depositProduced
               )
-              _ <- assertWith(
-                msg = "Correct treasury in state",
-                condition = dlState.treasury == env.config.initializationTx.treasuryProduced
-              )
+              // JointLedger.State owns only the deposits map; the treasury lives on the slow
+              // side (StackComposer).
               _ <- assertWith(
                 msg = "Correct refund in state",
                 condition =
@@ -731,7 +734,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
                   _ <- assertWith(
                     msg = "First block should be minor -- no deposits/withdrawals.",
-                    condition = block.isInstanceOf[Block.Unsigned.Minor]
+                    condition = block.isInstanceOf[BlockBrief.Minor]
                   )
 
                   _ <- assertWith(
@@ -739,13 +742,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     condition = block.body.depositsRefunded.isEmpty
                         && block.body.depositsAbsorbed.isEmpty
                   )
-                  _ <- assertWith(
-                    msg = "Post-dated refund should appear",
-                    condition = block.effects.postDatedRefundTxs
-                        .map(_.focus(_.tx).modify(_.stripVKeyWitnesses)) == List(
-                      depositRefundTxSeq.refundTx
-                    )
-                  )
+                  // Post-dated refund txs are slow-cycle (`StackEffects`), not block-attached,
+                  // so they're not checked here.
               } yield ()
 
           // Complete another block, assume the deposit shows up in the poll results -- but it's not mature yet
@@ -777,7 +775,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Second block should be minor -- no deposits were absorbed.",
-                condition = block.isInstanceOf[Block.Unsigned.Minor]
+                condition = block.isInstanceOf[BlockBrief.Minor]
               )
           } yield ()
 
@@ -805,10 +803,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Third block should be major.",
-                condition = block.isInstanceOf[Block.Unsigned.Major]
+                condition = block.isInstanceOf[BlockBrief.Major]
               )
 
-              majorBlock = block.asInstanceOf[Block.Unsigned.Major]
+              majorBlock = block.asInstanceOf[BlockBrief.Major]
 
               _ <- assertWith(
                 msg = "Deposits should be correct with absorbed deposit",
@@ -816,33 +814,10 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                     majorBlock.body.depositsRefunded == List.empty
               )
 
-              // Expected Evac map: The genesis utxos from the deposit + the initial l2 set
-              initialEvacMap = env.config.initialEvacuationMap.evacuationMap
-              depositEvacMap = L2Genesis(
-                genesisObligations = Queue.from(genesisObligations.toList),
-                genesisId = L2Genesis.mkGenesisId(
-                  depositRefundTxSeq.depositTx.depositProduced.utxoId
-                )
-              ).asUtxos.map((ti, krto) =>
-                  (ti.toEvacuationKey, Payout.Obligation(krto, env.config).toOption.get)
-              )
-
-              expectedEvacMap = EvacuationMap(initialEvacMap ++ depositEvacMap)
-
-              _ <- assertWith(
-                msg = "Evacuation map should contain deposit",
-                condition = jlState.evacuationMap == expectedEvacMap
-              )
-
-              kzgCommit = jlState.evacuationMap.kzgCommitment
-
-              expectedKzg = expectedEvacMap.kzgCommitment
-
-              _ <- assertWith(
-                msg =
-                    s"KZG Commitment is correct.\n\tObtained: $kzgCommit\n\tExpected: $expectedKzg",
-                condition = kzgCommit == expectedKzg
-              )
+              // No evacuation-map / KZG assertions here: that state lives in StackComposer, not
+              // JointLedger, and KZG does not live on `BlockHeader`. Cumulative evac-map + KZG
+              // correctness is a StackComposer-level invariant covered by stage4's
+              // `propEffectsLanded`.
 
           } yield ()
 
@@ -881,7 +856,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Deposit should be in dapp ledger state",
-                condition = jlState.l1LedgerState.deposits == DepositsMap.empty.append(
+                condition = jlState.deposits == DepositsMap.empty.append(
                   DepositsMap.Entry(
                     depositReq.requestId,
                     depositRefundTxSeq.depositTx.depositProduced
@@ -926,7 +901,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               _ <- assertWith(
                 msg = "Deposit should not be in dapp ledger state",
-                condition = jlState.l1LedgerState.deposits.isEmpty
+                condition = jlState.deposits.isEmpty
               )
 
               _ <- assertWith(

@@ -15,9 +15,10 @@ import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
-import hydrozoa.multisig.ledger.block.{BlockEffects, BlockHeader, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.*
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.Transaction.given
@@ -121,12 +122,19 @@ object CardanoLiaison:
 
     object State:
         def initialState(config: Config): State = {
+            // The submittable init + fallback effects are NOT seeded from config: those bodies are
+            // the UNSIGNED genesis placeholders, never submittable. CardanoLiaison learns the real
+            // (multisigned) init + fallback only from the hard-confirmed stack 0, via
+            // `handleInitialStackL1Effects`. We only seed the target treasury utxo id, which is
+            // identified by the init tx id (a body hash, witness-independent) and so is exact even
+            // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
+            // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
+            // TODO: I guess we don't need to set target state here, deferring to the persistent-recovery.
             State(
               targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
-              happyPathEffects =
-                  TreeMap(EffectId.initializationEffectId -> config.initializationTx),
-              fallbackEffects = Map(BlockVersion.Major.zero -> config.initialFallbackTx)
+              happyPathEffects = TreeMap.empty,
+              fallbackEffects = Map.empty
             )
         }
 
@@ -175,47 +183,8 @@ object CardanoLiaison:
     // ===================================
     object Timeout
 
-    object BlockConfirmed {
-        type Major = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.MultiSigned.Major.Section
-        type Final = BlockHeader.Fields.HasBlockNum & BlockHeader.Fields.HasBlockVersion &
-            BlockEffects.MultiSigned.Final.Section
-
-        /** For testing purposes, where we may not want to construct a whole Block.MultiSigned. */
-        sealed trait Minimal extends BlockHeader.Fields.HasBlockVersion
-
-        object Minimal {
-
-            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
-              */
-            final case class Major(
-                override val blockVersion: BlockVersion.Full,
-                override val settlementTx: SettlementTx,
-                override val fallbackTx: FallbackTx,
-                override val rolloutTxs: List[RolloutTx],
-                override val postDatedRefundTxs: List[RefundTx.PostDated],
-            ) extends Minimal,
-                  BlockEffects.MultiSigned.Major.Section {
-                override def effects: BlockEffects.MultiSigned.Major = BlockEffects.MultiSigned
-                    .Major(settlementTx, rolloutTxs, fallbackTx, postDatedRefundTxs)
-            }
-
-            /** For testing purposes, where we may not want to construct a whole Block.MultiSigned.
-              */
-            final case class Final(
-                override val blockVersion: BlockVersion.Full,
-                override val finalizationTx: FinalizationTx,
-                override val rolloutTxs: List[RolloutTx],
-            ) extends Minimal,
-                  BlockEffects.MultiSigned.Final.Section {
-                override def effects: BlockEffects.MultiSigned.Final =
-                    BlockEffects.MultiSigned.Final(finalizationTx, rolloutTxs)
-            }
-        }
-
-    }
-
-    type Request = PreStart.type | BlockConfirmed.Major | BlockConfirmed.Final | Timeout.type
+    type Request =
+        PreStart.type | Timeout.type | Stack.HardConfirmed
     type Handle = ActorRef[IO, Request]
 
     case object PreStart
@@ -264,30 +233,35 @@ trait CardanoLiaison(
         req match {
             case CardanoLiaison.PreStart =>
                 preStartLocal
-            case block: BlockConfirmed.Major =>
-                Tracer.scopedCtx(
-                  "cardanoLiaisonMode" -> "BlockConfirmed.Major",
-                  "blockNum" -> s"${block.blockNum: Int}"
-                ) {
-                    Tracer.info(
-                      s"received BlockConfirmed.Major for block ${block.blockVersion}"
-                    ) >>
-                        handleMajorBlockL1Effects(block) >> runEffects
-                }
-            case block: BlockConfirmed.Final =>
-                Tracer.scopedCtx(
-                  "cardanoLiaisonMode" -> "BlockConfirmed.Final",
-                  "blockNum" -> s"${block.blockNum: Int}"
-                ) {
-                    Tracer.info(
-                      s"received BlockConfirmed.Final for block ${block.blockVersion}"
-                    ) >>
-                        handleFinalBlockL1Effects(block) >> runEffects
-                }
             case CardanoLiaison.Timeout =>
                 Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
                     Tracer.info("received Timeout, run effects...") >>
                         runEffects
+                }
+            case stack: Stack.HardConfirmed =>
+                Tracer.scopedCtx(
+                  "cardanoLiaisonMode" -> "Stack.HardConfirmed",
+                  "stackNum" -> s"${stack.brief.stackNum: Int}"
+                ) {
+                    // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
+                    // peer's hard-ack signature into VKeyWitnesses and attached them onto
+                    // these tx bodies, so they are L1-submittable as is (NOT
+                    // `unsigned.effects`, which are the unwitnessed bodies).
+                    val effects = stack.effects
+                    Tracer.info(
+                      "received Stack.HardConfirmed for stack " +
+                          s"${stack.brief.stackNum}"
+                    ) >> (effects match {
+                        case ini: StackEffects.HardConfirmed.Initial =>
+                            // Stack 0 (initial). We MUST submit the initialization tx from the
+                            // hard-confirmed initial stack — NOT `config.initializationTx`,
+                            // which is the UNSIGNED body from head config.
+                            handleInitialStackL1Effects(ini) >> runEffects
+                        case reg: StackEffects.HardConfirmed.Regular =>
+                            // Learn the stack's effects, then run the submission state
+                            // machine immediately.
+                            handleStackL1Effects(reg) >> runEffects
+                    })
                 }
         }
 
@@ -307,73 +281,165 @@ trait CardanoLiaison(
     // Inbox handlers
     // ===================================
 
-    /** Handle [[Block.MultiSigned.Major]] request:
-      *   - saves the effects in the internal actor's state
+    /** Learn the hard-confirmed *initial* stack's L1 effects (stack 0).
+      *
+      * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
+      * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
+      * the **unsigned** body — usable only as a pre-confirmation placeholder, never submittable.
+      * Once stack 0 is hard-confirmed, [[StackEffects.HardConfirmed.Initial]] carries the
+      * slow-consensus-ratified init tx (the round-2 Initial unlock) + the locally-derived fallback;
+      * this overrides the seeded entries with them so `runEffects` submits the correct init tx.
+      *
+      * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
+      * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
+      * hard-acks (including each peer's individual funding witnesses) into the witnesses on these
+      * bodies. The remaining Initial-only gap is *Bootstrap wiring* — how stack 0 gets
+      * *composed/produced* in the first place (StackComposer's `Bootstrap` param) — which is
+      * orthogonal to (and unaffected by) this witnessing.
       */
-    protected[consensus] def handleMajorBlockL1Effects(block: BlockConfirmed.Major): IO[Unit] =
+    private def handleInitialStackL1Effects(eff: StackEffects.HardConfirmed.Initial): IO[Unit] =
         for {
-            _ <- Tracer.info(s"entering handleMajorBlockL1Effects for block ${block.blockVersion}")
-            _ <- IO.whenA(block.blockVersion.major != block.settlementTx.majorVersionProduced) {
-                val msg =
-                    s"Block major version (${block.blockVersion.major}) doesn't match" +
-                        s" settlement tx major version produced (${block.settlementTx.majorVersionProduced})"
-                Tracer.error(msg) >> IO.raiseError(RuntimeException(msg))
+            _ <- Tracer.info(
+              "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
+                  "init tx + fallback with the hard-confirmed initial stack's"
+            )
+            newState <- stateRef.updateAndGet { s =>
+                s.copy(
+                  targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
+                  happyPathEffects = s.happyPathEffects
+                      .updated(EffectId.initializationEffectId, eff.initializationTx),
+                  fallbackEffects =
+                      s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+                )
+            }
+            _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
+        } yield ()
+
+    /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
+      *
+      * Translates [[StackEffects.HardConfirmed.Regular]] into the `(effectInputs, happyPathEffects,
+      * fallbackEffects, targetState)` shape the `runEffects` / `mkDirectActions` machinery
+      * consumes, so effects submit in dependency order (backbone first via `EffectId (major, 0)`,
+      * then its rollouts `(major, 1..n)`; competing fallback resolved by
+      * `fallbackEffects.get(major.decrement)`).
+      *
+      * Backbones (settlements, then the optional finalization) are walked in stack/major order;
+      * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
+      * keyed by their settlement's `majorVersionProduced`, so the NEXT settlement finds its
+      * competing fallback via `major.decrement`.
+      *
+      * NOT submitted here (intentional, per spec):
+      *   - `evacCommit` — a dormant dispute-only record, never an immediate L1 tx (presented to the
+      *     rules-based dispute scripts only after a fallback; the consensus artifact is the header
+      *     signature in the hard-ack, persisted by the future storage layer).
+      *   - `refunds` — post-dated refund txs are not submitted here; refund-tx L1 submission is
+      *     deferred (see `StackEffectsBuilder.finalizeLedger` TODO fund14).
+      *
+      * Minor-only stacks (no settlement, no finalization) carry no backbone — nothing reaches L1;
+      * `targetState` is left unchanged.
+      *
+      * The effect bodies in `eff` are already MULTISIGNED: SlowConsensusActor aggregates every head
+      * peer's verified hard-ack signature into `VKeyWitness`es and attaches them onto each effect
+      * tx before emitting `Stack.HardConfirmed.effects` (same for the Initial path, see
+      * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
+      * witness-attachment step remains here.
+      */
+    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
+        val parts = eff.partitions.toList
+        // A minor-only stack (only Minor partitions) produces no L1 backbone effect — nothing to
+        // learn or submit — so short-circuit before deriving anything or touching the state.
+        // TODO: teach SlowConsensusActor not to emit minor-only stacks at all, so CardanoLiaison
+        //   never has to receive (and skip) them.
+        val hasBackbone = parts.exists {
+            case _: PartitionEffects.Major[?] => true
+            case _: PartitionEffects.Final    => true
+            case _: PartitionEffects.Minor[?] => false
+        }
+        if !hasBackbone then
+            Tracer.info("minor-only stack: no backbone L1 effects to submit; nothing to do")
+        else {
+            // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
+            // finalization) the submission state machine consumes. Each Major partition carries
+            // its own settlement+fallback together (so `settlements.zip(fallbacks)` aligns
+            // exactly); rollouts come from every Major / Final partition; refunds + SEC are NOT
+            // submitted.
+            val settlements: List[SettlementTx] =
+                parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
+            val fallbacks: List[FallbackTx] =
+                parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
+            val finalization: Option[FinalizationTx] =
+                parts.collectFirst { case PartitionEffects.Final(f, _) => f }
+            val allRollouts: List[RolloutTx] = parts.flatMap {
+                case PartitionEffects.Major(_, _, ro, _, _) => ro
+                case PartitionEffects.Final(_, ro)          => ro
+                case PartitionEffects.Minor(_, _)           => Nil
+            }
+            val backbones: List[SettlementTx | FinalizationTx] =
+                settlements ++ finalization.toList
+
+            // Accumulate every state delta up front — each is a pure function of the flattened
+            // effects, independent of the current state — then apply them all in a single `copy`
+            // below.
+            val perBackbone =
+                backbones.map(b =>
+                    mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
+                )
+            val newEffectInputs: Seq[(TransactionInput, EffectId)] = perBackbone.flatMap(_._1)
+            val newHappyPathEffects: Seq[(EffectId, HappyPathEffect)] = perBackbone.flatMap(_._2)
+            val newFallbackEffects: Seq[(BlockVersion.Major, FallbackTx)] =
+                settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
+            // Always `Some` here (a backbone exists): finalization → Finalized, else the last
+            // settlement's treasury → Active.
+            val newTarget: Option[TargetState] = finalization match {
+                case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
+                case None =>
+                    settlements.lastOption.map(s => TargetState.Active(s.treasuryProduced.utxoId))
             }
 
-            _ <- Tracer.trace(s"settlementTx hash: ${block.settlementTx.tx.id}")
-            _ <- Tracer.trace(s"settlementTx ttl: ${block.settlementTx.tx.body.value.ttl}")
-            _ <- Tracer.trace(
-              "settlementTx treasuryProduced: " +
-                  s"${block.settlementTx.treasuryProduced.utxoId}"
-            )
-            _ <- Tracer.trace(
-              "settlementTx majorVersionProduced: " +
-                  s"${block.settlementTx.majorVersionProduced}"
-            )
-            _ <- Tracer.trace(
-              s"fallback tx validity start: ${block.fallbackTx.fallbackTxStartTime}"
-            )
-
-            newState <- stateRef.updateAndGet(s => {
-                val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(block.settlementTx, block.rolloutTxs)
-                State(
-                  targetState = TargetState.Active(
-                    block.settlementTx.treasuryProduced.utxoId
-                  ),
-                  effectInputs = s.effectInputs ++ blockEffectInputs,
-                  happyPathEffects = s.happyPathEffects ++ blockEffects,
-                  fallbackEffects =
-                      s.fallbackEffects + (block.blockVersion.major -> block.fallbackTx)
+            for {
+                _ <- Tracer.info(
+                  s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
+                      s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
+                      s"finalization=${finalization.isDefined}"
                 )
-            })
-            _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
-        } yield ()
-
-    /** Handle [[Block.MultiSigned.Final]] request:
-      *   - saves the effects in the internal actor's state
-      */
-    protected[consensus] def handleFinalBlockL1Effects(block: BlockConfirmed.Final): IO[Unit] =
-        for {
-            _ <- Tracer.info(s"entering handleFinalBlockL1Effects for block ${block.blockVersion}")
-
-            _ <- Tracer.trace(s"finalizationTx hash: ${block.finalizationTx.tx.id}")
-            _ <- Tracer.trace(s"rolloutTxs count: ${block.rolloutTxs.size}")
-
-            newState <- stateRef.updateAndGet(s => {
-                val (blockEffectInputs, blockEffects) =
-                    mkHappyPathEffectInputsAndEffects(
-                      block.finalizationTx,
-                      block.rolloutTxs
+                newState <- stateRef.updateAndGet { s =>
+                    s.copy(
+                      effectInputs = s.effectInputs ++ newEffectInputs,
+                      happyPathEffects = s.happyPathEffects ++ newHappyPathEffects,
+                      fallbackEffects = s.fallbackEffects ++ newFallbackEffects,
+                      targetState = newTarget.getOrElse(s.targetState)
                     )
-                s.copy(
-                  targetState = TargetState.Finalized(block.finalizationTx.tx.id),
-                  effectInputs = s.effectInputs ++ blockEffectInputs,
-                  happyPathEffects = s.happyPathEffects ++ blockEffects
-                )
-            })
-            _ <- Tracer.trace(s"state after update: ${newState.prettyDump}")
-        } yield ()
+                }
+                _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
+            } yield ()
+        }
+    }
+
+    /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
+      *
+      * `StackEffects.HardConfirmed.Regular.rollouts` is flat across the whole stack; a backbone
+      * owns the rollout chain that starts at the rollout utxo it produces (`mbRolloutProduced`),
+      * each subsequent rollout spending the previous one's produced rollout utxo until a
+      * [[RolloutTx.Last]]. Linking by `utxo.input` is independent of the flat list's order and
+      * mirrors how `mkDirectAction` itself walks the chain on L1.
+      */
+    private def rolloutsFor(
+        backbone: SettlementTx | FinalizationTx,
+        all: List[RolloutTx]
+    ): List[RolloutTx] = {
+        @annotation.tailrec
+        def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
+            all.find(_.rolloutSpent.utxo.input == spentInput) match {
+                case None => acc.reverse
+                case Some(r: RolloutTx.NotLast) =>
+                    chain(r.rolloutProduced.utxo.input, r :: acc)
+                case Some(r) => (r :: acc).reverse // RolloutTx.Last
+            }
+        backbone.mbRolloutProduced match {
+            case None    => Nil
+            case Some(u) => chain(u.utxo.input, Nil)
+        }
+    }
 
     private def mkHappyPathEffectInputsAndEffects(
         majorTx: SettlementTx | FinalizationTx,
@@ -456,87 +522,88 @@ trait CardanoLiaison(
                     actionsToSubmit <-
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
-                        else {
+                        else
+                            for {
 
-                            Tracer.trace("due actions is empty")
+                                _ <- Tracer.trace("due actions is empty")
 
-                            // Empty direct actions indicate another actions should be considered:
-                            //  - the last fallback tx might have become valid
-                            //  - the init (whole happy path) tx submission might be needed
+                                // Empty direct actions indicate another actions should be considered:
+                                //  - the last fallback tx might have become valid
+                                //  - the init (whole happy path) tx submission might be needed
 
-                            // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
-                            //   more systematically
-                            val lastFallback: Option[Transaction] = for {
-                                maxKey <- state.fallbackEffects.keySet.maxOption
-                                fallbackTx = state.fallbackEffects(maxKey)
-                                if utxoIds.contains(
-                                  fallbackTx.treasurySpent.utxoId
-                                ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
-                            } yield fallbackTx.tx
+                                // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
+                                //   more systematically
+                                lastFallback: Option[Transaction] = for {
+                                    maxKey <- state.fallbackEffects.keySet.maxOption
+                                    fallbackTx = state.fallbackEffects(maxKey)
+                                    if utxoIds.contains(
+                                      fallbackTx.treasurySpent.utxoId
+                                    ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
+                                } yield fallbackTx.tx
 
-                            lastFallback match {
-                                case Some(fallback) =>
-                                    IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
-                                case None => {
-                                    lazy val initAction = {
-                                        if currentTime < config.initializationTx.initializationTxEndTime.convert
-                                        then
-                                            Seq(
-                                              Action.InitializeHead(
-                                                state.happyPathEffects.values.map(_.tx).toSeq
-                                              )
-                                            )
-                                        else {
-                                            Seq.empty
+                                ret <- lastFallback match {
+                                    case Some(fallback) =>
+                                        IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
+                                    case None => {
+                                        lazy val initAction = {
+                                            if currentTime < config.initializationTx.initializationTxEndTime.convert
+                                            then
+                                                Seq(
+                                                  Action.InitializeHead(
+                                                    state.happyPathEffects.values.map(_.tx).toSeq
+                                                  )
+                                                )
+                                            else {
+                                                Seq.empty
+                                            }
+                                        }
+                                        // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
+                                        state.targetState match {
+                                            case TargetState.Active(targetTreasuryUtxoId) =>
+                                                if utxoIds.contains(targetTreasuryUtxoId)
+                                                then {
+                                                    // everything is up-to-date on L1
+                                                    Tracer.trace(
+                                                      s"target ${targetTreasuryUtxoId} found, do nothing"
+                                                    ) >>
+                                                        IO.pure(List.empty)
+                                                } else
+                                                    Tracer.trace(
+                                                      s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                    ) >>
+                                                        IO.pure(initAction)
+
+                                            case TargetState.Finalized(finalizationTxHash) =>
+                                                for {
+                                                    txResp <- cardanoBackend.isTxKnown(
+                                                      finalizationTxHash
+                                                    )
+                                                    _ <- Tracer.debug(
+                                                      s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
+                                                    )
+                                                    mbInitAction <- txResp match {
+                                                        case Left(err) =>
+                                                            for {
+                                                                _ <- Tracer.error(
+                                                                  s"error when getting finalization tx info: ${err}"
+                                                                )
+                                                            } yield Seq.empty
+                                                        case Right(isKnown) =>
+                                                            if isKnown
+                                                            then
+                                                                Tracer.trace(
+                                                                  "finalization tx is known, do nothing"
+                                                                ) >> IO.pure(Seq.empty)
+                                                            else
+                                                                Tracer.trace(
+                                                                  s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
+                                                                ) >> IO.pure(initAction)
+                                                    }
+                                                } yield mbInitAction
                                         }
                                     }
-                                    // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
-                                    state.targetState match {
-                                        case TargetState.Active(targetTreasuryUtxoId) =>
-                                            if utxoIds.contains(targetTreasuryUtxoId)
-                                            then {
-                                                // everything is up-to-date on L1
-                                                Tracer.trace(
-                                                  s"target ${targetTreasuryUtxoId} found, do nothing"
-                                                ) >>
-                                                    IO.pure(List.empty)
-                                            } else
-                                                Tracer.trace(
-                                                  s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
-                                                ) >>
-                                                    IO.pure(initAction)
-
-                                        case TargetState.Finalized(finalizationTxHash) =>
-                                            for {
-                                                txResp <- cardanoBackend.isTxKnown(
-                                                  finalizationTxHash
-                                                )
-                                                _ <- Tracer.debug(
-                                                  s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
-                                                )
-                                                mbInitAction <- txResp match {
-                                                    case Left(err) =>
-                                                        for {
-                                                            _ <- Tracer.error(
-                                                              s"error when getting finalization tx info: ${err}"
-                                                            )
-                                                        } yield Seq.empty
-                                                    case Right(isKnown) =>
-                                                        if isKnown
-                                                        then
-                                                            Tracer.trace(
-                                                              "finalization tx is known, do nothing"
-                                                            ) >> IO.pure(Seq.empty)
-                                                        else
-                                                            Tracer.trace(
-                                                              s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
-                                                            ) >> IO.pure(initAction)
-                                                }
-                                            } yield mbInitAction
-                                    }
                                 }
-                            }
-                        }
+                            } yield ret
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty) {

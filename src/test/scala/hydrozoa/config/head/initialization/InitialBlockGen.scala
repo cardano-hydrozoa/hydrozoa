@@ -37,7 +37,7 @@ def generateInitialBlock(
         )
 
     } yield InitialBlock(
-      Block.MultiSigned.Initial(
+      Block.Unsigned.Initial(
         blockBrief = BlockBrief.Initial(
           BlockHeader.Initial(
             startTime = BlockCreationStartTime(blockCreationEndTime - 10.seconds),
@@ -45,12 +45,12 @@ def generateInitialBlock(
             fallbackTxStartTime = initTxSeq.fallbackTx.fallbackTxStartTime,
             forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
             mDepositDecisionWakeupTime = None,
-            kzgCommitment = config.initializationParameters.initialEvacuationMap.kzgCommitment
           )
         ),
-        effects = BlockEffects.MultiSigned.Initial(
-          initializationTx = testPeers.multisignTx(initTxSeq.initializationTx),
-          fallbackTx = testPeers.multisignTx(initTxSeq.fallbackTx)
+        // Unsigned — slow consensus stack-0 signs them at startup.
+        effects = BlockEffects.Unsigned.Initial(
+          initializationTx = initTxSeq.initializationTx,
+          fallbackTx = initTxSeq.fallbackTx
         )
       )
     )

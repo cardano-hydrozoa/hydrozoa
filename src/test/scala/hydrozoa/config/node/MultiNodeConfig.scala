@@ -10,8 +10,8 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.Block.MultiSigned
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, Properties, PropertyM}
 import scalus.cardano.address.ShelleyAddress
@@ -42,7 +42,6 @@ case class MultiNodeConfig private (
         )
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
-    override def initialBlock: MultiSigned.Initial = headConfig.initialBlock
 
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
@@ -53,11 +52,11 @@ case class MultiNodeConfig private (
         )
 
     def multisignHeader(
-        blockHeader: BlockHeader.Minor.Onchain
+        blockHeader: StandaloneEvacuationCommitment.Onchain
     ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
-        val serialized = BlockHeader.Minor.Onchain.Serialized(blockHeader)
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkMinorHeaderSignature(serialized)).toList
+          nodePrivateConfigs.map(_._2.ownHeadWallet.mkHeaderSignature(serialized)).toList
         )
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
@@ -98,8 +97,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): Gen[MultiNodeConfig] = for {
         testPeers <- TestPeers.generate(spec)
         ret <- generateForTestPeers(
@@ -117,8 +116,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): Gen[MultiNodeConfig] =
         generateForTestPeers(
           generateHeadConfig,
@@ -131,8 +130,8 @@ object MultiNodeConfig {
             hydrozoa.config.head.generateHeadConfig(),
         generateNodeOperationEvacuationConfig: NodeOperationEvacuationConfigGen =
             generateNodeOperationEvacuationConfig,
-        generateNodeOperationMultisigConfig: Gen[NodeOperationMultisigConfig] =
-            generateNodeOperationMultisigConfig,
+        generateNodeOperationMultisigConfig: HeadConfig => Gen[NodeOperationMultisigConfig] = hc =>
+            generateNodeOperationMultisigConfig(hc.maxCardanoLiaisonPollingPeriod),
     ): GenWithTestPeers[MultiNodeConfig] =
         for {
             testPeers <- ReaderT.ask
@@ -144,7 +143,7 @@ object MultiNodeConfig {
                   ], (HeadPeerNumber, NodePrivateConfig)](
                     testPeers.headPeerIds.toList.map(peerId =>
                         for {
-                            nomc <- generateNodeOperationMultisigConfig
+                            nomc <- generateNodeOperationMultisigConfig(headConfig)
                             ohpp = OwnHeadPeerPrivate(
                               testPeers.walletFor(peerId._1),
                               headConfig.headPeers
@@ -173,6 +172,8 @@ object MultiNodeConfigTest extends Properties("Multi-node config") {
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec.generate().flatMap(MultiNodeConfig.generate(_)())
     )(mnc =>
-        mnc.initialBlock.effects.initializationTx.tx.witnessSetRaw.value.vkeyWitnesses.toSet.nonEmpty
+        // InitialBlock now carries the UNSIGNED init+fallback txs (slow consensus signs them at
+        // startup), so we just verify the init tx is present.
+        mnc.initialBlock.effects.initializationTx.tx.body.value.outputs.nonEmpty
     )
 }

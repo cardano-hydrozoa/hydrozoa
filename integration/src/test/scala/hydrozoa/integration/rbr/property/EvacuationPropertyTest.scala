@@ -25,6 +25,8 @@ import scalus.cardano.ledger.{CertState, Coin, KeepRaw, TaggedSortedSet, Transac
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import test.TestPeersSpec
+import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
+
 
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
@@ -98,7 +100,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               )
 
               // block header: all peers vote for the same commitment (happy path).
-              blockHeader = BlockHeader.Minor.Onchain(
+              blockHeader = StandaloneEvacuationCommitment.Onchain(
                 blockNum = BigInt(1),
                 startTime = now.toPosixTime,
                 versionMajor = BigInt(1),
@@ -163,7 +165,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                               val disputeBot: IO[Unit] = system
                                   .actorOf(
                                     DisputeActor(
-                                      blockHeader = blockHeader,
+                                      sec = blockHeader,
                                       cardanoBackend = sharedBackend,
                                       signatures = signatures,
                                       tracerLocal = tracer

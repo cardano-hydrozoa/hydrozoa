@@ -138,7 +138,8 @@ object CommandGenerators:
         reservedSubmissionDuration: FiniteDuration
     ): Gen[QuantizedFiniteDuration] = {
         // The duration of the block must not put us in the silence period
-        val silencePeriodStart = txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
+        val silencePeriodStart =
+            txTiming.txTiming.newSettlementEndTime(competingFallbackStartTime)
         val availableDuration = silencePeriodStart - currentTime
 
         require(
@@ -696,7 +697,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
@@ -758,7 +759,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
@@ -843,7 +844,7 @@ object ScenarioGenerators:
                             CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
-                                  state.multiNodeConfig.initialBlock.endTime,
+                                  state.multiNodeConfig.initialBlock.blockBrief.endTime,
                                   state.competingFallbackStartTime,
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration

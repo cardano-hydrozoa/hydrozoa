@@ -5,9 +5,9 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
-import hydrozoa.multisig.consensus.ack.{AckBlock, AckId, AckNumber}
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
-import hydrozoa.multisig.ledger.block.{Block, BlockHeader}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
 import io.circe.*
 import io.circe.syntax.*
@@ -61,78 +61,37 @@ final class HeadPeerWallet(
         }
     }
 
-    def mkMinorHeaderSignature(
-        headerSerialized: BlockHeader.Minor.Onchain.Serialized
-    ): BlockHeader.Minor.HeaderSignature =
+    /** Sign arbitrary canonical bytes as a `HeaderSignature`. Used for two distinct sign targets:
+      *
+      *   - Soft-ack over the fast-cycle brief identity ([[BlockHeader.SignedDigest.Serialized]]).
+      *   - Hard-ack signature over the standalone evacuation commitment
+      *     ([[hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment.Onchain.Serialized]]).
+      *
+      * Both opaque types provide an implicit conversion to `IArray[Byte]`, so callers pass either.
+      */
+    def mkHeaderSignature(
+        headerSerialized: IArray[Byte]
+    ): BlockHeader.HeaderSignature =
         BlockHeader.Minor.HeaderSignature(walletModule.signMsg(headerSerialized, signingKey))
 
-    def mkAcks(
-        blockNext: Block.Unsigned.Next,
+    /** Sign the block brief's canonical signing bytes to produce this peer's soft ack. One ack per
+      * peer per block, regardless of block type. See `consensus/fast-consensus` in the spec.
+      */
+    def mkSoftAck(
+        brief: BlockBrief.Next,
         finalizationRequested: Boolean
-    ): List[AckBlock] = blockNext match {
-        case block: Block.Unsigned.Minor =>
-            List(mkAckMinor(block, finalizationRequested))
-        case block: Block.Unsigned.Major =>
-            List(mkAckMajor1(block, finalizationRequested), mkAckMajor2(block))
-        case block: Block.Unsigned.Final =>
-            List(mkAckFinal1(block), mkAckFinal2(block))
-    }
+    ): SoftAck = SoftAck(
+      peerNum = peerNum,
+      blockNum = brief.blockNum,
+      header = mkHeaderSignature(brief.header.signingBytes),
+      finalizationRequested = finalizationRequested
+    )
 
-    def mkAckMinor(
-        block: Block.Unsigned.Minor,
-        finalizationRequested: Boolean
-    ): AckBlock.Minor = {
-        import block.*
-        AckBlock.Minor(
-          ackId = AckId(peerNum, AckNumber.neededToConfirm(header)),
-          blockNum = blockNum,
-          header = mkMinorHeaderSignature(headerSerialized),
-          postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(mkTxSignature),
-          finalizationRequested = finalizationRequested
-        )
-    }
-
-    def mkAckMajor1(
-        block: Block.Unsigned.Major,
-        finalizationRequested: Boolean
-    ): AckBlock.Major1 = {
-        import block.*
-        AckBlock.Major1(
-          ackId = AckId(peerNum, AckNumber.neededToConfirm(header).decrement),
-          blockNum = blockNum,
-          fallbackTx = mkTxSignature(fallbackTx.tx),
-          rolloutTxs = rolloutTxs.map(_.tx).map(mkTxSignature),
-          postDatedRefundTxs = postDatedRefundTxs.map(_.tx).map(mkTxSignature),
-          finalizationRequested = finalizationRequested
-        )
-    }
-
-    def mkAckMajor2(block: Block.Unsigned.Major): AckBlock.Major2 = {
-        import block.*
-        AckBlock.Major2(
-          ackId = AckId(peerNum, AckNumber.neededToConfirm(header)),
-          blockNum = blockNum,
-          settlementTx = mkTxSignature(settlementTx.tx)
-        )
-    }
-
-    def mkAckFinal1(block: Block.Unsigned.Final): AckBlock.Final1 = {
-        import block.*
-        AckBlock.Final1(
-          ackId = AckId(peerNum, AckNumber.neededToConfirm(header).decrement),
-          blockNum = blockNum,
-          rolloutTxs = rolloutTxs.map(_.tx).map(mkTxSignature)
-        )
-    }
-
-    def mkAckFinal2(block: Block.Unsigned.Final): AckBlock.Final2 = {
-        import block.*
-        AckBlock.Final2(
-          ackId = AckId(peerNum, AckNumber.neededToConfirm(header)),
-          blockNum = blockNum,
-          finalizationTx = mkTxSignature(finalizationTx.tx)
-        )
-    }
+    // Hard-ack signing material is produced by StackComposer (which walks the partition-indexed
+    // StackEffects and applies the shared PartitionEffects.unlock rule). The wallet only exposes
+    // the signing primitives above — mkTxSignature / mkVKeyWitness / mkHeaderSignature — plus
+    // exportVerificationKey for the Initial individual-witness iff rule
+    // (StackEffects.spendsFromIndividualAddress).
 }
 
 object HeadPeerWallet:
