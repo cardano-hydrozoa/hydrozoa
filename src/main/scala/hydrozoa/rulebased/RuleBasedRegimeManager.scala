@@ -36,17 +36,18 @@ case class RuleBasedRegimeManager(
                 sec = sec,
                 signatures = signatures,
                 cardanoBackend = cardanoBackend,
-                tracerLocal
+                tracerLocal = tracerLocal
               )
             )
-//            _ <- context.actorOf(
-//              EvacuationActor(
-//                toEvacuate = toEvacuate,
-//                cardanoBackend = cardanoBackend,
-//                evacuationMapAtFallback = evacuationMapAtFallback,
-//                fallbackTxHash = fallbackTxHash
-//              )
-//            )
+            _ <- context.actorOf(
+              EvacuationActor(
+                thisNodeEvacuates = toEvacuate,
+                cardanoBackend = cardanoBackend,
+                evacuationMapAtFallback = evacuationMapAtFallback,
+                fallbackTxHash = fallbackTxHash,
+                tracerLocal = tracerLocal
+              )
+            )
         } yield ()
     }
 }

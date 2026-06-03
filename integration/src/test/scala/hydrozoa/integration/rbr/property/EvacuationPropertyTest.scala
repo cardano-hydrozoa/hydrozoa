@@ -17,7 +17,9 @@ import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.rulebased.{DisputeActor, EvacuationActor}
+import hydrozoa.rulebased.{EvacuationActor, RuleBasedRegimeManager}
+import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -139,18 +141,14 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
               (sharedBackend, utxoSnapshot) = backendAndSnapshot
 
-              // Fires when any peer logs "Treasury is Resolved" (Phase 1 termination).
-              // Fires when any peer logs "Evacuation TX submitted" (Phase 2 termination).
-              resolvedSignal <- lift(IO.deferred[Unit])
+              // Fires when any peer logs that no evacuations remain.
               evacuatedSignal <- lift(IO.deferred[Unit])
 
-              // Single shared tracer that fans out to both signal completions.
+              // Shared tracer that completes the evacuation signal when the terminal log fires.
               tracer <- lift {
                   // TODO: replace string sentinel matching with domain-specific typed log events
                   val signalTracer: Tracer = ContraTracer.emit { (ev: LogEvent) =>
-                      if ev.msg == DisputeActor.LogMessages.TreasuryIsResolved
-                      then resolvedSignal.complete(()).void
-                      else if ev.msg == EvacuationActor.LogMessages.NoMoreEvacuations
+                      if ev.msg == EvacuationActor.LogMessages.NoMoreEvacuations
                       then evacuatedSignal.complete(()).void
                       else IO.unit
                   }
@@ -158,66 +156,34 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               }
 
               terminalUtxos <- lift {
-                  // Phase 1 — Dispute: run all peer dispute actors until "Treasury is Resolved".
-                  val disputeSystems: List[IO[Unit]] =
+                  // One RuleBasedRegimeManager per peer; the manager spawns the dispute and
+                  // evacuation actors as children.
+                  val regimeBots: List[IO[Unit]] =
                       env.nodePrivateConfigs.toList.map { (peerId, _) =>
-                          ActorSystem[IO](s"Dispute System for peer $peerId").use { system =>
-                              val disputeBot: IO[Unit] = system
-                                  .actorOf(
-                                    DisputeActor(
-                                      sec = blockHeader,
-                                      cardanoBackend = sharedBackend,
-                                      signatures = signatures,
-                                      tracerLocal = tracer
-                                    )(using env.nodeConfigs(peerId))
-                                  )
-                                  >> system.waitForTermination
-
-                              IO.race(
-                                resolvedSignal.get >> Tracer.info("!!! RESOLVED !!!")(using tracer),
-                                disputeBot
-                              ).void
-                          }
+                          regimeManagerFor(
+                            peerId = peerId,
+                            sec = blockHeader,
+                            signatures = signatures,
+                            sharedBackend = sharedBackend,
+                            votingDeadline = now + votingDuration,
+                            toEvacuate = initialUtxos.evacuationMap,
+                            evacuationMapAtFallback = initialUtxos.evacuationMap,
+                            fallbackTxHash = fallbackTxId,
+                            tracer = tracer,
+                          )(using env.nodeConfigs(peerId))
                       }
 
-                  // Phase 2 — Evacuation: run all peer evacuation actors until one submits the TX.
-                  val evacuationSystems: List[IO[Unit]] =
-                      env.nodePrivateConfigs.toList.map { (peerId, _) =>
-                          ActorSystem[IO](s"Evacuation System for peer $peerId").use { system =>
-                              val evacuationBot: IO[Unit] = system.actorOf(
-                                EvacuationActor(
-                                  thisNodeEvacuates = initialUtxos.evacuationMap,
-                                  cardanoBackend = sharedBackend,
-                                  evacuationMapAtFallback = initialUtxos.evacuationMap,
-                                  fallbackTxHash = fallbackTxId,
-                                  tracerLocal = tracer
-                                )(using env.nodeConfigs(peerId))
-                              ) >> system.waitForTermination
-
-                              IO.race(
-                                evacuatedSignal.get >> Tracer.info("!!! EVACUATION FINISHED !!!")(
-                                  using tracer
-                                ),
-                                evacuationBot
-                              ).void
-                          }
-                      }
-
-                  // Run Phase 1, then Phase 2, then snapshot the terminal UTxO set.
-                  // timeoutTo handles the "silent retry" case where actors never die and never signal.
-                  disputeSystems.parSequence.timeoutTo(
+                  // Race the terminal log signal against the bots. timeoutTo handles the "silent
+                  // retry" case where actors never die and never signal.
+                  IO.race(
+                    evacuatedSignal.get >> Tracer.info("!!! EVACUATION FINISHED !!!")(using tracer),
+                    regimeBots.parSequence
+                  ).timeoutTo(
                     actorRunDuration,
                     IO.raiseError(
-                      RuntimeException(s"Dispute phase timed out after $actorRunDuration")
+                      RuntimeException(s"Regime manager phase timed out after $actorRunDuration")
                     )
-                  ) >>
-                      evacuationSystems.parSequence.timeoutTo(
-                        actorRunDuration,
-                        IO.raiseError(
-                          RuntimeException(s"Evacuation phase timed out after $actorRunDuration")
-                        )
-                      ) >>
-                      utxoSnapshot
+                  ) >> utxoSnapshot
               }
 
               classification <- lift(
@@ -258,3 +224,33 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 .label("MultiNodeConfig")
           )
         )
+
+    /** Spawn a [[RuleBasedRegimeManager]] for one peer inside its own [[ActorSystem]] and block
+      * until the system terminates. The manager spawns the dispute and evacuation actors as
+      * children.
+      */
+    private def regimeManagerFor(
+        peerId: Int,
+        sec: StandaloneEvacuationCommitment.Onchain,
+        signatures: List[BlockHeader.Minor.HeaderSignature],
+        sharedBackend: CardanoBackend[IO],
+        votingDeadline: QuantizedInstant,
+        toEvacuate: EvacuationMap,
+        evacuationMapAtFallback: EvacuationMap,
+        fallbackTxHash: TransactionHash,
+        tracer: IOLocal[Tracer],
+    )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
+        ActorSystem[IO](s"RuleBasedRegimeManager System for peer $peerId").use { system =>
+            system.actorOf(
+              RuleBasedRegimeManager(
+                sec = sec,
+                signatures = signatures,
+                cardanoBackend = sharedBackend,
+                votingDeadline = votingDeadline,
+                toEvacuate = toEvacuate,
+                evacuationMapAtFallback = evacuationMapAtFallback,
+                fallbackTxHash = fallbackTxHash,
+                tracerLocal = tracer
+              )
+            ) >> system.waitForTermination
+        }
