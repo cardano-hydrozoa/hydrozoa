@@ -57,3 +57,37 @@ types, because no element-level conversion search is needed:
 opaque type Full = (Int, Int)
 given Conversion[Full, (Int, Int)] = identity  // safe — underlying IS (Int, Int)
 ```
+
+## Boolean predicates — `is*` / `has*` / `can*` naming
+
+### Rule
+
+A `def` or `val` that returns `Boolean` is named as a predicate that reads like a
+yes/no question — prefix it with `is`, `has`, `can` (or another boolean-flavoured
+verb) so call sites read as assertions:
+
+```scala
+private def isSaturated(present: Set[PeerId]): Boolean = ...
+if isSaturated(cell.round1.keySet) then completeRound1(...)   // "if … is saturated"
+```
+
+Not:
+
+```scala
+private def saturated(present: Set[PeerId]): Boolean = ...
+if saturated(cell.round1.keySet) then ...                     // reads as a noun, hides the test
+```
+
+### Why
+
+`if isSaturated(x)` reads as a sentence; `if saturated(x)` reads as a noun and
+hides that it is a test. The prefix also disambiguates a boolean check from a
+value of the same root name (`val saturated: Set[…]` vs `def isSaturated:
+Boolean`). `HeadPeerId.isLeader` / `isSlowLeader` are the in-repo examples.
+
+### Scope
+
+Pick the prefix that fits: `is*` for a state (`isSaturated`, `isLeader`), `has*`
+for presence (`hasQuorum`), `can*` for capability (`canSubmit`). Don't force `is`
+onto established collection-style predicates that already read as a test
+(`contains`, `exists`, `startsWith`).
