@@ -65,7 +65,15 @@ object VoteUtxo {
                 .get(config.headMultisigScript.policyId)
                 .flatMap(_.get(config.headTokenNames.voteTokenName))
                 .toRight(ParseError.MissingVoteToken(utxo))
-            voteTokens = PositiveInt.unsafeApply(tokenCount.toInt)
+            voteTokens <- PositiveInt
+                .apply(tokenCount.toInt)
+                .toRight(
+                  ParseError.InvalidTokenCount(
+                    utxo,
+                    tokenCount.toInt,
+                    "VoteUtxo had less than 1 vote token"
+                  )
+                )
         } yield VoteUtxo(
           input = utxo.input,
           voteOutput = VoteOutput(

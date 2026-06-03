@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import scalus.cardano.ledger.TransactionHash
 
-/** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
+/** This doesn't actually do much of anything right now. It just starts the dispute and evacuation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(
@@ -27,7 +27,7 @@ case class RuleBasedRegimeManager(
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 
-    // Start the dispute and liquidation actors
+    // Start the dispute and evacuation actors
     override def preStart: IO[Unit] = {
 
         for {

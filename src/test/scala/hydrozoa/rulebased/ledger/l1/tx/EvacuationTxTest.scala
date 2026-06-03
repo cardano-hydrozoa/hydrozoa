@@ -63,7 +63,7 @@ def genTreasuryResolvedDatum(
     for {
         version <- genVersion
         setup = TrustedSetup
-            .takeSrsG2(65)
+            .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
             .map(p2 => G2Element(p2).toCompressedByteString)
     } yield Resolved(
       evacuationActive = utxosCommitment,
@@ -143,7 +143,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
 def genMembershipCheck: Gen[(prelude.List[ScalusScalar], G1Element, G1Element)] =
     for {
         // Acc elements
-        length <- Gen.choose(64, 1024)
+        length <- Gen.choose(EvacuationTx.Assumptions.maxEvacuationsPerTx, 1024)
         identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
         identityBlst = prelude.List.from(
           identity.map(ss => Scalar().from_bendian(ss._1.toByteArray))
@@ -154,7 +154,7 @@ def genMembershipCheck: Gen[(prelude.List[ScalusScalar], G1Element, G1Element)] 
         commitmentG1 = commitmentPoint.asG1Element
 
         // Subset
-        subset <- Gen.pick(Integer.min(1, 64), identity)
+        subset <- Gen.pick(Integer.min(1, EvacuationTx.Assumptions.maxEvacuationsPerTx), identity)
 
         // Proof
         theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
@@ -233,7 +233,9 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
             // Pre-calculated powers of tau
             val crsG2 =
-                TrustedSetup.takeSrsG2(65).map(G2Element.apply)
+                TrustedSetup
+                    .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
+                    .map(G2Element.apply)
 
             RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
         )

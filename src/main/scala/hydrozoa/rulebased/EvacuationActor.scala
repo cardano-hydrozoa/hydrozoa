@@ -21,6 +21,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased
 import hydrozoa.rulebased.EvacuationActor.*
 import hydrozoa.rulebased.EvacuationActor.Error.ParseError.TreasuryDeinitialized
+import hydrozoa.rulebased.EvacuationActor.Requests.Evacuate
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
@@ -57,13 +58,13 @@ case class EvacuationActor(
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
+            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, Evacuate)
             _ <- Tracer.routeLocal(s"EvacuationActor.${config.ownHeadPeerNum}")
         } yield ()
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal
-        case _: Requests.Evacuate      => handleEvacuation
+        case _: Requests.Evacuate.type => handleEvacuation
     }
 
     //  TODOS:
@@ -123,7 +124,7 @@ case class EvacuationActor(
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
                 redeemers: List[EvacuateRedeemer] <- treasuryTxRedeemers.length match {
-                    // Treasury not resolved, can't liquidate, return left and retry
+                    // Treasury not resolved, can't evacuate, return left and retry
                     case 0 =>
                         EitherT.left(
                           Tracer.debug("Treasury not yet resolved, retrying") >>
@@ -283,9 +284,9 @@ object EvacuationActor {
     object Requests {
         case object PreStart
 
-        type Evacuate = Unit // Stub type, not sure if we'll need anything in the request
+        case object Evacuate
 
-        type Request = Evacuate | PreStart.type
+        type Request = Evacuate.type | PreStart.type
     }
 
     object Error {

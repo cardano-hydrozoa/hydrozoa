@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
+import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx.Assumptions
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTxOps.Build.Error.BuilderError
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
@@ -42,6 +43,13 @@ final case class EvacuationTx(
 
 object EvacuationTx {
     export EvacuationTxOps.{Build, Config}
+
+    object Assumptions {
+        /* Hardcoding this until we genuinely want to test that the whole setup works with other values.
+         * Also, the whole KZG setup should be wrapped into something higher-level soon.
+         */
+        val maxEvacuationsPerTx = 64
+    }
 
 }
 
@@ -137,11 +145,14 @@ private object EvacuationTxOps {
                   left = EvacuationTx.Build.Error.NoEvacuatees
                 )
 
-                // The subset we will actually evacuate in this transaction (capped at 63).
+                // The subset we will actually evacuate in this transaction
+                // (capped by [[EvacutionTx.Assumptions.maxEvacuationsPerTx]]).
                 // All subsequent computations (membership proof, outputs, residual) must use this
                 // same subset so that the on-chain value invariant holds:
                 //   treasuryInput = treasuryOutput + Σ evacuationOutput
-                evacuatingNow = EvacuationMap(evacuatees.evacuationMap.take(64))
+                evacuatingNow = EvacuationMap(
+                  evacuatees.evacuationMap.take(Assumptions.maxEvacuationsPerTx)
+                )
 
                 membershipProof <- Membership
                     .mkMembershipProofValidated(
@@ -213,10 +224,6 @@ private object EvacuationTxOps {
                     .explainConst("Building evacuation tx failed")
                     .left
                     .map(BuilderError(_))
-
-                inputValue = inputTreasuryUtxo.treasuryOutput.value
-                outputValue = residualValue
-                evacValue = evacuationOutputs.head.value
 
                 finalize = context
                     .finalizeContext(

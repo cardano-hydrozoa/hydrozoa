@@ -77,7 +77,7 @@ object CommonGenerators {
                 .map(BigInt(_))
                 .map(System.currentTimeMillis() + _.abs)
             setup = TrustedSetup
-                .takeSrsG2(10)
+                .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                 .map(p2 => G2Element(p2).toCompressedByteString)
         } yield Unresolved(
           deadlineVoting = deadlineVoting,

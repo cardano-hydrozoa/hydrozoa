@@ -14,25 +14,21 @@ import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.logging.Tracer
-import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
+import hydrozoa.rulebased.DisputeActor.Requests.HandleDisputeRes
 import hydrozoa.rulebased.DisputeActor.{Error, *}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
-import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{DatumOption, Transaction, TransactionOutput, Utxo, Utxos}
-import scalus.cardano.onchain.plutus.v3.PubKeyHash
-import scalus.uplc.builtin.Data.fromData
+import scalus.cardano.ledger.{Transaction, TransactionOutput, Utxo, Utxos}
 import scalus.utils.Pretty
 
 // TODO: relocate
@@ -42,7 +38,7 @@ extension (tx: Transaction) {
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
   * tx, or dispute resolution tx. If none of these need to be submitted, it tells the rule-based
-  * regime manager to start liquidation.
+  * regime manager to start evacuation.
   *
   * This actor calls itself in a loop via an overridden [[preStart]] method.
   *
@@ -178,8 +174,7 @@ final case class DisputeActor(
             treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
 
             _ <- disputeUtxos match {
-                // Cast Vote
-                case (Some(ownVoteUtxo), _) =>
+                case DisputeUtxos.CastVote(ownVoteUtxo) =>
                     val builder = VoteTx.Build(
                       uncastVoteUtxo = ownVoteUtxo,
                       treasuryUtxo = treasuryUtxo,
@@ -197,8 +192,7 @@ final case class DisputeActor(
                         _ <- signAndSubmitTx[VoteTx](voteTx)
                     } yield ()
 
-                // Tally
-                case (None, otherUtxos) if otherUtxos.length > 1 =>
+                case DisputeUtxos.Tally(otherUtxos) =>
                     // We must have that they key of the continuing input is less than the key of the removed input,
                     // so we sort here.
                     val keySorted = otherUtxos.sortBy(_.voteOutput.key)
@@ -236,14 +230,13 @@ final case class DisputeActor(
                         _ <- signAndSubmitTx(tallyTx)
                     } yield ()
 
-                // Resolve
-                case (None, lastVoteUtxo) if lastVoteUtxo.length == 1 =>
+                case DisputeUtxos.Resolve(finalVoteUtxo) =>
                     for {
                         _ <- EitherT.liftF(Tracer.info("Resolving treasury..."))
                         resolutionTx <- ResolutionTx
                             .Build(
                               // FIXME: Partial, just doing this cast during a refactor
-                              talliedVoteUtxo = lastVoteUtxo.head.asInstanceOf[VoteUtxo[Voted]],
+                              talliedVoteUtxo = finalVoteUtxo.asInstanceOf[VoteUtxo[Voted]],
                               treasuryUtxo = treasuryUtxo,
                               collateralUtxo = collateralUtxo
                             )
@@ -255,11 +248,10 @@ final case class DisputeActor(
                         _ <- signAndSubmitTx(resolutionTx)
                     } yield ()
 
-                // This should not be able to happen. If the treasury is unresolved,
-                // then there must be at least one vote according to the spec.
-                // If the treasury is resolved, we should short circuit with a left when the treasury
-                // utxo is parsed.
-                case (None, _) => EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
+                // Treasury was still unresolved when we read it above but the dispute address holds
+                // no vote utxos. Per the spec this state is unreachable, so escalate.
+                case DisputeUtxos.EmptyVotes =>
+                    EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
             }
 
         } yield ()
@@ -271,14 +263,14 @@ final case class DisputeActor(
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
+            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, HandleDisputeRes)
 
             _ <- Tracer.routeLocal(s"DisputeActor.${config.ownHeadPeerNum}")
         } yield ()
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal
-        case _: Requests.HandleDisputeRes =>
+        case _: Requests.HandleDisputeRes.type =>
             handleDisputeRes
     }
 
@@ -297,95 +289,59 @@ final case class DisputeActor(
       *       - Each utxo has the correct vote token in it and sits at the correct adddress.
       *
       * @return
-      *   A tuple of [[VoteUtxoWithDatum]]. The first element is wrapped in an option, and is only
-      *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
-      *   vote utxos with cast votes.
+      *   A [[DisputeUtxos]] describing the current state at the dispute address:
+      *   [[DisputeUtxos.CastVote]] when the peer's own empty vote utxo is still present,
+      *   [[DisputeUtxos.Tally]] when more than one cast-vote utxo remains, or
+      *   [[DisputeUtxos.Resolve]] when a single tallied vote utxo remains.
       */
     private def parseDisputeUtxos(utxos: Utxos)(using
         config: Config
-    ): IO[
-      (
-          Option[VoteUtxo[AwaitingVote]],
-          Seq[VoteUtxo[VoteStatus]]
-      )
-    ] =
+    ): IO[DisputeUtxos] = {
+        val ownPkhHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash.hash
         for {
-            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(Utxo(i, o)))
-
-            votePartition = voteUtxos.partition {
-                case VoteUtxo(_, VoteOutput(_, _, _, _, VoteStatus.AwaitingVote(peerPkh))) =>
-                    val ownPkh: PubKeyHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash
-                    peerPkh == ownPkh
-                case _ => false
+            parsed <- utxos.toList.traverse { case (input, output) =>
+                VoteUtxo.parse(Utxo(input, output)) match {
+                    case Right(v) => IO.pure(v)
+                    case Left(e)  => IO.raiseError(e)
+                }
             }
-
-            _ <-
-                if votePartition._1.headOption.isDefined
-                then
-                    Tracer.debug(
-                      "Own peer has already voted, parseDisputeUtxos will return (None,_)"
-                    )
-                else
-                    Tracer.debug(
-                      "Own peer has not voted yet, parseDisputeUtxos will return (Some(_),_)"
-                    )
-
-            _ <-
-                if votePartition._2.isEmpty
-                then Tracer.debug("No VoteUtxo[Voted] found")
-                else
-                    Tracer.debug(
-                      "Found VoteUtxo[Voted] for (key, link)s " +
-                          s"${votePartition._2.map(v => (v.voteOutput.key, v.voteOutput.link))}"
-                    )
-
-        } yield (
-          votePartition._1.headOption.map(_.asInstanceOf[VoteUtxo[AwaitingVote]]),
-          votePartition._2
-        )
-
-    // TODO: Move to `VoteUtxo`
-    private def utxoToVoteUtxo(
-        utxo: Utxo
-    )(using config: Config): IO[VoteUtxo[VoteStatus]] = {
-        for {
-            d1: DatumOption <- utxo._2.datumOption match {
-                case None    => IO.raiseError(DisputeActor.Error.ParseError.Vote.MissingDatum(utxo))
-                case Some(x) => IO.pure(x)
+            ownAwaiting = parsed.collectFirst {
+                case v if v.voteOutput.status match {
+                        case AwaitingVote(peer) => peer.hash == ownPkhHash
+                        case _                  => false
+                    } =>
+                    v.asInstanceOf[VoteUtxo[AwaitingVote]]
             }
-            d2: Inline <- d1 match {
-                case i: Inline => IO.pure(i)
-                case _ => IO.raiseError(DisputeActor.Error.ParseError.Vote.DatumNotInline(utxo))
+            result <- ownAwaiting match {
+                case Some(own) => IO.pure(DisputeUtxos.CastVote(own))
+                case None =>
+                    parsed match {
+                        case Nil      => IO.pure(DisputeUtxos.EmptyVotes)
+                        case x :: Nil => IO.pure(DisputeUtxos.Resolve(x))
+                        case xs       => IO.pure(DisputeUtxos.Tally(xs))
+                    }
             }
-            d3: VoteDatum <- Try(fromData[VoteDatum](d2.data)) match {
-                case Success(d) => IO.pure(d)
-                case Failure(e) =>
-                    IO.raiseError(
-                      DisputeActor.Error.ParseError.Vote.DatumDeserializationError(utxo, e)
-                    )
-            }
-
-            // TODO: Partial. Should we throw an exception here? Should we ensure this is the only non-ada asset in
-            //   the utxo?
-            voteTokens =
-                utxo.output.value.assets
-                    .assets(config.headMultisigScript.policyId)(config.headTokenNames.voteTokenName)
-            voteUtxo = VoteUtxo(
-              input = utxo.input,
-              voteOutput = VoteOutput(
-                d3.key,
-                d3.link,
-                utxo.output.value.coin,
-                PositiveInt.unsafeApply(voteTokens.toInt),
-                d3.voteStatus
-              )
-            )
-        } yield voteUtxo
+        } yield result
     }
 
 }
 
 object DisputeActor {
+
+    /** The possible cases for (valid, parsed) utxos at the dispute resolution address.
+      *
+      * [[EmptyVotes]] should not be observed while the treasury is still unresolved (the spec
+      * guarantees at least one vote utxo in that state). It is reachable in practice when the
+      * dispute has already been resolved and the deinit transaction has consumed every vote utxo;
+      * the caller is expected to detect that situation via the treasury parse and short-circuit
+      * before matching here.
+      */
+    enum DisputeUtxos:
+        case CastVote(ownVoteUtxo: VoteUtxo[AwaitingVote])
+        case Tally(utxos: Seq[VoteUtxo[VoteStatus]])
+        case Resolve(finalVoteUtxo: VoteUtxo[VoteStatus])
+        case EmptyVotes
+
     type Config = NodePrivateConfig.Section & HeadConfig.Section
 
     type Handle = ActorRef[IO, Requests.Request]
@@ -394,10 +350,10 @@ object DisputeActor {
 
         case object PreStart
 
-        type Request = HandleDisputeRes | PreStart.type
+        type Request = HandleDisputeRes.type | PreStart.type
 
         // Placeholder, I'm not sure if we need any additional state here
-        type HandleDisputeRes = Unit
+        case object HandleDisputeRes
     }
 
     object Error {
@@ -446,14 +402,6 @@ object DisputeActor {
 
         sealed trait ParseError
         object ParseError {
-            object Vote {
-                case class MissingDatum(utxo: Utxo) extends Unrecoverable
-
-                case class DatumNotInline(utxo: Utxo) extends Unrecoverable
-
-                case class DatumDeserializationError(utxo: Utxo, e: Throwable) extends Unrecoverable
-            }
-
             object Treasury {
                 case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
                     extends Unrecoverable
