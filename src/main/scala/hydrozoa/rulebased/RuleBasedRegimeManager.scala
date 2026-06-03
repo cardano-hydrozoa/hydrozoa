@@ -5,13 +5,14 @@ import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import scalus.cardano.ledger.TransactionHash
 
-/** This doesn't actually do much of anything right now. It just starts the dispute and liquidation
+/** This doesn't actually do much of anything right now. It just starts the dispute and evacuation
   * actors, and those proceed autonomously. I don't think we need actors for these.
   */
 case class RuleBasedRegimeManager(
@@ -21,11 +22,12 @@ case class RuleBasedRegimeManager(
     votingDeadline: QuantizedInstant,
     toEvacuate: EvacuationMap,
     evacuationMapAtFallback: EvacuationMap,
-    fallbackTxHash: TransactionHash
+    fallbackTxHash: TransactionHash,
+    tracerLocal: IOLocal[Tracer]
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 
-    // Start the dispute and liquidation actors
+    // Start the dispute and evacuation actors
     override def preStart: IO[Unit] = {
 
         for {
@@ -34,6 +36,7 @@ case class RuleBasedRegimeManager(
                 sec = sec,
                 signatures = signatures,
                 cardanoBackend = cardanoBackend,
+                tracerLocal
               )
             )
 //            _ <- context.actorOf(

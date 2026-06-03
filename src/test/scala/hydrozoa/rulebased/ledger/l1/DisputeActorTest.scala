@@ -8,6 +8,7 @@ import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
+import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -19,9 +20,10 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
-import org.scalacheck.{Arbitrary, Gen, Properties}
-import scalus.builtin.BLS12_381_G2_Element
+import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import org.scalacheck.rng.Seed
+import org.scalacheck.{Arbitrary, Gen, Properties, Test}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -30,6 +32,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v3.PosixTime
+import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
 // Note: If the vote status is unresolved, the dispute resolution script will fail unless the tx hash matches
@@ -82,8 +85,8 @@ object DisputeActorTestHelpers {
               versionMajor = versionMajor,
               // this is cribbed from the CommonGenerators.scala test
               setup = TrustedSetup
-                  .takeSrsG2(10)
-                  .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
+                  .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerT + 1)
+                  .map(p2 => G2Element(p2).toCompressedByteString)
             )
             treasuryUtxo = RuleBasedTreasuryUtxo(
               utxoId = txIn,
@@ -175,10 +178,13 @@ object DisputeActorTestHelpers {
                     )
               )
             )
+            tracer <- lift(Tracer.makeLocal)
+
             disputeActor = DisputeActor(
               sec = blockHeader,
               cardanoBackend = cardanoBackend,
-              signatures = env.multisignHeader(blockHeader).toList
+              signatures = env.multisignHeader(blockHeader).toList,
+              tracerLocal = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }
@@ -224,12 +230,15 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
         // Should throw here
         res <- lift(disputeActor.handleDisputeRes.attempt)
-        _ <- assertWith(
-          msg = "Missing vote datum throws",
-          condition = res == Left(
-            DisputeActor.Error.ParseError.Vote.MissingDatum(Utxo(voteInput, voteOutput))
-          )
-        )
+        _ <- {
+            val expectedError = Left(
+              VoteUtxo.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
+            )
+            assertWith(
+              msg = "Missing vote datum throws",
+              condition = res == expectedError
+            )
+        }
     } yield true
 
     def missingRuleBasedTreasuryUtxoDoesNotThrow: MultiNodeConfigTestM[Boolean] = for {

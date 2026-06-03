@@ -25,3 +25,6 @@ target/
 
 #scratches
 .scratch
+
+# Local scratch / notes (not for commit)
+.scratch/

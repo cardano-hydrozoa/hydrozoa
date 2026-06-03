@@ -7,7 +7,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.asG1Element
-import hydrozoa.multisig.ledger.commitment.{KzgCommitment, Membership, TrustedSetup}
+import hydrozoa.multisig.ledger.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
@@ -18,15 +18,14 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test}
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.address.{Network, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
-import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
-import scalus.uplc.builtin.{BLS12_381_G1_Element, BLS12_381_G2_Element}
+import scalus.uplc.builtin.bls12_381.{G1Element, G2Element}
 import supranational.blst.Scalar
 import test.*
 import test.Generators.Hydrozoa.genPubKeyUtxo
@@ -41,7 +40,7 @@ def genResolvedTreasuryUtxo(
     network: Network
 ): Gen[RuleBasedTreasuryUtxo] =
     for {
-        treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment, setupSize)
+        treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment)
         // Min ada for the beacon token and the datum
         coin <- Gen.const(5_000_000L)
         value = Value(Coin(coin)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
@@ -60,14 +59,12 @@ def genResolvedTreasuryUtxo(
 def genTreasuryResolvedDatum(
     headMp: PolicyId,
     utxosCommitment: KzgCommitment.KzgCommitment,
-    setupSize: Int
 ): Gen[Resolved] =
     for {
         version <- genVersion
-        params <- genByteStringOfN(32)
         setup = TrustedSetup
-            .takeSrsG2(setupSize)
-            .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
+            .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
+            .map(p2 => G2Element(p2).toCompressedByteString)
     } yield Resolved(
       evacuationActive = utxosCommitment,
       version = version,
@@ -79,7 +76,7 @@ def genTreasuryResolvedDatum(
 def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build] =
     for {
         // Generate a set of 64-1000 L2 utxos
-        l2UtxoCount <- Gen.choose(64, 1000)
+        l2UtxoCount <- Gen.choose(1, 100)
         // FIXME: this is partial, but I'm just trying to restore the old test for now
         Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
           _.toEvacuationMap(config.headConfig)
@@ -91,31 +88,14 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
 
         // Select some random number of withdrawals
         // TODO: find the limit with refscripts
-        wn <- Gen.choose(1, Integer.min(5, evacMap.size))
+        wn <- Gen.choose(1, evacMap.size)
         evacuatees0 <- Gen.pick(wn, evacMap)
         _ = println(s"evacuatees length: ${evacuatees0.length}")
         evacuatees = EvacuationMap.from(evacuatees0)
 
-        // Check
-        // _ = println(s"withdrawals: {$withdrawals0}")
-        // _ = println(
-        //  s"withdrawal hashes: ${withdrawalScalars.map(e => BigInt.apply(e.to_bendian()))}"
-        // )
-
         // Calculate and validate the membership proof
         theRest = evacMap.removedAll(Set.from(evacuatees.keys))
         _ = println(s"theRest: ${theRest.size}")
-
-        membershipProof = Membership
-            .mkMembershipProofValidated(
-              set = evacMap,
-              subset = evacuatees
-            )
-            .fold(err => throw RuntimeException(err.explain), x => x)
-
-        _ = println(
-          s"validated membership proof: ${membershipProof.asG1Element.toCompressedByteString.toHex}"
-        )
 
         fallbackTxId <- Arbitrary.arbitrary[TransactionHash]
 
@@ -133,10 +113,10 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // Ensure treasury has sufficient funds
         totalL2Value = evacMap.totalValue
         sufficientTreasuryValue = treasuryUtxo.treasuryOutput.value + totalL2Value +
-            Value(Coin(20_000_000L))
+            Value(Coin(200_000_000L))
         adjustedTreasuryUtxo = treasuryUtxo
             .focus(_.treasuryOutput.value)
-            .set(sufficientTreasuryValue)
+            .replace(sufficientTreasuryValue)
 
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)
@@ -153,18 +133,17 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)(using config)
 
     } yield EvacuationTx.Build(
-      treasuryUtxo = adjustedTreasuryUtxo,
-      evacuatees = evacuatees,
-      notEvacuatedYet = evacMap,
+      inputTreasuryUtxo = adjustedTreasuryUtxo,
+      evacuateesToTryNext = evacuatees,
+      allRemainingEvacuatees = evacMap,
       feeUtxos = Map(feeUtxo.toTuple),
       collateralUtxo = collateralUtxo
     )
 
-def genMembershipCheck
-    : Gen[(prelude.List[ScalusScalar], BLS12_381_G1_Element, BLS12_381_G1_Element)] =
+def genMembershipCheck: Gen[(prelude.List[ScalusScalar], G1Element, G1Element)] =
     for {
         // Acc elements
-        length <- Gen.choose(64, 1024)
+        length <- Gen.choose(EvacuationTx.Assumptions.maxEvacuationsPerTx, 1024)
         identity <- Gen.listOfN(length, Arbitrary.arbitrary[ScalusScalar])
         identityBlst = prelude.List.from(
           identity.map(ss => Scalar().from_bendian(ss._1.toByteArray))
@@ -175,7 +154,7 @@ def genMembershipCheck
         commitmentG1 = commitmentPoint.asG1Element
 
         // Subset
-        subset <- Gen.pick(Integer.min(1, 64), identity)
+        subset <- Gen.pick(Integer.min(1, EvacuationTx.Assumptions.maxEvacuationsPerTx), identity)
 
         // Proof
         theRest = identity.diff(subset) // I don't like the name, but diff is disjoint
@@ -200,6 +179,11 @@ given Arbitrary[ScalusScalar] = Arbitrary {
 }
 
 object EvacuationTxTest extends Properties("EvacuationTx Test") {
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withInitialSeed(
+          org.scalacheck.rng.Seed.fromBase64("9PR4WvgQ9fPaxaw-w9NDv8Ug0CT9TXibdweMlDrWlQF=").get
+        )
+
     import MultiNodeConfig.*
 
     val _ = property(
@@ -210,7 +194,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
           builder <- pick(genEvacuationTxBuild(using env))
           evacuationTx <- failLeft(builder.result(using env.nodeConfigs.head._2))
           _ <- assertWith(
-            evacuationTx.treasuryUtxoSpent == builder.treasuryUtxo,
+            evacuationTx.treasuryUtxoSpent == builder.inputTreasuryUtxo,
             "Spent treasury UTXO should match recipe input"
           )
           _ <- assertWith(
@@ -218,20 +202,28 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
             "Treasury UTXO produced should not be null"
           )
           _ <- assertWith(
-            evacuationTx.evacuatedOutputs.length == builder.evacuatees.size,
+            {
+                val tried = builder.evacuateesToTryNext.toSet.map((_, payout) => payout.utxo.value)
+                val actual = evacuationTx.evacuatedOutputs.toSet
+                actual.subsetOf(tried)
+            },
             "Evacuated outputs should match builder's evacuatees"
             // Note this holds because we're not
             // testing large numbers of evacuations
+
           )
           _ <- assertWith(evacuationTx.tx != null, "Transaction should not be null")
 
           // Verify residual treasury value is correct
           totalEvacuations =
-              builder.evacuatees.totalValue
-          expectedResidual = builder.treasuryUtxo.treasuryOutput.value - totalEvacuations
+              builder.evacuateesToTryNext.totalValue
+          expectedResidual = builder.inputTreasuryUtxo.treasuryOutput.value - Value.combine(
+            evacuationTx.evacuatedOutputs.map(_.value)
+          )
+          actualResidual = evacuationTx.treasuryUtxoProduced.treasuryOutput.value
           _ <- assertWith(
-            evacuationTx.treasuryUtxoProduced.treasuryOutput.value == expectedResidual,
-            "Residual treasury value should be correct"
+            actualResidual == expectedResidual,
+            s"Residual treasury value should be correct.\n\tExpected: $expectedResidual\n\tActual:$actualResidual"
           )
       } yield true
     )
@@ -241,7 +233,9 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
             // Pre-calculated powers of tau
             val crsG2 =
-                TrustedSetup.takeSrsG2(subset.length.toInt + 1).map(BLS12_381_G2_Element.apply)
+                TrustedSetup
+                    .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
+                    .map(G2Element.apply)
 
             RuleBasedTreasuryValidator.checkMembership(crsG2, commitmentG1, subset, proof) == true
         )

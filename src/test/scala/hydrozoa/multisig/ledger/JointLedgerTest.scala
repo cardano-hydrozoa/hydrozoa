@@ -55,7 +55,10 @@ import test.given
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
-    Pretty(_ => "MultiNodeConfig (too long to print)")
+    Pretty(_ =>
+        "MultiNodeConfig Summary:" +
+            s"\n\tnPeers: ${nodeConfig.nHeadPeers}"
+    )
 
 // TODO: restore? Do we use it?
 //given ppTestPeers: (TestPeers => Pretty) = testPeers =>
@@ -144,7 +147,8 @@ object JointLedgerTestHelpers {
 
             config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-            system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
+            // We should be using _.use instead...
+            system <- PropertyM.run(ActorSystem[IO]("JointLedger").allocated.map(_._1))
 
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
             stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))

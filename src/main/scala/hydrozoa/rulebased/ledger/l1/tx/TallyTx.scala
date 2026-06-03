@@ -132,6 +132,14 @@ object TallyTxOps {
 //              collateralUtxo.collateralOutput.addrKeyHash
 //            )
 
+            def isVoted(voteUtxo: VoteUtxo[?]): Boolean =
+                voteUtxo.voteOutput.status.isInstanceOf[VoteStatus.Voted]
+
+            val validityStart =
+                if isVoted(continuingVoteUtxo) && isVoted(removedVoteUtxo)
+                then List.empty
+                else List(ValidityStartSlot(votingDeadline.slot))
+
             for {
                 context <- contextualscalus.TransactionBuilder
                     .build(
@@ -144,9 +152,8 @@ object TallyTxOps {
                         // Send back the continuing vote utxo (the removed one is consumed)
                         tallied.send,
                         treasuryUtxo.referenceOutput,
-                        collateralUtxo.add,
-                        ValidityStartSlot(votingDeadline.slot)
-                      )
+                        collateralUtxo.add
+                      ) ++ validityStart
                     )
 
                 finalized <- context

@@ -368,7 +368,7 @@ case class Suite(
             operationalMultisigConfig <- generateNodeOperationMultisigConfig(
               config.headConfig.maxCardanoLiaisonPollingPeriod
             )
-            operationalLiquidationConfig <- generateNodeOperationEvacuationConfig(
+            operationalEvacuationConfig <- generateNodeOperationEvacuationConfig(
               testPeers.walletFor(Alice)
             )
         } yield Model
