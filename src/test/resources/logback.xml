@@ -16,6 +16,7 @@
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
     <logger name="Limiter" level="warn"/>
+    <logger name="Persistence" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>

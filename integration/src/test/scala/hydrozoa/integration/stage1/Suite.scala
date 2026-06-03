@@ -31,6 +31,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import org.typelevel.log4cats.Logger
@@ -538,13 +539,21 @@ case class Suite(
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
+            // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
+            // need a handle. `given IOLocal[Tracer]` is already in scope above.
+            persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
+            persistence <- {
+                given CardanoNetwork.Section = nodeConfig
+                Persistence.fromBackend(persistenceBackend)
+            }
             jointLedger <- system.actorOf(
               JointLedger(
                 nodeConfig,
                 jointLedgerConnections,
                 l2Ledger,
                 tracer,
-                tracerLocal
+                tracerLocal,
+                persistence
               )
             )
 
@@ -562,7 +571,7 @@ case class Suite(
             )
 
             consensusActor <- system.actorOf(
-              FastConsensusActor(nodeConfig, consensusConnections, tracerLocal)
+              FastConsensusActor(nodeConfig, consensusConnections, tracerLocal, persistence)
             )
 
             _ <- consensusActorD.complete(consensusActor)
