@@ -364,15 +364,11 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is AwaitingVote...
-                if continuingDatum.voteStatus match {
-                        case VoteStatus.AwaitingVote(_) => true
-                        case VoteStatus.Voted(_, _) =>
-                            removedDatum.voteStatus match {
-                                case VoteStatus.AwaitingVote(_) => true
-                                case VoteStatus.Voted(_, _)     => false
-                            }
-                    }
+                // If the voteStatus of either continuingInput or removedInput is AwaitingVote,
+                // the tally tx must wait for the voting deadline. Abstain is a terminal,
+                // peer-acknowledged "no commitment" — same as Voted for tally-timing purposes
+                // (deadline does NOT have to elapse to absorb an Abstain).
+                if isAwaiting(continuingDatum.voteStatus) || isAwaiting(removedDatum.voteStatus)
                 then {
                     // ...all the following must be satisfied
 
@@ -492,16 +488,30 @@ object DisputeResolutionValidator extends Validator {
                 require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
                 require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
 
-    // Utility to decide which vote is higher
+    /** True iff `s` is `AwaitingVote`. `Voted` and `Abstain` both count as terminal/decided. */
+    def isAwaiting(s: VoteStatus): Boolean =
+        s match {
+            case VoteStatus.AwaitingVote(_) => true
+            case VoteStatus.Voted(_, _)     => false
+            case VoteStatus.Abstain         => false
+        }
+
+    /** Pick the higher-precedence vote status. Precedence: `Voted` > `AwaitingVote` > `Abstain`.
+      */
     def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{AwaitingVote, Voted}
+        import VoteStatus.{Abstain, AwaitingVote, Voted}
         a match {
-            case AwaitingVote(_) => b
+            case Abstain => b
+            case AwaitingVote(_) =>
+                b match {
+                    case Abstain => a
+                    case _       => b
+                }
             case Voted(_commitmentA, versionMinorA) =>
                 b match {
-                    case AwaitingVote(_) => a
                     case Voted(_commitmentB, versionMinorB) =>
                         if versionMinorA > versionMinorB then a else b
+                    case _ => a
                 }
         }
 
