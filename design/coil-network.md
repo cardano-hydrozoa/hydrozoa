@@ -404,20 +404,58 @@ hears **every** coil in the head, via its hub forwarding **all** `HubCoilAckLane
 
 On the hub→coil direction, briefs / soft-acks / head hard-acks / coil hard-acks
 all arrive with `author ≠ remote` (authored across the population, merely relayed
-by the hub). So the coil's inbound author check relaxes from "author == hub" to
-"author ∈ known population, **verified by signature**":
+by the hub). The lane carries the **full signed** artifact, never a reference —
+the coil's `FastConsensusActor` / `SlowConsensusActor` verify each signature
+themselves. The hub is never trusted to vouch for an artifact; it only orders and
+forwards.
 
-- The lane carries the **full signed** `HardAck`s, never references — the
-  downstream `SlowConsensusActor` verifies each coil signature against
-  `coilPeerVKey` itself. The hub is never trusted to vouch for an ack; it only
-  orders and forwards.
-- The `CoilAckSequencer` must preserve **per-coil order** when sequencing (a
-  coil's `hardAckNum` stays monotone); cross-coil interleaving is free.
+#### Hub→coil link lane encoding (resolved 2026-06-04)
+
+The mesh's per-author / sparse-leader lanes don't fit a single link that
+multiplexes the whole population. The coil link uses **two lane shapes**, both
+single-cursor:
+
+- **Briefs (block + stack): contiguous.** The hub relays *every* block and stack
+  in number order (not its own leader subset), so the cursor is plain
+  `num.increment` and the existing brief verify (number-match, no author check)
+  works unchanged. The hub's `JointLedger` already re-produces every block in
+  order, so it is the natural ordered source.
+- **Soft-acks + hard-acks: re-sequenced relay lanes.** A per-author cursor can't
+  multiplex N authors, so the hub stamps each relayed ack with a **hub-local
+  contiguous sequence number** and carries it on a relay lane (exactly the
+  `HubCoilAckLane` shape — a sequenced wrapper over the signed ack, **no author
+  check on the wire**). The receiving actor verifies the embedded signature and
+  aggregates by the embedded author. This generalizes the existing
+  `CoilAckSequencer`: the hub re-sequences **all** acks the coil needs (every head
+  soft-ack + hard-ack, plus other coils' hard-acks) onto the coil link.
+
+Consequences:
+
 - The hub **does not** strip a coil's own acks from the lane it sends that coil.
-  Filtering would punch seqNum gaps into a contiguous lane and break the
-  next-expected cursor; instead the coil's `SlowConsensusActor` simply dedups the
-  echo of its own ack (it already holds it). Keeping the lane whole preserves the
-  invariant.
+  Filtering would punch seqNum gaps into the contiguous lane and break the
+  next-expected cursor; instead the coil's `SlowConsensusActor` **dedups the echo
+  of its own ack** (it already holds it — see `handleRemoteHardAck`). Keeping the
+  lane whole preserves the invariant. Same rule for the coil's own soft-ack echo
+  in `FastConsensusActor`.
+- Per-author monotonicity is preserved *within* the re-sequenced stream (a given
+  author's acks keep their relative order); cross-author interleaving is free.
+
+#### Implementation plan (Pc4)
+
+1. **Lane-policy seam in `BatchProtocolLiaison`.** Parameterize the brief lanes
+   (sparse-leader vs contiguous) and add re-sequenced soft-ack / hard-ack relay
+   lanes (mirroring the `hubCoilAck` lane). `HeadPeerToCoilLiaison` selects
+   contiguous briefs + relay-ack lanes; `CoilPeerToHeadLiaison` consumes them.
+2. **Hub feed.** The hub fans every brief it (re)produces and every soft/hard-ack
+   it sees to its coil-ward liaisons, via relay sequencers analogous to
+   `CoilAckSequencer` (one ordering point per relayed lane). Sourced from the
+   hub's received-from-mesh state (this section's "cost of being a hub").
+3. **Coil-side dedup of own soft-ack echo** in `FastConsensusActor` (the hard-ack
+   echo dedup already landed).
+4. **Settling.** With the relay in place a **paced ≥2-head / `coilQuorum`=1**
+   config (alternating leaders, unlike the never-idle single leader) lets the
+   generative stage4 harness settle, so `One-head-one-coil` graduates to a
+   multi-head green property.
 
 ### The cost of being a hub
 
