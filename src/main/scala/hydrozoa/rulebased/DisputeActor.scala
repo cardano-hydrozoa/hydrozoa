@@ -84,6 +84,25 @@ final case class DisputeActor(
             }
         } yield a
 
+    /** Build, log, sign, and submit one dispute-flow tx. Each arm of `handleDisputeRes` differs
+      * only in `label`, the lazy build result, and the per-tx-family error wrapper — this helper
+      * collapses the shared pattern.
+      */
+    private def buildAndSubmit[T <: Tx[T], E <: Throwable](
+        label: String,
+        result: => Either[E, T],
+        wrapError: E => Throwable,
+    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
+        for {
+            _ <- EitherT.liftF(Tracer.info(s"Building $label Tx"))
+            tx <- result match {
+                case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
+                case Right(tx) => EitherT.right(IO.pure(tx))
+            }
+            _ <- EitherT.liftF(Tracer.info(s"Submitting $label Tx"))
+            _ <- signAndSubmitTx[T](tx)
+        } yield ()
+
     private def signAndSubmitTx[TxType <: Tx[TxType]](
         tx: Tx[TxType],
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
@@ -174,39 +193,31 @@ final case class DisputeActor(
                 case DisputeUtxos.CastVote(ownVoteUtxo) =>
                     action match {
                         case RuleBasedRegimeManager.DisputeAction.Vote(sec, signatures) =>
-                            val builder = VoteTx.Build(
-                              uncastVoteUtxo = ownVoteUtxo,
-                              treasuryUtxo = treasuryUtxo,
-                              collateralUtxo = collateralUtxo,
-                              sec = sec,
-                              signatures = signatures,
+                            buildAndSubmit(
+                              label = "vote",
+                              result = VoteTx
+                                  .Build(
+                                    uncastVoteUtxo = ownVoteUtxo,
+                                    treasuryUtxo = treasuryUtxo,
+                                    collateralUtxo = collateralUtxo,
+                                    sec = sec,
+                                    signatures = signatures,
+                                  )
+                                  .result,
+                              wrapError = Error.BuildError.Vote(_)
                             )
-                            for {
-                                _ <- EitherT.liftF(Tracer.info("Building vote Tx"))
-                                voteTx <- builder.result match {
-                                    case Left(e) =>
-                                        EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
-                                    case Right(tx) => EitherT.right(IO.pure(tx))
-                                }
-                                _ <- EitherT.liftF(Tracer.info("Submitting vote Tx"))
-                                _ <- signAndSubmitTx[VoteTx](voteTx)
-                            } yield ()
 
                         case RuleBasedRegimeManager.DisputeAction.Abstain =>
-                            val builder = AbstainTx.Build(
-                              uncastVoteUtxo = ownVoteUtxo,
-                              collateralUtxo = collateralUtxo
+                            buildAndSubmit(
+                              label = "abstain",
+                              result = AbstainTx
+                                  .Build(
+                                    uncastVoteUtxo = ownVoteUtxo,
+                                    collateralUtxo = collateralUtxo
+                                  )
+                                  .result,
+                              wrapError = Error.BuildError.Abstain(_)
                             )
-                            for {
-                                _ <- EitherT.liftF(Tracer.info("Building abstain Tx"))
-                                abstainTx <- builder.result match {
-                                    case Left(e) =>
-                                        EitherT.liftF(IO.raiseError(Error.BuildError.Abstain(e)))
-                                    case Right(tx) => EitherT.right(IO.pure(tx))
-                                }
-                                _ <- EitherT.liftF(Tracer.info("Submitting abstain Tx"))
-                                _ <- signAndSubmitTx[AbstainTx](abstainTx)
-                            } yield ()
                     }
 
                 case DisputeUtxos.Tally(otherUtxos) =>
@@ -234,36 +245,32 @@ final case class DisputeActor(
                         // - Randomized or otherwise came up with an algorithm for peers to optimistically not
                         //   submit non-disjoint tallying transactions
                         // But right now I'm just doing the simplest thing
-                        builder = TallyTx.Build(
-                          continuingVoteUtxo = continuing,
-                          removedVoteUtxo = removed,
-                          treasuryUtxo = treasuryUtxo,
-                          collateralUtxo = collateralUtxo
+                        _ <- buildAndSubmit(
+                          label = "tally",
+                          result = TallyTx
+                              .Build(
+                                continuingVoteUtxo = continuing,
+                                removedVoteUtxo = removed,
+                                treasuryUtxo = treasuryUtxo,
+                                collateralUtxo = collateralUtxo
+                              )
+                              .result,
+                          wrapError = Error.BuildError.Tally(_)
                         )
-                        tallyTx <- builder.result match {
-                            case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- signAndSubmitTx(tallyTx)
                     } yield ()
 
                 case DisputeUtxos.Resolve(finalVoteUtxo) =>
-                    for {
-                        _ <- EitherT.liftF(Tracer.info("Resolving treasury..."))
-                        resolutionTx <- ResolutionTx
-                            .Build(
-                              // FIXME: Partial, just doing this cast during a refactor
-                              talliedVoteUtxo = finalVoteUtxo.asInstanceOf[VoteUtxo[Voted]],
-                              treasuryUtxo = treasuryUtxo,
-                              collateralUtxo = collateralUtxo
-                            )
-                            .result match {
-                            case Left(e) =>
-                                EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- signAndSubmitTx(resolutionTx)
-                    } yield ()
+                    buildAndSubmit(
+                      label = "resolve",
+                      result = ResolutionTx
+                          .Build(
+                            talliedVoteUtxo = finalVoteUtxo,
+                            treasuryUtxo = treasuryUtxo,
+                            collateralUtxo = collateralUtxo
+                          )
+                          .result,
+                      wrapError = Error.BuildError.Resolution(_)
+                    )
 
                 // Treasury was still unresolved when we read it above but the dispute address holds
                 // no vote utxos. Per the spec this state is unreachable, so escalate.
@@ -333,9 +340,19 @@ final case class DisputeActor(
                 case Some(own) => IO.pure(DisputeUtxos.CastVote(own))
                 case None =>
                     parsed match {
-                        case Nil      => IO.pure(DisputeUtxos.EmptyVotes)
-                        case x :: Nil => IO.pure(DisputeUtxos.Resolve(x))
-                        case xs       => IO.pure(DisputeUtxos.Tally(xs))
+                        case Nil => IO.pure(DisputeUtxos.EmptyVotes)
+                        case x :: Nil =>
+                            x.voteOutput.status match {
+                                case _: Voted =>
+                                    IO.pure(
+                                      DisputeUtxos.Resolve(x.asInstanceOf[VoteUtxo[Voted]])
+                                    )
+                                case _ =>
+                                    IO.raiseError(
+                                      DisputeActor.Error.NonVotedUtxoAtResolve(x)
+                                    )
+                            }
+                        case xs => IO.pure(DisputeUtxos.Tally(xs))
                     }
             }
         } yield result
@@ -356,7 +373,7 @@ object DisputeActor {
     enum DisputeUtxos:
         case CastVote(ownVoteUtxo: VoteUtxo[AwaitingVote])
         case Tally(utxos: Seq[VoteUtxo[VoteStatus]])
-        case Resolve(finalVoteUtxo: VoteUtxo[VoteStatus])
+        case Resolve(finalVoteUtxo: VoteUtxo[Voted])
         case EmptyVotes
 
     type Config = NodePrivateConfig.Section & HeadConfig.Section
@@ -388,6 +405,13 @@ object DisputeActor {
             override def getMessage: String =
                 s"No compatible vote utxo with key ${voteUtxos.head._2.link} found. Datums found: " +
                     s"${voteUtxos.map { _._2 }}"
+        }
+        // Treasury is unresolved, exactly one vote utxo remains, but its status isn't Voted.
+        // The spec says the final tally output is always Voted — Abstain/AwaitingVote here
+        // means the on-chain state has diverged from what we expect, so we escalate.
+        case class NonVotedUtxoAtResolve(voteUtxo: VoteUtxo[VoteStatus]) extends Unrecoverable {
+            override def getMessage: String =
+                s"Single remaining vote utxo at resolve time is not Voted: $voteUtxo"
         }
         case class UnrecoverableCardanoBackendError(
             wrapped: CardanoBackend.Error
