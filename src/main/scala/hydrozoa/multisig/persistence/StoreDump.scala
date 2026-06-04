@@ -114,13 +114,14 @@ object StoreDump:
             case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck =>
                 try LaneKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
-            case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater =>
+            case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
+                Cf.EvacuationMap =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>
                 if key.length == 4 then s"HardConfirmation(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
-            case Cf.DepositMap | Cf.Treasury | Cf.EvacuationMap =>
+            case Cf.DepositMap | Cf.Treasury =>
                 if key.isEmpty then "(singleton)" else hex(key)
             case Cf.Meta =>
                 try s"Meta(${new String(key, "UTF-8")})"

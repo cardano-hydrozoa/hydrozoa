@@ -14,7 +14,7 @@ import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.ack.SoftAck
+import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
@@ -54,7 +54,7 @@ final case class JointLedger(
     given IOLocal[Tracer] = tracerLocal
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
-      * given so the typed `WriteBatch.put` calls in [[persistOwnBlock]] pick it up.
+      * given so the typed `WriteBatch.put` calls in [[persistOwnAckBundle]] pick it up.
       */
     private given CardanoNetwork.Section = config
 
@@ -705,7 +705,7 @@ final case class JointLedger(
             // 0. Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
             //    write-before-send): own brief (leader) + own soft-ack lanes + BlockResult +
             //    deposits snapshot, in one atomic WriteBatch.
-            _ <- persistOwnBlock(brief, softAck, blockResult)
+            _ <- persistOwnAckBundle(brief, softAck, blockResult)
             // 1. Broadcast the brief to peer liaisons (leader only).
             _ <- IO.whenA(config.ownHeadPeerId.isLeader(brief.blockNum))(
               (conn.peerLiaisons ! brief).parallel
@@ -726,11 +726,15 @@ final case class JointLedger(
       *   - the cumulative per-peer request high-water at this block → `RequestHighWater[blockNum]`
       *     (the previous block's high-water with this block's included request ids merged in; the
       *     `ReplayActor` reads `RequestHighWater[softAcked]` to seed each peer's RequestLane resume
-      *     cursor, §5.3).
+      *     cursor, §5.3);
+      *   - the L2 ledger's command number reached after this block's L2 commits →
+      *     `L2CommandNumber[blockNum]` (JointLedger's own recover reads
+      *     `L2CommandNumber[softAcked]` and calls `l2Ledger.restoreTo` to co-anchor the committed
+      *     L2 state, §R2b).
       *
       * Lane values carry the 12-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
       */
-    private def persistOwnBlock(
+    private def persistOwnAckBundle(
         brief: BlockBrief.Next,
         softAck: SoftAck,
         blockResult: BlockResult
@@ -743,6 +747,10 @@ final case class JointLedger(
             // the first block).
             priorHighWater <- previousBlockHighWater(brief.blockNum)
             highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.events.map(_._1))
+            // The L2 ledger has already committed this block's commands (JL is its sole, single-
+            // message-at-a-time driver), so its command number now reflects this block; record it
+            // so recover can co-anchor the L2 ledger to softAcked via restoreTo.
+            commandNumber <- l2Ledger.currentCommandNumber
             briefBatch =
                 if config.ownHeadPeerId.isLeader(brief.blockNum) then
                     WriteBatch.start.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
@@ -753,6 +761,7 @@ final case class JointLedger(
                   .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
                   .put(StoreKey.DepositMap)(deposits)
                   .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
+                  .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
             )
         } yield ()
 
@@ -904,6 +913,58 @@ object JointLedger {
           previousBlockHeader = config.initialBlock.blockBrief.header,
           deposits = DepositsMap.empty,
         )
+
+        /** Reconstruct the passive [[Done]] state after a crash and co-anchor the L2 ledger to the
+          * same `softAcked` boundary, or `None` if the store holds no own soft-ack yet (cold
+          * start).
+          *
+          * Beyond rebuilding `Done` from the store ([[recoverState]]), this reads the L2 command
+          * number recorded for the `softAcked` block and calls [[L2Ledger.restoreTo]] — the only
+          * effect on the L2 ledger. The consensus → L2 mapping stays wholly on this side; only the
+          * recorded command number crosses, never an ack (§R2b). A `RemoteL2Ledger` owns its own
+          * recovery and leaves `restoreTo` unsupported, so this path is for the EUTXO reference
+          * ledger.
+          */
+        def recover(
+            persistence: Persistence[IO],
+            l2Ledger: L2Ledger[IO],
+            softAcked: Option[SoftAckNumber]
+        )(using CardanoNetwork.Section): IO[Option[Done]] =
+            softAcked match
+                case None => IO.pure(None)
+                case Some(ackNum) =>
+                    val blockNum = ackNum.blockNum
+                    for {
+                        done <- doneAt(persistence, blockNum)
+                        commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
+                        _ <- l2Ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
+                    } yield Some(done)
+
+        /** The store-only half of [[recover]]: rebuild `Done(previousBlockHeader, deposits)` from
+          * the `softAcked` block's persisted brief + the deposits snapshot, with no L2 effect.
+          * `None` for an empty store. Exposed for tests that exercise the state reconstruction
+          * independently of the L2 ledger.
+          */
+        def recoverState(
+            persistence: Persistence[IO],
+            softAcked: Option[SoftAckNumber]
+        )(using CardanoNetwork.Section): IO[Option[Done]] =
+            softAcked match
+                case None         => IO.pure(None)
+                case Some(ackNum) => doneAt(persistence, ackNum.blockNum).map(Some(_))
+
+        /** Build `Done` from the brief persisted at `blockNum` (its header) and the deposits
+          * snapshot. Both are present in any non-empty store — the brief via `persistOwnAckBundle`
+          * (if this peer led) or `PeerLiaison.persistInbound` (if it received), the deposits via
+          * `persistOwnAckBundle` — so a missing entry is store corruption (fail-safe throw).
+          */
+        private def doneAt(persistence: Persistence[IO], blockNum: BlockNumber)(using
+            CardanoNetwork.Section
+        ): IO[Done] =
+            for {
+                brief <- persistence.getOrFail(LaneKey.Block(blockNum))
+                deposits <- persistence.getOrFail(StoreKey.DepositMap)
+            } yield Done(brief.payload.header, deposits)
     }
 
     final case class Done private[JointLedger] (

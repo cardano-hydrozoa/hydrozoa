@@ -214,6 +214,7 @@ Structural facts:
 | **Hard confirmation** (`HardConfirmation` CF)                                     | SlowConsensusActor → CardanoLiaison | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. CardanoLiaison submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | JointLedger | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
 | Request high-water (`RequestHighWater` CF)                                        | JointLedger | **per-block** — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]` giving the highest request from each peer included in any block `≤ blockNum` (cumulative, monotone in `blockNum`). One entry per own soft-ack, bundled with that block. The RequestLane recovery cursor is `RequestHighWater[softAcked] + 1` per peer. Persisted (not derived) because retention (§5.1) prunes the old briefs a brief-fold would need (§5.3); block-keyed (not a singleton) so the high-water at any committed block is recoverable. |
+| L2 command number (`L2CommandNumber` CF)                                          | JointLedger | **per-block** — keyed by `blockNum`, a single `Long`: the L2 ledger's commit counter reached after that block's L2 commits. One entry per own soft-ack, bundled with that block. On recover JointLedger reads `L2CommandNumber[softAcked]` and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state (§6). |
 | Treasury (`Treasury` CF)                                                          | StackComposer | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
 | Evacuation maps (`EvacuationMap` CF)                                              | StackComposer | **per-block, but only at the blocks that back an on-chain KZG commitment** — every **major** block (its post-diff map is the settlement's `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC), keyed by `blockNum`. SC folds each block's `evacuationMapDiff` onto the running map and persists the result at those blocks on every own hard-ack stack-close. The maps at other minors commit to nothing on-chain, so the rule-based dispute can never need them. KZG commitment derives from the map, not stored separately. |
 
@@ -776,7 +777,10 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
   load the **`deposits` map** from the snapshot bundled with the `softAcked` ack
   (§5.1, §5.2), and reload `previousBlockHeader` from `BlockLane[softAcked]` (its
   brief is already persisted there; no need to duplicate it in the snapshot).
-  Those two are JointLedger's whole passive state. (The acked-but-unconfirmed
+  Those two are JointLedger's whole passive state. It then **co-anchors the L2
+  ledger**: reads `L2CommandNumber[softAcked]` and calls `l2Ledger.restoreTo(it)` so
+  the committed L2 state matches the `softAcked` boundary (see the L2 co-anchoring
+  note above). (The acked-but-unconfirmed
   band `[softConfirmed + 1, softAcked]` is **not** JointLedger state: those
   blocks are already applied — JointLedger is at `Done(softAcked)` — and their
   pending soft-confirmations complete in the **aggregator**, not here; §5.2.)
@@ -790,7 +794,7 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
   `Block.SoftConfirmed.Next`. (`GetState.Sync` is a defined query with no current
   sender.)
 - **Persists:** on each own soft ack, one atomic `WriteBatch` (CR4/CR6/CR8)
-  spanning five CFs:
+  spanning six CFs:
     - the own `BlockBrief` → **`Block`** CF (leader only — BlockLane author),
     - the own soft-ack → **`SoftAck`** CF (SoftAckLane author),
     - the per-block **`BlockResult`** → **`BlockResult`** CF (keyed by
@@ -805,41 +809,65 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
       with this block's included request ids folded into the per-peer max). Feeds
       the RequestLane recovery cursors (§5.3) — recovery reads the entry at
       `softAcked`; written here so that entry stays aligned with the soft-ack and
-      survives brief pruning.
+      survives brief pruning,
+    - the **L2 command number** → **`L2CommandNumber`** CF (keyed by `blockNum`, a
+      single `Long`): `l2Ledger.currentCommandNumber` read after this block's L2
+      commit. On recover JointLedger reads the `softAcked` entry and calls
+      `l2Ledger.restoreTo` to co-anchor the committed L2 state.
 
-  Bundling deposits + request high-water here keeps both snapshots aligned with
-  the `softAcked` anchor (our last soft-ack) and un-tearable from it. No marker key
+  Bundling deposits, request high-water, and the L2 command number here keeps these
+  snapshots aligned with the `softAcked` anchor (our last soft-ack) and un-tearable
+  from it. No marker key
   is written:
   `softAcked = max(SoftAck.softAckNum where peer == own)` derives from the
   `SoftAck` CF on restart (§5.1). Soft-**confirmation** is *not* written here
   — that is `FastConsensusActor`'s job (below). The own soft-ack's
   equivocation guard is a PeerLiaison-boundary fact per CR2; JointLedger
   computes the signature.
-- **L2 co-anchoring (keyed by an L2 serial number — *not* by any ack).**
+- **L2 co-anchoring (keyed by an L2 command number — *not* by any ack).**
   `Producing.l2LedgerState` is WIP; the committed L2 state lives in the `L2Ledger`
   black box (its own persistence). That black box **knows nothing of acks, blocks,
   stacks, or confirmations**, so its persistence is keyed by something intrinsic to
   *its own* operation, never by a consensus marker like `softAcked`. The key is the
-  L2's own **monotonic serial number** — a commit counter it increments on each
+  L2's own **monotonic command number** — a commit counter it increments on each
   state-mutating command. (A content hash of the evacuation map was considered and
   dropped: no cheap whole-map hash exists — only a slow `kzgCommitment` BLS pairing
   and a private per-entry blake2b — and the EUTXO ledger holds `activeUtxos` + diffs,
   not an assembled map, so a content key would cost a projection + digest per commit.
-  Recovery needs only a stable per-commit key, which the serial gives for free.) The
-  L2 reconstructs from `(initial state, target serial)`; the interface is
-  `restoreTo(serial)`. The **consensus → L2 translation lives entirely on the
-  JointLedger side**: the L2 returns its new serial on each commit, JL records per
-  own soft-ack the serial for that block (durable alongside its own snapshot), and on
-  recover restores `Done(softAcked)` then calls `restoreTo(thatBlock'sSerial)`. The
-  co-anchoring requirement is still exact — the two must agree on the same committed
-  point — but the membrane is never crossed by an ack; only a serial passes.
+  Recovery needs only a stable per-commit key, which the command number gives for free.) The
+  L2 reconstructs from `(initial state, target command number)`; the interface is
+  `restoreTo(commandNumber)`. The **consensus → L2 translation lives entirely on the
+  JointLedger side**: JointLedger reads the L2's `currentCommandNumber` right after the
+  block's commits and records it per own soft-ack as that block's command number (the
+  per-block `Cf.L2CommandNumber`, written in the same atomic bundle as the soft-ack); on
+  recover it restores `Done(softAcked)` then calls `restoreTo(L2CommandNumber[softAcked])`.
+  The co-anchoring requirement is still exact — the two must agree on the same committed
+  point — but the membrane is never crossed by an ack; only a command number passes.
+  - **Command counting — how & why.** The command number is the **L2's own** counter: it
+    keys the L2's log / snapshot and is the argument to `restoreTo`, so the L2 holds it
+    internally no matter what. JointLedger learns each block's value by reading
+    `l2Ledger.currentCommandNumber` **after** that block's L2 commits (inside
+    `persistOwnAckBundle`, just before the atomic batch) — a clean **post-block** boundary value
+    (block N's commands are done; N+1's haven't started). The read is a non-atomic query in
+    general, but **safe here because JointLedger is the sole, single-message-at-a-time L2
+    driver** — nothing commits between a block's last command and the read. *Why a query, not
+    JointLedger-side counting:* JL could count the successful real commands itself (it issues
+    them all and sees each result), but the L2 **already** owns the counter above, so counting
+    on JL's side would *duplicate* it and force JL to mirror the L2's "which commands advance"
+    rule — two definitions that can silently drift into a wrong `restoreTo` (corrupt
+    recovery). The query keeps that rule single-sourced in the L2; JointLedger only reads. If
+    the trait surface ever needs to shrink (so a remote L2 need not expose a query), the
+    cleaner alternative is to **return the new command number with each commit** (or carry it
+    on the consumer-side `L2LedgerState`) — same single source, no query, no JL counting.
+    Either way the value is **persisted** per soft-ack and read back at recover; an in-memory
+    count would not survive the crash.
   - **Cost / optimization.** Full L2 state is far larger than the deposits map, so
     snapshotting it at *every* commit may be too expensive. The `L2Ledger` may
-    instead snapshot **less frequently** and restore-to-serial by loading its nearest
-    snapshot `≤ serial` and replaying its own command log forward to the target — the
+    instead snapshot **less frequently** and restore-to-command-number by loading its nearest
+    snapshot `≤ commandNumber` and replaying its own command log forward to the target — the
     usual snapshot-interval-vs-replay-length tradeoff, internal to the black box. The
     mechanism is delegated / out-of-scope here; the contract is the
-    `restoreTo(serial)` interface plus JL holding the soft-ack → serial mapping.
+    `restoreTo(commandNumber)` interface plus JL holding the soft-ack → command-number mapping.
 
 #### FastConsensusActor, SlowConsensusActor
 
@@ -999,7 +1027,7 @@ Two further mechanisms we lean on:
 - **`WriteBatch`** — a group of puts/deletes committed **atomically** as a single
   WAL record. All operations land or none, even after a crash. This is our
   durability barrier for CR4/CR6/CR8 (e.g. the per-soft-ack bundle
-  `{brief, ack, BlockResult, DepositMap, RequestHighWater}` lands together across
+  `{brief, ack, BlockResult, DepositMap, RequestHighWater, L2CommandNumber}` lands together across
   five CFs).
 - **Column families (CFs)** — logically separate keyspaces inside one DB, each
   with its own MemTable + its own SSTables, all **sharing the WAL**. The shared
@@ -1021,7 +1049,7 @@ Two further mechanisms we lean on:
     - **Per-CF metrics + backup granularity** — observability and (later) backups
       are CF-level.
 
-Our store opens **13 CFs** — singular names throughout, no marker CF (every
+Our store opens **14 CFs** — singular names throughout, no marker CF (every
 marker derives from a single-CF scan, §5.1):
 
 ```
@@ -1106,23 +1134,23 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   else that would breach the R10 evacuation floor (§5.1 note). The storage
   engine's own **native (SST) compaction** runs underneath and is a separate,
   internal matter.
-- **Column families.** Thirteen CFs — five lane (`Block`, `Stack`, `Request`,
-  `SoftAck`, `HardAck`; §7.1), four spine-indexed working / confirmation
-  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`, `RequestHighWater`),
-  three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs;
+- **Column families.** Fourteen CFs — five lane (`Block`, `Stack`, `Request`,
+  `SoftAck`, `HardAck`; §7.1), five spine-indexed working / confirmation
+  (`BlockResult`, `SoftConfirmation`, `HardConfirmation`, `RequestHighWater`,
+  `L2CommandNumber`), three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs;
   `EvacuationMap` keyed per committed block), and one metadata
   (`Meta`, store version + the arrival-stamp generation counter, §5.4). The
   generic benefits of CF-per-concern (per-CF
   tuning, compaction isolation, scoped Bloom filters, tag-byte savings) are
   enumerated in the primer above. **Atomicity across CFs is preserved**:
   `WriteBatch` covers puts in multiple CFs as one WAL record, so the per-soft-ack
-  bundle `{Block, SoftAck, BlockResult, DepositMap, RequestHighWater}` lands as one
-  transaction even though its pieces live in five CFs.
+  bundle `{Block, SoftAck, BlockResult, DepositMap, RequestHighWater, L2CommandNumber}`
+  lands as one transaction even though its pieces live in six CFs.
 - **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
   CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
   committed block (§3.2).
 
-**Per-CF profile — what CF-per-concern buys us.** The thirteen CFs have very
+**Per-CF profile — what CF-per-concern buys us.** The fourteen CFs have very
 different workload shapes, and the win of splitting them is that each one's
 tuning knobs (block size, Bloom-filter bits / prefix extractor, MemTable size,
 compaction style) can match its shape. Concretely:
@@ -1137,6 +1165,7 @@ compaction style) can match its shape. Concretely:
 | `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (CardanoLiaison + rule-based regime, §6, §10 Q6) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
 | `RequestHighWater` | one entry per block keyed by `blockNum`, a small `Map[HeadPeerNumber, RequestNumber]` (`N` entries), written on every own soft ack (cumulative — each entry extends the previous) | scan-optimized + sparse like `BlockResult`; recovery reads the `softAcked` entry to seed the `N` RequestLane cursors (§5.3); its own CF keeps the churn off the lane / ack compaction queues |
+| `L2CommandNumber` | one entry per block keyed by `blockNum`, a single `Long` (the L2 ledger's commit counter reached after that block's L2 commits), written on every own soft ack | tiny scan-optimized + sparse CF; JointLedger's own `recover` reads the `softAcked` entry and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state (§6); isolated from the lane / ack compaction queues |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
 | `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
 | `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open (§5.4), so this process's lane stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |

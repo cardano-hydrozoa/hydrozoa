@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
+import hydrozoa.multisig.ledger.l2.L2CommandNumber
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import java.nio.file.{Files, Path}
@@ -50,6 +51,17 @@ class PersistenceTest extends AnyFunSuite:
                 got3 <- p.get(StoreKey.RequestHighWater(BlockNumber(3)))
                 got4 <- p.get(StoreKey.RequestHighWater(BlockNumber(4)))
             yield assert(got3 == Some(atBlock3) && got4 == Some(atBlock4))
+        }
+    }
+
+    test("L2CommandNumber round-trips per-block command numbers under distinct keys") {
+        withTypedStore { p =>
+            for
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(3)))(L2CommandNumber(7L))
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(4)))(L2CommandNumber(8L))
+                got3 <- p.get(StoreKey.L2CommandNumber(BlockNumber(3)))
+                got4 <- p.get(StoreKey.L2CommandNumber(BlockNumber(4)))
+            yield assert(got3 == Some(L2CommandNumber(7L)) && got4 == Some(L2CommandNumber(8L)))
         }
     }
 

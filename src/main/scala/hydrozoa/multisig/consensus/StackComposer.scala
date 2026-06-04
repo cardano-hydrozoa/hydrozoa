@@ -13,10 +13,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
+import hydrozoa.multisig.persistence.recovery.BlockResultScan
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
 
 /** Stack composer.
@@ -853,5 +855,54 @@ object StackComposer {
           treasury = config.initializationTx.treasuryProduced,
           evacuationMap = config.initialEvacuationMap
         )
+
+        /** Reconstruct the full [[State]] from the store after a crash, or `None` if the store
+          * holds no own hard-ack yet (cold start — the actor keeps [[initial]] and runs
+          * `bootstrapInitialStack`). The last own hard-ack's `stackNum` is the last stack this peer
+          * closed; from it we restore the treasury + evacuation-map snapshots and the counters, and
+          * rebuild `pending` from the `BlockResult`s soft-acked since that stack's last block.
+          * `ready` and `inboundLeaderBrief` start empty — the `Block.SoftConfirmed` halves and
+          * inbound briefs arrive from replay (R3), re-pairing into `ready`.
+          *
+          * `hardAcked` is a [[HardAckNumber]] (the satellite key), NOT a stack number, so the stack
+          * number is read from the last own HardAck **value**; the marker number gives only
+          * `nextOwnHardAckNum = hardAcked + 1`. The brief, treasury, and evacuation map are present
+          * on every peer for any hard-acked stack — the brief via `persistOwnStackClose` (if this
+          * peer led) or `PeerLiaison.persistInbound` (if it received); treasury + evacuation map
+          * are written by every peer at each close — so a missing entry is store corruption.
+          */
+        def recover(
+            persistence: Persistence[IO],
+            hardAcked: Option[HardAckNumber],
+            hardConfirmed: Option[StackNumber],
+            own: HeadPeerNumber
+        )(using CardanoNetwork.Section): IO[Option[State]] =
+            hardAcked match
+                case None => IO.pure(None)
+                case Some(hardAckNum) =>
+                    for {
+                        lastHardAck <- persistence.getOrFail(LaneKey.HardAck(own, hardAckNum))
+                        hardAckedStack = lastHardAck.payload.stackNum
+                        treasury <- persistence.getOrFail(StoreKey.Treasury)
+                        stackBrief <- persistence.getOrFail(LaneKey.Stack(hardAckedStack))
+                        lastBlockNum = stackBrief.payload.lastBlockNum
+                        evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
+                        blockResults <- BlockResultScan.scanFrom(persistence.backend, lastBlockNum)
+                    } yield Some(
+                      blockResults.foldLeft(
+                        State(
+                          pending = Map.empty,
+                          ready = Map.empty,
+                          inboundLeaderBrief = Map.empty,
+                          lastClosedStackNum = hardAckedStack,
+                          lastClosedBlockNum = lastBlockNum,
+                          previousStackHardConfirmed =
+                              hardConfirmed.exists(Ordering[StackNumber].gteq(_, hardAckedStack)),
+                          nextOwnHardAckNum = hardAckNum.increment,
+                          treasury = treasury,
+                          evacuationMap = evacuationMap
+                        )
+                      )(_.recordBlockResult(_))
+                    )
     }
 }

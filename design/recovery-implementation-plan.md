@@ -7,9 +7,12 @@ build the read/boot side. Section refs (§5.1 etc.) point at the design doc.
 **Status:** Draft for review · **Branch:** `feature/recovery` · 2026-05-31
 **Scope:** head-peer multisig recovery read-path only (coil, TDX, rule-based
 payloads out of scope per design §1).
-**Landed:** R1 (recovery primitives) · R2b (EUTXO L2 persistence — `L2Serial`,
-`L2Store` InMemory + RocksDB, `restoreTo`/`currentSerial`, codecs, tests). **Next:**
-R2-fast.
+**Landed:** R1 (recovery primitives) · R2b (EUTXO L2 persistence — `L2CommandNumber`,
+`L2Store` InMemory + RocksDB, `restoreTo`/`currentCommandNumber`, codecs, tests) · R2-fast
+recover seams (2026-06-02): `RequestHighWater` write; per-block `Cf.L2CommandNumber` (14th CF) +
+its `persistOwnAckBundle` write; `JointLedger.State.recover`/`recoverState` (+ L2 co-anchor via
+`restoreTo`); `StackComposer.State.recover`; `BlockResultScan` — all pure-over-store and
+unit-tested, with the actor wiring deferred to R3. **Next:** R2-bnd (boundary restores).
 
 ---
 
@@ -47,9 +50,9 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
 - `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
   R10 read path (design §10 Q6, priority P2) does not exist.
 - ~~**EUTXO L2 ledger has no persistence at all**~~ **Done (R2b, 2026-05-31):**
-  `EutxoL2Ledger` now owns a serial-keyed `L2Store` (InMemory + RocksDB), advances an
-  `L2Serial` on each real mutator, snapshots every `SnapshotInterval`, and restores via
-  `restoreTo(serial)`. The JL-side co-anchoring (recording the per-soft-ack serial) is
+  `EutxoL2Ledger` now owns a command-number-keyed `L2Store` (InMemory + RocksDB), advances an
+  `L2CommandNumber` on each real mutator, snapshots every `SnapshotInterval`, and restores via
+  `restoreTo(commandNumber)`. The JL-side co-anchoring (recording the per-soft-ack command number) is
   still R2-fast.
 - PeerLiaison queues are not loaded from the store on boot (`state = State()`
   starts empty); see R2.
@@ -60,6 +63,15 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
 `[generation:4][monotonicNanos:8]` and §5.4. `ArrivalStamp(generation: Int,
 monotonic: Long)` is 12 bytes — the code comment is wrong. Correct it when R1
 touches that area.
+
+**Deferred cleanup (StoreKey codec altitude, 2026-06-04):** `StoreKey.decodeValue` /
+`encodeValue` + the `given codec` live on the **key instance**, but a codec is really a property of
+the **(CF, value-type)**, not of a particular key. Point `get` / `put` always have a key so it reads
+naturally; **value-only iteration** (`BlockResultScan` today; the FCA/SCA spine scans coming in R3)
+has values but no single key, so it rebuilds a key from the cursor's key bytes purely to reach the
+codec. Cleaner: lift the codec to the case **companion** (or a `Cf`-indexed codec) so value-only ops
+decode without an instance, keeping the instance `decodeValue` as one-line sugar. Small, isolated —
+do it when the R3 spine scans land (they want the same accessor).
 
 ---
 
@@ -140,7 +152,14 @@ right after connections resolve: *if the store is non-empty, `state.set(recovere
 else keep the cold/bootstrap value.* Markers being all-`None` **is** the empty-store
 signal — no separate "is cold" flag.
 
-#### R2-fast — JointLedger + StackComposer recover (+ RequestHighWater write)
+#### R2-fast — JointLedger + StackComposer recover (+ RequestHighWater write) — LANDED 2026-06-02
+
+The recover functions are **pure over the store** (`recover` / `recoverState` on each actor's
+`State` companion), unit-tested by seeding a store and asserting the reconstructed value equals the
+crash-time value; the **actor wiring** (calling them in `preStart`, skipping `bootstrapInitialStack`,
+deriving markers) is deferred to R3. The spine briefs a recover reads are present on **every** peer —
+own (leader) via the producer, inbound via `PeerLiaison.persistInbound` — so there is no follower
+gap.
 
 - **JointLedger** → restore `Done(previousBlockHeader, deposits)`. Today
   `State.initialize(config) = Done(config.initialBlock.blockBrief.header,
@@ -149,17 +168,19 @@ signal — no separate "is cold" flag.
   `BlockLane[softAcked].brief` (the persisted own/leader brief). A mid-`Producing`
   block is **not** restored — it was never acked, so `Done(softAcked)` is the whole
   passive state; BlockWeaver re-drives the `[softAcked + 1, head]` tail in R3.
-  - **L2 co-anchoring (keyed by an L2 serial number, *not* by ack — Ilia
+  - **L2 co-anchoring (keyed by an L2 command number, *not* by ack — Ilia
     2026-05-31).** Also restore the committed L2 state to match JL's `softAcked`. The
     L2 ledger is a **black box that knows nothing of acks / blocks / stacks /
-    confirmations**, so it is addressed by its own **monotonic serial** (commit
-    counter), and recovers from `(initial state, target serial)`. JL holds the
-    translation: per own soft-ack it records the L2 serial for that block (durable on
-    JL's side), and on recover calls `l2Ledger.restoreTo(serial)` — the consensus →
-    L2 mapping stays entirely on JL; the membrane is never crossed by an ack. R2b
-    builds this; R2-fast assumes it exists (we do R2b first — see §5).
+    confirmations**, so it is addressed by its own **monotonic command number** (commit
+    counter), and recovers from `(initial state, target command number)`. JL holds the
+    translation: per own soft-ack `persistOwnAckBundle` reads `l2Ledger.currentCommandNumber`
+    (after the block's L2 commit) and records it under the per-block `Cf.L2CommandNumber`
+    (14th CF); on recover it reads `L2CommandNumber[softAcked]` and calls
+    `l2Ledger.restoreTo(it)` — the consensus → L2 mapping stays entirely on JL; the
+    membrane is never crossed by an ack. (R2b built `restoreTo` / `currentCommandNumber`;
+    R2-fast added the per-soft-ack recording + the recover call.)
   - **Write-side addition (`RequestHighWater`) — LANDED 2026-06-01:**
-    `persistOwnBlock` writes `{Block(leader), SoftAck, BlockResult, DepositMap}` in
+    `persistOwnAckBundle` writes `{Block(leader), SoftAck, BlockResult, DepositMap}` in
     one `WriteBatch`; a fifth put `StoreKey.RequestHighWater(blockNum)` was added —
     the previous block's high-water with this block's included request ids folded in
     via `ReplayCursors.mergeHighWater`, keyed **per block** (not a singleton, so the
@@ -173,18 +194,22 @@ signal — no separate "is cold" flag.
   `treasury = config.initializationTx.treasuryProduced`,
   `evacuationMap = config.initialEvacuationMap`, empty maps, and `PreStart` runs
   `bootstrapInitialStack` (compose stack 0 → hand to SlowConsensusActor). Recover
-  (when `hardAcked` is `Some`): `treasury` from `Cf.Treasury`; `evacuationMap` from
-  `EvacuationMap[StackLane[hardAcked].lastBlockNum]` (load invariant §5.2);
-  `pending` rebuilt from a `BlockResult` scan over
-  `(StackLane[hardAcked].lastBlockNum, head]` via `recordBlockResult` (the
+  (when `hardAcked` is `Some`): the marker `hardAcked` is a `HardAckNumber` (the
+  satellite key), **not** a stack number, so the closed-stack number `hardAckedStack`
+  is read from the **last own HardAck value** (`HardAck.stackNum` at
+  `HardAck[own, hardAcked]`); the marker only gives `nextOwnHardAckNum = hardAcked + 1`.
+  Then: `treasury` from `Cf.Treasury`; `lastClosedBlockNum` from
+  `StackLane[hardAckedStack].lastBlockNum`; `evacuationMap` from
+  `EvacuationMap[lastClosedBlockNum]` (load invariant §5.2); `pending` rebuilt from
+  `BlockResultScan.scanFrom(lastClosedBlockNum)` — the BlockResults soft-acked since the
+  last close, `(lastClosedBlockNum, softAcked]` — folded via `recordBlockResult` (the
   `Block.SoftConfirmed` halves arrive from FCA replay in R3, completing each
-  `PendingBlock` then `tryPair → ready`); counters derived
-  (`lastClosedStackNum = hardAcked`, `lastClosedBlockNum =
-  StackLane[hardAcked].brief.lastBlockNum`, `nextOwnHardAckNum = max(own HardAck)
-  + 1`, `previousStackHardConfirmed = hardAcked ≤ hardConfirmed`).
-  `inboundLeaderBrief` fills from replayed StackLane in R3. **Skip
-  `bootstrapInitialStack` on a non-empty store** — stack 0 long since hard-confirmed;
-  keep it only for the empty-store cold path.
+  `PendingBlock` then `tryPair → ready`); the remaining counters are
+  `lastClosedStackNum = hardAckedStack` and
+  `previousStackHardConfirmed = hardAckedStack ≤ hardConfirmed`. `ready` /
+  `inboundLeaderBrief` start empty and fill from replay in R3. **Skip
+  `bootstrapInitialStack` on a non-empty store** (R3 wiring) — stack 0 long since
+  hard-confirmed; keep it only for the empty-store cold path.
 
 #### R2-bnd — boundary restores (restore only, no replay)
 
@@ -238,7 +263,7 @@ This is its own work item because the `L2Ledger` is a separate component (the bl
 box behind the `L2Ledger[F]` trait), and SugarRush will have its own L2 with its own
 store. Scope here = the **EUTXO reference ledger** only.
 
-**The anchoring key is an L2-internal serial number — not any consensus marker, and
+**The anchoring key is an L2-internal command number — not any consensus marker, and
 not a content hash (Ilia 2026-05-31).** The L2 ledger knows nothing about acks,
 blocks, stacks, or confirmations, so keying its snapshots by `softAcked` would leak
 consensus vocabulary across the membrane. A *content* hash was considered (the
@@ -247,14 +272,14 @@ only offers `kzgCommitment` (a slow BLS12-381 pairing, unviable per-interaction)
 a *private per-entry* blake2b; worse, the EUTXO ledger doesn't even hold an
 `EvacuationMap` (it holds `activeUtxos` + emits diffs), so a content key would force
 both a `toEvacuationMap` projection and a new digest on every commit. Instead the L2
-keeps its **own monotonic serial number** — a commit counter it increments on each
+keeps its **own monotonic command number** — a commit counter it increments on each
 state-mutating command. Cheap, deterministic, consensus-agnostic; recovery doesn't
-need content-addressing, only a stable per-commit key, which the serial gives for
-free.
+need content-addressing, only a stable per-commit key, which the command number gives
+for free.
 
-**Recovery contract: the L2 reconstructs from `(initial state, target serial)`.**
-The initial state it already has (`config.initialEvacuationMap`); the target serial
-is the only recovery input it takes.
+**Recovery contract: the L2 reconstructs from `(initial state, target command number)`.**
+The initial state it already has (`config.initialEvacuationMap`); the target command
+number is the only recovery input it takes.
 
 **Storage: own RocksDB store, two CFs, via a dedicated `L2Store` (Ilia 2026-05-31).**
 The L2 owns its store (separate from the consensus store) — clean black-box boundary,
@@ -265,96 +290,96 @@ CF set would force parameterizing `BackendStore[F, C]` + `RawWriteBatch[C]` over
 CF type — a refactor reaching committed R1 (`LaneScan`/`ReplayCursors`) +
 `Persistence`/`Markers`/`StoreDump`. Rejected. Instead a **small purpose-built
 `L2Store` trait** in the `eutxol2` package, with `InMemory` + `RocksDb` impls, exposing
-exactly what the two serial-keyed CFs need (append log entry, get snapshot ≤ serial,
-scan log range, put snapshot). `EutxoL2Ledger.apply(config, store: L2Store[IO])` takes
+exactly what the two command-number-keyed CFs need (append log entry, get snapshot ≤
+command number, scan log range, put snapshot). `EutxoL2Ledger.apply(config, store: L2Store[IO])` takes
 it as a param (caller provides; tests use the in-memory impl). Zero consensus-store /
 R1 churn.
 
-- **`L2Log` CF** — append-only command log, key = `serial` (BE), value = the applied
+- **`L2Log` CF** — append-only command log, key = `commandNumber` (BE), value = the applied
   ledger-state command. The **source of truth.** For the EUTXO ledger the command
   *is* the diff (applying it via the deterministic `transit` reproduces the next
   `activeUtxos`), so an event-sourced log needs no separate diff type.
-- **`L2Snapshot` CF** — restore accelerator, key = `serial` (BE), value = full
-  `State` at that serial. Written every **N** commits, where **`N` is a named
+- **`L2Snapshot` CF** — restore accelerator, key = `commandNumber` (BE), value = full
+  `State` at that command number. Written every **N** commits, where **`N` is a named
   constant — `SnapshotInterval = 100`** (Ilia 2026-05-31; tune later if needed, not
   config-driven for now). Genesis (`config.initialEvacuationMap`) is the implicit
-  serial-0 snapshot, so an empty CF is fine.
+  command-number-0 snapshot, so an empty CF is fine.
 
 `restoreTo(S)`: `SeekForPrev` the greatest snapshot key `≤ S` (else genesis), load
-it, then re-fold the `L2Log` entries `(snapSerial, S]`. The log is authoritative; the
+it, then re-fold the `L2Log` entries `(snapCommandNumber, S]`. The log is authoritative; the
 snapshot only bounds replay length.
 
-**Which commands advance the serial + get logged: the ledger-state mutators only**
+**Which commands advance the command number + get logged: the ledger-state mutators only**
 — `sendApplyTransaction`, `sendApplyDepositDecisions`, `sendRegisterDeposit` (they
 mutate `activeUtxos` / `pendingDeposits`). The proxy commands
 (`sendProxyBlockConfirmation`, `sendProxyRequestError`) write transient,
 client-facing data (`confirmations` / `errors`) that recovery's co-anchoring does
-not need — **excluded** from serial + log (so `confirmations` / `errors` are *not*
+not need — **excluded** from the command number + log (so `confirmations` / `errors` are *not*
 restored; a client needing them post-restart is a separate concern).
 
 **Factoring (so restore reuses production logic exactly).** Split each mutator into a
 pure `applyMutation(state, cmd): Either[L2LedgerError, State]` (the existing `transit`
-core, advancing `state.serial`) and a public method = `applyMutation` + append to
+core, advancing `state.commandNumber`) and a public method = `applyMutation` + append to
 `L2Log` + snapshot-every-N. Restore folds `applyMutation` over the logged commands —
-**no re-logging, no re-snapshot, no serial re-bump.** Relies on `transit` being
+**no re-logging, no re-snapshot, no command-number re-bump.** Relies on `transit` being
 deterministic given `(state, command)` (true today; verify at the top of R2b).
 
-- **Interface:** `restoreTo(serial): EitherT[F, L2LedgerError, Unit]` on `L2Ledger[F]`
-  (name TBD), implemented by `EutxoL2Ledger` from `(genesis, serial)` via the
+- **Interface:** `restoreTo(commandNumber): EitherT[F, L2LedgerError, Unit]` on `L2Ledger[F]`
+  (name TBD), implemented by `EutxoL2Ledger` from `(genesis, commandNumber)` via the
   snapshot + log above.
-- **Serial exposure: a `currentSerial` query (Ilia 2026-05-31).** Add
-  `currentSerial: F[L2Serial]` to `L2Ledger`; JointLedger reads it right after a
+- **Command-number exposure: a `currentCommandNumber` query (Ilia 2026-05-31).** Add
+  `currentCommandNumber: F[L2CommandNumber]` to `L2Ledger`; JointLedger reads it right after a
   commit. Safe despite "non-atomic in general" because JL is a single-message-at-a-
   time actor and the sole L2 driver in this regime, so nothing interleaves between
   commit and read. Chosen over return-on-commit because the existing mutators go
   through a Kleisli / `L2LedgerAction` indirection and return a *consumer-side*
-  `L2LedgerState`; threading the serial out of that is far more invasive than a query.
-  - *Alternative noted (Ilia): JL computes the serial itself* by counting the
+  `L2LedgerState`; threading the command number out of that is far more invasive than a query.
+  - *Alternative noted (Ilia): JL computes the command number itself* by counting the
     successful real-commands it issues (it sees each `Either` result, the L2 logs
     only successes, JL is the sole driver → the two counts stay in lockstep). That
-    would drop the `currentSerial` trait method entirely. **But the L2 still needs an
-    internal serial to key its own log/snapshot**, so this only removes the *query*,
-    not the counter. Deferred — `currentSerial` for now; revisit if the trait surface
+    would drop the `currentCommandNumber` trait method entirely. **But the L2 still needs an
+    internal command number to key its own log/snapshot**, so this only removes the *query*,
+    not the counter. Deferred — `currentCommandNumber` for now; revisit if the trait surface
     matters.
 - **Trait blast radius:** `L2Ledger[F]` has **two** implementors — `EutxoL2Ledger`
   (our target) and `RemoteL2Ledger` (the SugarRush-facing remote). New trait methods
-  (`restoreTo`, `currentSerial`) force both to compile; `RemoteL2Ledger` gets an
+  (`restoreTo`, `currentCommandNumber`) force both to compile; `RemoteL2Ledger` gets an
   **unsupported stub** (`L2LedgerError` / `raiseError`) — it's out of scope ("we only
   fix the trait contract so SugarRush implements against it"). Constructors to ripple:
   `MultisigRegimeManager`, `JointLedgerTest` (both build an `EutxoL2Ledger`).
 - **Snapshot value: the recoverable subset only (Ilia 2026-05-31)** —
-  `(serial, activeUtxos, pendingDeposits)`. `errors` / `confirmations` are the
+  `(commandNumber, activeUtxos, pendingDeposits)`. `errors` / `confirmations` are the
   transient proxy data excluded from recovery, so on restore they start empty. Keeps
   the "not restored" contract honest and avoids needing codecs for `Tx.Serialized`
   (the `confirmations` value type).
-- **State + codecs:** add a `serial` field to `EutxoL2Ledger.State`; needs a codec for
+- **State + codecs:** add a `commandNumber` field to `EutxoL2Ledger.State`; needs a codec for
   the snapshot subset (`L2Snapshot`) and a codec for the logged command (`L2Log`).
-  `L2Serial` = a small `opaque type` over `Long` in the `eutxol2` package.
+  `L2CommandNumber` = a small `opaque type` over `Long` in the `eutxol2` package.
 - **Co-anchoring wiring:** JointLedger holds the consensus → L2 mapping: per own
-  soft-ack it records the L2 serial for that block (durable alongside its own
+  soft-ack it records the L2 command number for that block (durable alongside its own
   snapshot), then on recover restores `Done(softAcked)` and calls
-  `restoreTo(thatBlock'sSerial)`. The serial means nothing to the L2 beyond "how many
+  `restoreTo(thatBlock'sCommandNumber)`. The command number means nothing to the L2 beyond "how many
   commits"; the ack never crosses the membrane.
-- **Pruning — none in the first cut.** The target serial JL asks for is its
+- **Pruning — none in the first cut.** The target command number JL asks for is its
   `softAcked` boundary, which can lag the L2 head, so a target may fall *below* the
   newest snapshot — we must keep the log (and a snapshot ≤ any reachable target).
   First cut: **keep all logs + periodic snapshots** (literally "always restore"). A
-  later optimization prunes below a **JL-supplied serial floor** (a serial, not an
+  later optimization prunes below a **JL-supplied command-number floor** (a command number, not an
   ack — membrane stays clean); deferred.
 - **Out of scope:** SugarRush's L2 persistence (their component, their store) — we
   only fix the `L2Ledger` trait contract so they can implement against it. (The
-  JointLedger side — recording the per-soft-ack serial — is **R2-fast**, not R2b.
-  R2b delivers only the L2's own serial + persistence + `restoreTo`.)
+  JointLedger side — recording the per-soft-ack command number — is **R2-fast**, not R2b.
+  R2b delivers only the L2's own command number + persistence + `restoreTo`.)
 
 **Build order (R2b):**
 
-1. `L2Serial` opaque type (`Long`) + `serial` field on `EutxoL2Ledger.State`
+1. `L2CommandNumber` opaque type (`Long`) + `commandNumber` field on `EutxoL2Ledger.State`
    (genesis = 0); bump it in the three real mutators. Pure, compiles, no persistence
    yet. Confirm `HydrozoaTransactionMutator.transit` is deterministic here.
-2. `L2Ledger` trait: add `currentSerial` + `restoreTo(serial)`; stub both in
-   `RemoteL2Ledger` (unsupported). `EutxoL2Ledger.currentSerial` reads `state.serial`.
+2. `L2Ledger` trait: add `currentCommandNumber` + `restoreTo(commandNumber)`; stub both in
+   `RemoteL2Ledger` (unsupported). `EutxoL2Ledger.currentCommandNumber` reads `state.commandNumber`.
 3. The L2 store: own RocksDB store, two CFs (`L2Log`, `L2Snapshot`); BE-`Long` keys;
-   `Codec[command]` + codec for the snapshot subset `(serial, activeUtxos,
+   `Codec[command]` + codec for the snapshot subset `(commandNumber, activeUtxos,
    pendingDeposits)`. `SnapshotInterval = 100`. **Codec correction (landed 2026-05-31):**
    the `L2LedgerCommand.Real` wire codecs the trait exports **cannot be reused** — they
    rename fields (`userVKey` → `userVk`) and encode `Destination` lossily (object out,
@@ -364,8 +389,8 @@ deterministic given `(state, command)` (true today; verify at the top of R2b).
    a CBOR-hex string. Lives store-local; the wire codecs are untouched.
 4. Factor each mutator into pure `applyMutation` + public wrapper that appends to
    `L2Log` and snapshots every `SnapshotInterval`. Implement `restoreTo`
-   (SeekForPrev snapshot ≤ serial, fold log tail via `applyMutation`).
-5. Tests: serial monotonicity; commit→`currentSerial`; `restoreTo(S)` reproduces the
+   (SeekForPrev snapshot ≤ commandNumber, fold log tail via `applyMutation`).
+5. Tests: command-number monotonicity; commit→`currentCommandNumber`; `restoreTo(S)` reproduces the
    live state for S on a snapshot boundary, mid-interval, below the newest snapshot,
    and at 0/genesis; codec round-trips.
 
@@ -455,8 +480,8 @@ construction data from the durable store:
    is the fold. R3 open: where the counter lives (Meta key / snapshot CF).
 2. ~~**EUTXO L2 store placement (R2b).**~~ **Resolved (Ilia 2026-05-31):** own
    RocksDB store, two CFs — `L2Log` (append-only command log, source of truth) +
-   `L2Snapshot` (full-state every N commits, restore accelerator); `restoreTo(serial)`
-   = nearest snapshot `≤ serial` + re-fold log tail. Serial advances on the
+   `L2Snapshot` (full-state every N commits, restore accelerator); `restoreTo(commandNumber)`
+   = nearest snapshot `≤ commandNumber` + re-fold log tail. The command number advances on the
    ledger-state mutators only; first cut keeps all logs (no pruning). `N` =
    `SnapshotInterval = 100` (named constant). Remaining sub-decision for the top of
    R2b: confirm `transit` determinism for replay.

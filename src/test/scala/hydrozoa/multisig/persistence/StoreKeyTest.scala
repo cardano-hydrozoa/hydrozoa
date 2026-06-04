@@ -24,6 +24,7 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.Treasury -> Cf.Treasury,
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
+          StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -37,7 +38,8 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.SoftConfirmation(BlockNumber(99)),
           StoreKey.HardConfirmation(StackNumber(123)),
           StoreKey.EvacuationMap(BlockNumber(42)),
-          StoreKey.RequestHighWater(BlockNumber(5))
+          StoreKey.RequestHighWater(BlockNumber(5)),
+          StoreKey.L2CommandNumber(BlockNumber(11))
         )
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")

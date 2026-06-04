@@ -47,6 +47,18 @@ trait Persistence[F[_]]:
       */
     def arrivalStamp: F[ArrivalStamp]
 
+    /** Like [[get]] but **fails** (`raiseError`) when the key is absent — for reads that must be
+      * present. Recovery uses it for entries that, in a non-empty store, are store corruption when
+      * missing (fail-safe, §5 / §7).
+      */
+    def getOrFail(key: StoreKey): F[key.Value]
+
+    /** The underlying byte-level [[BackendStore]] this instance wraps — an escape hatch for
+      * **byte-level / boot-time** work the typed API can't express (recovery range-scans via
+      * `cursor`, marker derivation; §5). Steady-state actor code never needs it.
+      */
+    def backend: BackendStore[F]
+
 object Persistence:
     /** Force the routing key to `"Persistence"` for the duration of `fa`, so every `Tracer.info` /
       * `Tracer.debug` inside lands on the `"Persistence"` Logback logger regardless of the calling
@@ -81,10 +93,12 @@ object Persistence:
       * lines are scoped through [[withRoute]] so they always route to the `"Persistence"` logger.
       */
     def fromBackend(
-        backend: BackendStore[IO]
+        store: BackendStore[IO]
     )(using CardanoNetwork.Section, IOLocal[Tracer]): IO[Persistence[IO]] =
-        for generation <- bumpGeneration(backend)
+        for generation <- bumpGeneration(store)
         yield new Persistence[IO]:
+            val backend: BackendStore[IO] = store
+
             def arrivalStamp: IO[ArrivalStamp] =
                 IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
 
@@ -99,6 +113,15 @@ object Persistence:
                       )
                       .map(_.map(key.decodeValue))
                 )
+
+            def getOrFail(key: StoreKey): IO[key.Value] =
+                get(key).flatMap {
+                    case Some(value) => IO.pure(value)
+                    case None =>
+                        IO.raiseError(
+                          new IllegalStateException(s"Persistence.getOrFail: no value at $key")
+                        )
+                }
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
                 withRoute(

@@ -7,6 +7,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
+import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
 
@@ -15,7 +16,7 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, R
   * Every column family ([[Cf]]) has exactly one **key shape** and exactly one **value type** — a
   * corresponding `StoreKey` subtype captures both, so actor code addresses entries by name and
   * exchanges typed values, never raw bytes. The 5 lane CFs are reached through [[LaneKey]] (which
-  * extends `StoreKey`); the 7 non-lane CFs are covered by the cases declared in the companion
+  * extends `StoreKey`); the 9 non-lane CFs are covered by the cases declared in the companion
   * below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -23,6 +24,8 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, R
   *     `Cf.SoftConfirmation`, keyed by `blockNum`. [[StoreKey.HardConfirmation]] —
   *     `Cf.HardConfirmation`, keyed by `stackNum`. [[StoreKey.EvacuationMap]] — `Cf.EvacuationMap`,
   *     keyed by `blockNum` (per-block; see the case docstring for why).
+  *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
+  *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
@@ -151,6 +154,20 @@ object StoreKey:
         import RequestHighWaterCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.RequestHighWater
+        def encode: Array[Byte] = LaneKey.intBytes(num)
+
+    /** Key for [[Cf.L2CommandNumber]] — the L2 ledger's commit counter
+      * ([[hydrozoa.multisig.ledger.l2.L2CommandNumber]]) reached after block `num`'s L2 commits.
+      * One entry per own soft-ack, written in the same atomic bundle as that block. JointLedger's
+      * own recover reads `L2CommandNumber(softAcked)` and calls `l2Ledger.restoreTo(it)` to
+      * co-anchor the committed L2 state to the fast-side `softAcked` boundary (§R2b). Block-keyed,
+      * mirroring the other spine-indexed CFs.
+      */
+    final case class L2CommandNumber(num: BlockNumber) extends StoreKey:
+        type Value = LedgerL2CommandNumber
+        import LedgerL2CommandNumber.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.L2CommandNumber
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */
