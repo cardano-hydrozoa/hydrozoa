@@ -220,17 +220,25 @@ final case class SlowConsensusActor(
 
     private def handleRemoteHardAck(h: HardAck): IO[Unit] =
         Tracer.scopedCtx(h.toContext*) {
-            stateRef.get.flatMap { s =>
-                s.cells.get(h.stackNum) match {
-                    case None =>
-                        Tracer.debug(
-                          s"orphan hard-ack for stack ${h.stackNum} from peer ${h.peerId} " +
-                              "(no cell yet); buffering"
-                        ) >> stateRef.update(_.bufferOrphan(h))
-                    case Some(_) =>
-                        applyRemote(h) >> tryAdvance(h.stackNum)
+            if h.peerId == config.ownPeerId then
+                // Our own hard-ack echoed back on the `HubCoilAckLane`: a hub re-publishes a coil's
+                // acks to every coil it serves, the author included (filtering would punch gaps in
+                // the contiguous lane). We already hold our own ack locally, so drop the echo —
+                // re-applying it would, once the cell has advanced past the echoed round, hit the
+                // "wrong round" guard in `applyRemote`.
+                Tracer.debug(s"ignoring echo of own hard-ack for stack ${h.stackNum}")
+            else
+                stateRef.get.flatMap { s =>
+                    s.cells.get(h.stackNum) match {
+                        case None =>
+                            Tracer.debug(
+                              s"orphan hard-ack for stack ${h.stackNum} from peer ${h.peerId} " +
+                                  "(no cell yet); buffering"
+                            ) >> stateRef.update(_.bufferOrphan(h))
+                        case Some(_) =>
+                            applyRemote(h) >> tryAdvance(h.stackNum)
+                    }
                 }
-            }
         }
 
     /** Apply one remote ack into its (existing) cell, verifying it against the local effects. */
