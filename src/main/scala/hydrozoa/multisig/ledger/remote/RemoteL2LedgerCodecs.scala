@@ -1,19 +1,17 @@
 package hydrozoa.multisig.ledger.remote
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
-import io.bullet.borer.Cbor
 import io.circe.generic.semiauto
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
-import scala.util.Try
 import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
-import scalus.uplc.builtin.ByteString
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
 object RemoteL2LedgerCodecs {
@@ -133,30 +131,8 @@ object RemoteL2LedgerCodecs {
             }
     }
 
-    // EvacuationKey codec
-
-    given Encoder[KeepRaw[TransactionOutput]] = Encoder.instance { kr =>
-        io.circe.Json.fromString(ByteString.fromArray(kr.raw).toHex)
-    }
-
-    given Decoder[KeepRaw[TransactionOutput]] = Decoder.instance { c =>
-        c.as[String].flatMap { hexStr =>
-            ByteString.fromHex(hexStr) match {
-                case bs =>
-                    // Decode CBOR bytes to TransactionOutput
-                    Try(Cbor.decode(bs.bytes).to[TransactionOutput].value).toEither match {
-                        case Right(txOut) => Right(KeepRaw(txOut))
-                        case Left(e) =>
-                            Left(
-                              io.circe.DecodingFailure(
-                                s"Failed to decode TransactionOutput from CBOR: ${e.getMessage}",
-                                c.history
-                              )
-                            )
-                    }
-            }
-        }
-    }
+    // KeepRaw[TransactionOutput] CBOR-hex codec is hoisted into
+    // `lib/cardano/scalus/codecs/json/Codecs.scala`; imported above.
 
     // Payout.Obligation codec
     // Encode directly as TransactionOutput (without "utxo" wrapper) for API compatibility

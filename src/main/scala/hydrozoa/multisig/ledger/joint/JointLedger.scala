@@ -8,11 +8,13 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -28,6 +30,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -40,11 +43,17 @@ final case class JointLedger(
     pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
     tracer: hydrozoa.lib.tracing.ProtocolTracer,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, Requests.Request] {
     import config.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
+      * given so the typed `WriteBatch.put` calls in [[persistOwnBlock]] pick it up.
+      */
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -689,17 +698,49 @@ final case class JointLedger(
               vMin,
               evtCnt
             )
+            softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
+            // 0. Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
+            //    write-before-send): own brief (leader) + own soft-ack lanes + BlockResult +
+            //    deposits snapshot, in one atomic WriteBatch.
+            _ <- persistOwnBlock(brief, softAck, blockResult)
             // 1. Broadcast the brief to peer liaisons (leader only).
             _ <- IO.whenA(config.ownHeadPeerId.isLeader(brief.blockNum))(
               (conn.peerLiaisons ! brief).parallel
             )
-            // 2. Sign the brief and ship brief + own soft-ack to the consensus actor.
-            softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
+            // 2. Ship brief + own soft-ack to the consensus actor.
             _ <- conn.fastConsensusActor ! brief
             _ <- conn.fastConsensusActor ! softAck
             // 3. Slow side: hand the block result to the stack composer (independent of fast
             //    cycle).
             _ <- conn.stackComposer ! blockResult
+        } yield ()
+
+    /** Persist this peer's per-soft-ack bundle in one atomic `WriteBatch` (CR4/CR6/CR8, §6):
+      *   - own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this block);
+      *   - own `SoftAck` → `SoftAck` lane;
+      *   - the per-block `BlockResult` → `BlockResult` CF;
+      *   - the current deposits snapshot → `DepositMap` CF.
+      *
+      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
+      */
+    private def persistOwnBlock(
+        brief: BlockBrief.Next,
+        softAck: SoftAck,
+        blockResult: BlockResult
+    ): IO[Unit] =
+        for {
+            stamp <- persistence.arrivalStamp
+            deposits <- state.get.map(_.deposits)
+            briefBatch =
+                if config.ownHeadPeerId.isLeader(brief.blockNum) then
+                    WriteBatch.start.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
+                else WriteBatch.start
+            _ <- persistence.write(
+              briefBatch
+                  .put(LaneKey.SoftAck(softAck.peerNum, softAck.ackNum))(LaneValue(stamp, softAck))
+                  .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
+                  .put(StoreKey.DepositMap)(deposits)
+            )
         } yield ()
 
     // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.

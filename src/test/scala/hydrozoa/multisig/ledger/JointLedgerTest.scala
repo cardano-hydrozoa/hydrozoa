@@ -35,6 +35,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, 
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -155,6 +156,10 @@ object JointLedgerTestHelpers {
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             tracerLocal <- PropertyM.run(Tracer.makeLocal)
+            persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
+            persistence <- PropertyM.run(
+              Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+            )
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
@@ -166,7 +171,8 @@ object JointLedgerTestHelpers {
                   ),
                   eutxoLedger,
                   hydrozoa.lib.tracing.ProtocolTracer.noop,
-                  tracerLocal
+                  tracerLocal,
+                  persistence
                 )
               )
             )

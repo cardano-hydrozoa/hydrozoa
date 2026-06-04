@@ -83,6 +83,8 @@ lazy val core: Project = (project in file("."))
         // scodec for hex encoding
         "org.scodec" %% "scodec-bits" % "1.2.1",
         "io.github.cdimascio" % "dotenv-java" % "3.0.0",
+        // RocksDB (persistence layer)
+        "org.rocksdb" % "rocksdbjni" % "9.7.3",
       ),
       libraryDependencies ++= Seq(
         "org.typelevel" %% "spire-laws" % "0.18.0" % Test,
