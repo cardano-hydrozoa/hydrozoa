@@ -15,8 +15,11 @@ its `persistOwnAckBundle` write; `JointLedger.State.recover`/`recoverState` (+ L
 unit-tested, with the actor wiring deferred to R3. · R2-bnd (boundary restores, 2026-06-04):
 `Markers.recoverNextRequestNumber` (EventSequencer counter), `CardanoLiaison.State.recover`
 (`HardConfirmation` fold via `HardConfirmationScan`), `PeerLiaison.recover` → `OutboxSeed` — all
-pure-over-store and unit-tested, wiring deferred to R3. **Next:** R3 (ReplayActor + boot sequence +
-the deferred actor wiring).
+pure-over-store and unit-tested, wiring deferred to R3. · R3a (recover wiring + bootstrap skip,
+2026-06-04): each snapshot/boundary actor's `PreStart` self-derives `Markers` and restores via its
+R2 `recover`; StackComposer skips `bootstrapInitialStack` on a non-empty store; CardanoLiaison
+gained a `persistence` param; `StackComposerRecoveryTest` boots the actor against a seeded store.
+**Next:** R3b (`ReplayActor` + mailbox replay), then R3c (boot sequence + fail-safe).
 
 ---
 
@@ -409,22 +412,44 @@ deterministic given `(state, command)` (true today; verify at the top of R2b).
 
 ### R3 — `ReplayActor` + boot sequence (§8) + fail-safe.
 
-- **`ReplayActor`** (new consensus-side actor): on boot — load base snapshots,
-  build `ReplayCursors`, stream `ArrivalOrderedMerge`, **seed each consensus
-  actor's mailbox** with its lane tail at its own resume cursor; read L1 from
-  `CardanoBackend` and send the first `PollResults` to BlockWeaver; hold the
-  suspend window.
-- **`MultisigRegimeManager.preStartLocal`** grows the §8 steps: derive markers →
-  load snapshots → spawn actors (recovered or bootstrapped) → `ReplayActor` seeds
-  mailboxes → open the start barrier (`pendingConnections.complete`) → boundaries
-  restore + filter → reconcile L1 → resume `GetMsgBatch`.
-- **Suspend barrier decision.** Today every actor blocks in `initializeConnections`
-  on the single `PendingConnections` `Deferred` until the manager completes it.
-  **Plan A (preferred):** seed mailboxes *before* `pendingConnections.complete`,
-  reusing that `Deferred` as the suspend gate — sends queue in the mailbox while
-  the actor is parked, then drain in order once the barrier opens. **Plan B:** add
-  a second `Deferred` suspend barrier only if cats-actors does not accept
-  pre-barrier mailbox sends cleanly. Verify empirically at the start of R3.
+Split into three sub-phases (mirrors R2). **Settled by the R3 understand pass
+(2026-06-04):** the suspend barrier is **Plan A** — the cats-actors mailbox is
+`Deferred`-driven and FIFO, and each actor enqueues a `PreStart` message then blocks
+on `pendingConnections.get` *inside* that handler, so anything sent before
+`pendingConnections.complete` queues behind `PreStart` and drains in order; no second
+barrier. `FastConsensusActor` / `SlowConsensusActor` / `BlockWeaver` hold **no base
+state** (§5.1, §6) and are rebuilt purely from the ReplayActor's lane tail — only the
+snapshot/boundary actors recover base state (all landed in R2). Bootstrap-skip test =
+`Markers.hardAcked.isDefined`.
+
+#### R3a — recover wiring + bootstrap skip — LANDED 2026-06-04
+
+Each snapshot/boundary actor's `PreStart` self-derives `Markers` and restores via its
+R2 `recover`, gated on a non-empty store; cold start is unchanged. StackComposer
+`recoverOrBootstrap` skips `bootstrapInitialStack` when `recover` returns `Some`.
+JointLedger recovers `Done(softAcked)` + co-anchors L2. CardanoLiaison gained a
+`persistence` param (ctor/factory/MRM) and folds `HardConfirmation` on boot.
+EventSequencer (`State.seedNextRequestNumber`) + PeerLiaison (`State.seedFromOutbox`)
+got small seed seams. `StackComposerRecoveryTest` boots the actor against a seeded
+store and asserts the observable: cold ⇒ a stack-0 `StackHandoff` reaches
+`SlowConsensusActor`, non-empty ⇒ none.
+
+#### R3b — `ReplayActor` + mailbox replay
+
+- **`ReplayActor`** (new consensus-side actor): on boot — derive `Markers` +
+  `ReplayCursors`, `scanLanes`, `ArrivalOrderedMerge`, decode each `RawLaneEntry` and
+  **route it into the reading actor's mailbox** (Request→BlockWeaver, SoftAck→FCA,
+  HardAck→SCA, Block spine→FCA at `softConfirmed+1` and BlockWeaver at `softAcked+1`,
+  Stack spine→SCA at `hardConfirmed+1` and StackComposer at `hardAcked+1`); read L1
+  from `CardanoBackend.utxosAt(treasuryAddress)` and send the first `PollResults` to
+  BlockWeaver. Spawned by MRM **before** `pendingConnections.complete` (Plan A).
+- No inbound restore from PeerLiaison — it forwards; the ReplayActor re-feeds.
+
+#### R3c — boot sequence (§8) + fail-safe
+
+- **`MultisigRegimeManager.preStartLocal`** grows the §8 steps: spawn actors →
+  `ReplayActor` seeds mailboxes → open the start barrier → boundaries restore + filter
+  → reconcile L1 → resume `GetMsgBatch`.
 - **Fail-safe (CR6/CR7):** validate marker/snapshot consistency on load (anchors
   aligned, counters monotone) → refuse start on violation; abort + signal/evacuate
   if catch-up can't finish within the timing budget.
