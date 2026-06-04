@@ -137,6 +137,18 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
+    // One head hubbing one coil (coilQuorum = 1): no stack hard-confirms without the coil's ack,
+    // so any slow-cycle progress proves the coil participates. A manual run (point the propFilter
+    // here) demonstrates both the head AND the coil hard-confirming many stacks with cross-signed
+    // acks, exercising the full CoilPeerToHeadLiaison ⇄ HeadPeerToCoilLiaison ⇄ CoilAckSequencer
+    // relay end-to-end. It is NOT in the default green set: a single head is the sole block leader,
+    // so it never pauses long enough for the generative harness's post-run `waitForIdle` drain to
+    // settle. The paced multi-head config that would settle (2h+ / coilQuorum=1) needs the hub to
+    // relay every leader's briefs+acks to the coil — the multi-head relay deferred to Pc4 (§8
+    // "cost of being a hub"). Until then, coil coverage in CI rests on the unit `CoilLiaisonTest`.
+    val _ = property("One-head-one-coil works") =
+        Stage4Suite(label = "stage4-1h1c", nPeers = 1, nCoils = 1).property()
+
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
 

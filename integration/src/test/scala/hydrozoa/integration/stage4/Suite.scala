@@ -26,7 +26,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet, RemotePeer}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilPeerToHeadLiaison, FastConsensusActor, EventSequencer, HeadPeerToCoilLiaison, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -48,6 +48,21 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // ===================================
 // Stage 4 suite
 // ===================================
+
+/** All actors + observation refs for one coil follower, assembled in `startupSut` (gated on
+  * `nCoils > 0`). `headLiaison` is the hub-side `HeadPeerToCoilLiaison`; `coilLiaison` is the
+  * coil-side `CoilPeerToHeadLiaison`.
+  */
+private case class CoilWiring(
+    coilNum: CoilPeerNumber,
+    config: NodeConfig,
+    pending: Deferred[IO, MultisigRegimeManager.Connections],
+    stack: PeerStack,
+    stackObserver: CardanoLiaison.Handle,
+    stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
+    coilLiaison: CoilPeerToHeadLiaison.Handle,
+    headLiaison: HeadPeerToCoilLiaison.Handle,
+)
 
 case class Stage4Suite(
     label: String = "stage4",
@@ -97,6 +112,7 @@ case class Stage4Suite(
         val multiNodeConfig = state.params.multiNodeConfig
         val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
+        val coilConfigs = state.params.coilNodeConfigs
 
         // Advance simulated clock to the head's start epoch BEFORE creating the ActorSystem.
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
@@ -318,11 +334,97 @@ case class Stage4Suite(
             }
             (remoteLiaisonsByPeer, transportCleanup) = transportSetup
 
+            // ---- Coil followers (gated; empty for a pure-head run) ----
+            // Each coil is hubbed by head 0. Build the coil's full follower actor stack + its single
+            // CoilPeerToHeadLiaison, plus the hub-side HeadPeerToCoilLiaison and (once) the
+            // CoilAckSequencer. The hub's own Connections (completed below) gains the coil-ward
+            // liaisons, the coil remote map, and the sequencer. Direct mode only — coils are wired
+            // in-process like the head mesh.
+            hubNum = HeadPeerNumber(0)
+            hubConfig = multiNodeConfig.nodeConfigs(hubNum)
+            hubHeadId = headPeerId(multiNodeConfig, hubNum)
+            hubPending = pendingConnsMap(hubNum)
+
+            coilAckSequencer <-
+                if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
+                else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
+
+            coilWirings <- coilConfigs.traverse { coilConfig =>
+                val coilNum = coilConfig.ownPeerId match {
+                    case PeerId.Coil(n) => n
+                    case PeerId.Head(_) =>
+                        throw new IllegalStateException("coil node config carries a head peer id")
+                }
+                Tracer.scopedCtx("peer" -> s"c${coilNum.convert}") {
+                    for
+                        coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                        blockWeaver <- system.actorOf(
+                          BlockWeaver(coilConfig, coilPending, tracerLocal)
+                        )
+                        cardanoLiaison <- system.actorOf(
+                          CardanoLiaison(coilConfig, cardanoBackend, coilPending, tracerLocal)
+                        )
+                        eventSequencer <- system.actorOf(EventSequencer(coilConfig, coilPending))
+                        l2Ledger <- EutxoL2Ledger(coilConfig)
+                        jointLedger <- system.actorOf(
+                          JointLedger(coilConfig, coilPending, l2Ledger, ProtocolTracer.noop, tracerLocal)
+                        )
+                        consensusActor <- system.actorOf(
+                          FastConsensusActor(coilConfig, coilPending, tracerLocal)
+                        )
+                        stackComposer <- system.actorOf(
+                          StackComposer(coilConfig, coilPending, tracerLocal)
+                        )
+                        slowConsensusActor <- system.actorOf(
+                          SlowConsensusActor(coilConfig, coilPending, tracerLocal)
+                        )
+                        stacksRef <- Ref[IO].of(Vector.empty[Stack.HardConfirmed])
+                        stackObserver <- system.actorOf(
+                          StackObserver(hubNum, cardanoLiaison, stacksRef)
+                        )
+                        coilLiaison <- system.actorOf(
+                          CoilPeerToHeadLiaison(coilConfig, RemotePeer.Head(hubHeadId), coilPending)
+                        )
+                        headLiaison <- system.actorOf(
+                          HeadPeerToCoilLiaison(hubConfig, RemotePeer.Coil(coilNum), hubPending)
+                        )
+                    yield CoilWiring(
+                      coilNum = coilNum,
+                      config = coilConfig,
+                      pending = coilPending,
+                      stack = PeerStack(
+                        blockWeaver,
+                        cardanoLiaison,
+                        eventSequencer,
+                        jointLedger,
+                        consensusActor,
+                        stackComposer,
+                        slowConsensusActor
+                      ),
+                      stackObserver = stackObserver,
+                      stacksRef = stacksRef,
+                      coilLiaison = coilLiaison,
+                      headLiaison = headLiaison
+                    )
+                }
+            }
+
+            // Coil-ward additions merged into the hub head's Connections (below).
+            hubExtraLiaisons = coilWirings.map(_.headLiaison)
+            hubExtraRemote =
+                coilWirings.map(c => (PeerId.Coil(c.coilNum): PeerId) -> c.coilLiaison).toMap
+
             // Complete each peer's deferred with its full wiring.
             _ <- peers.traverse { peerNum =>
                 val stack = peerStackMap(peerNum)
                 val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
+                // The hub head additionally fans to its coil-ward liaisons and owns the sequencer.
+                val isHub = peerNum == hubNum
+                val allLiaisons = if isHub then localLiaisons ++ hubExtraLiaisons else localLiaisons
+                val allRemote =
+                    if isHub then remoteLiaisonsByPeer(peerNum) ++ hubExtraRemote
+                    else remoteLiaisonsByPeer(peerNum)
                 for {
                     // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
                     // default RateLimits config (zero periods) these are no-ops; non-zero
@@ -352,8 +454,41 @@ case class Stage4Suite(
                             stackComposer = stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = stack.slowConsensusActor,
-                            peerLiaisons = localLiaisons,
-                            remotePeerLiaisons = remoteLiaisonsByPeer(peerNum),
+                            peerLiaisons = allLiaisons,
+                            remotePeerLiaisons = allRemote,
+                            coilAckSequencer = if isHub then coilAckSequencer else None,
+                          )
+                        )
+                        .void
+                } yield ()
+            }
+
+            // Complete each coil's deferred with its follower wiring: its single liaison toward the
+            // hub, the hub-side liaison as its only remote, the StackObserver in the cardanoLiaison
+            // slot to capture its hard-confirmed stacks.
+            _ <- coilWirings.traverse_ { c =>
+                for {
+                    blockWeaverLimiter <- system.actorOf(
+                      Limiter[BlockWeaver.Request](c.stack.blockWeaver, c.config, tracerLocal)
+                    )
+                    stackComposerLimiter <- system.actorOf(
+                      Limiter[StackComposer.Request](c.stack.stackComposer, c.config, tracerLocal)
+                    )
+                    _ <- c.pending
+                        .complete(
+                          MultisigRegimeManager.Connections(
+                            blockWeaver = c.stack.blockWeaver,
+                            blockWeaverLimiter = blockWeaverLimiter,
+                            cardanoLiaison = c.stackObserver,
+                            consensusActor = c.stack.consensusActor,
+                            eventSequencer = c.stack.eventSequencer,
+                            jointLedger = c.stack.jointLedger,
+                            stackComposer = c.stack.stackComposer,
+                            stackComposerLimiter = stackComposerLimiter,
+                            slowConsensusActor = c.stack.slowConsensusActor,
+                            peerLiaisons = List(c.coilLiaison),
+                            remotePeerLiaisons = Map((PeerId.Head(hubNum): PeerId) -> c.headLiaison),
+                            coilAckSequencer = None,
                           )
                         )
                         .void
@@ -385,6 +520,13 @@ case class Stage4Suite(
                 (IO.sleep(pollingPeriod) >> (liaison ! CardanoLiaison.Timeout)).foreverM.start
             }
 
+            // Same polling tick for each coil's CardanoLiaison.
+            coilTickFibers <- coilWirings.traverse { c =>
+                val pollingPeriod =
+                    c.config.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
+                (IO.sleep(pollingPeriod) >> (c.stack.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
+            }
+
             submittedRequestIds <- Ref[IO].of(Vector.empty[RequestId])
         yield Stage4Sut(
           system = system,
@@ -394,9 +536,10 @@ case class Stage4Suite(
           },
           sutErrors = sutErrors,
           errorDrainer = errorDrainer,
-          liaisonTickFibers = liaisonTickFibers.toList,
+          liaisonTickFibers = liaisonTickFibers.toList ++ coilTickFibers,
           blockBriefs = blockBriefsMap,
           stacks = stacksMap,
+          coilStacks = coilWirings.map(c => c.coilNum -> c.stacksRef).toMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
           transportCleanup = transportCleanup,
@@ -590,6 +733,19 @@ case class Stage4Suite(
                       .mkString(", ")
             )
 
+            coilStacksByCoil <- sut.coilStacks.toList
+                .traverse { case (c, ref) => ref.get.map(c -> _) }
+                .map(_.toMap)
+            _ <- IO.whenA(coilStacksByCoil.nonEmpty)(
+              logger.info(
+                "coil hard-confirmed stacks: " +
+                    coilStacksByCoil.toList
+                        .sortBy((c, _) => c.convert)
+                        .map((c, ss) => s"coil${c.convert}=${ss.size}")
+                        .mkString(", ")
+              )
+            )
+
             _ <- traceBlockTable(
               canonicalBriefs,
               sortedPeers,
@@ -613,8 +769,33 @@ case class Stage4Suite(
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
             propStackCoverage(canonicalBriefs, canonicalStacks) &&
+            propCoilParticipation(coilStacksByCoil, canonicalStacks) &&
             effectsLandedProp
     }
+
+    /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coils' acks, so
+      * [[propStackCoverage]] already proves coil participation on the head side. This additionally
+      * checks the relay back: each coil follower itself hard-confirms stacks (it received the head
+      * acks + its own echo), and never hard-confirms a stack the canonical head didn't. No-op for a
+      * pure-head run.
+      */
+    private def propCoilParticipation(
+        coilStacksByCoil: Map[CoilPeerNumber, Vector[Stack.HardConfirmed]],
+        canonicalStacks: Vector[Stack.HardConfirmed]
+    ): Prop =
+        if coilStacksByCoil.isEmpty then Prop.proved
+        else
+            val headStackNums = canonicalStacks.map(_.brief.stackNum).toSet
+            coilStacksByCoil.toList
+                .map { (coilNum, coilStacks) =>
+                    val coilStackNums = coilStacks.map(_.brief.stackNum).toSet
+                    (Prop(coilStacks.nonEmpty) :|
+                        s"coil ${coilNum.convert} hard-confirmed no stacks") &&
+                        (Prop(coilStackNums.subsetOf(headStackNums)) :|
+                            s"coil ${coilNum.convert} hard-confirmed stacks absent from the head: " +
+                            s"${(coilStackNums -- headStackNums).map(_.convert)}")
+                }
+                .foldLeft(Prop.proved)(_ && _)
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
