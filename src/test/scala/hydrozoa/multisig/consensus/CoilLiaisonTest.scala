@@ -2,6 +2,7 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
@@ -17,22 +18,20 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalacheck.{Prop, Properties}
 
-/** Pc3 plumbing test (one head / one coil): a coil's hard-ack travels up its
-  * [[CoilPeerToHeadLiaison]] to the hub's [[HeadPeerToCoilLiaison]], which routes it to BOTH the
-  * hub's slow-consensus actor and the [[CoilAckSequencer]]; the sequencer stamps it and relays the
-  * resulting `HubCoilAck` back down, where the coil's liaison unwraps it to the raw ack for the
-  * coil's own slow-consensus actor.
+/** Pc3/Pc4 plumbing tests for the coil hard-ack relay (§8 of `design/coil-network.md`), one hub
+  * head serving N coils. A coil's hard-ack travels up its [[CoilPeerToHeadLiaison]] to the hub's
+  * [[HeadPeerToCoilLiaison]], which routes it to BOTH the hub's slow-consensus actor and the
+  * [[CoilAckSequencer]]; the sequencer stamps it and relays the resulting `HubCoilAck` down EVERY
+  * coil link, so each coil hears every coil's ack (its own echo included — deduped downstream).
   *
   * Everything around the three new actors is stubbed: the liaison `Config` is a hand-built
   * `OwnPeerPublic.Section & NodeOperationMultisigConfig.Section`, and every consensus actor a
-  * liaison might touch is a no-op probe — only the two slow-consensus slots record what they
-  * receive. This exercises the new lane + relay end-to-end without standing up a full node.
+  * liaison might touch is a no-op probe — only the slow-consensus slots record what they receive.
+  * This exercises the new lane + relay end-to-end without standing up a full node.
   */
 object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
 
-    private val coilNum = CoilPeerNumber(0)
     private val headNum = HeadPeerNumber(0)
-    private val coilPeerId: PeerId = PeerId.Coil(coilNum)
     private val headPeerId: PeerId = PeerId.Head(headNum)
 
     private def ownPublic(pid: PeerId, leads: Boolean, label: String): OwnPeerPublic =
@@ -57,9 +56,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 NodeOperationMultisigConfig.default
         }
 
-    // The head leads every block/stack (sole leader at one head); the coil never leads.
+    // The head leads every block/stack (sole leader at one head); coils never lead.
     private val headConfig = stubConfig(ownPublic(headPeerId, leads = true, "0"))
-    private val coilConfig = stubConfig(ownPublic(coilPeerId, leads = false, "c0"))
+    private def coilConfig(coilNum: CoilPeerNumber) =
+        stubConfig(ownPublic(PeerId.Coil(coilNum), leads = false, s"c${coilNum.convert}"))
 
     /** A no-op actor for the Connections slots the liaisons never read in this scenario. */
     private def noop[R](system: ActorSystem[IO]): IO[ActorRef[IO, R]] =
@@ -76,11 +76,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         }
     }
 
-    /** The coil's first hard-ack (hardAckNum 0, the lane's initial cursor value). */
-    private val coilHardAck: HardAck =
+    private def coilAck(coilNum: CoilPeerNumber, hardAckNum: Int): HardAck =
         HardAck(
-          ackId = HardAckId(coilPeerId, HardAckNumber.zero),
-          stackNum = StackNumber(0),
+          ackId = HardAckId(PeerId.Coil(coilNum), HardAckNumber(hardAckNum)),
+          stackNum = StackNumber(hardAckNum),
           payload = HardAck.Round1Payload.Initial(
             fallbackSig = TxSignature(IArray[Byte](7.toByte, 8.toByte, 9.toByte))
           )
@@ -115,65 +114,120 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
           coilAckSequencer = coilAckSequencer,
         )
 
-    private val scenario: IO[Unit] =
-        ActorSystem[IO]("coil-liaison-test").use { system =>
-            for {
-                headPending <- Deferred[IO, MultisigRegimeManager.Connections]
-                coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+    /** Per-coil actors + the Ref recording what its slow-consensus slot receives. */
+    private final case class CoilParts(
+        coilNum: CoilPeerNumber,
+        pending: Deferred[IO, MultisigRegimeManager.Connections],
+        coilSeen: Ref[IO, Vector[HardAck]],
+        coilSlowConsensus: SlowConsensusActor.Handle,
+        headLiaison: HeadPeerToCoilLiaison.Handle,
+        coilLiaison: CoilPeerToHeadLiaison.Handle,
+    )
 
-                hubSeen <- Ref[IO].of(Vector.empty[HardAck])
-                coilSeen <- Ref[IO].of(Vector.empty[HardAck])
-                hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
-                coilSlowConsensus <- system.actorOf(new HardAckRecorder(coilSeen))
+    /** Stand up one hub head serving `acksByCoil.size` coils, inject each coil's hard-acks, and
+      * return what the hub and each coil observed once the relay settles.
+      */
+    private def runRelay(
+        acksByCoil: List[List[HardAck]]
+    ): (Vector[HardAck], List[Vector[HardAck]]) =
+        ActorSystem[IO]("coil-liaison-test")
+            .use { system =>
+                for {
+                    headPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                    hubSeen <- Ref[IO].of(Vector.empty[HardAck])
+                    hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
+                    sequencer <- system.actorOf(CoilAckSequencer(headConfig, headPending))
 
-                sequencer <- system.actorOf(CoilAckSequencer(headConfig, headPending))
-                headLiaison <- system.actorOf(
-                  HeadPeerToCoilLiaison(headConfig, RemotePeer.Coil(coilNum), headPending)
-                )
-                coilLiaison <- system.actorOf(
-                  CoilPeerToHeadLiaison(coilConfig, RemotePeer.Head(HeadPeerId(0, 1)), coilPending)
-                )
+                    coils <- acksByCoil.indices.toList.traverse { i =>
+                        val coilNum = CoilPeerNumber(i)
+                        for {
+                            pending <- Deferred[IO, MultisigRegimeManager.Connections]
+                            coilSeen <- Ref[IO].of(Vector.empty[HardAck])
+                            coilSlowConsensus <- system.actorOf(new HardAckRecorder(coilSeen))
+                            headLiaison <- system.actorOf(
+                              HeadPeerToCoilLiaison(
+                                headConfig,
+                                RemotePeer.Coil(coilNum),
+                                headPending
+                              )
+                            )
+                            coilLiaison <- system.actorOf(
+                              CoilPeerToHeadLiaison(
+                                coilConfig(coilNum),
+                                RemotePeer.Head(HeadPeerId(0, 1)),
+                                pending
+                              )
+                            )
+                        } yield CoilParts(
+                          coilNum,
+                          pending,
+                          coilSeen,
+                          coilSlowConsensus,
+                          headLiaison,
+                          coilLiaison
+                        )
+                    }
 
-                headConnections <- mkConnections(
-                  system,
-                  slowConsensus = hubSlowConsensus,
-                  peerLiaisons = List(headLiaison),
-                  remotePeerLiaisons = Map(coilPeerId -> coilLiaison),
-                  coilAckSequencer = Some(sequencer),
-                )
-                coilConnections <- mkConnections(
-                  system,
-                  slowConsensus = coilSlowConsensus,
-                  peerLiaisons = List(coilLiaison),
-                  remotePeerLiaisons = Map(headPeerId -> headLiaison),
-                  coilAckSequencer = None,
-                )
-                _ <- headPending.complete(headConnections)
-                _ <- coilPending.complete(coilConnections)
+                    headConnections <- mkConnections(
+                      system,
+                      slowConsensus = hubSlowConsensus,
+                      peerLiaisons = coils.map(_.headLiaison),
+                      remotePeerLiaisons =
+                          coils.map(c => PeerId.Coil(c.coilNum) -> c.coilLiaison).toMap,
+                      coilAckSequencer = Some(sequencer),
+                    )
+                    _ <- headPending.complete(headConnections)
+                    _ <- coils.traverse_ { c =>
+                        mkConnections(
+                          system,
+                          slowConsensus = c.coilSlowConsensus,
+                          peerLiaisons = List(c.coilLiaison),
+                          remotePeerLiaisons = Map(headPeerId -> c.headLiaison),
+                          coilAckSequencer = None,
+                        ).flatMap(c.pending.complete)
+                    }
 
-                // Let the initial GetMsgBatch handshake settle, inject the coil's hard-ack, then let
-                // the up-relay-down cascade settle.
-                _ <- system.waitForIdle()
-                _ <- coilLiaison ! coilHardAck
-                _ <- system.waitForIdle()
+                    // Let the initial GetMsgBatch handshakes settle, inject each coil's hard-acks
+                    // in order, then let the up-relay-down cascade settle.
+                    _ <- system.waitForIdle()
+                    _ <- coils.traverse_ { c =>
+                        acksByCoil(c.coilNum.convert).traverse_(c.coilLiaison ! _)
+                    }
+                    _ <- system.waitForIdle()
 
-                hub <- hubSeen.get
-                coil <- coilSeen.get
-                _ <- IO.raiseUnless(hub.size == 1 && hub.head.ackId.peerId == coilPeerId)(
-                  new AssertionError(
-                    s"hub slow-consensus should see exactly the coil ack, got: $hub"
-                  )
-                )
-                _ <- IO.raiseUnless(coil.size == 1 && coil.head.ackId.peerId == coilPeerId)(
-                  new AssertionError(
-                    s"coil slow-consensus should see its ack echoed via the HubCoilAckLane, got: $coil"
-                  )
-                )
-            } yield ()
-        }
+                    hub <- hubSeen.get
+                    perCoil <- coils.traverse(_.coilSeen.get)
+                } yield (hub, perCoil)
+            }
+            .unsafeRunSync()
 
-    val _ = property("coil hard-ack reaches the hub and is relayed back via the HubCoilAckLane") = {
-        scenario.unsafeRunSync()
-        Prop.proved
+    private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet
+
+    val _ = property(
+      "a coil hard-ack reaches the hub and is relayed back via the HubCoilAckLane"
+    ) = {
+        val coil0 = CoilPeerNumber(0)
+        val (hub, perCoil) = runRelay(List(List(coilAck(coil0, 0))))
+        Prop(hub.map(_.ackId.peerId) == Vector(PeerId.Coil(coil0))) :| s"hub saw: $hub" &&
+        Prop(perCoil.head.map(_.ackId.peerId) == Vector(PeerId.Coil(coil0))) :|
+            s"coil saw: ${perCoil.head}"
+    }
+
+    val _ = property("two coils each hear both acks via the hub's HubCoilAckLane") = {
+        val coil0 = CoilPeerNumber(0)
+        val coil1 = CoilPeerNumber(1)
+        val (hub, perCoil) = runRelay(List(List(coilAck(coil0, 0)), List(coilAck(coil1, 0))))
+        val both = Set[PeerId](PeerId.Coil(coil0), PeerId.Coil(coil1))
+        Prop(peerIdsOf(hub) == both) :| s"hub saw: $hub" &&
+        Prop(perCoil.forall(peerIdsOf(_) == both)) :| s"coils saw: $perCoil"
+    }
+
+    val _ = property("a coil's successive hard-acks are relayed back in order") = {
+        val coil0 = CoilPeerNumber(0)
+        val acks = List(coilAck(coil0, 0), coilAck(coil0, 1), coilAck(coil0, 2))
+        val (hub, perCoil) = runRelay(List(acks))
+        val expected = Vector(0, 1, 2)
+        Prop(hub.map(_.hardAckNum.convert) == expected) :| s"hub saw: $hub" &&
+        Prop(perCoil.head.map(_.hardAckNum.convert) == expected) :| s"coil saw: ${perCoil.head}"
     }
 }
