@@ -5,8 +5,10 @@ import cats.implicits.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.NewMsgBatch
+import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.peer.RemotePeer
+import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.stack.StackNumber
 
 /** A hub head's liaison toward one coil it serves (§8 of `design/coil-network.md`).
   *
@@ -55,6 +57,20 @@ abstract class HeadPeerToCoilLiaison(
               )
             )
         } yield ()
+
+    // The hub relays every block/stack in number order, so the outbound brief lanes are contiguous
+    // (§8), not the head mesh's sparse own-led subset. Block 0 / stack 0 are out-of-band bootstrap,
+    // so the first relayed item — and the initial cursor — is 1.
+    override protected def nextOwnBriefBlock(after: BlockNumber): Option[BlockNumber] =
+        Some(after.increment)
+    override protected def nextOwnBriefStack(after: StackNumber): Option[StackNumber] =
+        Some(after.increment)
+    override protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber] =
+        Some(after.increment)
+    override protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
+        Some(after.increment)
+    override protected def initialRequest: GetMsgBatch =
+        GetMsgBatch.initial(coilPeer).copy(blockNum = BlockNumber(1), stackNum = StackNumber(1))
 
     override protected def sendToRemoteLiaison(msg: Request): IO[Unit] =
         getConnections.flatMap(_.remotePeerLiaison ! msg)

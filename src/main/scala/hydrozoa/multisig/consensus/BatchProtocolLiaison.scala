@@ -54,6 +54,31 @@ trait BatchProtocolLiaison(
       */
     protected def dispatchVerifiedBatch(batch: NewMsgBatch): IO[Unit]
 
+    // ---- Brief-lane shape (§8) ----
+    // The block/stack-brief lanes are SPARSE on the head mesh (only the round-robin leader emits an
+    // item, so the successor is that peer's leader schedule) but CONTIGUOUS on the hub→coil relay
+    // (the hub forwards EVERY block/stack in order, so the successor is `+1`). These seams let a
+    // concrete liaison pick the shape; the head mesh keeps the sparse default.
+
+    /** Successor on THIS liaison's outbound block-brief lane (used by append + the OOB guard). */
+    protected def nextOwnBriefBlock(after: BlockNumber): Option[BlockNumber] =
+        config.nextOwnLeaderBlock(after)
+
+    /** Successor on THIS liaison's outbound stack-brief lane. */
+    protected def nextOwnBriefStack(after: StackNumber): Option[StackNumber] =
+        config.nextOwnSlowLeaderStack(after)
+
+    /** Successor on the INBOUND block-brief lane (used by verify to advance the cursor). */
+    protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber] =
+        remotePeer.nextLeaderBlock(after)
+
+    /** Successor on the INBOUND stack-brief lane. */
+    protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
+        remotePeer.nextSlowLeaderStack(after)
+
+    /** The initial outstanding request — its brief cursors depend on the lane shape above. */
+    protected def initialRequest: GetMsgBatch = GetMsgBatch.initial(remotePeer)
+
     override def preStart: IO[Unit] = context.self ! PeerLiaison.PreStart
 
     override def receive: Receive[IO, Request] =
@@ -202,7 +227,7 @@ trait BatchProtocolLiaison(
             _ <- logger.info(s"starting, remote peer: ${remotePeer.label}")
             _ <- initializeConnections
             _ <- mermaid("GetMsgBatch.initial")
-            _ <- sendToRemoteLiaison(GetMsgBatch.initial(remotePeer))
+            _ <- sendToRemoteLiaison(initialRequest)
             _ <- startResendTimer
         yield ()
 
@@ -222,7 +247,7 @@ trait BatchProtocolLiaison(
 
     private final class State {
         private val currentlyRequesting: Ref[IO, GetMsgBatch] =
-            Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial(remotePeer))
+            Ref.unsafe[IO, GetMsgBatch](initialRequest)
 
         /** Read-only access to the outstanding [[GetMsgBatch]]. Used by the retransmit timer (see
           * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
@@ -283,7 +308,7 @@ trait BatchProtocolLiaison(
                     for {
                         nBlock <- this.nBlock.get
                         nY = y.blockNum
-                        nextOwnBlock = config.nextOwnLeaderBlock(nBlock)
+                        nextOwnBlock = nextOwnBriefBlock(nBlock)
                         _ <- IO.raiseWhen(!nextOwnBlock.contains(nY))(
                           Error(
                             s"Bad BlockBrief.Next increment: last-appended: ${nBlock}, " +
@@ -302,7 +327,7 @@ trait BatchProtocolLiaison(
                     for {
                         nStack <- this.nStackBrief.get
                         nY = y.stackNum
-                        nextOwnStack = config.nextOwnSlowLeaderStack(nStack)
+                        nextOwnStack = nextOwnBriefStack(nStack)
                         _ <- IO.raiseWhen(!nextOwnStack.contains(nY))(
                           Error(
                             s"Bad StackBrief increment: last-appended: $nStack, " +
@@ -403,8 +428,8 @@ trait BatchProtocolLiaison(
                 // symmetric in `(peer, n) ↦ first leader ≥ next`).
                 _ <- IO.raiseWhen(
                   nAck.increment < batchReq.softAckNumber ||
-                      config.nextOwnLeaderBlock(nBlock).exists(_ < batchReq.blockNum) ||
-                      config.nextOwnSlowLeaderStack(nStack).exists(_ < batchReq.stackNum) ||
+                      nextOwnBriefBlock(nBlock).exists(_ < batchReq.blockNum) ||
+                      nextOwnBriefStack(nStack).exists(_ < batchReq.stackNum) ||
                       nHard.increment < batchReq.hardAckNum ||
                       nHub.increment < batchReq.hubCoilAckNum ||
                       nRequest.increment < batchReq.requestNum
@@ -602,10 +627,10 @@ trait BatchProtocolLiaison(
                 batchNum = current.batchNum.increment,
                 softAckNumber = received.softAck.fold(current.softAckNumber)(_.ackNum.increment),
                 blockNum = received.blockBrief.fold(current.blockNum)(b =>
-                    remotePeer.nextLeaderBlock(b.blockNum).getOrElse(current.blockNum)
+                    nextRemoteBriefBlock(b.blockNum).getOrElse(current.blockNum)
                 ),
                 stackNum = received.stackBrief.fold(current.stackNum)(sb =>
-                    remotePeer.nextSlowLeaderStack(sb.stackNum).getOrElse(current.stackNum)
+                    nextRemoteBriefStack(sb.stackNum).getOrElse(current.stackNum)
                 ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
                 hubCoilAckNum = received.hubCoilAck.fold(current.hubCoilAckNum)(_.seqNum.increment),
