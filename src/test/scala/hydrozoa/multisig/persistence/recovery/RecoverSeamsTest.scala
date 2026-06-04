@@ -11,7 +11,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Tracer
-import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
+import hydrozoa.multisig.consensus.{CardanoLiaison, PeerLiaison, StackComposer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
@@ -296,6 +296,57 @@ class RecoverSeamsTest extends AnyFunSuite:
             CardanoLiaison.State
                 .recover(p, config)
                 .map(s => assert(s == CardanoLiaison.State.initialState(config)))
+        }
+    }
+
+    // ---- PeerLiaison (outbox restore) ----
+
+    test("PeerLiaison.recover over an empty store yields an empty outbox") {
+        withStore { p =>
+            PeerLiaison.recover(p, config.ownHeadPeerId).map { seed =>
+                assert(
+                  seed.qAck.isEmpty && seed.qBlock.isEmpty && seed.qRequest.isEmpty &&
+                      seed.qStackBrief.isEmpty && seed.qHardAck.isEmpty
+                )
+            }
+        }
+    }
+
+    test("PeerLiaison.recover restores own satellites (per-peer) and own-led spines (filtered)") {
+        withStore { p =>
+            val own = config.ownHeadPeerId
+            val ownNum = config.ownHeadPeerNum
+            val other = HeadPeerNumber(1)
+            val spineRange = (0 to 5).toList
+            for
+                // own HardAcks 0..2 + another peer's at 5 (must be excluded by the per-peer scan).
+                _ <- List(0, 1, 2).traverse_(k =>
+                    p.put(LaneKey.HardAck(ownNum, HardAckNumber(k)))(
+                      LaneValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
+                    )
+                )
+                _ <- p.put(LaneKey.HardAck(other, HardAckNumber(5)))(
+                  LaneValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
+                )
+                // Block + Stack spines carry every leader's brief; recover keeps only own-led.
+                _ <- spineRange.traverse_(n =>
+                    blockBrief(n).flatMap(b =>
+                        p.put(LaneKey.Block(BlockNumber(n)))(LaneValue(stamp, b))
+                    )
+                )
+                _ <- spineRange.traverse_(n =>
+                    stackBrief(stack = n, firstBlock = 0, lastBlock = n).flatMap(s =>
+                        p.put(LaneKey.Stack(StackNumber(n)))(LaneValue(stamp, s))
+                    )
+                )
+                seed <- PeerLiaison.recover(p, own)
+            yield assert(
+              seed.qHardAck.map(_.hardAckNum) == List(0, 1, 2).map(HardAckNumber(_)) &&
+                  seed.qBlock
+                      .map(_.blockNum) == spineRange.map(BlockNumber(_)).filter(own.isLeader) &&
+                  seed.qStackBrief.map(_.stackNum) ==
+                  spineRange.map(StackNumber(_)).filter(own.isSlowLeader)
+            )
         }
     }
 

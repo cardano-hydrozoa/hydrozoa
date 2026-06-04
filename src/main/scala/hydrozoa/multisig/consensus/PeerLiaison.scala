@@ -16,6 +16,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.recovery.LaneScan
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 import scala.collection.immutable.Queue
 
@@ -661,6 +662,67 @@ object PeerLiaison {
     )
 
     type Handle = ActorRef[IO, Request]
+
+    /** This peer's own-produced outbox restored from the store on boot — the five lanes' own
+      * entries in ascending number order. `recover` rebuilds it; R3 seeds [[PeerLiaison]]'s `State`
+      * from it (each queue's last entry's number is the corresponding cursor `nX`; the cold value
+      * is all empty, with `currentlyRequesting` left at `GetMsgBatch.initial(remote)` so the remote
+      * re-polls).
+      */
+    final case class OutboxSeed(
+        qAck: List[SoftAck],
+        qBlock: List[BlockBrief.Next],
+        qRequest: List[UserRequestWithId],
+        qStackBrief: List[StackBrief],
+        qHardAck: List[HardAck]
+    )
+
+    /** Reconstruct this peer's own-produced outbox after a crash (R2-bnd) — the entries the remote
+      * polls from us via `GetMsgBatch`. Pure over the store; the actor wiring (seeding `State`) is
+      * R3. Each lane is read ascending: the satellites (`SoftAck` / `HardAck` / `Request`) are
+      * own-keyed, so a per-peer scan yields exactly our entries; the spines (`Block` / `Stack`)
+      * carry every leader's brief, so we keep only the ones THIS peer leads (`isLeader` /
+      * `isSlowLeader`). **Inbound is not restored** — `persistInbound` forwards each received entry
+      * rather than holding it, so inbound re-delivery is the `ReplayActor`'s job in R3 (restoring
+      * it here would double-deliver).
+      */
+    def recover(persistence: Persistence[IO], own: HeadPeerId)(using
+        CardanoNetwork.Section
+    ): IO[OutboxSeed] =
+        val backend = persistence.backend
+        val ownNum = own.peerNum
+        val kAck = LaneKey.SoftAck(ownNum, SoftAckNumber.zero)
+        val kRequest = LaneKey.Request(ownNum, RequestNumber.zero)
+        val kHardAck = LaneKey.HardAck(ownNum, HardAckNumber.zero)
+        val kBlock = LaneKey.Block(BlockNumber.zero)
+        val kStack = LaneKey.Stack(StackNumber.zero)
+        for {
+            acks <- LaneScan.scan(backend, kAck).map(_.map(e => kAck.decodeValue(e.framed).payload))
+            requests <- LaneScan
+                .scan(backend, kRequest)
+                .map(_.map(e => kRequest.decodeValue(e.framed).payload))
+            hardAcks <- LaneScan
+                .scan(backend, kHardAck)
+                .map(_.map(e => kHardAck.decodeValue(e.framed).payload))
+            blocks <- LaneScan
+                .scan(backend, kBlock)
+                .map(
+                  _.map(e => kBlock.decodeValue(e.framed).payload)
+                      .filter(b => own.isLeader(b.blockNum))
+                )
+            stacks <- LaneScan
+                .scan(backend, kStack)
+                .map(
+                  _.map(e => kStack.decodeValue(e.framed).payload)
+                      .filter(s => own.isSlowLeader(s.stackNum))
+                )
+        } yield OutboxSeed(
+          qAck = acks,
+          qBlock = blocks,
+          qRequest = requests,
+          qStackBrief = stacks,
+          qHardAck = hardAcks
+        )
 
     type BlockConfirmed = BlockBrief.Section & BlockType.Next & BlockStatus.SoftConfirmed
 
