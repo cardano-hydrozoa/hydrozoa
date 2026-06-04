@@ -6,6 +6,7 @@ import cats.syntax.parallel.*
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import java.nio.ByteBuffer
 
@@ -45,6 +46,19 @@ object Markers:
               .map(_.map(decodeSatelliteNumHard))
         ).parMapN(Markers.apply)
 
+    /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
+      * `RequestNumber(0)` for an empty store. The same own-prefixed-max read as the `*Acked`
+      * markers, but the Request key is `[peer:1][requestNum:8]` (8-byte index). EventSequencer
+      * seeds its counter with this on boot (R3).
+      */
+    def recoverNextRequestNumber(
+        backend: BackendStore[IO],
+        own: HeadPeerNumber
+    ): IO[RequestNumber] =
+        backend
+            .lastKeyWithPrefix(Cf.Request, LaneKey.peerByte(own))
+            .map(_.fold(RequestNumber(0))(decodeSatelliteNumRequest(_).increment))
+
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =
         requireWidth(bytes, 4, "BlockNumber")
@@ -66,6 +80,13 @@ object Markers:
     private def decodeSatelliteNumHard(bytes: Array[Byte]): HardAckNumber =
         requireWidth(bytes, 1 + 4, "HardAck key")
         HardAckNumber(ByteBuffer.wrap(bytes, 1, 4).getInt)
+
+    /** Decode `RequestNumber` from a satellite-shaped key `[peer:1][requestNum:8]` — the Request
+      * lane uses an 8-byte index, unlike the 4-byte soft/hard-ack indices.
+      */
+    private def decodeSatelliteNumRequest(bytes: Array[Byte]): RequestNumber =
+        requireWidth(bytes, 1 + 8, "Request key")
+        RequestNumber(ByteBuffer.wrap(bytes, 1, 8).getLong)
 
     private def requireWidth(bytes: Array[Byte], expected: Int, label: String): Unit =
         if bytes.length != expected then

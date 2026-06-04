@@ -15,6 +15,7 @@ import hydrozoa.multisig.consensus.StackComposer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
@@ -23,7 +24,7 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, LaneKey, LaneValue, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, LaneKey, LaneValue, Markers, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
@@ -240,6 +241,39 @@ class RecoverSeamsTest extends AnyFunSuite:
                     .recover(p, markers.hardAcked, markers.hardConfirmed, own)
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
+        }
+    }
+
+    // ---- EventSequencer (request counter) ----
+
+    test("Markers.recoverNextRequestNumber returns RequestNumber(0) on an empty store") {
+        withStore { p =>
+            Markers
+                .recoverNextRequestNumber(p.backend, HeadPeerNumber(0))
+                .map(n => assert(n == RequestNumber(0)))
+        }
+    }
+
+    test("Markers.recoverNextRequestNumber = max own Request + 1; other peers' requests ignored") {
+        withStore { p =>
+            val own = HeadPeerNumber(1)
+            // Seed own requests (incl. one > 2^32 to exercise the 8-byte index decode), plus a
+            // different peer at a higher number that must NOT raise own's counter (prefix scoping).
+            for
+                _ <- List(0L, 1L, 2L, 5_000_000_000L).traverse_(k =>
+                    p.backend.put(
+                      Cf.Request,
+                      LaneKey.Request(own, RequestNumber(k)).encode,
+                      Array[Byte](0)
+                    )
+                )
+                _ <- p.backend.put(
+                  Cf.Request,
+                  LaneKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
+                  Array[Byte](0)
+                )
+                n <- Markers.recoverNextRequestNumber(p.backend, own)
+            yield assert(n == RequestNumber(5_000_000_001L))
         }
     }
 

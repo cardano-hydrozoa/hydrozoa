@@ -219,19 +219,19 @@ gap.
   `dResponse.complete(id)` (verified: `persistence.write(...)` precedes
   `req.dResponse.complete`). So R2-bnd only adds the boot-time counter restore; the
   earlier "fix the barrier" note is stale and dropped.
-- **PeerLiaison:** per-remote cursors = `max(persisted) + 1`. **Queue loading
-  (Ilia 2026-05-30 — must do, not just "queues empty"):** the in/out queues in
-  `PeerLiaison.State` are reconstructed from the store on boot, not left empty.
-  Concretely `State` holds five per-remote cursor `Ref`s
-  (`nAck`/`nBlock`/`nRequest`/`nStackBrief`/`nHardAck`), five outbox queues
-  (`qAck`/`qBlock`/`qRequest`/`qStackBrief`/`qHardAck`), and `currentlyRequesting`
-  (the outstanding `GetMsgBatch`). The **outbox** is the DB-backed view of this
-  peer's own-produced lane prefix `[remote's cursor, head]` (re-served on each
-  `GetMsgBatch`, exactly the steady-state write-through-cache behavior — a cold
-  cache *is* recovery). The **inbound** side restores from the persisted inbound
-  lane entries (CR8) above each remote's cursor. Define how `State()` is seeded
-  from `persistence` at `preStartLocal` — today it's `private val state = State()`
-  (all `Ref`s cold-zeroed / empty queues).
+- **PeerLiaison:** restore the **own-produced outbox only**. `State` holds five own-produced
+  cursors (`nAck`/`nBlock`/`nRequest`/`nStackBrief`/`nHardAck` — the highest number this peer has
+  produced per lane), the five outbox queues (`qAck`/`qBlock`/`qRequest`/`qStackBrief`/`qHardAck`),
+  and `currentlyRequesting` (our outstanding `GetMsgBatch` to the remote). recover seeds the cursors
+  (satellites: own-prefixed max; spines `Block`/`Stack`: the highest index this peer **leads**, since
+  the spine key carries no peer byte) and re-loads each outbox queue from the own-produced lane tail.
+  The outbox is a DB-backed write-through cache of this peer's own lane prefix `[remote's cursor,
+  head]`, re-served on each `GetMsgBatch` — a cold cache *is* recovery, so `currentlyRequesting` stays
+  `GetMsgBatch.initial(remote)` and the remote re-polls. **No inbound restore:** `persistInbound`
+  writes each received entry (CR8) and immediately **forwards** it — PeerLiaison holds no inbound
+  queue, so inbound re-delivery is the `ReplayActor`'s job in R3 (it seeds each consensus actor's
+  mailbox from the persisted lane tails). Restoring inbound here would double-deliver. (Supersedes the
+  2026-05-30 "reconstruct in/out queues" note — there are no inbound queues to restore.)
 - **CardanoLiaison:** `State(targetState, effectInputs, happyPathEffects,
   fallbackEffects)` (cold: `targetState = Active(config…treasuryProduced.utxoId)`,
   empty maps). Recover by **folding `Cf.HardConfirmation` in stack order** through
