@@ -10,7 +10,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HubCoilAck, HubCoilAckNumber, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.RemotePeer.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
@@ -114,6 +114,10 @@ trait PeerLiaison(
                               s"outbox: hard ack stack=${y.stackNum} peer=${y.peerId} " +
                                   s"round=${y.payload.round}"
                             )
+                        case y: HubCoilAck =>
+                            logger.debug(
+                              s"outbox: hub-coil ack seq=${y.seqNum} coil=${y.ack.peerId}"
+                            )
                     }
                     // Append the event to the corresponding queue in the state
                     _ <- state.appendToOutbox(x)
@@ -181,6 +185,9 @@ trait PeerLiaison(
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
                                 _ <- x.stackBrief.traverse_(conn.stackComposer ! _)
                                 _ <- x.hardAck.traverse_(conn.slowConsensusActor ! _)
+                                // Relayed coil hard-acks: unwrap and hand the raw, signed coil ack
+                                // to the local SlowConsensusActor (verified end-to-end there).
+                                _ <- x.hubCoilAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
                                 _ <- x.requests.traverse_(conn.blockWeaver ! _)
                             } yield ()
                         case VerifyOutcome.Reject(reason) =>
@@ -245,11 +252,13 @@ trait PeerLiaison(
         private val nRequest = Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
         private val nStackBrief = Ref.unsafe[IO, StackNumber](StackNumber.zero)
         private val nHardAck = Ref.unsafe[IO, HardAckNumber](HardAckNumber.zero)
+        private val nHubCoilAck = Ref.unsafe[IO, HubCoilAckNumber](HubCoilAckNumber.zero)
         private val qAck = Ref.unsafe[IO, Queue[SoftAck]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
         private val qRequest = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val qStackBrief = Ref.unsafe[IO, Queue[StackBrief]](Queue())
         private val qHardAck = Ref.unsafe[IO, Queue[HardAck]](Queue())
+        private val qHubCoilAck = Ref.unsafe[IO, Queue[HubCoilAck]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
         /** Check whether there are no acks, blocks, events, stack briefs, or hard-acks queued-up to
@@ -262,7 +271,8 @@ trait PeerLiaison(
                 event <- this.qRequest.get.map(_.isEmpty)
                 stackBrief <- this.qStackBrief.get.map(_.isEmpty)
                 hardAck <- this.qHardAck.get.map(_.isEmpty)
-            } yield ack && block && event && stackBrief && hardAck
+                hubCoilAck <- this.qHubCoilAck.get.map(_.isEmpty)
+            } yield ack && block && event && stackBrief && hardAck && hubCoilAck
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
@@ -336,6 +346,20 @@ trait PeerLiaison(
                         _ <- this.nHardAck.set(nY)
                         _ <- this.qHardAck.update(_ :+ y)
                     } yield ()
+                case y: HubCoilAck =>
+                    // Relayed coil hard-acks, hub-sequenced: contiguous per-link by `seqNum`
+                    // (mirrors the hard-ack lane). The hub's CoilAckSequencer assigns the seqNums.
+                    for {
+                        nHub <- this.nHubCoilAck.get
+                        nY = y.seqNum
+                        _ <- IO.raiseWhen(nY.convert != 0 && nHub.increment != nY)(
+                          Error(
+                            s"Bad HubCoilAck increment: last-appended: $nHub, attempted: $nY"
+                          )
+                        )
+                        _ <- this.nHubCoilAck.set(nY)
+                        _ <- this.qHubCoilAck.update(_ :+ y)
+                    } yield ()
             }
 
         /** Make sure a batch is sent to the counterparty as soon as another local ack/block/event
@@ -376,6 +400,7 @@ trait PeerLiaison(
                 nBlock <- this.nBlock.get
                 nStack <- this.nStackBrief.get
                 nHard <- this.nHardAck.get
+                nHub <- this.nHubCoilAck.get
                 nRequest <- this.nRequest.get
 
                 // OutOfBounds sanity guard, one per lane. The remote's cursor can
@@ -400,6 +425,7 @@ trait PeerLiaison(
                       config.nextOwnLeaderBlock(nBlock).exists(_ < batchReq.blockNum) ||
                       config.nextOwnSlowLeaderStack(nStack).exists(_ < batchReq.stackNum) ||
                       nHard.increment < batchReq.hardAckNum ||
+                      nHub.increment < batchReq.hubCoilAckNum ||
                       nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
 
@@ -435,6 +461,10 @@ trait PeerLiaison(
                     val pruned = q.dropWhile(_.hardAckNum < batchReq.hardAckNum)
                     (pruned, pruned.headOption)
                 }
+                mHubCoilAck <- this.qHubCoilAck.modify { q =>
+                    val pruned = q.dropWhile(_.seqNum < batchReq.hubCoilAckNum)
+                    (pruned, pruned.headOption)
+                }
                 events <- this.qRequest.modify { q =>
                     val pruned = q.dropWhile(_.requestId._2 < batchReq.requestNum)
                     (pruned, pruned.take(maxRequests))
@@ -442,7 +472,7 @@ trait PeerLiaison(
 
                 _ <- IO.raiseWhen(
                   mAck.isEmpty && mBlock.isEmpty && events.isEmpty &&
-                      mStackBrief.isEmpty && mHardAck.isEmpty
+                      mStackBrief.isEmpty && mHardAck.isEmpty && mHubCoilAck.isEmpty
                 )(EmptyNewMsgBatch)
             } yield NewMsgBatch(
               batchNum = batchReq.batchNum,
@@ -450,6 +480,7 @@ trait PeerLiaison(
               blockBrief = mBlock,
               stackBrief = mStackBrief,
               hardAck = mHardAck,
+              hubCoilAck = mHubCoilAck,
               requests = events.toList
             )).attemptNarrow
 
@@ -548,6 +579,16 @@ trait PeerLiaison(
                     )
                 case _ => ()
 
+            // 3c. If a relayed coil hard-ack is present, its seqNum must equal the next-expected
+            //     `current.hubCoilAckNum`. No author check — the embedded ack is a coil's, verified
+            //     end-to-end by SlowConsensusActor; the seqNum is the remote hub's relay ordering.
+            received.hubCoilAck match
+                case Some(hc) if hc.seqNum != current.hubCoilAckNum =>
+                    return Reject(
+                      Rejection.HubCoilAckNumMismatch(current.hubCoilAckNum, hc.seqNum)
+                    )
+                case _ => ()
+
             // 4. If requests are present, the first must equal `current.requestNum` (the
             //    next-expected event number) and subsequent requests must be consecutive.
             received.requests.headOption match
@@ -580,6 +621,7 @@ trait PeerLiaison(
                     remotePeer.nextSlowLeaderStack(sb.stackNum).getOrElse(current.stackNum)
                 ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
+                hubCoilAckNum = received.hubCoilAck.fold(current.hubCoilAckNum)(_.seqNum.increment),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
                   _.requestId.requestNum.increment
                 )
@@ -659,6 +701,7 @@ object PeerLiaison {
             case StackBriefNumMismatch(expected: StackNumber, received: StackNumber)
             case HardAckPeerMismatch(expected: PeerId, received: PeerId)
             case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
+            case HubCoilAckNumMismatch(expected: HubCoilAckNumber, received: HubCoilAckNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)
 
@@ -677,6 +720,8 @@ object PeerLiaison {
                     s"HardAckPeerMismatch(expected=$e, received=$r)"
                 case HardAckNumMismatch(e, r) =>
                     s"HardAckNumMismatch(expected=$e, received=$r)"
+                case HubCoilAckNumMismatch(e, r) =>
+                    s"HubCoilAckNumMismatch(expected=$e, received=$r)"
                 case RequestsHeadMismatch(e, r) =>
                     s"RequestsHeadMismatch(expected=$e, received=$r)"
                 case RequestsNotConsecutive(p, n) =>
@@ -719,7 +764,8 @@ object PeerLiaison {
     case object ResendCurrent
 
     object Request {
-        type RemoteBroadcast = SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck
+        type RemoteBroadcast =
+            SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck | HubCoilAck
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of acks,
           * blocks, stack briefs, hard-acks, and user requests originating from the remote peer.
@@ -819,6 +865,7 @@ object PeerLiaison {
             blockNum: BlockNumber,
             stackNum: StackNumber,
             hardAckNum: HardAckNumber,
+            hubCoilAckNum: HubCoilAckNumber,
             requestNum: RequestNumber
         )
 
@@ -841,6 +888,7 @@ object PeerLiaison {
               stackNum =
                   remotePeer.nextSlowLeaderStack(StackNumber.zero).getOrElse(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
+              hubCoilAckNum = HubCoilAckNumber.zero,
               requestNum = RequestNumber.zero
             )
         }
@@ -872,6 +920,7 @@ object PeerLiaison {
             blockBrief: Option[BlockBrief.Next],
             stackBrief: Option[StackBrief],
             hardAck: Option[HardAck],
+            hubCoilAck: Option[HubCoilAck],
             requests: List[UserRequestWithId]
         )
     }
