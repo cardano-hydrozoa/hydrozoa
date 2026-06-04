@@ -12,7 +12,8 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{BackendStore, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, LaneKey, Markers, Persistence, StoreKey}
+import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
 import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
@@ -39,8 +40,7 @@ case class RuleBasedRegimeManager(
             state <- loadRuleBasedState
             _ <- context.actorOf(
               DisputeActor(
-                sec = state.sec,
-                signatures = state.signatures,
+                action = state.action,
                 cardanoBackend = cardanoBackend,
                 tracerLocal = tracerLocal
               )
@@ -57,9 +57,11 @@ case class RuleBasedRegimeManager(
         } yield ()
     }
 
-    /** Read the rule-based recovery inputs from persistence: the latest hard-confirmed stack
-      * carries the SEC + peer signatures (latest SEC in partition order) and the fallback tx; the
-      * SEC's blockNum keys the evacuation map.
+    /** Read the rule-based recovery inputs from persistence. The latest hard-confirmed stack always
+      * provides a fallback tx. It provides a SEC + peer signatures (=> [[DisputeAction.Vote]]) only
+      * when the latest partition is a Minor or a Major with trailing minors; otherwise (Initial
+      * stack, or Major-with-no-trailing-minors) the recovered action is [[DisputeAction.Abstain]]
+      * and the dispute resolves via the on-chain Abstain branch.
       */
     private def loadRuleBasedState: IO[RuleBasedRegimeManager.State] =
         for {
@@ -74,52 +76,96 @@ case class RuleBasedRegimeManager(
                     RuleBasedRegimeManager.MissingState(s"HardConfirmation($stackNum) missing")
                   )
                 )
-            partitions <- effects match {
-                case r: StackEffects.HardConfirmed.Regular => IO.pure(r.partitions)
-                case _: StackEffects.HardConfirmed.Initial =>
-                    IO.raiseError(
-                      RuleBasedRegimeManager.MissingState(
-                        s"hard-confirmed stack $stackNum is Initial — no SEC"
+            res <- effects match {
+                case i: StackEffects.HardConfirmed.Initial =>
+                    IO.pure(
+                      RuleBasedRegimeManager.State(
+                        action = DisputeAction.Abstain,
+                        toEvacuate = config.initialEvacuationMap,
+                        evacuationMapAtFallback = config.initialEvacuationMap,
+                        fallbackTxHash = i.fallbackTx.tx.id
                       )
                     )
-            }
-            multiSec <- RuleBasedRegimeManager
-                .lastSec(partitions)
-                .liftTo[IO](
-                  RuleBasedRegimeManager.MissingState(s"no SEC in stack $stackNum")
-                )
-            fallbackTx <- RuleBasedRegimeManager
-                .lastFallback(partitions)
-                .liftTo[IO](
-                  RuleBasedRegimeManager.MissingState(s"no fallback tx in stack $stackNum")
-                )
-            sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment)
-            evacMap <- persistence
-                .get(StoreKey.EvacuationMap(multiSec.commitment.blockNum))
-                .flatMap(
-                  _.liftTo[IO](
-                    RuleBasedRegimeManager.MissingState(
-                      s"EvacuationMap(${multiSec.commitment.blockNum}) missing"
+                case r: StackEffects.HardConfirmed.Regular =>
+                    // TODO: hoist the StackBrief + EvacuationMap recovery lookup into a shared
+                    // helper once SC's recovery routine lands (open draft PR on another branch);
+                    // both readers want `EvacuationMap[StackLane[hardAcked].lastBlockNum]` per
+                    // design/persistence-and-crash-recovery.md §5.2 / §6.
+                    val stackKey = LaneKey.Stack(stackNum)
+                    for {
+                        fallbackTx <- RuleBasedRegimeManager
+                            .lastFallback(r.partitions)
+                            .liftTo[IO](
+                              RuleBasedRegimeManager.MissingState(
+                                s"no fallback tx in stack $stackNum"
+                              )
+                            )
+                        action = RuleBasedRegimeManager.lastSec(r.partitions) match {
+                            case None => DisputeAction.Abstain
+                            case Some(multiSec) =>
+                                DisputeAction.Vote(
+                                  sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment),
+                                  signatures = multiSec.headerMultiSigned
+                                )
+                        }
+                        stackBriefBytes <- backend
+                            .get(Cf.Stack, stackKey.encode)
+                            .flatMap(
+                              _.liftTo[IO](
+                                RuleBasedRegimeManager.MissingState(
+                                  s"StackLane[$stackNum] missing"
+                                )
+                              )
+                            )
+                        lastBlockNum = stackKey.codec.decode(stackBriefBytes).payload.lastBlockNum
+                        evacMap <- persistence
+                            .get(StoreKey.EvacuationMap(lastBlockNum))
+                            .flatMap(
+                              _.liftTo[IO](
+                                RuleBasedRegimeManager.MissingState(
+                                  s"EvacuationMap($lastBlockNum) missing"
+                                )
+                              )
+                            )
+                    } yield RuleBasedRegimeManager.State(
+                      action = action,
+                      toEvacuate = evacMap,
+                      evacuationMapAtFallback = evacMap,
+                      fallbackTxHash = fallbackTx.tx.id
                     )
-                  )
-                )
-        } yield RuleBasedRegimeManager.State(
-          sec = sec,
-          signatures = multiSec.headerMultiSigned,
-          toEvacuate = evacMap,
-          evacuationMapAtFallback = evacMap,
-          fallbackTxHash = fallbackTx.tx.id
-        )
+            }
+        } yield res
 }
 
 object RuleBasedRegimeManager {
     type Config = EvacuationActor.Config & DisputeActor.Config
 
-    /** The five rule-based recovery inputs pulled from persistence at boot. */
+    /** What action this peer's [[DisputeActor]] should take when it observes its own `AwaitingVote`
+      * vote utxo on L1.
+      *
+      *   - [[Vote]]: the latest hard-confirmed stack ended with a Minor (or Major-with-trailing-
+      *     minors) — we have a signed SEC + peer header signatures, so the actor builds and submits
+      *     a `VoteTx` that flips the datum to `Voted`.
+      *   - [[Abstain]]: the latest hard-confirmed stack is Initial or Major-with-no-trailing-minors
+      *     — there is no SEC to vote with, so the actor publicly abstains via the on-chain Abstain
+      *     branch and the dispute is tallied/resolved from there.
+      */
+    enum DisputeAction:
+        case Vote(
+            sec: StandaloneEvacuationCommitment.Onchain,
+            signatures: List[BlockHeader.Minor.HeaderSignature]
+        )
+        case Abstain
+
+    /** The rule-based recovery inputs pulled from persistence at boot. */
     final case class State(
-        sec: StandaloneEvacuationCommitment.Onchain,
-        signatures: List[BlockHeader.Minor.HeaderSignature],
+        action: DisputeAction,
         toEvacuate: EvacuationMap,
+        // TODO: this is the evac map *at fallback*, but what the EvacuationActor actually needs is
+        // the evac map active *after* dispute resolution — those can differ when peers vote to an
+        // earlier SEC rather than the latest. DisputeActor can run from this static snapshot, but
+        // the EvacuationActor needs to read the resolution outcome dynamically. Revisit before
+        // wiring EvacuationActor against this field.
         evacuationMapAtFallback: EvacuationMap,
         fallbackTxHash: TransactionHash
     )

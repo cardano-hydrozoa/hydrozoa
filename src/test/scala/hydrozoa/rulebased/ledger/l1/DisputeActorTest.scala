@@ -13,7 +13,6 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
-import hydrozoa.rulebased.DisputeActor
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
@@ -22,6 +21,7 @@ import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import hydrozoa.rulebased.{DisputeActor, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.*
@@ -180,9 +180,11 @@ object DisputeActorTestHelpers {
             tracer <- lift(Tracer.makeLocal)
 
             disputeActor = DisputeActor(
-              sec = blockHeader,
+              action = RuleBasedRegimeManager.DisputeAction.Vote(
+                sec = blockHeader,
+                signatures = env.multisignHeader(blockHeader).toList
+              ),
               cardanoBackend = cardanoBackend,
-              signatures = env.multisignHeader(blockHeader).toList,
               tracerLocal = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor

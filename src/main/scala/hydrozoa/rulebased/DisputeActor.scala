@@ -15,9 +15,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddr
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.Tx
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.DisputeActor.Requests.HandleDisputeRes
@@ -57,9 +55,8 @@ extension (tx: Transaction) {
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
-    sec: StandaloneEvacuationCommitment.Onchain,
+    action: RuleBasedRegimeManager.DisputeAction,
     cardanoBackend: CardanoBackend[IO],
-    signatures: List[BlockHeader.Minor.HeaderSignature],
     tracerLocal: IOLocal[Tracer]
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
@@ -175,22 +172,42 @@ final case class DisputeActor(
 
             _ <- disputeUtxos match {
                 case DisputeUtxos.CastVote(ownVoteUtxo) =>
-                    val builder = VoteTx.Build(
-                      uncastVoteUtxo = ownVoteUtxo,
-                      treasuryUtxo = treasuryUtxo,
-                      collateralUtxo = collateralUtxo,
-                      sec = sec,
-                      signatures = signatures,
-                    )
-                    for {
-                        _ <- EitherT.liftF(Tracer.info("Building vote Tx"))
-                        voteTx <- builder.result match {
-                            case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- EitherT.liftF(Tracer.info("Submitting vote Tx"))
-                        _ <- signAndSubmitTx[VoteTx](voteTx)
-                    } yield ()
+                    action match {
+                        case RuleBasedRegimeManager.DisputeAction.Vote(sec, signatures) =>
+                            val builder = VoteTx.Build(
+                              uncastVoteUtxo = ownVoteUtxo,
+                              treasuryUtxo = treasuryUtxo,
+                              collateralUtxo = collateralUtxo,
+                              sec = sec,
+                              signatures = signatures,
+                            )
+                            for {
+                                _ <- EitherT.liftF(Tracer.info("Building vote Tx"))
+                                voteTx <- builder.result match {
+                                    case Left(e) =>
+                                        EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
+                                    case Right(tx) => EitherT.right(IO.pure(tx))
+                                }
+                                _ <- EitherT.liftF(Tracer.info("Submitting vote Tx"))
+                                _ <- signAndSubmitTx[VoteTx](voteTx)
+                            } yield ()
+
+                        case RuleBasedRegimeManager.DisputeAction.Abstain =>
+                            val builder = AbstainTx.Build(
+                              uncastVoteUtxo = ownVoteUtxo,
+                              collateralUtxo = collateralUtxo
+                            )
+                            for {
+                                _ <- EitherT.liftF(Tracer.info("Building abstain Tx"))
+                                abstainTx <- builder.result match {
+                                    case Left(e) =>
+                                        EitherT.liftF(IO.raiseError(Error.BuildError.Abstain(e)))
+                                    case Right(tx) => EitherT.right(IO.pure(tx))
+                                }
+                                _ <- EitherT.liftF(Tracer.info("Submitting abstain Tx"))
+                                _ <- signAndSubmitTx[AbstainTx](abstainTx)
+                            } yield ()
+                    }
 
                 case DisputeUtxos.Tally(otherUtxos) =>
                     // We must have that they key of the continuing input is less than the key of the removed input,
@@ -398,6 +415,9 @@ object DisputeActor {
                 override def getMessage: String = wrapped.getMessage
             }
 
+            case class Abstain(wrapped: AbstainTx.Build.Error) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
         }
 
         sealed trait ParseError

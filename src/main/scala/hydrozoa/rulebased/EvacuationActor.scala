@@ -246,6 +246,10 @@ case class EvacuationActor(
                   )
                 )
                 evacTx <- evacBuilder.result match {
+                    case Left(EvacuationTx.Build.Error.NoEvacuatees) =>
+                        EitherT.left[EvacuationTx](
+                          IO.pure(Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors)
+                        )
                     case Left(e) =>
                         EitherT(IO.raiseError(Error.BuildError.EvacuationTxBuildError(e)))
                     case Right(tx) => EitherT.pure[IO, Error.RecoverableErrors](tx)
@@ -299,6 +303,9 @@ object EvacuationActor {
 
         object QueryError {
             case object NoTreasuryFound extends Recoverable
+            // Nothing left for us to evacuate. The actor stays alive to handle potential rollbacks
+            // that would re-introduce work — so we keep polling rather than terminate.
+            case object NoEvacuateesRemaining extends Recoverable
         }
 
         object ParseError {
