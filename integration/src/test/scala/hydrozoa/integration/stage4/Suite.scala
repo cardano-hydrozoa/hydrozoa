@@ -11,8 +11,9 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEnd
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.coil.CoilPeer
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -22,7 +23,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet, RemotePeer}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
@@ -51,6 +52,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
+    nCoils: Int = 0,
     transportMode: TransportMode = TransportMode.Direct,
 ) extends ModelBasedSuite:
 
@@ -83,7 +85,11 @@ case class Stage4Suite(
     override def initEnv: Unit = ()
 
     override def genInitialState(env: Unit): Gen[ModelState] =
-        Stage4Suite.genInitialState(nPeers = nPeers, useTestControl = useTestControl)
+        Stage4Suite.genInitialState(
+          nPeers = nPeers,
+          nCoils = nCoils,
+          useTestControl = useTestControl
+        )
 
     override def canStartupNewSut(): Boolean = true
 
@@ -864,6 +870,7 @@ object Stage4Suite:
 
     def genInitialState(
         nPeers: Int = 2,
+        nCoils: Int = 0,
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
         useTestControl: Boolean = true,
@@ -871,6 +878,19 @@ object Stage4Suite:
         val cardanoNetwork = CardanoNetwork.Preprod
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+
+        // Coil wallets are extra keys from the same seed, beyond the head set; each coil is hubbed
+        // by head 0. Empty for a pure-head run. Their vkeys go into the head bootstrap so the
+        // threshold script requires `coilQuorum` of them, and `mkCoilConfig` (below) derives each
+        // coil's own node config from the shared head config.
+        val coilWallets: List[PeerWallet] =
+            if nCoils == 0 then Nil
+            else {
+                val withCoils = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoils)
+                (0 until nCoils).toList.map(i => withCoils.walletFor(HeadPeerNumber(nPeers + i)))
+            }
+        val coilPeerList: List[CoilPeer] =
+            coilWallets.map(w => CoilPeer(w.exportVerificationKey, HeadPeerNumber(0)))
 
         // For non-TestControl runs we need the head's initial block end-time anchored at a
         // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
@@ -899,14 +919,16 @@ object Stage4Suite:
         )
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
-          generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming),
+          generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
+              .map(_.copy(coilQuorum = nCoils)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
               generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
                   Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
               )
             )
-          )
+          ),
+          coilPeers = coilPeerList
         )
 
         val generateHeadConfig_ = generateHeadConfig(
@@ -935,6 +957,24 @@ object Stage4Suite:
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
 
+            // Each coil's own node config: the shared head config plus the coil identity seam. The
+            // coil is a read-only follower, so it reuses head 0's operational sub-configs (polling
+            // period etc.); none of head 0's wallet-derived fields are exercised on the coil path.
+            head0Private = config.nodePrivateConfigs(HeadPeerNumber(0))
+            coilNodeConfigs = coilWallets.map { w =>
+                NodeConfig
+                    .mkCoilConfig(
+                      headConfig = config.headConfig,
+                      ownCoilWallet = w,
+                      nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
+                      nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
+                      hydrozoaHost = "localhost",
+                      hydrozoaPort = "4973",
+                      blockfrostApiKey = "not-a-real-key"
+                    )
+                    .get
+            }
+
             initTx = config.headConfig.initializationTx.tx
             spentInputs = initTx.body.value.inputs.toSet
             initOutputsList = initTx.body.value.outputs.toList.map(_.value).zipWithIndex
@@ -956,7 +996,8 @@ object Stage4Suite:
           params = Params(
             config,
             absorptionSlack,
-            peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap
+            peers.map(pn => pn -> meanInterArrivalTime(pn)).toMap,
+            coilNodeConfigs = coilNodeConfigs
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,
           currentModelTime = startTime,

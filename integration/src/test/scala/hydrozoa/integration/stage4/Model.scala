@@ -31,6 +31,8 @@ object Model {
           */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
+        /** Coil follower node configs (each hubbed by head 0). Empty for a pure-head run. */
+        coilNodeConfigs: List[NodeConfig] = List.empty,
     )
 
     /** A deposit that has been registered but whose L2 UTxOs are not yet available in the model
