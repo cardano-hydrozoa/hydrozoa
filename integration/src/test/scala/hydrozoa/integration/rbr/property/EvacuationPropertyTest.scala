@@ -19,6 +19,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.rulebased.{DisputeActor, EvacuationActor, RuleBasedRegimeManager}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
@@ -209,8 +210,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                           peerId = peerId,
                           action = action,
                           sharedBackend = sharedBackend,
-                          toEvacuate = initialUtxos.evacuationMap,
-                          evacuationMapAtFallback = initialUtxos.evacuationMap,
+                          candidateEvacMaps = Map(
+                            initialUtxos.evacuationMap.kzgCommitment ->
+                                initialUtxos.evacuationMap
+                          ),
                           fallbackTxHash = fallbackTxId,
                           tracer = tracer,
                         )(using env.nodeConfigs(peerId))
@@ -278,8 +281,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         peerId: Int,
         action: RuleBasedRegimeManager.DisputeAction,
         sharedBackend: CardanoBackend[IO],
-        toEvacuate: EvacuationMap,
-        evacuationMapAtFallback: EvacuationMap,
+        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
         fallbackTxHash: TransactionHash,
         tracer: IOLocal[Tracer],
     )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
@@ -294,9 +296,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 )
                 _ <- system.actorOf(
                   EvacuationActor(
-                    thisNodeEvacuates = toEvacuate,
+                    candidateEvacMaps = candidateEvacMaps,
                     cardanoBackend = sharedBackend,
-                    evacuationMapAtFallback = evacuationMapAtFallback,
                     fallbackTxHash = fallbackTxHash,
                     tracerLocal = tracer
                   )

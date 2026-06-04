@@ -9,6 +9,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
@@ -47,9 +48,8 @@ case class RuleBasedRegimeManager(
             )
             _ <- context.actorOf(
               EvacuationActor(
-                thisNodeEvacuates = state.toEvacuate,
+                candidateEvacMaps = state.candidateEvacMaps,
                 cardanoBackend = cardanoBackend,
-                evacuationMapAtFallback = state.evacuationMapAtFallback,
                 fallbackTxHash = state.fallbackTxHash,
                 tracerLocal = tracerLocal
               )
@@ -81,8 +81,10 @@ case class RuleBasedRegimeManager(
                     IO.pure(
                       RuleBasedRegimeManager.State(
                         action = DisputeAction.Abstain,
-                        toEvacuate = config.initialEvacuationMap,
-                        evacuationMapAtFallback = config.initialEvacuationMap,
+                        candidateEvacMaps = Map(
+                          config.initialEvacuationMap.kzgCommitment ->
+                              config.initialEvacuationMap
+                        ),
                         fallbackTxHash = i.fallbackTx.tx.id
                       )
                     )
@@ -108,6 +110,9 @@ case class RuleBasedRegimeManager(
                                   signatures = multiSec.headerMultiSigned
                                 )
                         }
+                        // Default-vote map — what the multisig treasury was committed to at
+                        // fallback time. The default vote utxo carries this kzg, so if peers
+                        // never tally onto a newer SEC the resolution will land here.
                         stackBriefBytes <- backend
                             .get(Cf.Stack, stackKey.encode)
                             .flatMap(
@@ -118,7 +123,7 @@ case class RuleBasedRegimeManager(
                               )
                             )
                         lastBlockNum = stackKey.codec.decode(stackBriefBytes).payload.lastBlockNum
-                        evacMap <- persistence
+                        defaultMap <- persistence
                             .get(StoreKey.EvacuationMap(lastBlockNum))
                             .flatMap(
                               _.liftTo[IO](
@@ -127,10 +132,31 @@ case class RuleBasedRegimeManager(
                                 )
                               )
                             )
+                        // SEC maps — every candidate SEC peers could vote for, keyed by its
+                        // kzg commitment. The dispute resolution writes whichever wins into
+                        // the treasury's Resolved.evacuationActive, so the EvacuationActor
+                        // looks it up here at runtime.
+                        secMaps <- RuleBasedRegimeManager
+                            .allSecs(r.partitions)
+                            .traverse { multiSec =>
+                                persistence
+                                    .get(
+                                      StoreKey.EvacuationMap(multiSec.commitment.blockNum)
+                                    )
+                                    .flatMap(
+                                      _.liftTo[IO](
+                                        RuleBasedRegimeManager.MissingState(
+                                          s"EvacuationMap(${multiSec.commitment.blockNum})" +
+                                              " missing for candidate SEC"
+                                        )
+                                      )
+                                    )
+                                    .map(map => multiSec.commitment.kzgCommitment -> map)
+                            }
                     } yield RuleBasedRegimeManager.State(
                       action = action,
-                      toEvacuate = evacMap,
-                      evacuationMapAtFallback = evacMap,
+                      candidateEvacMaps =
+                          ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
                       fallbackTxHash = fallbackTx.tx.id
                     )
             }
@@ -157,16 +183,17 @@ object RuleBasedRegimeManager {
         )
         case Abstain
 
-    /** The rule-based recovery inputs pulled from persistence at boot. */
+    /** The rule-based recovery inputs pulled from persistence at boot.
+      *
+      * `candidateEvacMaps` enumerates every evacuation map peers might end up tallying onto — each
+      * candidate SEC in the hard-confirmed partitions plus the "default vote" map (what the
+      * multisig treasury was committed to at fallback time). At runtime, once the dispute
+      * resolution lands, the EvacuationActor reads the resolved treasury's kzg commitment and picks
+      * the matching map.
+      */
     final case class State(
         action: DisputeAction,
-        toEvacuate: EvacuationMap,
-        // TODO: this is the evac map *at fallback*, but what the EvacuationActor actually needs is
-        // the evac map active *after* dispute resolution — those can differ when peers vote to an
-        // earlier SEC rather than the latest. DisputeActor can run from this static snapshot, but
-        // the EvacuationActor needs to read the resolution outcome dynamically. Revisit before
-        // wiring EvacuationActor against this field.
-        evacuationMapAtFallback: EvacuationMap,
+        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
         fallbackTxHash: TransactionHash
     )
 
@@ -185,6 +212,19 @@ object RuleBasedRegimeManager {
         partitions.toList.reverseIterator.collectFirst {
             case PartitionEffects.Minor(sec, _)                => sec
             case PartitionEffects.Major(_, _, _, _, Some(sec)) => sec
+        }
+
+    /** Every SEC carried by the partitions, in partition order — these are the candidates peers may
+      * tally onto and the dispute resolution may settle on.
+      */
+    // TODO: Truncate this to the actual votable SECs -- anything lower than the default vote won't work
+    private def allSecs(
+        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]]
+    ): List[StandaloneEvacuationCommitment.MultiSigned] =
+        partitions.toList.flatMap {
+            case PartitionEffects.Minor(sec, _)                => List(sec)
+            case PartitionEffects.Major(_, _, _, _, Some(sec)) => List(sec)
+            case _                                             => Nil
         }
 
     /** Walk the partitions in reverse and return the latest fallback tx. Only Major partitions
