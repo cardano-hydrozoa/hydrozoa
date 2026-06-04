@@ -56,9 +56,18 @@ object CardanoLiaison:
         config: Config,
         cardanoBackend: CardanoBackend[IO],
         pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
-        tracerLocal: IOLocal[Tracer]
+        tracerLocal: IOLocal[Tracer],
+        persistence: Persistence[IO]
     ): IO[CardanoLiaison] =
-        IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal) {})
+        IO(
+          new CardanoLiaison(
+            config,
+            cardanoBackend,
+            pendingConnections,
+            tracerLocal,
+            persistence
+          ) {}
+        )
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
         NodeOperationMultisigConfig.Section & OwnHeadPeerPublic.Section
@@ -329,6 +338,7 @@ trait CardanoLiaison(
     cardanoBackend: CardanoBackend[IO],
     pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
@@ -402,6 +412,11 @@ trait CardanoLiaison(
         for {
             _ <- Tracer.routeLocal(s"CardanoLiaison.${config.ownHeadPeerNum}")
             _ <- initializeConnections
+            // R3: rebuild the submission index by folding the persisted HardConfirmation CF (an
+            // empty CF folds to `initialState`). Submission progress itself is NOT persisted —
+            // `runEffects` re-samples L1, so recover restores only the effect index.
+            recovered <- State.recover(persistence, config)(using config)
+            _ <- stateRef.set(recovered)
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(

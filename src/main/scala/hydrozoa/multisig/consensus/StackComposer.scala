@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, StoreKey, WriteBatch}
 
 /** Stack composer.
   *
@@ -73,7 +73,7 @@ final case class StackComposer(
             for {
                 _ <- Tracer.routeLocal(s"StackComposer.${config.ownHeadPeerNum}")
                 _ <- initializeConnections
-                _ <- bootstrapInitialStack
+                _ <- recoverOrBootstrap
                 _ <- Tracer.info("StackComposer started.")
             } yield ()
         case r: BlockResult =>
@@ -85,6 +85,31 @@ final case class StackComposer(
         case s: Stack.HardConfirmed =>
             handlePreviousStackHardConfirmed(s)
     }
+
+    /** Boot seam (R3): a cold store bootstraps stack 0, a non-empty one recovers instead.
+      *
+      * `Markers.hardAcked.isDefined` is the test — any own hard-ack proves stack 0 was long since
+      * composed and hard-confirmed, so re-handing it to [[SlowConsensusActor]] would re-issue acks
+      * (CR3). [[State.recover]] mirrors the same marker (it returns `None` exactly when `hardAcked`
+      * is empty), so we drive the branch off its result: `Some` ⇒ seed the recovered state and skip
+      * bootstrap, `None` ⇒ cold start.
+      */
+    private def recoverOrBootstrap: IO[Unit] =
+        for {
+            markers <- Markers.derive(persistence.backend, config.ownHeadPeerNum)
+            recovered <- State.recover(
+              persistence,
+              markers.hardAcked,
+              markers.hardConfirmed,
+              config.ownHeadPeerNum
+            )
+            _ <- recovered match {
+                case Some(recoveredState) =>
+                    state.set(recoveredState) >>
+                        Tracer.info("Recovered from a non-empty store; skipping stack-0 bootstrap.")
+                case None => bootstrapInitialStack
+            }
+        } yield ()
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *

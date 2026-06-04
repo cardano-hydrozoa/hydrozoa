@@ -103,7 +103,13 @@ trait MultisigRegimeManager(
 
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
+                  CardanoLiaison(
+                    config,
+                    cardanoBackend,
+                    pendingConnections,
+                    tracerLocal,
+                    persistence
+                  )
                 )
 
             consensusActor <- context.actorOf(

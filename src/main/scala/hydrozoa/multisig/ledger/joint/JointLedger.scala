@@ -33,7 +33,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -191,6 +191,18 @@ final case class JointLedger(
         for {
             _ <- Tracer.routeLocal(s"JointLedger.${config.ownHeadPeerNum}")
             _ <- initializeConnections
+            // R3: on a non-empty store restore the passive `Done(softAcked)` and co-anchor the L2
+            // ledger to the same boundary. Cold start (no own soft-ack) leaves `State.initialize`.
+            // The `[softAcked + 1, head]` block tail is re-driven by BlockWeaver, not restored here.
+            markers <- Markers.derive(persistence.backend, config.ownHeadPeerNum)
+            recovered <- State.recover(persistence, l2Ledger, markers.softAcked)
+            _ <- recovered match {
+                case Some(done) =>
+                    state.set(done) >> Tracer.info(
+                      "Recovered passive state from a non-empty store."
+                    )
+                case None => IO.unit
+            }
         } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = {

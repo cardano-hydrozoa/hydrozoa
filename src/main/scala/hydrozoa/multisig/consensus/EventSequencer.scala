@@ -13,7 +13,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, WriteBatch}
 import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -105,13 +105,24 @@ trait EventSequencer(
             )
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
+            // empty store -> RequestNumber(0), the same cold value.
+            next <- Markers.recoverNextRequestNumber(persistence.backend, config.ownHeadPeerNum)
+            _ <- state.seedNextRequestNumber(next)
+        } yield ()
 
     private final class State {
         private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
         def nextLedgerEventNum(): IO[RequestNumber] =
             nLedgerEvent.getAndUpdate(_.increment)
+
+        /** Seed the next-to-assign request number on recovery (R3). */
+        def seedNextRequestNumber(next: RequestNumber): IO[Unit] =
+            nLedgerEvent.set(next)
     }
 }
 

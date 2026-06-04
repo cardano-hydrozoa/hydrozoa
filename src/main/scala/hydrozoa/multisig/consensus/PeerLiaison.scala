@@ -257,6 +257,11 @@ trait PeerLiaison(
             _ <- logger.info(s"starting, remote peer: ${remotePeerId.peerNum}")
             _ <- initializeConnections
             conn <- getConnections
+            // R3: refill the own-produced outbox from the store so the remote can re-poll the
+            // blocks/acks/requests it missed during our crash (buildNewMsgBatch serves the remote
+            // from these in-memory queues; a cold outbox could not answer its catch-up).
+            seed <- PeerLiaison.recover(persistence, config.ownHeadPeerId)(using config)
+            _ <- state.seedFromOutbox(seed)
             _ <- mermaid("GetMsgBatch.initial")
             _ <- conn.remotePeerLiaison ! GetMsgBatch.initial(remotePeerId)
             _ <- startResendTimer
@@ -295,6 +300,26 @@ trait PeerLiaison(
         private val qStackBrief = Ref.unsafe[IO, Queue[StackBrief]](Queue())
         private val qHardAck = Ref.unsafe[IO, Queue[HardAck]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
+
+        /** Seed the outbox from a recovered [[OutboxSeed]] (R3): refill each lane's queue and set
+          * its cursor to the highest own-produced number — matching what [[appendToOutbox]] would
+          * have left, i.e. the last entry's number itself (not its successor).
+          */
+        def seedFromOutbox(seed: OutboxSeed): IO[Unit] =
+            for {
+                _ <- this.qAck.set(Queue.from(seed.qAck))
+                _ <- this.qBlock.set(Queue.from(seed.qBlock))
+                _ <- this.qRequest.set(Queue.from(seed.qRequest))
+                _ <- this.qStackBrief.set(Queue.from(seed.qStackBrief))
+                _ <- this.qHardAck.set(Queue.from(seed.qHardAck))
+                _ <- seed.qAck.lastOption.traverse_(a => this.nAck.set(a.ackNum))
+                _ <- seed.qBlock.lastOption.traverse_(b => this.nBlock.set(b.blockNum))
+                _ <- seed.qRequest.lastOption.traverse_(r =>
+                    this.nRequest.set(r.requestId.requestNum)
+                )
+                _ <- seed.qStackBrief.lastOption.traverse_(s => this.nStackBrief.set(s.stackNum))
+                _ <- seed.qHardAck.lastOption.traverse_(h => this.nHardAck.set(h.hardAckNum))
+            } yield ()
 
         /** Check whether there are no acks, blocks, events, stack briefs, or hard-acks queued-up to
           * be sent out.
