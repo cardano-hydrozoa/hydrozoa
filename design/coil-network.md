@@ -411,51 +411,73 @@ forwards.
 
 #### Hub→coil link lane encoding (resolved 2026-06-04)
 
-The mesh's per-author / sparse-leader lanes don't fit a single link that
-multiplexes the whole population. The coil link uses **two lane shapes**, both
-single-cursor:
+**Driver: recovery symmetry.** A coil must persist and crash-recover with the
+*same* machinery as a head (`persistence-and-crash-recovery.md`): the same column
+families, the same `LaneId`s, the same recover seams. So the binding requirement
+is not on the wire — it is that the coil's **internal, persisted lane structure
+equals a head's**. The wire is free to multiplex however is efficient, as long as
+the coil **de-multiplexes back into the head's lane structure** before anything is
+stored.
 
-- **Briefs (block + stack): contiguous.** The hub relays *every* block and stack
-  in number order (not its own leader subset), so the cursor is plain
-  `num.increment` and the existing brief verify (number-match, no author check)
-  works unchanged. The hub's `JointLedger` already re-produces every block in
-  order, so it is the natural ordered source.
-- **Soft-acks + hard-acks: re-sequenced relay lanes.** A per-author cursor can't
-  multiplex N authors, so the hub stamps each relayed ack with a **hub-local
-  contiguous sequence number** and carries it on a relay lane (exactly the
-  `HubCoilAckLane` shape — a sequenced wrapper over the signed ack, **no author
-  check on the wire**). The receiving actor verifies the embedded signature and
-  aggregates by the embedded author. This generalizes the existing
-  `CoilAckSequencer`: the hub re-sequences **all** acks the coil needs (every head
-  soft-ack + hard-ack, plus other coils' hard-acks) onto the coil link.
+A head's store has two lane shapes (`persistence/Cf.scala`, `LaneId.scala`):
+
+- **Spines — contiguous, head-global.** `BlockSpine` / `StackSpine`: `JointLedger`
+  / `StackComposer` write block 1, 2, 3, … and stack 0, 1, 2, … one after another,
+  one lane each for the whole head. The leader is recorded *inside* each block, not
+  in the lane key. The mesh's *sparse-per-leader brief lanes* are a wire/transport
+  detail of dissemination only — the receiving `JointLedger` interleaves the N
+  streams back into the contiguous spine before writing. Nothing sparse reaches
+  the store.
+- **Satellites — per-author.** `SoftAck` / `HardAck` / `Request`: one lane per
+  author, keyed today by `HeadPeerNumber`, indexed within by that author's
+  sequence number.
+
+This maps onto the coil link directly:
+
+- **Briefs (block + stack): relayed contiguously.** Since the spine is contiguous
+  regardless of how briefs arrived, the hub hands the coil one already-interleaved
+  contiguous brief stream; the coil's `JointLedger` / `StackComposer` build the
+  identical contiguous spine. Cursor is plain `num.increment`; brief verify
+  (number-match, no author check) is unchanged.
+- **Soft-acks + hard-acks: multiplexed on the wire, de-muxed by author.** The hub
+  may re-sequence them onto a relay lane (the `HubCoilAckLane` shape — a sequenced
+  wrapper over the signed ack, **no author check on the wire**) for cheap
+  single-link transport. On receipt the coil's `FastConsensusActor` /
+  `SlowConsensusActor` verify each embedded signature and **aggregate by the
+  embedded author**, which *is* the de-mux into per-author satellite lanes. So the
+  persisted satellite structure is per-author exactly as on a head.
+
+**The single persistence change for coils:** widen the satellite `LaneId` key from
+`HeadPeerNumber` to `PeerId` (Head | Coil), so a coil's own and other coils'
+hard-acks land in `HardAck(PeerId)` lanes. That is the persistence side of Pc1's
+`PeerId` tagging (already flagged as a Pc1→recovery cross-cutting concern). With
+that, the entire write/recover path is shared.
 
 Consequences:
 
-- The hub **does not** strip a coil's own acks from the lane it sends that coil.
-  Filtering would punch seqNum gaps into the contiguous lane and break the
-  next-expected cursor; instead the coil's `SlowConsensusActor` **dedups the echo
-  of its own ack** (it already holds it — see `handleRemoteHardAck`). Keeping the
-  lane whole preserves the invariant. Same rule for the coil's own soft-ack echo
-  in `FastConsensusActor`.
-- Per-author monotonicity is preserved *within* the re-sequenced stream (a given
+- The hub **does not** strip a coil's own hard-acks from the relay lane (filtering
+  would gap a contiguous seqNum lane); the coil's `SlowConsensusActor` **dedups the
+  echo of its own ack** (`handleRemoteHardAck`, already landed). A coil emits no
+  soft-acks (§7), so there is no own-soft-ack echo to dedup.
+- Per-author monotonicity is preserved *within* the multiplexed stream (each
   author's acks keep their relative order); cross-author interleaving is free.
 
 #### Implementation plan (Pc4)
 
-1. **Lane-policy seam in `BatchProtocolLiaison`.** Parameterize the brief lanes
-   (sparse-leader vs contiguous) and add re-sequenced soft-ack / hard-ack relay
-   lanes (mirroring the `hubCoilAck` lane). `HeadPeerToCoilLiaison` selects
-   contiguous briefs + relay-ack lanes; `CoilPeerToHeadLiaison` consumes them.
-2. **Hub feed.** The hub fans every brief it (re)produces and every soft/hard-ack
-   it sees to its coil-ward liaisons, via relay sequencers analogous to
-   `CoilAckSequencer` (one ordering point per relayed lane). Sourced from the
-   hub's received-from-mesh state (this section's "cost of being a hub").
-3. **Coil-side dedup of own soft-ack echo** in `FastConsensusActor` (the hard-ack
-   echo dedup already landed).
-4. **Settling.** With the relay in place a **paced ≥2-head / `coilQuorum`=1**
-   config (alternating leaders, unlike the never-idle single leader) lets the
-   generative stage4 harness settle, so `One-head-one-coil` graduates to a
-   multi-head green property.
+1. **Brief relay — contiguous (DONE).** `BatchProtocolLiaison` got an overridable
+   brief-lane shape; the coil liaisons select contiguous. The hub feeds one
+   contiguous brief stream.
+2. **Ack relay — multiplexed, author-preserving.** Carry every head soft-ack +
+   hard-ack (and other coils' hard-acks) to the coil over a re-sequenced relay
+   lane; the coil's FCA/SCA aggregate by embedded author (the de-mux). Hub feed:
+   fan every (re)produced brief + every soft/hard-ack the hub sees to its coil-ward
+   liaisons, via relay sequencers analogous to `CoilAckSequencer`.
+3. **Persistence (when recovery merges):** satellite `LaneId` key `HeadPeerNumber`
+   → `PeerId`; spines + recover seams otherwise unchanged.
+4. **Settling.** With the relay in place a **paced ≥2-head / `coilQuorum`=1** config
+   (alternating leaders, unlike the never-idle single leader) lets the generative
+   stage4 harness settle, so `One-head-one-coil` graduates to a multi-head green
+   property.
 
 ### The cost of being a hub
 
