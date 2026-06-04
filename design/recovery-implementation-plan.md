@@ -54,7 +54,7 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
   (`CardanoLiaison.State.recover`), PeerLiaison own-produced outbox (`PeerLiaison.recover` →
   `OutboxSeed`). Pure-over-store; actor wiring is R3.
 - `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
-  R10 read path (design §10 Q6, priority P2) does not exist.
+  R10 read path (design §10 Q6, priority P2) is **WIP by Peter, out of this plan**.
 - ~~**EUTXO L2 ledger has no persistence at all**~~ **Done (R2b, 2026-05-31):**
   `EutxoL2Ledger` now owns a command-number-keyed `L2Store` (InMemory + RocksDB), advances an
   `L2CommandNumber` on each real mutator, snapshots every `SnapshotInterval`, and restores via
@@ -143,10 +143,12 @@ and change cold init to **"non-empty store → recovered; empty store → bootst
   2. **R2-bnd — boundary restores (EventSequencer / PeerLiaison / CardanoLiaison).**
   3. **R2b — EUTXO L2 persistence** (own section; parallelizable).
 
-The **rule-based read path (R10 custody floor)** was originally folded in here as a
-first sub-track; it is now its own terminal phase **R5** (below) — likely handed off
-to Peter — because it is fully self-contained (read-only, no replay, no fast-side
-state) and shares nothing with the R2 recover seams beyond reading the same CFs.
+The **rule-based read path (R10 custody floor)** is **out of scope for this plan —
+WIP by Peter**, tracked separately. It is fully self-contained (read-only, no replay,
+no fast-side state) and shares nothing with the R2 recover seams beyond reading the
+same CFs, so it proceeds independently. The only piece that stays here is the
+panic→spawn *handover* wiring (R3/orchestration), which consumes that read model but
+does not build it.
 
 **Common shape.** Every recover path is a pure `IO` over `Persistence` /
 `BackendStore` (+ `Markers` from R1's derivation) — no actor system, unit-tested by
@@ -252,8 +254,8 @@ gap.
   live run. **Submission progress is *not* persisted** — it is re-sampled from L1
   (`runEffects` polls `utxosAt(treasuryAddress)`, §5.5), so recover only restores
   the effect *index*; what is already on-chain is observed, not remembered. (Reads
-  `Cf.HardConfirmation` directly — the same CF R5 reads, but independently; R2-bnd
-  does not depend on R5.)
+  `Cf.HardConfirmation` directly — the same CF the rule-based read path reads, but
+  independently; no cross-dependency.)
 
 **R2 testing.** Seed a store through the real write paths, run each `recover` /
 read-model query, assert the returned value equals the expected crash-time value.
@@ -441,42 +443,17 @@ deterministic given `(state, command)` (true today; verify at the top of R2b).
   down (legitimate divergence, not corruption), long downtime → head went
   rule-based (detect, don't re-enter multisig), torn record → refuse start.
 
-### R5 — Rule-based read path (R10 custody floor). Standalone; **candidate hand-off (Peter).**
+### Rule-based read path (R10 custody floor) — out of scope (WIP by Peter)
 
 The read-only view the rule-based regime loads on handover (design §10 Q6, priority
-P2). Pulled out of R2 into its own terminal phase (Ilia 2026-05-31): it is fully
-self-contained — read-only, no replay, no fast-side state, no actor changes — and
-shares nothing with the R2 recover seams beyond reading the same CFs, so it can be
-built independently and on its own timeline. Likely handed to Peter this week;
-sequenced last here only because nothing else depends on it, **not** by custody
-priority (in custody terms it is the highest-value piece — a crashed peer that
-restores nothing else can still fall back, vote, evacuate from it).
-
-`rulebased/persistence/Persistence` is today a bare `object Persistence {}`, and
-`RuleBasedRegimeManager` (params `sec`, `signatures`, `cardanoBackend`,
-`votingDeadline`, `toEvacuate`, `evacuationMapAtFallback`, `fallbackTxHash`) is
-**never instantiated**. R5 builds the read-only facade that supplies that
-construction data from the durable store:
-
-- **Read-set (all already persisted, never pruned below the R10 floor):**
-  - `Cf.HardConfirmation[stackNum]` → `StackEffects.HardConfirmed` (`Initial` =
-    init + fallback; `Regular` = `NonEmptyList[PartitionEffects[SEC.MultiSigned]]`).
-    The SECs (`StandaloneEvacuationCommitment.MultiSigned` = `commitment` +
-    `headerMultiSigned: List[HeaderSignature]`) inside the partitions are the vote
-    material; `hardConfirmed = max(HardConfirmation.key)` (R1 marker) is the floor.
-  - `Cf.Treasury` → `MultisigTreasuryUtxo` (singleton, the `hardAcked` treasury).
-  - `Cf.EvacuationMap[blockNum]` → `EvacuationMap` for whichever committed block the
-    dispute lands on (per-committed-block, §3.2). Exposes `kzgCommitment` +
-    `totalValue`.
-- **Shape:** a read-only `RuleBasedReadModel` (name TBD) over `BackendStore[IO]`:
-  `loadHardConfirmation(stackNum)`, `latestHardConfirmed`, `loadTreasury`,
-  `loadEvacuationMap(blockNum)`. Pure reads; no `WriteBatch`, no `Ref`, no replay.
-  Unit-tested by seeding via the SCA / SC write paths then asserting the SECs +
-  treasury + map round-trip and that the marker picks the right stack.
-- **Out of scope for R5 (→ R3 / orchestration):** the actual *handover* —
-  `MultisigRegimeManager` watching the consensus children and, on panic, constructing
-  `RuleBasedRegimeManager` from this read model. R5 delivers the read capability;
-  wiring the panic→spawn path is boot/orchestration (R3). Flag, don't build here.
+P2) is a separate workstream, **WIP by Peter** — not phased here. It is fully
+self-contained (read-only, no replay, no fast-side state, no actor changes), sharing
+nothing with the R2 recover seams beyond reading the same already-written CFs
+(`Cf.HardConfirmation`, `Cf.Treasury`, `Cf.EvacuationMap`), so it builds and lands on
+its own timeline. The only related piece inside this plan is the panic→spawn
+*handover* wiring — `MultisigRegimeManager` watching the consensus children and, on
+panic, constructing `RuleBasedRegimeManager` from that read model — which is
+boot/orchestration and belongs to R3.
 
 ---
 
@@ -500,9 +477,8 @@ construction data from the durable store:
    `Deferred` (Plan B) — *Ilia: TBD; decide empirically by testing pre-barrier
    mailbox sends.*
 4. ~~**Land order (§5).**~~ **Resolved (Ilia 2026-05-31):** the rule-based read path
-   is **not** pulled to the front — it becomes a standalone terminal phase **R5**,
-   likely handed off to Peter. Main line is R1 → R2 → R2b → R3 → R4; R5 in parallel
-   / last.
+   is **not** pulled to the front — it is a separate workstream (WIP by Peter), out of
+   this plan. Main line is R1 → R2 → R2b → R3 → R4.
 5. **Request-ID fsync vs CR1 (write-side, pre-mainnet).** `sync=false` on `Request`
    trades against CR1 under power loss (§10 Q5) — decide explicitly; out of this
    plan's critical path but track it.
@@ -517,8 +493,7 @@ step. R2b (EUTXO L2 persistence) is loosely coupled — it can proceed in parall
 with the other R2 sub-tracks since it's a self-contained component with its own
 store.
 
-**R5 (rule-based read path)** runs **off the main line** — standalone, read-only,
-depends on nothing but the already-written CFs, and is a candidate hand-off to
-Peter this week. It can land at any point (the consensus children must panic before
-anything *uses* it, and that wiring is R3), so it is sequenced last here purely for
-independence, not low priority.
+**The rule-based read path** runs **off the main line** entirely — standalone,
+read-only, depends on nothing but the already-written CFs, and is **WIP by Peter**
+(tracked outside this plan). It can land at any point; the consensus children must
+panic before anything *uses* it, and that handover wiring is R3.
