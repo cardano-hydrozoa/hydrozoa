@@ -1,0 +1,179 @@
+package hydrozoa.multisig.consensus
+
+import cats.effect.unsafe.implicits.global
+import cats.effect.{Deferred, IO, Ref}
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.actor.ActorSystem
+import com.suprnation.typelevel.actors.syntax.*
+import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
+import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l1.tx.TxSignature
+import hydrozoa.multisig.ledger.stack.StackNumber
+import org.scalacheck.{Prop, Properties}
+
+/** Pc3 plumbing test (one head / one coil): a coil's hard-ack travels up its
+  * [[CoilPeerToHeadLiaison]] to the hub's [[HeadPeerToCoilLiaison]], which routes it to BOTH the
+  * hub's slow-consensus actor and the [[CoilAckSequencer]]; the sequencer stamps it and relays the
+  * resulting `HubCoilAck` back down, where the coil's liaison unwraps it to the raw ack for the
+  * coil's own slow-consensus actor.
+  *
+  * Everything around the three new actors is stubbed: the liaison `Config` is a hand-built
+  * `OwnPeerPublic.Section & NodeOperationMultisigConfig.Section`, and every consensus actor a
+  * liaison might touch is a no-op probe — only the two slow-consensus slots record what they
+  * receive. This exercises the new lane + relay end-to-end without standing up a full node.
+  */
+object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
+
+    private val coilNum = CoilPeerNumber(0)
+    private val headNum = HeadPeerNumber(0)
+    private val coilPeerId: PeerId = PeerId.Coil(coilNum)
+    private val headPeerId: PeerId = PeerId.Head(headNum)
+
+    private def ownPublic(pid: PeerId, leads: Boolean, label: String): OwnPeerPublic =
+        new OwnPeerPublic {
+            override def ownPeerId: PeerId = pid
+            override def canLeadFast(blockNum: BlockNumber): Boolean = leads
+            override def canLeadSlow(stackNum: StackNumber): Boolean = leads
+            override def nextOwnLeaderBlock(after: BlockNumber): Option[BlockNumber] =
+                Option.when(leads)(after.increment)
+            override def nextOwnSlowLeaderStack(after: StackNumber): Option[StackNumber] =
+                Option.when(leads)(after.increment)
+            override def ownPeerLabel: String = label
+            override def ownPeerIndex: Int = 0
+        }
+
+    private def stubConfig(
+        pub: OwnPeerPublic
+    ): OwnPeerPublic.Section & NodeOperationMultisigConfig.Section =
+        new OwnPeerPublic.Section with NodeOperationMultisigConfig.Section {
+            override def ownPeerPublic: OwnPeerPublic = pub
+            override def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
+                NodeOperationMultisigConfig.default
+        }
+
+    // The head leads every block/stack (sole leader at one head); the coil never leads.
+    private val headConfig = stubConfig(ownPublic(headPeerId, leads = true, "0"))
+    private val coilConfig = stubConfig(ownPublic(coilPeerId, leads = false, "c0"))
+
+    /** A no-op actor for the Connections slots the liaisons never read in this scenario. */
+    private def noop[R](system: ActorSystem[IO]): IO[ActorRef[IO, R]] =
+        system.actorOf(new Actor[IO, R] {
+            override def receive: Receive[IO, R] = PartialFunction.fromFunction((_: R) => IO.unit)
+        })
+
+    /** Records every hard-ack handed to a slow-consensus slot. */
+    private class HardAckRecorder(seen: Ref[IO, Vector[HardAck]])
+        extends Actor[IO, SlowConsensusActor.Request] {
+        override def receive: Receive[IO, SlowConsensusActor.Request] = {
+            case h: HardAck => seen.update(_ :+ h)
+            case _          => IO.unit
+        }
+    }
+
+    /** The coil's first hard-ack (hardAckNum 0, the lane's initial cursor value). */
+    private val coilHardAck: HardAck =
+        HardAck(
+          ackId = HardAckId(coilPeerId, HardAckNumber.zero),
+          stackNum = StackNumber(0),
+          payload = HardAck.Round1Payload.Initial(
+            fallbackSig = TxSignature(IArray[Byte](7.toByte, 8.toByte, 9.toByte))
+          )
+        )
+
+    private def mkConnections(
+        system: ActorSystem[IO],
+        slowConsensus: SlowConsensusActor.Handle,
+        peerLiaisons: List[PeerLiaison.Handle],
+        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
+        coilAckSequencer: Option[CoilAckSequencer.Handle],
+    ): IO[MultisigRegimeManager.Connections] =
+        for {
+            blockWeaver <- noop[BlockWeaver.Request](system)
+            cardanoLiaison <- noop[CardanoLiaison.Request](system)
+            consensusActor <- noop[FastConsensusActor.Request](system)
+            eventSequencer <- noop[EventSequencer.Request](system)
+            jointLedger <- noop[JointLedger.Requests.Request](system)
+            stackComposer <- noop[StackComposer.Request](system)
+        } yield MultisigRegimeManager.Connections(
+          blockWeaver = blockWeaver,
+          blockWeaverLimiter = blockWeaver,
+          cardanoLiaison = cardanoLiaison,
+          consensusActor = consensusActor,
+          eventSequencer = eventSequencer,
+          jointLedger = jointLedger,
+          stackComposer = stackComposer,
+          stackComposerLimiter = stackComposer,
+          slowConsensusActor = slowConsensus,
+          peerLiaisons = peerLiaisons,
+          remotePeerLiaisons = remotePeerLiaisons,
+          coilAckSequencer = coilAckSequencer,
+        )
+
+    private val scenario: IO[Unit] =
+        ActorSystem[IO]("coil-liaison-test").use { system =>
+            for {
+                headPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+
+                hubSeen <- Ref[IO].of(Vector.empty[HardAck])
+                coilSeen <- Ref[IO].of(Vector.empty[HardAck])
+                hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
+                coilSlowConsensus <- system.actorOf(new HardAckRecorder(coilSeen))
+
+                sequencer <- system.actorOf(CoilAckSequencer(headConfig, headPending))
+                headLiaison <- system.actorOf(
+                  HeadPeerToCoilLiaison(headConfig, RemotePeer.Coil(coilNum), headPending)
+                )
+                coilLiaison <- system.actorOf(
+                  CoilPeerToHeadLiaison(coilConfig, RemotePeer.Head(HeadPeerId(0, 1)), coilPending)
+                )
+
+                headConnections <- mkConnections(
+                  system,
+                  slowConsensus = hubSlowConsensus,
+                  peerLiaisons = List(headLiaison),
+                  remotePeerLiaisons = Map(coilPeerId -> coilLiaison),
+                  coilAckSequencer = Some(sequencer),
+                )
+                coilConnections <- mkConnections(
+                  system,
+                  slowConsensus = coilSlowConsensus,
+                  peerLiaisons = List(coilLiaison),
+                  remotePeerLiaisons = Map(headPeerId -> headLiaison),
+                  coilAckSequencer = None,
+                )
+                _ <- headPending.complete(headConnections)
+                _ <- coilPending.complete(coilConnections)
+
+                // Let the initial GetMsgBatch handshake settle, inject the coil's hard-ack, then let
+                // the up-relay-down cascade settle.
+                _ <- system.waitForIdle()
+                _ <- coilLiaison ! coilHardAck
+                _ <- system.waitForIdle()
+
+                hub <- hubSeen.get
+                coil <- coilSeen.get
+                _ <- IO.raiseUnless(hub.size == 1 && hub.head.ackId.peerId == coilPeerId)(
+                  new AssertionError(
+                    s"hub slow-consensus should see exactly the coil ack, got: $hub"
+                  )
+                )
+                _ <- IO.raiseUnless(coil.size == 1 && coil.head.ackId.peerId == coilPeerId)(
+                  new AssertionError(
+                    s"coil slow-consensus should see its ack echoed via the HubCoilAckLane, got: $coil"
+                  )
+                )
+            } yield ()
+        }
+
+    val _ = property("coil hard-ack reaches the hub and is relayed back via the HubCoilAckLane") = {
+        scenario.unsafeRunSync()
+        Prop.proved
+    }
+}
