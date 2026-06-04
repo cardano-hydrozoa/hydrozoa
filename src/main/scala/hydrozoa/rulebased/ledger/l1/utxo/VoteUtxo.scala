@@ -165,6 +165,9 @@ extension (uncastVote: VoteOutput[AwaitingVote]) {
     def castVote(kzgCommitment: KzgCommitment, versionMinor: BigInt): VoteOutput[VoteStatus.Voted] =
         uncastVote.copy(status = VoteStatus.Voted(kzgCommitment, versionMinor))
 
+    def abstain: VoteOutput[VoteStatus.Abstain.type] =
+        uncastVote.copy(status = VoteStatus.Abstain)
+
     def voterAddrKeyHash: AddrKeyHash =
         AddrKeyHash(uncastVote.status.peer.hash)
 }
