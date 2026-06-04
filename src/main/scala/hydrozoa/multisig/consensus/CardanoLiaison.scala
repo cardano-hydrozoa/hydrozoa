@@ -18,7 +18,9 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.l1.tx.*
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.recovery.HardConfirmationScan
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.Transaction.given
@@ -129,7 +131,6 @@ object CardanoLiaison:
             // identified by the init tx id (a body hash, witness-independent) and so is exact even
             // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
             // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
-            // TODO: I guess we don't need to set target state here, deferring to the persistent-recovery.
             State(
               targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
               effectInputs = Map.empty,
@@ -137,6 +138,138 @@ object CardanoLiaison:
               fallbackEffects = Map.empty
             )
         }
+
+        /** Apply a hard-confirmed *initial* stack's L1 effects — the pure transition shared by the
+          * live `Stack.HardConfirmed` path and [[recover]]: override the config-seeded UNSIGNED
+          * init tx + fallback with the ratified bodies from stack 0.
+          */
+        def applyInitialEffects(state: State, eff: StackEffects.HardConfirmed.Initial): State =
+            state.copy(
+              targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
+              happyPathEffects = state.happyPathEffects
+                  .updated(EffectId.initializationEffectId, eff.initializationTx),
+              fallbackEffects =
+                  state.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+            )
+
+        /** Apply a hard-confirmed *regular* stack's L1 effects — the pure transition shared by the
+          * live path and [[recover]]. A minor-only stack carries no backbone, so `state` is
+          * returned unchanged; otherwise the partition effects fold into
+          * `(effectInputs, happyPathEffects, fallbackEffects, targetState)`.
+          */
+        def applyRegularEffects(state: State, eff: StackEffects.HardConfirmed.Regular): State = {
+            val parts = eff.partitions.toList
+            val hasBackbone = parts.exists {
+                case _: PartitionEffects.Major[?] => true
+                case _: PartitionEffects.Final    => true
+                case _: PartitionEffects.Minor[?] => false
+            }
+            if !hasBackbone then state
+            else {
+                val settlements: List[SettlementTx] =
+                    parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
+                val fallbacks: List[FallbackTx] =
+                    parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
+                val finalization: Option[FinalizationTx] =
+                    parts.collectFirst { case PartitionEffects.Final(f, _) => f }
+                val allRollouts: List[RolloutTx] = parts.flatMap {
+                    case PartitionEffects.Major(_, _, ro, _, _) => ro
+                    case PartitionEffects.Final(_, ro)          => ro
+                    case PartitionEffects.Minor(_, _)           => Nil
+                }
+                val backbones: List[SettlementTx | FinalizationTx] =
+                    settlements ++ finalization.toList
+                val perBackbone =
+                    backbones.map(b =>
+                        mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
+                    )
+                val newEffectInputs = perBackbone.flatMap(_._1)
+                val newHappyPathEffects = perBackbone.flatMap(_._2)
+                val newFallbackEffects =
+                    settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
+                val newTarget: Option[TargetState] = finalization match {
+                    case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
+                    case None =>
+                        settlements.lastOption.map(s =>
+                            TargetState.Active(s.treasuryProduced.utxoId)
+                        )
+                }
+                state.copy(
+                  effectInputs = state.effectInputs ++ newEffectInputs,
+                  happyPathEffects = state.happyPathEffects ++ newHappyPathEffects,
+                  fallbackEffects = state.fallbackEffects ++ newFallbackEffects,
+                  targetState = newTarget.getOrElse(state.targetState)
+                )
+            }
+        }
+
+        /** Reconstruct the submission state after a crash by folding every persisted
+          * `Cf.HardConfirmation` (ascending stack order) through the same kernels the live
+          * `Stack.HardConfirmed` path uses — so a recovered `State` equals a live run's. Submission
+          * progress is **not** restored: `runEffects` re-samples L1 (§5.5), so only the effect
+          * index is rebuilt. An empty CF folds to [[initialState]] (the cold value); no `Option`
+          * (there is no own-ack to gate on).
+          */
+        def recover(persistence: Persistence[IO], config: Config)(using
+            CardanoNetwork.Section
+        ): IO[State] =
+            HardConfirmationScan.scanFrom(persistence.backend, StackNumber.zero).map {
+                _.foldLeft(initialState(config)) { (state, eff) =>
+                    eff match {
+                        case ini: StackEffects.HardConfirmed.Initial =>
+                            applyInitialEffects(state, ini)
+                        case reg: StackEffects.HardConfirmed.Regular =>
+                            applyRegularEffects(state, reg)
+                    }
+                }
+            }
+
+        /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
+          */
+        private def rolloutsFor(
+            backbone: SettlementTx | FinalizationTx,
+            all: List[RolloutTx]
+        ): List[RolloutTx] = {
+            @annotation.tailrec
+            def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
+                all.find(_.rolloutSpent.utxo.input == spentInput) match {
+                    case None => acc.reverse
+                    case Some(r: RolloutTx.NotLast) =>
+                        chain(r.rolloutProduced.utxo.input, r :: acc)
+                    case Some(r) => (r :: acc).reverse // RolloutTx.Last
+                }
+            backbone.mbRolloutProduced match {
+                case None    => Nil
+                case Some(u) => chain(u.utxo.input, Nil)
+            }
+        }
+
+        private def mkHappyPathEffectInputsAndEffects(
+            majorTx: SettlementTx | FinalizationTx,
+            rollouts: List[RolloutTx]
+        ): (
+            Seq[(TransactionInput, EffectId)],
+            Seq[(EffectId, HappyPathEffect)]
+        ) = {
+            val treasurySpent = majorTx.treasurySpent
+
+            val effects: List[(TransactionInput, HappyPathEffect)] =
+                List(treasurySpent.utxoId -> majorTx)
+                    ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
+            indexWithEffectId(effects, majorTx.majorVersionProduced).unzip
+        }
+
+        private def indexWithEffectId(
+            effects: List[(TransactionInput, HappyPathEffect)],
+            versionMajor: BlockVersion.Major
+        ): List[((TransactionInput, EffectId), (EffectId, HappyPathEffect))] =
+            effects.zipWithIndex
+                .map((utxoIdAndEffect, index) => {
+                    val effectId = versionMajor -> index
+
+                    utxoIdAndEffect._1
+                        -> effectId -> (effectId -> utxoIdAndEffect._2)
+                })
 
         extension (state: State)
             def prettyDump: String = {
@@ -303,15 +436,7 @@ trait CardanoLiaison(
               "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
                   "init tx + fallback with the hard-confirmed initial stack's"
             )
-            newState <- stateRef.updateAndGet { s =>
-                s.copy(
-                  targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
-                  happyPathEffects = s.happyPathEffects
-                      .updated(EffectId.initializationEffectId, eff.initializationTx),
-                  fallbackEffects =
-                      s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
-                )
-            }
+            newState <- stateRef.updateAndGet(State.applyInitialEffects(_, eff))
             _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
         } yield ()
 
@@ -344,130 +469,14 @@ trait CardanoLiaison(
       * [[handleInitialStackL1Effects]]). So they are submittable on L1 as is — no
       * witness-attachment step remains here.
       */
-    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] = {
-        val parts = eff.partitions.toList
-        // A minor-only stack (only Minor partitions) produces no L1 backbone effect — nothing to
-        // learn or submit — so short-circuit before deriving anything or touching the state.
-        // TODO: teach SlowConsensusActor not to emit minor-only stacks at all, so CardanoLiaison
-        //   never has to receive (and skip) them.
-        val hasBackbone = parts.exists {
-            case _: PartitionEffects.Major[?] => true
-            case _: PartitionEffects.Final    => true
-            case _: PartitionEffects.Minor[?] => false
-        }
-        if !hasBackbone then
-            Tracer.info("minor-only stack: no backbone L1 effects to submit; nothing to do")
-        else {
-            // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
-            // finalization) the submission state machine consumes. Each Major partition carries
-            // its own settlement+fallback together (so `settlements.zip(fallbacks)` aligns
-            // exactly); rollouts come from every Major / Final partition; refunds + SEC are NOT
-            // submitted.
-            val settlements: List[SettlementTx] =
-                parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
-            val fallbacks: List[FallbackTx] =
-                parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
-            val finalization: Option[FinalizationTx] =
-                parts.collectFirst { case PartitionEffects.Final(f, _) => f }
-            val allRollouts: List[RolloutTx] = parts.flatMap {
-                case PartitionEffects.Major(_, _, ro, _, _) => ro
-                case PartitionEffects.Final(_, ro)          => ro
-                case PartitionEffects.Minor(_, _)           => Nil
-            }
-            val backbones: List[SettlementTx | FinalizationTx] =
-                settlements ++ finalization.toList
-
-            // Accumulate every state delta up front — each is a pure function of the flattened
-            // effects, independent of the current state — then apply them all in a single `copy`
-            // below.
-            val perBackbone =
-                backbones.map(b =>
-                    mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
-                )
-            val newEffectInputs: Seq[(TransactionInput, EffectId)] = perBackbone.flatMap(_._1)
-            val newHappyPathEffects: Seq[(EffectId, HappyPathEffect)] = perBackbone.flatMap(_._2)
-            val newFallbackEffects: Seq[(BlockVersion.Major, FallbackTx)] =
-                settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
-            // Always `Some` here (a backbone exists): finalization → Finalized, else the last
-            // settlement's treasury → Active.
-            val newTarget: Option[TargetState] = finalization match {
-                case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
-                case None =>
-                    settlements.lastOption.map(s => TargetState.Active(s.treasuryProduced.utxoId))
-            }
-
-            for {
-                _ <- Tracer.info(
-                  s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
-                      s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
-                      s"finalization=${finalization.isDefined}"
-                )
-                newState <- stateRef.updateAndGet { s =>
-                    s.copy(
-                      effectInputs = s.effectInputs ++ newEffectInputs,
-                      happyPathEffects = s.happyPathEffects ++ newHappyPathEffects,
-                      fallbackEffects = s.fallbackEffects ++ newFallbackEffects,
-                      targetState = newTarget.getOrElse(s.targetState)
-                    )
-                }
-                _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
-            } yield ()
-        }
-    }
-
-    /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
-      *
-      * `StackEffects.HardConfirmed.Regular.rollouts` is flat across the whole stack; a backbone
-      * owns the rollout chain that starts at the rollout utxo it produces (`mbRolloutProduced`),
-      * each subsequent rollout spending the previous one's produced rollout utxo until a
-      * [[RolloutTx.Last]]. Linking by `utxo.input` is independent of the flat list's order and
-      * mirrors how `mkDirectAction` itself walks the chain on L1.
-      */
-    private def rolloutsFor(
-        backbone: SettlementTx | FinalizationTx,
-        all: List[RolloutTx]
-    ): List[RolloutTx] = {
-        @annotation.tailrec
-        def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
-            all.find(_.rolloutSpent.utxo.input == spentInput) match {
-                case None => acc.reverse
-                case Some(r: RolloutTx.NotLast) =>
-                    chain(r.rolloutProduced.utxo.input, r :: acc)
-                case Some(r) => (r :: acc).reverse // RolloutTx.Last
-            }
-        backbone.mbRolloutProduced match {
-            case None    => Nil
-            case Some(u) => chain(u.utxo.input, Nil)
-        }
-    }
-
-    private def mkHappyPathEffectInputsAndEffects(
-        majorTx: SettlementTx | FinalizationTx,
-        rollouts: List[RolloutTx]
-    ): (
-        Seq[(TransactionInput, EffectId)],
-        Seq[(EffectId, HappyPathEffect)]
-    ) = {
-        val treasurySpent = majorTx.treasurySpent
-
-        val effects: List[(TransactionInput, HappyPathEffect)] =
-            List(treasurySpent.utxoId -> majorTx)
-            // TODO: implement utxoId?
-                ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        indexWithEffectId(effects, majorTx.majorVersionProduced).unzip
-    }
-
-    private def indexWithEffectId(
-        effects: List[(TransactionInput, HappyPathEffect)],
-        versionMajor: BlockVersion.Major
-    ): List[((TransactionInput, EffectId), (EffectId, HappyPathEffect))] =
-        effects.zipWithIndex
-            .map((utxoIdAndEffect, index) => {
-                val effectId = versionMajor -> index
-
-                utxoIdAndEffect._1
-                    -> effectId -> (effectId -> utxoIdAndEffect._2)
-            })
+    private def handleStackL1Effects(eff: StackEffects.HardConfirmed.Regular): IO[Unit] =
+        for {
+            _ <- Tracer.info(
+              s"entering handleStackL1Effects for ${eff.partitions.size} partition(s)"
+            )
+            newState <- stateRef.updateAndGet(State.applyRegularEffects(_, eff))
+            _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
+        } yield ()
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *
