@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, Evacuation
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
-import hydrozoa.multisig.ledger.l2.L2Serial.increment
+import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -76,12 +76,13 @@ object EutxoL2Ledger {
           * state-mutating command; the transient proxy commands (confirmations / errors) do not
           * advance it.
           */
-        serial: L2Serial,
+        commandNumber: L2CommandNumber,
     )
 
     object State:
-        /** The genesis state (serial 0): `activeUtxos` from the config's initial evacuation map,
-          * everything else empty. The restore base when no snapshot precedes the target serial.
+        /** The genesis state (commandNumber 0): `activeUtxos` from the config's initial evacuation
+          * map, everything else empty. The restore base when no snapshot precedes the target
+          * commandNumber.
           */
         def genesis(config: EutxoL2Ledger.Config): State =
             State(
@@ -90,7 +91,7 @@ object EutxoL2Ledger {
               errors = Map.empty,
               confirmations = Map.empty,
               headId = None,
-              serial = L2Serial.zero
+              commandNumber = L2CommandNumber.zero
             )
 
     /** Build a ledger whose state lives only in memory (no recovery store). Convenience for callers
@@ -101,7 +102,7 @@ object EutxoL2Ledger {
 
     /** Build a ledger backed by `store` for crash recovery (§R2b): each real command appends to the
       * store's log and snapshots every [[L2Store.SnapshotInterval]] commits, so
-      * [[EutxoL2Ledger.restoreTo]] can rebuild the state at any past serial.
+      * [[EutxoL2Ledger.restoreTo]] can rebuild the state at any past commandNumber.
       */
     def apply(config: EutxoL2Ledger.Config, store: L2Store[IO]): IO[EutxoL2Ledger] =
         for ref <- Ref[IO].of(State.genesis(config))
@@ -118,12 +119,12 @@ case class EutxoL2Ledger private (
 ) extends L2Ledger[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
-    /** Apply one **real** (state-mutating) command to `s`, returning the next state with `serial`
-      * bumped, or an `L2LedgerError`. This is the **single deterministic transition** — the live
-      * mutators call it (then derive their return value + persist), and [[restoreTo]] re-folds it
-      * over the logged commands. Keeping both paths on one function is what guarantees a restored
-      * state is byte-identical to the live one (§R2b "factoring"). Pure given `(s, command)`: the
-      * `transit` core and the deposit folds depend only on their inputs.
+    /** Apply one **real** (state-mutating) command to `s`, returning the next state with
+      * `commandNumber` bumped, or an `L2LedgerError`. This is the **single deterministic
+      * transition** — the live mutators call it (then derive their return value + persist), and
+      * [[restoreTo]] re-folds it over the logged commands. Keeping both paths on one function is
+      * what guarantees a restored state is byte-identical to the live one (§R2b "factoring"). Pure
+      * given `(s, command)`: the `transit` core and the deposit folds depend only on their inputs.
       */
     private def applyMutation(
         s: EutxoL2Ledger.State,
@@ -135,7 +136,7 @@ case class EutxoL2Ledger private (
                 .map(l2Genesis =>
                     s.focus(_.pendingDeposits)
                         .modify(_.updated(req.requestId, l2Genesis))
-                        .focus(_.serial)
+                        .focus(_.commandNumber)
                         .modify(_.increment)
                 )
 
@@ -146,7 +147,7 @@ case class EutxoL2Ledger private (
                   .modify(_ ++ addedL2Utxos.map((i, o) => i -> o.value))
                   .focus(_.pendingDeposits)
                   .modify(_.removedAll(req.absorbedDeposits ++ req.refundedDeposits))
-                  .focus(_.serial)
+                  .focus(_.commandNumber)
                   .modify(_.increment)
             )
 
@@ -163,7 +164,11 @@ case class EutxoL2Ledger private (
                     )
                     .left
                     .map(error => L2LedgerError(error.toString))
-            yield s.focus(_.activeUtxos).replace(newActiveUtxos).focus(_.serial).modify(_.increment)
+            yield s
+                .focus(_.activeUtxos)
+                .replace(newActiveUtxos)
+                .focus(_.commandNumber)
+                .modify(_.increment)
 
     /** Run a real command: apply the transition, persist it (append to the log; snapshot every
       * [[L2Store.SnapshotInterval]] commits), and commit the new state. Returns the new state so
@@ -177,10 +182,10 @@ case class EutxoL2Ledger private (
         for
             s <- EitherT.right(state.get)
             next <- EitherT.fromEither[IO](applyMutation(s, command))
-            _ <- EitherT.right(store.appendLog(next.serial, command))
+            _ <- EitherT.right(store.appendLog(next.commandNumber, command))
             _ <- EitherT.right(
-              IO.whenA(next.serial.value % L2Store.SnapshotInterval == 0L)(
-                store.putSnapshot(next.serial, L2Snapshot.fromState(next))
+              IO.whenA(next.commandNumber.value % L2Store.SnapshotInterval == 0L)(
+                store.putSnapshot(next.commandNumber, L2Snapshot.fromState(next))
               )
             )
             _ <- EitherT.right(state.set(next))
@@ -252,53 +257,54 @@ case class EutxoL2Ledger private (
     ): EitherT[IO, L2LedgerError, Unit] =
         commitReal(req).void
 
-    override def currentSerial: IO[L2Serial] = state.get.map(_.serial)
+    override def currentCommandNumber: IO[L2CommandNumber] = state.get.map(_.commandNumber)
 
     /** Read the full in-memory state — package-private, for recovery tests that assert a restored
       * ledger matches the live one. Not part of the [[L2Ledger]] interface.
       */
     private[eutxol2] def peekState: IO[EutxoL2Ledger.State] = state.get
 
-    /** Reconstruct the committed state as of `serial` (§R2b): load the latest snapshot `<= serial`
-      * (or genesis), then re-fold the logged commands in `(snapshot.serial, serial]` through the
-      * same [[applyMutation]] the live path uses — no re-logging, no re-snapshot, no serial
-      * re-bump. Replaces the in-memory state; afterwards [[currentSerial]] equals `serial`.
+    /** Reconstruct the committed state as of `commandNumber` (§R2b): load the latest snapshot
+      * `<= commandNumber` (or genesis), then re-fold the logged commands in
+      * `(snapshot.commandNumber, commandNumber]` through the same [[applyMutation]] the live path
+      * uses — no re-logging, no re-snapshot, no commandNumber re-bump. Replaces the in-memory
+      * state; afterwards [[currentCommandNumber]] equals `commandNumber`.
       */
-    override def restoreTo(serial: L2Serial): EitherT[IO, L2LedgerError, Unit] =
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
         for {
             base <- EitherT.right(
               store
-                  .latestSnapshotAtOrBefore(serial)
+                  .latestSnapshotAtOrBefore(commandNumber)
                   .map(_.fold(EutxoL2Ledger.State.genesis(config))(restoreFromSnapshot))
             )
-            commands <- EitherT.right(store.logRange(base.serial, serial))
+            commands <- EitherT.right(store.logRange(base.commandNumber, commandNumber))
             restored <- EitherT.fromEither[IO](
               commands.foldLeft[Either[L2LedgerError, EutxoL2Ledger.State]](Right(base))(
                 (acc, cmd) => acc.flatMap(applyMutation(_, cmd))
               )
             )
             _ <- EitherT.cond[IO](
-              restored.serial == serial,
+              restored.commandNumber == commandNumber,
               (),
               L2LedgerError(
-                s"restoreTo($serial) reached serial ${restored.serial}: log is missing entries"
+                s"restoreTo($commandNumber) reached commandNumber ${restored.commandNumber}: log is missing entries"
               )
             )
             _ <- EitherT.right(state.set(restored))
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `pendingDeposits`, and `serial` come from the snapshot; the transient `errors` /
+      * `pendingDeposits`, and `commandNumber` come from the snapshot; the transient `errors` /
       * `confirmations` are not persisted and start empty (§R2b).
       */
-    private def restoreFromSnapshot(entry: (L2Serial, L2Snapshot)): EutxoL2Ledger.State =
+    private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2
         EutxoL2Ledger.State
             .genesis(config)
             .copy(
               activeUtxos = snapshot.activeUtxos,
               pendingDeposits = snapshot.pendingDeposits,
-              serial = snapshot.serial
+              commandNumber = snapshot.commandNumber
             )
 
     override def sendApplyDepositDecisions(

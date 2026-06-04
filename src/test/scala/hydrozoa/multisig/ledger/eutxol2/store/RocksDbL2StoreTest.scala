@@ -7,7 +7,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2Serial}
+import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
 import io.circe.syntax.*
 import java.nio.file.Files
 import org.scalacheck.Gen
@@ -17,7 +17,7 @@ import org.scalatest.funsuite.AnyFunSuite
 /** R2b tests for the on-disk [[RocksDbL2Store]] and its codecs ([[L2StoreCodecs]]).
   *
   * The recovery flow mirrors `EutxoL2LedgerRecoveryTest` but over a real RocksDB store in a temp
-  * directory, so it exercises the on-disk plumbing (big-endian serial keys, the two CFs,
+  * directory, so it exercises the on-disk plumbing (big-endian commandNumber keys, the two CFs,
   * `seekForPrev` snapshot lookup, the `(from, to]` log scan) plus the `ApplyDepositDecisions` JSON
   * round-trip end to end. The codec tests round-trip the snapshot (with real genesis utxos) and the
   * command dispatch directly.
@@ -62,9 +62,12 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                     )
                     // A second ledger over the same on-disk store, rebuilt purely from snapshot+log.
                     restored <- EutxoL2Ledger(config, store)
-                    _ <- restored.restoreTo(L2Serial(target.toLong)).value.flatMap(IO.fromEither)
+                    _ <- restored
+                        .restoreTo(L2CommandNumber(target.toLong))
+                        .value
+                        .flatMap(IO.fromEither)
                     s <- restored.peekState
-                yield assert(s.serial == L2Serial(target.toLong))
+                yield assert(s.commandNumber == L2CommandNumber(target.toLong))
             }
         }
     }
@@ -77,7 +80,7 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                     _ <- (1 to 3).toList.traverseVoid(i =>
                         ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                     )
-                    result <- ledger.restoreTo(L2Serial(99)).value
+                    result <- ledger.restoreTo(L2CommandNumber(99)).value
                 yield assert(result.isLeft)
             }
         }
@@ -86,7 +89,7 @@ class RocksDbL2StoreTest extends AnyFunSuite:
     test("snapshot codec round-trips real genesis utxos") {
         import L2StoreCodecs.snapshotCodec
         val genesis = EutxoL2Ledger.State.genesis(config)
-        val snapshot = L2Snapshot(L2Serial(5), genesis.activeUtxos, Map.empty)
+        val snapshot = L2Snapshot(L2CommandNumber(5), genesis.activeUtxos, Map.empty)
         val decoded = io.circe.parser.decode[L2Snapshot](snapshot.asJson.noSpaces)
         // The round-trip is only meaningful when the fixture actually carries utxos.
         assert(genesis.activeUtxos.nonEmpty && decoded == Right(snapshot))

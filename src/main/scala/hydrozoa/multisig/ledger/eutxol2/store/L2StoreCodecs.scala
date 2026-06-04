@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.eutxol2.store
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{utxoDecoder, utxoEncoder}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
-import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand, L2Serial}
+import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand, L2CommandNumber}
 import io.bullet.borer.Cbor
 import io.circe.generic.semiauto.deriveCodec
 import io.circe.syntax.*
@@ -97,15 +97,15 @@ object L2StoreCodecs:
     given snapshotCodec: Codec[L2Snapshot] = Codec.from(
       Decoder.instance(c =>
           for
-              serial <- c.downField("serial").as[Long]
+              commandNumber <- c.downField("commandNumber").as[Long]
               activeUtxos <- c.downField("activeUtxos").as[Utxos]
               // pendingDeposits: list of (RequestId, L2Genesis) — no KeyEncoder[RequestId] needed.
               pendingDeposits <- c.downField("pendingDeposits").as[List[(RequestId, L2Genesis)]]
-          yield L2Snapshot(L2Serial(serial), activeUtxos, pendingDeposits.toMap)
+          yield L2Snapshot(L2CommandNumber(commandNumber), activeUtxos, pendingDeposits.toMap)
       ),
       Encoder.instance(s =>
           Json.obj(
-            "serial" -> (s.serial: Long).asJson,
+            "commandNumber" -> (s.commandNumber: Long).asJson,
             "activeUtxos" -> s.activeUtxos.asJson,
             "pendingDeposits" -> s.pendingDeposits.toList.asJson
           )

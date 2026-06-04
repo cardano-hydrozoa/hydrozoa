@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.eutxol2.store
 
 import cats.effect.{IO, Resource}
 import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.{realCommandCodec, snapshotCodec}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2Serial}
+import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import java.nio.ByteBuffer
@@ -13,12 +13,12 @@ import scala.jdk.CollectionConverters.*
 
 /** RocksDB-backed [[L2Store]] — the durable form of the `EutxoL2Ledger` recovery store (§R2b).
   *
-  * Two column families, both keyed by an 8-byte big-endian [[L2Serial]] (serials are non-negative,
-  * so big-endian byte order coincides with numeric order, and RocksDB's lexicographic iteration is
-  * serial order):
+  * Two column families, both keyed by an 8-byte big-endian [[L2CommandNumber]] (command numbers are
+  * non-negative, so big-endian byte order coincides with numeric order, and RocksDB's lexicographic
+  * iteration is command-number order):
   *
-  *   - **L2Log** — `serial -> ` JSON of the applied [[L2LedgerCommand.Real]].
-  *   - **L2Snapshot** — `serial -> ` JSON of the [[L2Snapshot]].
+  *   - **L2Log** — `commandNumber -> ` JSON of the applied [[L2LedgerCommand.Real]].
+  *   - **L2Snapshot** — `commandNumber -> ` JSON of the [[L2Snapshot]].
   *
   * Values are the store-local JSON of [[L2StoreCodecs]] (UTF-8). This DB is wholly separate from
   * the consensus `BackendStore`: the L2 ledger owns its persistence, mirroring how a real black-box
@@ -32,40 +32,46 @@ final class RocksDbL2Store private (
     readOptions: ReadOptions
 ) extends L2Store[IO]:
 
-    import RocksDbL2Store.{keyToSerial, serialToKey}
+    import RocksDbL2Store.{keyToCommandNumber, commandNumberToKey}
 
-    def appendLog(serial: L2Serial, command: L2LedgerCommand.Real): IO[Unit] =
-        IO.blocking(db.put(logCf, writeOptions, serialToKey(serial), encode(command)))
+    def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand.Real): IO[Unit] =
+        IO.blocking(db.put(logCf, writeOptions, commandNumberToKey(commandNumber), encode(command)))
 
-    def putSnapshot(serial: L2Serial, snapshot: L2Snapshot): IO[Unit] =
-        IO.blocking(db.put(snapshotCf, writeOptions, serialToKey(serial), encode(snapshot)))
+    def putSnapshot(commandNumber: L2CommandNumber, snapshot: L2Snapshot): IO[Unit] =
+        IO.blocking(
+          db.put(snapshotCf, writeOptions, commandNumberToKey(commandNumber), encode(snapshot))
+        )
 
-    def latestSnapshotAtOrBefore(serial: L2Serial): IO[Option[(L2Serial, L2Snapshot)]] =
+    def latestSnapshotAtOrBefore(
+        commandNumber: L2CommandNumber
+    ): IO[Option[(L2CommandNumber, L2Snapshot)]] =
         IO.blocking {
             val it = db.newIterator(snapshotCf, readOptions)
             try
-                it.seekForPrev(serialToKey(serial))
-                if it.isValid then Some(keyToSerial(it.key()) -> decode[L2Snapshot](it.value()))
+                it.seekForPrev(commandNumberToKey(commandNumber))
+                if it.isValid then
+                    Some(keyToCommandNumber(it.key()) -> decode[L2Snapshot](it.value()))
                 else None
             finally it.close()
         }
 
     def logRange(
-        fromExclusive: L2Serial,
-        toInclusive: L2Serial
+        fromExclusive: L2CommandNumber,
+        toInclusive: L2CommandNumber
     ): IO[List[L2LedgerCommand.Real]] =
         IO.blocking {
             val it = db.newIterator(logCf, readOptions)
             try
                 // Seek to the first key >= fromExclusive, then drop the boundary key itself.
-                it.seek(serialToKey(fromExclusive))
+                it.seek(commandNumberToKey(fromExclusive))
                 val out = List.newBuilder[L2LedgerCommand.Real]
                 var continue = true
                 while continue && it.isValid do
-                    val serial = keyToSerial(it.key())
-                    if Ordering[L2Serial].gt(serial, toInclusive) then continue = false
+                    val commandNumber = keyToCommandNumber(it.key())
+                    if Ordering[L2CommandNumber].gt(commandNumber, toInclusive) then
+                        continue = false
                     else
-                        if Ordering[L2Serial].gt(serial, fromExclusive) then
+                        if Ordering[L2CommandNumber].gt(commandNumber, fromExclusive) then
                             out += decode[L2LedgerCommand.Real](it.value())
                         it.next()
                 out.result()
@@ -130,12 +136,12 @@ object RocksDbL2Store:
             // handles: [default, L2Log, L2Snapshot] — positional with the descriptor order above.
             .map { case (db, handles) => (db, handles(1), handles(2)) }
 
-    /** 8-byte big-endian key; for non-negative serials this orders numerically. */
-    private def serialToKey(serial: L2Serial): Array[Byte] =
-        ByteBuffer.allocate(8).putLong(serial: Long).array()
+    /** 8-byte big-endian key; for non-negative command numbers this orders numerically. */
+    private def commandNumberToKey(commandNumber: L2CommandNumber): Array[Byte] =
+        ByteBuffer.allocate(8).putLong(commandNumber: Long).array()
 
-    private def keyToSerial(key: Array[Byte]): L2Serial =
-        L2Serial(ByteBuffer.wrap(key).getLong)
+    private def keyToCommandNumber(key: Array[Byte]): L2CommandNumber =
+        L2CommandNumber(ByteBuffer.wrap(key).getLong)
 
     private def autoCloseable[A <: AutoCloseable](a: => A): Resource[IO, A] =
         Resource.fromAutoCloseable(IO.blocking(a))

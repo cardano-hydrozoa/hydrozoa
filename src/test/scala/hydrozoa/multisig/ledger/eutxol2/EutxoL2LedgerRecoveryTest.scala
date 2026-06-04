@@ -7,20 +7,20 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Store}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2Serial}
+import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 
-/** R2b recovery tests for [[EutxoL2Ledger]] — serial monotonicity, snapshot-interval, and
-  * `restoreTo` reproducing the live state at any past serial (snapshot boundary, mid-interval,
-  * below the newest snapshot, and genesis).
+/** R2b recovery tests for [[EutxoL2Ledger]] — commandNumber monotonicity, snapshot-interval, and
+  * `restoreTo` reproducing the live state at any past commandNumber (snapshot boundary,
+  * mid-interval, below the newest snapshot, and genesis).
   *
   * Uses the **no-op `ApplyDepositDecisions`** command (empty absorb / refund lists): it advances
-  * the serial and is logged like any real command, but does not touch `activeUtxos` and never
-  * invokes the transaction mutator — so the test needs no constructed L2 tx / deposit payloads,
-  * only a real config for the genesis utxos. Recovery correctness (serial keying, snapshot+log
-  * re-fold) is independent of which real command was applied.
+  * the commandNumber and is logged like any real command, but does not touch `activeUtxos` and
+  * never invokes the transaction mutator — so the test needs no constructed L2 tx / deposit
+  * payloads, only a real config for the genesis utxos. Recovery correctness (commandNumber keying,
+  * snapshot+log re-fold) is independent of which real command was applied.
   */
 class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
 
@@ -30,7 +30,8 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
             .map(_.nodeConfigs(HeadPeerNumber.zero))
             .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(0L))
 
-    /** A no-op real command — bumps the serial, logged, but leaves `activeUtxos` untouched. */
+    /** A no-op real command — bumps the commandNumber, logged, but leaves `activeUtxos` untouched.
+      */
     private def noop(n: Int): L2LedgerCommand.ApplyDepositDecisions =
         L2LedgerCommand.ApplyDepositDecisions(
           blockNumber = BlockNumber(n),
@@ -57,35 +58,33 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
             finalState <- ledger.peekState
         yield Run(ledger, store, finalState)
 
-    import cats.syntax.all.*
-
-    test("serial advances by one per real command, starting from genesis 0") {
+    test("commandNumber advances by one per real command, starting from genesis 0") {
         run {
             for
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
-                s0 <- ledger.currentSerial
+                s0 <- ledger.currentCommandNumber
                 _ <- ledger.sendApplyDepositDecisions(noop(1)).value.flatMap(IO.fromEither)
-                s1 <- ledger.currentSerial
+                s1 <- ledger.currentCommandNumber
                 _ <- ledger.sendApplyDepositDecisions(noop(2)).value.flatMap(IO.fromEither)
-                s2 <- ledger.currentSerial
+                s2 <- ledger.currentCommandNumber
             yield assert(
-              s0 == L2Serial.zero && s1 == L2Serial(1) && s2 == L2Serial(2)
+              s0 == L2CommandNumber.zero && s1 == L2CommandNumber(1) && s2 == L2CommandNumber(2)
             )
         }
     }
 
     test(
-      "restoreTo reproduces the live state at a snapshot boundary (serial == SnapshotInterval)"
+      "restoreTo reproduces the live state at a snapshot boundary (commandNumber == SnapshotInterval)"
     ) {
         run {
             val n = L2Store.SnapshotInterval.toInt
             for
                 run <- runCommits(n)
-                // Fresh ledger over the same store, restored to the snapshot-boundary serial.
-                restored <- restoreFresh(run.store, L2Serial(n.toLong))
+                // Fresh ledger over the same store, restored to the snapshot-boundary commandNumber.
+                restored <- restoreFresh(run.store, L2CommandNumber(n.toLong))
             yield assert(
-              restored.serial == run.finalState.serial
+              restored.commandNumber == run.finalState.commandNumber
                   && restored.activeUtxos == run.finalState.activeUtxos
             )
         }
@@ -97,15 +96,15 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
             for
                 run <- runCommits(target + 5) // commit beyond the target
                 liveAtTarget <- replayLiveTo(target)
-                restored <- restoreFresh(run.store, L2Serial(target.toLong))
+                restored <- restoreFresh(run.store, L2CommandNumber(target.toLong))
             yield assert(
-              restored.serial == L2Serial(target.toLong)
+              restored.commandNumber == L2CommandNumber(target.toLong)
                   && restored.activeUtxos == liveAtTarget.activeUtxos
             )
         }
     }
 
-    test("restoreTo to a serial below the newest snapshot still reconstructs correctly") {
+    test("restoreTo to a commandNumber below the newest snapshot still reconstructs correctly") {
         run {
             // Commit well past two snapshot boundaries, then restore to a target below the last one.
             val total = (L2Store.SnapshotInterval * 2).toInt + 3
@@ -113,43 +112,46 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
             for
                 run <- runCommits(total)
                 liveAtTarget <- replayLiveTo(target)
-                restored <- restoreFresh(run.store, L2Serial(target.toLong))
+                restored <- restoreFresh(run.store, L2CommandNumber(target.toLong))
             yield assert(
-              restored.serial == L2Serial(target.toLong)
+              restored.commandNumber == L2CommandNumber(target.toLong)
                   && restored.activeUtxos == liveAtTarget.activeUtxos
             )
         }
     }
 
-    test("restoreTo genesis (serial 0) yields the initial state") {
+    test("restoreTo genesis (commandNumber 0) yields the initial state") {
         run {
             for
                 run <- runCommits(5)
-                restored <- restoreFresh(run.store, L2Serial.zero)
+                restored <- restoreFresh(run.store, L2CommandNumber.zero)
                 genesis = EutxoL2Ledger.State.genesis(config)
             yield assert(
-              restored.serial == L2Serial.zero && restored.activeUtxos == genesis.activeUtxos
+              restored.commandNumber == L2CommandNumber.zero && restored.activeUtxos == genesis.activeUtxos
             )
         }
     }
 
-    test("restoreTo a serial beyond the log fails rather than silently under-restoring") {
+    test("restoreTo a commandNumber beyond the log fails rather than silently under-restoring") {
         run {
             for
                 run <- runCommits(3)
                 ledger <- EutxoL2Ledger(config, run.store)
-                result <- ledger.restoreTo(L2Serial(99)).value
+                result <- ledger.restoreTo(L2CommandNumber(99)).value
             yield assert(result.isLeft)
         }
     }
 
     // --- helpers -------------------------------------------------------------
 
-    /** A fresh ledger over `store`, restored to `serial`; returns its post-restore state. */
-    private def restoreFresh(store: L2Store[IO], serial: L2Serial): IO[EutxoL2Ledger.State] =
+    /** A fresh ledger over `store`, restored to `commandNumber`; returns its post-restore state. */
+    private def restoreFresh(
+        store: L2Store[IO],
+        commandNumber: L2CommandNumber
+    ): IO[EutxoL2Ledger.State] =
         for
             ledger <- EutxoL2Ledger(config, store)
-            _ <- ledger.restoreTo(serial).value.flatMap(IO.fromEither)
+            _ <- ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
             s <- ledger.peekState
         yield s
 
