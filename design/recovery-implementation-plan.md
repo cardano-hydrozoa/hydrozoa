@@ -12,7 +12,11 @@ payloads out of scope per design §1).
 recover seams (2026-06-02): `RequestHighWater` write; per-block `Cf.L2CommandNumber` (14th CF) +
 its `persistOwnAckBundle` write; `JointLedger.State.recover`/`recoverState` (+ L2 co-anchor via
 `restoreTo`); `StackComposer.State.recover`; `BlockResultScan` — all pure-over-store and
-unit-tested, with the actor wiring deferred to R3. **Next:** R2-bnd (boundary restores).
+unit-tested, with the actor wiring deferred to R3. · R2-bnd (boundary restores, 2026-06-04):
+`Markers.recoverNextRequestNumber` (EventSequencer counter), `CardanoLiaison.State.recover`
+(`HardConfirmation` fold via `HardConfirmationScan`), `PeerLiaison.recover` → `OutboxSeed` — all
+pure-over-store and unit-tested, wiring deferred to R3. **Next:** R3 (ReplayActor + boot sequence +
+the deferred actor wiring).
 
 ---
 
@@ -45,8 +49,10 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
 - No indices algorithm (§5.3), no total-order merge (§5.4), no `ReplayActor`.
 - No boot sequence (§8) in `MultisigRegimeManager.preStartLocal` (it spawns all
   actors and completes one `PendingConnections` barrier — nothing recovery-aware).
-- No boundary restore (PeerLiaison cursors / EventSequencer counter /
-  CardanoLiaison `HardConfirmation` fold + live L1 re-sample).
+- ~~No boundary restore~~ **Done (R2-bnd, 2026-06-04):** EventSequencer counter
+  (`Markers.recoverNextRequestNumber`), CardanoLiaison `HardConfirmation` fold + live L1 re-sample
+  (`CardanoLiaison.State.recover`), PeerLiaison own-produced outbox (`PeerLiaison.recover` →
+  `OutboxSeed`). Pure-over-store; actor wiring is R3.
 - `rulebased/persistence/Persistence` is a bare `object Persistence {}` — the
   R10 read path (design §10 Q6, priority P2) does not exist.
 - ~~**EUTXO L2 ledger has no persistence at all**~~ **Done (R2b, 2026-05-31):**
@@ -54,8 +60,9 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
   `L2CommandNumber` on each real mutator, snapshots every `SnapshotInterval`, and restores via
   `restoreTo(commandNumber)`. The JL-side co-anchoring (recording the per-soft-ack command number) is
   still R2-fast.
-- PeerLiaison queues are not loaded from the store on boot (`state = State()`
-  starts empty); see R2.
+- ~~PeerLiaison queues are not loaded from the store on boot~~ **Restore landed
+  (R2-bnd):** `PeerLiaison.recover` rebuilds the outbox as an `OutboxSeed`; `State` is still
+  cold-init at construction — R3 seeds it from the recovered value.
 - No fail-safe validation (CR6/CR7), no crash-restart tests (§9).
 
 **Drift to fix in passing:** `Cf.scala` docstring says the arrival stamp is
@@ -211,7 +218,7 @@ gap.
   `bootstrapInitialStack` on a non-empty store** (R3 wiring) — stack 0 long since
   hard-confirmed; keep it only for the empty-store cold path.
 
-#### R2-bnd — boundary restores (restore only, no replay)
+#### R2-bnd — boundary restores (restore only, no replay) — LANDED 2026-06-04
 
 - **EventSequencer:** `next = max(own Request) + 1` (its `nLedgerEvent`
   `Ref[RequestNumber]`, cold-init 0). **CR1 is already satisfied** — current code
@@ -219,15 +226,19 @@ gap.
   `dResponse.complete(id)` (verified: `persistence.write(...)` precedes
   `req.dResponse.complete`). So R2-bnd only adds the boot-time counter restore; the
   earlier "fix the barrier" note is stale and dropped.
-- **PeerLiaison:** restore the **own-produced outbox only**. `State` holds five own-produced
-  cursors (`nAck`/`nBlock`/`nRequest`/`nStackBrief`/`nHardAck` — the highest number this peer has
-  produced per lane), the five outbox queues (`qAck`/`qBlock`/`qRequest`/`qStackBrief`/`qHardAck`),
-  and `currentlyRequesting` (our outstanding `GetMsgBatch` to the remote). recover seeds the cursors
-  (satellites: own-prefixed max; spines `Block`/`Stack`: the highest index this peer **leads**, since
-  the spine key carries no peer byte) and re-loads each outbox queue from the own-produced lane tail.
-  The outbox is a DB-backed write-through cache of this peer's own lane prefix `[remote's cursor,
-  head]`, re-served on each `GetMsgBatch` — a cold cache *is* recovery, so `currentlyRequesting` stays
-  `GetMsgBatch.initial(remote)` and the remote re-polls. **No inbound restore:** `persistInbound`
+- **PeerLiaison:** restore the **own-produced outbox only**, via `PeerLiaison.recover` →
+  `OutboxSeed`. `State` holds five own-produced cursors
+  (`nAck`/`nBlock`/`nRequest`/`nStackBrief`/`nHardAck` — the highest number this peer has produced
+  per lane), the five outbox queues (`qAck`/`qBlock`/`qRequest`/`qStackBrief`/`qHardAck`), and
+  `currentlyRequesting` (our outstanding `GetMsgBatch` to the remote). `buildNewMsgBatch` serves the
+  remote from the **in-memory** queues — so a cold (empty) outbox cannot answer the remote's
+  catch-up. recover therefore re-loads each queue from the store, not just the cursors. It returns a
+  pure `OutboxSeed` (the five lanes' own entries, ascending): satellites
+  (`SoftAck`/`HardAck`/`Request`) are own-keyed, so a per-peer `LaneScan` yields exactly our entries;
+  spines (`Block`/`Stack`) carry every leader's brief, so recover keeps only the ones this peer
+  **leads** (`isLeader`/`isSlowLeader`, since the spine key has no peer byte). R3 seeds `State` from
+  the value (each cursor `nX` = its queue's last number; `currentlyRequesting` stays
+  `GetMsgBatch.initial(remote)` so the remote re-polls). **No inbound restore:** `persistInbound`
   writes each received entry (CR8) and immediately **forwards** it — PeerLiaison holds no inbound
   queue, so inbound re-delivery is the `ReplayActor`'s job in R3 (it seeds each consensus actor's
   mailbox from the persisted lane tails). Restoring inbound here would double-deliver. (Supersedes the
