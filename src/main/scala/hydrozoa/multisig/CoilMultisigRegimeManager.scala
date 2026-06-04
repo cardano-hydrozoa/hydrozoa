@@ -109,9 +109,9 @@ trait CoilMultisigRegimeManager(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
 
-            // Exactly one peer liaison, toward the hub head peer.
+            // Exactly one liaison, toward the hub head peer (§8).
             hubLiaison <- context.actorOf(
-              PeerLiaison(config, RemotePeer.Head(hubPeerId), pendingConnections)
+              CoilPeerToHeadLiaison(config, RemotePeer.Head(hubPeerId), pendingConnections)
             )
 
             connections = Connections(

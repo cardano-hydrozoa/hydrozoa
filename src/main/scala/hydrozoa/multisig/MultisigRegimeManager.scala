@@ -144,16 +144,20 @@ trait MultisigRegimeManager(
                     )
             }
 
-            // If this head is a hub, also one peer liaison toward each coil it hubs (§8). The coil's
-            // hard-acks arrive on these links; non-hub heads spawn none.
+            hubbedCoils = config.hubbedCoilNums(ownHeadNum)
+
+            // If this head is a hub, spawn the relay sequencer for its coils' hard-acks (§8) plus
+            // one head→coil liaison per coil it hubs. Non-hub heads spawn neither.
+            coilAckSequencer <-
+                if hubbedCoils.isEmpty then IO.none[CoilAckSequencer.Handle]
+                else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
+
             coilPeerLiaisons <-
-                config
-                    .hubbedCoilNums(ownHeadNum)
-                    .traverse(coilNum =>
-                        context.actorOf(
-                          PeerLiaison(config, RemotePeer.Coil(coilNum), pendingConnections)
-                        )
+                hubbedCoils.traverse(coilNum =>
+                    context.actorOf(
+                      HeadPeerToCoilLiaison(config, RemotePeer.Coil(coilNum), pendingConnections)
                     )
+                )
 
             localPeerLiaisons = headPeerLiaisons ++ coilPeerLiaisons
 
@@ -169,6 +173,7 @@ trait MultisigRegimeManager(
               slowConsensusActor = slowConsensusActor,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
+              coilAckSequencer = coilAckSequencer,
               tracer = tracer,
             )
 
@@ -219,6 +224,10 @@ object MultisigRegimeManager {
         slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
+        /** Present only on a hub head (§8): the relay sequencer for its coils' hard-acks. `None` on
+          * non-hub heads and on coils.
+          */
+        coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         tracer: ProtocolTracer = ProtocolTracer.noop,
     )
 
