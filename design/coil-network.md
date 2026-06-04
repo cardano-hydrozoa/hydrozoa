@@ -651,7 +651,7 @@ higher quorum with little new production code.
 | Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
 | Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** — spawn + coil-typed `RemotePeer` discriminator only; the relay **lane policies** (the two new liaison shapes) land in Pc3; **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
 | Pc3 | Coil-side bootstrap entry point + the two new liaison shapes (§8) — `HeadPeerToCoilLiaison` (hub relays its full fast-side stream to the coil) and `CoilPeerToHeadLiaison` (coil sends only its own hard-acks); integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1`. No `HubCoilAckLane` yet — a single head means no coil-ack relay into a mesh |
-| Pc4 | `HubCoilAckLane` + `CoilAckSequencer` — disseminate coil hard-acks across the population (§8); then multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine) |
+| Pc4 | **Multi-head relay** so a coil follows the whole population through its hub (§8 "Hub→coil link lane encoding"): contiguous brief relay (done) + multiplexed ack relay de-muxed by author + hub feed. Validated by a paced ≥2-head / `coilQuorum`=1 **stage4** run (not stage1 — stage1 is slow-consensus-agnostic). `HubCoilAckLane` + `CoilAckSequencer` were pulled forward into Pc3. Recovery symmetry is the design driver; the satellite `LaneId` key widens `HeadPeerNumber`→`PeerId` when `feature/recovery` merges |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
 | Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified; rule-based-regime handover spawns `DisputeActor` + `EvacuationActor` on coil the same as on head |
@@ -714,8 +714,12 @@ each must be honored even though none is owned by a single section:
 - **D-coil-3.** Hub-fallover semantics for M5 (§8) — strictly out of
   scope, or worth a stub?
 - **D-coil-4.** Concrete skip-stack triggers (§12).
-- **D-coil-5.** Coil's `L2Ledger` — same restore-by-block-boundary
-  interface as head's, or simpler forward-only? Confirm byte-determinism
-  across head/coil divide.
+- **D-coil-5 — RESOLVED (2026-06-04).** Same as a head's, by design: the coil's
+  whole point is recovery symmetry (§8 "Hub→coil link lane encoding"), so it keeps
+  the head's lane structure — contiguous spines (`BlockSpine`/`StackSpine`) built
+  by the same `JointLedger`/`StackComposer`, per-author satellites keyed by
+  `PeerId` — and shares the head's restore-by-block-boundary `L2Ledger` interface
+  and recover seams unchanged. Byte-determinism holds because the coil runs the
+  same effect derivation over the same contiguous spine.
 - **D-coil-6 — RESOLVED.** Fully parallel `CoilMultisigRegimeManager`
   (`RuleBasedRegimeManager` stays shared). See §3, §5.
