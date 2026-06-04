@@ -5,13 +5,14 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.peer.RemotePeer.*
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -19,20 +20,20 @@ import scala.collection.immutable.Queue
 
 trait PeerLiaison(
     config: Config,
-    remotePeerId: HeadPeerId,
+    remotePeer: RemotePeer,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val state = State()
 
     private val logger =
-        Logging.loggerIO(s"PeerLiaison.${config.ownHeadPeerNum}->${remotePeerId.peerNum}")
+        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remotePeer.label}")
 
     private val loggerMmd =
         Logging.loggerIO("Mermaid.PeerLiaison")
 
     private def mermaid(s: String): IO[Unit] =
-        loggerMmd.info(s"\t${config.ownHeadPeerNum}->>${remotePeerId.peerNum}: ${s}")
+        loggerMmd.info(s"\t${config.ownPeerLabel}->>${remotePeer.label}: ${s}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -56,7 +57,7 @@ trait PeerLiaison(
                       consensusActor = _connections.consensusActor,
                       stackComposer = _connections.stackComposer,
                       slowConsensusActor = _connections.slowConsensusActor,
-                      remotePeerLiaison = _connections.remotePeerLiaisons(remotePeerId)
+                      remotePeerLiaison = _connections.remotePeerLiaisons(remotePeer.peerId)
                     )
                   )
                 )
@@ -209,11 +210,11 @@ trait PeerLiaison(
 
     private def preStartLocal: IO[Unit] =
         for
-            _ <- logger.info(s"starting, remote peer: ${remotePeerId.peerNum}")
+            _ <- logger.info(s"starting, remote peer: ${remotePeer.label}")
             _ <- initializeConnections
             conn <- getConnections
             _ <- mermaid("GetMsgBatch.initial")
-            _ <- conn.remotePeerLiaison ! GetMsgBatch.initial(remotePeerId)
+            _ <- conn.remotePeerLiaison ! GetMsgBatch.initial(remotePeer)
             _ <- startResendTimer
         yield ()
 
@@ -233,7 +234,7 @@ trait PeerLiaison(
 
     private final class State {
         private val currentlyRequesting: Ref[IO, GetMsgBatch] =
-            Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial(remotePeerId))
+            Ref.unsafe[IO, GetMsgBatch](GetMsgBatch.initial(remotePeer))
 
         /** Read-only access to the outstanding [[GetMsgBatch]]. Used by the retransmit timer (see
           * [[startResendTimer]]) and by the [[NewMsgBatch]] handler to detect duplicates.
@@ -291,8 +292,8 @@ trait PeerLiaison(
                     for {
                         nBlock <- this.nBlock.get
                         nY = y.blockNum
-                        nextOwnBlock = config.ownHeadPeerId.nextLeaderBlock(nBlock)
-                        _ <- IO.raiseWhen(nextOwnBlock != nY)(
+                        nextOwnBlock = config.nextOwnLeaderBlock(nBlock)
+                        _ <- IO.raiseWhen(!nextOwnBlock.contains(nY))(
                           Error(
                             s"Bad BlockBrief.Next increment: last-appended: ${nBlock}, " +
                                 s"expected next block: ${nextOwnBlock}, attempted: ${nY}"
@@ -310,8 +311,8 @@ trait PeerLiaison(
                     for {
                         nStack <- this.nStackBrief.get
                         nY = y.stackNum
-                        nextOwnStack = config.ownHeadPeerId.nextSlowLeaderStack(nStack)
-                        _ <- IO.raiseWhen(nextOwnStack != nY)(
+                        nextOwnStack = config.nextOwnSlowLeaderStack(nStack)
+                        _ <- IO.raiseWhen(!nextOwnStack.contains(nY))(
                           Error(
                             s"Bad StackBrief increment: last-appended: $nStack, " +
                                 s"expected next stack: $nextOwnStack, attempted: $nY"
@@ -396,9 +397,8 @@ trait PeerLiaison(
                 // symmetric in `(peer, n) ↦ first leader ≥ next`).
                 _ <- IO.raiseWhen(
                   nAck.increment < batchReq.softAckNumber ||
-                      config.ownHeadPeerId.nextLeaderBlock(nBlock) < batchReq.blockNum ||
-                      config.ownHeadPeerId.nextSlowLeaderStack(nStack) <
-                      batchReq.stackNum ||
+                      config.nextOwnLeaderBlock(nBlock).exists(_ < batchReq.blockNum) ||
+                      config.nextOwnSlowLeaderStack(nStack).exists(_ < batchReq.stackNum) ||
                       nHard.increment < batchReq.hardAckNum ||
                       nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
@@ -505,8 +505,8 @@ trait PeerLiaison(
             //    number must equal the next-expected `current.ackNum` (next-expected
             //    cursor — same pattern as requestNum below).
             received.softAck match
-                case Some(a) if a.ackId.peerNum != remotePeerId.peerNum =>
-                    return Reject(Rejection.AckPeerMismatch(remotePeerId.peerNum, a.ackId.peerNum))
+                case Some(a) if remotePeer.peerId != PeerId.Head(a.ackId.peerNum) =>
+                    return Reject(Rejection.AckPeerMismatch(remotePeer.peerId, a.ackId.peerNum))
                 case Some(a) if a.ackNum != current.softAckNumber =>
                     return Reject(Rejection.AckNumMismatch(current.softAckNumber, a.ackNum))
                 case _ => ()
@@ -538,9 +538,9 @@ trait PeerLiaison(
             // 3b. If a hard-ack is present, its peer must be the remote peer and its
             //     hardAckNum must equal the next-expected `current.hardAckNum`.
             received.hardAck match
-                case Some(h) if h.ackId.peerId != PeerId.Head(remotePeerId.peerNum) =>
+                case Some(h) if h.ackId.peerId != remotePeer.peerId =>
                     return Reject(
-                      Rejection.HardAckPeerMismatch(remotePeerId.peerNum, h.ackId.peerId)
+                      Rejection.HardAckPeerMismatch(remotePeer.peerId, h.ackId.peerId)
                     )
                 case Some(h) if h.hardAckNum != current.hardAckNum =>
                     return Reject(
@@ -574,10 +574,10 @@ trait PeerLiaison(
                 batchNum = current.batchNum.increment,
                 softAckNumber = received.softAck.fold(current.softAckNumber)(_.ackNum.increment),
                 blockNum = received.blockBrief.fold(current.blockNum)(b =>
-                    remotePeerId.nextLeaderBlock(b.blockNum)
+                    remotePeer.nextLeaderBlock(b.blockNum).getOrElse(current.blockNum)
                 ),
                 stackNum = received.stackBrief.fold(current.stackNum)(sb =>
-                    remotePeerId.nextSlowLeaderStack(sb.stackNum)
+                    remotePeer.nextSlowLeaderStack(sb.stackNum).getOrElse(current.stackNum)
                 ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
@@ -597,12 +597,12 @@ trait PeerLiaison(
 object PeerLiaison {
     def apply(
         config: Config,
-        remotePeerId: HeadPeerId,
+        remotePeer: RemotePeer,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections) {})
+        IO(new PeerLiaison(config, remotePeer, pendingLocalConnections) {})
 
-    type Config = OwnHeadPeerPublic.Section & NodeOperationMultisigConfig.Section
+    type Config = OwnPeerPublic.Section & NodeOperationMultisigConfig.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -653,11 +653,11 @@ object PeerLiaison {
           */
         enum Rejection:
             case BatchNumMismatch(expected: Batch.Number, received: Batch.Number)
-            case AckPeerMismatch(expected: HeadPeerNumber, received: HeadPeerNumber)
+            case AckPeerMismatch(expected: PeerId, received: HeadPeerNumber)
             case AckNumMismatch(expected: SoftAckNumber, received: SoftAckNumber)
             case BlockNumMismatch(expected: BlockNumber, received: BlockNumber)
             case StackBriefNumMismatch(expected: StackNumber, received: StackNumber)
-            case HardAckPeerMismatch(expected: HeadPeerNumber, received: PeerId)
+            case HardAckPeerMismatch(expected: PeerId, received: PeerId)
             case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)
@@ -834,11 +834,12 @@ object PeerLiaison {
             //
             // Per-remote because the sparse-lane initial cursor depends on which remote peer the
             // liaison is talking to. Tests can use any [[HeadPeerId]] fixture.
-            def initial(remotePeerId: HeadPeerId): GetMsgBatch = GetMsgBatch(
+            def initial(remotePeer: RemotePeer): GetMsgBatch = GetMsgBatch(
               batchNum = Batch.Number(0),
               softAckNumber = SoftAckNumber.zero.increment,
-              blockNum = remotePeerId.nextLeaderBlock(BlockNumber.zero),
-              stackNum = remotePeerId.nextSlowLeaderStack(StackNumber.zero),
+              blockNum = remotePeer.nextLeaderBlock(BlockNumber.zero).getOrElse(BlockNumber.zero),
+              stackNum =
+                  remotePeer.nextSlowLeaderStack(StackNumber.zero).getOrElse(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
               requestNum = RequestNumber.zero
             )

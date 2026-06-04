@@ -8,13 +8,15 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{Tracer, logWith}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
+import hydrozoa.multisig.consensus.ack.SoftAck
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{FastConsensusActor, PeerLiaison, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
@@ -177,7 +179,7 @@ final case class JointLedger(
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.routeLocal(s"JointLedger.${config.ownHeadPeerNum}")
+            _ <- Tracer.routeLocal(s"JointLedger.${config.ownPeerLabel}")
             _ <- initializeConnections
         } yield ()
 
@@ -669,9 +671,13 @@ final case class JointLedger(
     }
 
     /** When the joint ledger finishes producing (or reproducing) a brief:
-      *   1. Broadcast the brief to peer liaisons — only when leading the block.
-      *   2. Sign the brief and forward both brief + own soft-ack to the consensus actor for
-      *      soft-confirmation. L1 effect signing (slow consensus) does not happen here.
+      *   1. Forward the brief to the consensus actor — every peer does this.
+      *   2. If this peer is a head: broadcast the brief to peer liaisons when it leads the block,
+      *      and author its own soft-ack. A coil does neither — it can't lead (leadership implies
+      *      being a head peer) and authors no soft-acks.
+      *   3. Hand the block result to the stack composer (slow side).
+      *
+      * L1 effect signing (slow consensus) does not happen here.
       */
     private def handleBlock(
         brief: BlockBrief.Next,
@@ -683,22 +689,33 @@ final case class JointLedger(
             (bt, vMaj, vMin, evtCnt) = extractBriefTraceMetadata(brief)
             _ <- tracer.briefProduced(
               brief.blockNum: Int,
-              config.ownHeadPeerNum: Int,
+              config.ownPeerIndex,
               bt,
               vMaj,
               vMin,
               evtCnt
             )
-            // 1. Broadcast the brief to peer liaisons (leader only).
-            _ <- IO.whenA(config.ownHeadPeerId.isLeader(brief.blockNum))(
-              (conn.peerLiaisons ! brief).parallel
-            )
-            // 2. Sign the brief and ship brief + own soft-ack to the consensus actor.
-            softAck = ownHeadWallet.mkSoftAck(brief, localFinalization.asBoolean)
+            // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
-            _ <- conn.fastConsensusActor ! softAck
-            // 3. Slow side: hand the block result to the stack composer (independent of fast
-            //    cycle).
+            // Only a head emits on the fast cycle — it broadcasts the brief when it leads the
+            // block, and authors a soft-ack for every block. A coil never leads and authors none.
+            _ <- config.ownPeerId match {
+                case PeerId.Head(peerNum) =>
+                    for {
+                        _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
+                          (conn.peerLiaisons ! brief).parallel
+                        )
+                        softAck = SoftAck(
+                          peerNum = peerNum,
+                          blockNum = brief.blockNum,
+                          header = config.ownWallet.mkHeaderSignature(brief.header.signingBytes),
+                          finalizationRequested = localFinalization.asBoolean
+                        )
+                        _ <- conn.fastConsensusActor ! softAck
+                    } yield ()
+                case PeerId.Coil(_) => IO.unit
+            }
+            // Slow side: hand the block result to the stack composer (independent of fast cycle).
             _ <- conn.stackComposer ! blockResult
         } yield ()
 
@@ -736,7 +753,7 @@ object JointLedger {
 
     type Handle = ActorRef[IO, Requests.Request]
 
-    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,

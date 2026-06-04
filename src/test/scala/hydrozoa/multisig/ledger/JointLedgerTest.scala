@@ -431,8 +431,7 @@ object JointLedgerTestHelpers {
 
                 userWallet = env.multiNodeConfig
                     .nodePrivateConfigs(HeadPeerNumber.zero)
-                    .ownHeadPeerPrivate
-                    .ownHeadWallet
+                    .ownWallet
 
                 userVk = userWallet.exportVerificationKey
 

@@ -97,8 +97,8 @@ Out of scope here:
 ## 2. The one-sentence design
 
 A coil peer is a head peer in **constant follower mode**: `BlockWeaver` never
-enters Leader role, `StackComposer` never closes as leader, `FastConsensusActor`
-signs no `SoftAck`, no `RequestSequencer` exists, and the head-mesh
+enters Leader role, `StackComposer` never closes as leader, `JointLedger`
+produces no `SoftAck`, no `RequestSequencer` exists, and the head-mesh
 `PeerLiaison` collapses to a single hub. Same lanes, same replicated set,
 same L1-submission and rule-based-regime paths.
 
@@ -129,12 +129,12 @@ reference. Coil's multisig regime is a strict subset (separate manager —
 |---|---|
 | `EventSequencer` (a.k.a. `RequestSequencer`) | **absent** — no user-request surface |
 | `BlockWeaver` | **follower-only** — drives `JointLedger` (`StartBlock` / `CompleteBlock`) from observed `BlockBrief.Next` + `PollResults`; never enters Leader role, no mempool drain |
-| `JointLedger` | **follower-only** — never enters the `Producing` leader path |
-| `FastConsensusActor` | aggregator-only — verifies + aggregates head soft-acks, signs none (coil has no `SoftAckLane`) |
+| `JointLedger` | runs the same `Done → Producing → Done` cycle on every block whether leading or following (`Producing` is the block-application state, entered by both — not a leader path). Two steps in `handleBlock` are gated: the brief broadcast (leader-only, `canLeadFast` — false on coil) and own soft-ack production (head-only — coil authors none) |
+| `FastConsensusActor` | aggregator-only — verifies + aggregates head soft-acks into `SoftConfirmation`s; **signs nothing** (soft-acks are authored by `JointLedger`). On coil it still aggregates the head soft-acks relayed via the hub; a coil simply has no own soft-ack to add |
 | `StackComposer` | **follower-only** — pairs `BlockResult` × `Block.SoftConfirmed` × inbound `StackBrief` from the leader, never closes a stack as leader |
-| `SlowConsensusActor` | aggregator + own hard-ack signer; aggregates head + coil hard-acks the same way |
-| `PeerLiaison` | **one** — connects to the hub head peer only |
-| `CardanoLiaison` | **same as head** — independent L1, verifies + submits happy-path + fallback (R8/R9) |
+| `SlowConsensusActor` | same as head |
+| `PeerLiaison` | **one** `CoilPeerToHeadLiaison` toward the hub (`coilPeers[me].hub`) — sends only own hard-acks, receives the full relayed population stream. The hub head runs the counterpart `HeadPeerToCoilLiaison` + a `CoilAckSequencer` (§8) |
+| `CardanoLiaison` | same as head |
 
 Absent actors → no scaffolding spawned. Present actors → existing head-peer
 implementations reused, with the `Connections` barrier holding the absent
@@ -170,19 +170,23 @@ slots empty (or the barrier shape itself slimmed for coil — D-coil-6).
 **Behavioral gates on reused actors:**
 - `BlockWeaver`: gate the Leader role on role; follower path (drive JL from
   `BlockBrief.Next` + `PollResults`) unchanged.
-- `FastConsensusActor`: gate the own-soft-ack emission on role; aggregator
-  path unchanged.
+- `JointLedger`: the `Done → Producing → Done` cycle is unchanged — entered on
+  every block in both modes (`Producing` is the block-application state, not a
+  leader path). Two `handleBlock` steps are role-gated: the leader-only brief
+  broadcast (`canLeadFast`) and own soft-ack production (head-only; coil emits
+  none).
+- `FastConsensusActor`: aggregator-only, no gate of its own — on coil it simply
+  never receives an own soft-ack to schedule, because JointLedger emits none.
 - `StackComposer`: gate the leader-close path on role; coil keeps full
   derivation (every block, every stack) but the **own-hard-ack production**
   is the only coil-only optionality (§12 skip policy).
 - `PeerLiaison`: single-hub case is structurally the existing per-remote
   `PeerLiaison` with `nRemotes == 1`.
 
-`JointLedger` and `CardanoLiaison` carry **no role gate** — JL runs the same
-`Done → Producing → Done` cycle on every block whether leading or following
-(Producing is the block-application state, not leader-only; leadership is
-gated upstream in BlockWeaver). CardanoLiaison submits happy-path + fallback
-the same way on coil as on head (§9).
+`CardanoLiaison` carries **no role gate** — it submits happy-path + fallback the
+same way on coil as on head (§9). JointLedger's `Producing` cycle is likewise
+un-gated (every block, both modes); only the two `handleBlock` steps above
+differ between head and coil.
 
 The role parameter lives in the regime manager and is read by each actor at
 construction; it is **not** carried in any wire message.
@@ -333,37 +337,111 @@ fast-side stream:
 
 ## 8. Hub topology
 
-Coil's `PeerLiaison` connects to exactly **one** head peer — the hub
-specified in `coilPeers[me].hub`. The hub fans every other peer's traffic
-into coil and fans coil's own hard-acks back out to the rest of the
-head + coil population. Whitepaper anchors: `peer-network` §Coil peer
-communication, §Disseminating coil hard acks.
+A coil connects to exactly **one** head peer — its hub (`coilPeers[me].hub`).
+The hub fans the whole population's traffic down to the coil and fans the coil's
+hard-acks back up into the head + coil population. Whitepaper anchors:
+`peer-network` §Coil peer communication, §Disseminating coil hard acks.
 
-Concrete:
-- **Inbound** — coil's hub-PeerLiaison receives the same five lane-types
-  every head follower receives: block briefs, soft-acks, stack briefs, head
-  hard-acks, other-coils' hard-acks.
-- **Outbound** — coil's hub-PeerLiaison emits **only** its own `HardAck`
-  entries on the reverse flow of `NewMsgBatch`.
-- **Hub failure** — out-of-scope for M5. Whitepaper fixes one hub statically;
-  head-side outbox retransmission covers transient outages. Durable hub-down
-  → coil is dark until hub recovers or head escalates to rule-based regime /
-  evacuation. **D-coil-3** flags whether even a stub fallover is M5-worth.
+This makes the head↔head `PeerLiaison` one of **three** liaison shapes. Each is
+the same `GetMsgBatch` / `NewMsgBatch` cursor protocol with a different **lane
+policy** — which lanes it sends, which it accepts, and whether briefs are full or
+sparse:
 
-### Head-side wiring — the hub spawns liaisons toward its coils
+| Liaison | `(own, remote)` | Sends | Receives |
+|---|---|---|---|
+| `PeerLiaison` (existing) | (head, head) | own artifacts; briefs / stack-briefs **sparse** (own-led only); own hard-acks; own `HubCoilAckLane` | the remote head's artifacts + its `HubCoilAckLane` |
+| `HeadPeerToCoilLiaison` (new) | (head, coil) | **everything the hub holds** — briefs / stack-briefs **full** (all leaders, relayed), all soft-acks, all head hard-acks, **all** `HubCoilAckLane`s | only that coil's own hard-acks |
+| `CoilPeerToHeadLiaison` (new) | (coil, head) | **only** this coil's own hard-acks | the full relayed population stream from the hub |
 
-The hub relationship is **two-sided**, and the head side does not exist yet.
-`MultisigRegimeManager` today spawns one `PeerLiaison` per *head* peer
-(`headPeerIds.filterNot(_ == ownHeadPeerId)`) and has no notion of coils — so a
-hub head peer currently has no way to deliver fast-side traffic to its coils or
-to receive their hard-acks. **Pc2 therefore also touches the head
-`MultisigRegimeManager`**, not only the new coil manager: a head peer that is a
-hub (`coilPeers.filter(_.hub == ownHeadPeerNum)`) must additionally spawn a
-`PeerLiaison` toward each such coil, whose remote identity is coil-typed
-(`PeerId.Coil`) — so the per-remote `PeerLiaison` construction widens its
-`remotePeerId` to accept a coil remote. Non-hub head peers are unaffected: a
-coil's hard-ack reaches them relayed through the normal head mesh, fanned out by
-the hub's existing outbox.
+`(coil, coil)` does not exist — coils only ever link to their hub. The three are
+selected by the `(own, remote)` kinds, so they share the cursor protocol and
+differ only in lane policy (one batch-protocol core + three policies, not three
+hand-rolled actors).
+
+> **Provisional — `RemotePeer`.** Pc2 added a `RemotePeer = Head(HeadPeerId) |
+> Coil(CoilPeerNumber)` discriminator so a `PeerLiaison` can name a head or coil
+> remote. It may not survive: once the lane policies land (Pc3/Pc4) the
+> `(own, remote)` kind that selects them may be a better home for the
+> distinction, subsuming `RemotePeer`, or it may fold into the lane-policy type.
+> Kept for now; **revisit when the liaison shapes are implemented** and remove if
+> it isn't pulling its weight.
+
+### Disseminating coil hard-acks — the `HubCoilAckLane`
+
+A coil's hard-ack has `author = coil`, but the head mesh's `hardAck` lane is
+keyed per-author with `author == remote`. A coil ack relayed by its hub onto a
+head↔head link would violate that invariant. So each head peer that hubs coils
+**re-publishes** its coils' acks on a new per-head lane, the **`HubCoilAckLane`**,
+keyed `(head peer, sequence number) → HardAck`. It behaves exactly like the
+per-peer **request lane** — contiguous, sequenced, published to every head link,
+one per head peer. The main head↔head `PeerLiaison` therefore just gains **N**
+more request-shaped lanes (`N = nHeadPeers`, one per head, each carried inbound
+on that head's link).
+
+The lane is produced by a new actor, **`CoilAckSequencer`**, analogous to
+`RequestSequencer`:
+
+1. On receiving a coil's hard-acks (via the `HeadPeerToCoilLiaison`), persist
+   them per coil — one CF `hardAckNumber → HardAck` per coil peer (durable
+   write-ahead and the idempotency guard against retransmits).
+2. The sequencer assigns a hub-local sequence number to each newly-received ack
+   and writes two CFs:
+   - **`HubCoilAckLane`**: `seqNum → HardAck` — the published, ordered stream.
+   - **index**: `coilPeerId → hardAckNumber` — last-sequenced high-water per
+     coil; lets the sequencer recover its position and never re-assign a seqNum
+     to an ack it already sequenced.
+
+   (The ack payload is stored twice for now — per-coil CF and `HubCoilAckLane`.
+   Collapsing to one payload store + two index maps is a later optimization; the
+   duplication is acceptable.)
+
+**Cross-hub dissemination falls out for free.** H1 sequences its coils into H1's
+`HubCoilAckLane`; the head mesh propagates it to H2 (one more inbound lane on the
+H1↔H2 link); H2 relays it — plus its own — down to *its* coils. A coil thus
+hears **every** coil in the head, via its hub forwarding **all** `HubCoilAckLane`s.
+
+### Relay is transport-only — verification stays end-to-end
+
+On the hub→coil direction, briefs / soft-acks / head hard-acks / coil hard-acks
+all arrive with `author ≠ remote` (authored across the population, merely relayed
+by the hub). So the coil's inbound author check relaxes from "author == hub" to
+"author ∈ known population, **verified by signature**":
+
+- The lane carries the **full signed** `HardAck`s, never references — the
+  downstream `SlowConsensusActor` verifies each coil signature against
+  `coilPeerVKey` itself. The hub is never trusted to vouch for an ack; it only
+  orders and forwards.
+- The `CoilAckSequencer` must preserve **per-coil order** when sequencing (a
+  coil's `hardAckNum` stays monotone); cross-coil interleaving is free.
+- The hub **does not** strip a coil's own acks from the lane it sends that coil.
+  Filtering would punch seqNum gaps into a contiguous lane and break the
+  next-expected cursor; instead the coil's `SlowConsensusActor` simply dedups the
+  echo of its own ack (it already holds it). Keeping the lane whole preserves the
+  invariant.
+
+### The cost of being a hub
+
+A hub buffers and forwards the **entire** fast-side stream to each of its coils,
+not just its own artifacts (today a head outboxes only what it produces; briefs
+are sparse = own-led only). The `HeadPeerToCoilLiaison` is therefore sourced from
+the hub's *received-from-mesh* state, not its own outbox, and bandwidth scales
+`O(coils × stream)`. This is inherent to the hub model; we accept it.
+
+### Head-side spawning
+
+`MultisigRegimeManager` (a head), in addition to its head-mesh `PeerLiaison`s,
+spawns one `HeadPeerToCoilLiaison` per coil it hubs
+(`coilPeers.filter(_.hub == ownHeadPeerNum)`) plus the `CoilAckSequencer`.
+`CoilMultisigRegimeManager` (a coil) spawns exactly one `CoilPeerToHeadLiaison`,
+toward `coilPeers[me].hub`. Non-hub head peers are unaffected beyond consuming
+the extra `HubCoilAckLane`s on their existing head↔head links.
+
+### Hub failure
+
+Out-of-scope for M5. The whitepaper fixes one hub statically; head-side outbox
+retransmission covers transient outages. A durable hub-down leaves the coil dark
+until the hub recovers or the head escalates to the rule-based regime /
+evacuation. **D-coil-3** flags whether even a stub fallover is M5-worth.
 
 ## 9. L1 access — independent (multisig regime)
 
@@ -511,9 +589,9 @@ higher quorum with little new production code.
 | Step | Deliverable |
 |---|---|
 | Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
-| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** (§8); **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
-| Pc3 | Coil-side bootstrap entry point + integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1` |
-| Pc4 | Multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine; minimal new production code) |
+| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** — spawn + coil-typed `RemotePeer` discriminator only; the relay **lane policies** (the two new liaison shapes) land in Pc3; **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
+| Pc3 | Coil-side bootstrap entry point + the two new liaison shapes (§8) — `HeadPeerToCoilLiaison` (hub relays its full fast-side stream to the coil) and `CoilPeerToHeadLiaison` (coil sends only its own hard-acks); integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1`. No `HubCoilAckLane` yet — a single head means no coil-ack relay into a mesh |
+| Pc4 | `HubCoilAckLane` + `CoilAckSequencer` — disseminate coil hard-acks across the population (§8); then multi-coil quorum: `coilQuorum > 1`, multiple coil peers through stage1 (validates the spine) |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
 | Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified; rule-based-regime handover spawns `DisputeActor` + `EvacuationActor` on coil the same as on head |
@@ -547,6 +625,14 @@ each must be honored even though none is owned by a single section:
   the `PeerId` tag changes the on-disk ack codec. The
   `persistence-and-crash-recovery.md` store keys for ack records must track the
   new shape; fold into the deferred coil-persistence §11.
+- **`CoilAckSequencer` CFs (Pc4 → recovery).** The relay path (§8) adds three
+  new column families to the deferred coil-persistence §11: the per-coil
+  receive log (`hardAckNumber → HardAck`, one per coil), the published
+  `HubCoilAckLane` (`seqNum → HardAck`), and the sequencer index
+  (`coilPeerId → hardAckNumber`). The index is the recovery key — it lets
+  `CoilAckSequencer` resume without re-assigning seqNums to already-sequenced
+  acks. (Payload is duplicated across the receive log and the lane for now; a
+  later optimization stores it once with two index maps.)
 - **Logback sync (Pc2).** Any new coil Tracer route (e.g. a
   `CoilMultisigRegimeManager` route) must be added to **all three**
   `logback.xml` configs (root main + test, integration test), per the repo

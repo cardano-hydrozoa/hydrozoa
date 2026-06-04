@@ -30,15 +30,19 @@ case class MultiNodeConfig private (
     lazy val nodeConfigs: Map[HeadPeerNumber, NodeConfig] =
         nodePrivateConfigs.map((n, pc) =>
             n ->
-                NodeConfig(
-                  headConfig = headConfig,
-                  ownHeadWallet = pc.ownHeadWallet,
-                  nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
-                  nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
-                  pc.hydrozoaHost,
-                  pc.hydrozoaPort,
-                  pc.blockfrostApiKey
-                ).get
+                NodeConfig
+                    .mkHeadConfig(
+                      headConfig = headConfig,
+                      // This fixture builds head nodes; mkHeadConfig derives the head identity from the
+                      // wallet's key.
+                      ownHeadWallet = pc.ownWallet,
+                      nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
+                      nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
+                      pc.hydrozoaHost,
+                      pc.hydrozoaPort,
+                      pc.blockfrostApiKey
+                    )
+                    .get
         )
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
@@ -48,7 +52,7 @@ case class MultiNodeConfig private (
 
     def mkVKeyWitnesses(tx: Transaction): NonEmptyList[VKeyWitness] =
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkVKeyWitness(tx)).toList
+          nodePrivateConfigs.map(_._2.ownWallet.mkVKeyWitness(tx)).toList
         )
 
     def multisignHeader(
@@ -56,19 +60,19 @@ case class MultiNodeConfig private (
     ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkHeaderSignature(serialized)).toList
+          nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
         )
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
-    ).ownHeadWallet.exportVerificationKey.shelleyAddress()(using headConfig)
+    ).ownWallet.exportVerificationKey.shelleyAddress()(using headConfig)
 
     def addrKeyHashOf(peerNumber: HeadPeerNumber): AddrKeyHash =
-        AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey))
+        AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownWallet.exportVerificationKey))
 
     def signTxAs(peerNumber: HeadPeerNumber): Transaction => Transaction = nodeConfigs(
       peerNumber
-    ).ownHeadWallet.signTx
+    ).ownWallet.signTx
 
     // TODO: are we fine with having that here? Better place?
     def pickPeer: Gen[HeadPeerNumber] =
@@ -151,7 +155,7 @@ object MultiNodeConfig {
                             noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
 
                         } yield peerId._1 -> NodePrivateConfig(
-                          ownHeadPeerPrivate = ohpp,
+                          ownPeerPrivate = ohpp,
                           // Re-using the same wallet for now, don't know if this will work
                           nodeOperationEvacuationConfig = noec,
                           nodeOperationMultisigConfig = nomc,

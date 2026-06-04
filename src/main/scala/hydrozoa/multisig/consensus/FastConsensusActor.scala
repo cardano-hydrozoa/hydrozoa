@@ -6,11 +6,11 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.*
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import scala.util.control.NonFatal
@@ -46,7 +46,7 @@ import scalus.uplc.builtin.{ByteString, platform}
   * soft-confirmed.
   */
 object FastConsensusActor:
-    type Config = OwnHeadPeerPublic.Section & HeadPeers.Section
+    type Config = OwnPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -195,7 +195,7 @@ class FastConsensusActor(
     }
 
     private def preStartLocal: IO[Unit] = for {
-        _ <- Tracer.routeLocal(s"FastConsensusActor.${config.ownHeadPeerNum}")
+        _ <- Tracer.routeLocal(s"FastConsensusActor.${config.ownPeerLabel}")
         _ <- initializeConnections
     } yield ()
 
@@ -210,7 +210,7 @@ class FastConsensusActor(
             conn <- getConnections
             _ <- Tracer.debug(
               s"handleAck: block=${ack.blockNum} peer=${ack.peerNum}" +
-                  (if ack.peerNum == config.ownHeadPeerNum then " (own)" else "")
+                  (if config.ownPeerId == PeerId.Head(ack.peerNum) then " (own)" else "")
             )
             _ <- conn.tracer.ack(ack.blockNum: Int, ack.peerNum: Int, "soft")
             // Validate peer
@@ -220,14 +220,14 @@ class FastConsensusActor(
             _ <- withCell(ack.blockNum)(_.acceptAck(ack, vk))
             // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
             // if the previous block's cell still exists, to maintain the spec ordering).
-            _ <- IO.whenA(ack.peerNum == config.ownHeadPeerNum)(scheduleOwnAck(ack))
+            _ <- IO.whenA(config.ownPeerId == PeerId.Head(ack.peerNum))(scheduleOwnAck(ack))
         } yield ())
 
     /** Decide whether to broadcast a fresh own ack immediately or postpone it onto the previous
       * block's cell. See the [[FastConsensusActor]] class-level doc for postponed-ack semantics.
       */
     private def scheduleOwnAck(ack: SoftAck): IO[Unit] = for {
-        _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
+        _ <- IO.raiseWhen(config.ownPeerId != PeerId.Head(ack.peerNum))(Error.AlienAckAnnouncement)
         state <- stateRef.get
         prevBlockNum = ack.blockNum match {
             case n if (n: Int) == 0 => None

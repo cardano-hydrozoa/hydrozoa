@@ -4,7 +4,7 @@ import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.*
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
@@ -21,7 +21,7 @@ import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlut
 import scalus.uplc.builtin.Data.toData
 
 type VoteOutputConfig = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
-    HasTokenNames & OwnHeadPeerPrivate.Section
+    HasTokenNames & OwnPeerPrivate.Section
 
 final case class VoteUtxo[Status <: VoteStatus](
     input: TransactionInput,
@@ -31,7 +31,7 @@ final case class VoteUtxo[Status <: VoteStatus](
         Utxo(input, voteOutput.toOutput)
 
     def spend(redeemer: DisputeRedeemer)(using config: VoteOutputConfig): Spend = {
-        val expectedSigner = ExpectedSigner(config.ownHeadWallet.exportVerificationKey.addrKeyHash)
+        val expectedSigner = ExpectedSigner(config.ownWallet.exportVerificationKey.addrKeyHash)
         Spend(
           this.toUtxo,
           ThreeArgumentPlutusScriptWitness(

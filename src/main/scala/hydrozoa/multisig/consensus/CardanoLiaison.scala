@@ -9,7 +9,7 @@ import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
@@ -59,7 +59,7 @@ object CardanoLiaison:
         IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal) {})
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
-        NodeOperationMultisigConfig.Section & OwnHeadPeerPublic.Section
+        NodeOperationMultisigConfig.Section & OwnPeerPublic.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle
@@ -267,7 +267,7 @@ trait CardanoLiaison(
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.routeLocal(s"CardanoLiaison.${config.ownHeadPeerNum}")
+            _ <- Tracer.routeLocal(s"CardanoLiaison.${config.ownPeerLabel}")
             _ <- initializeConnections
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout

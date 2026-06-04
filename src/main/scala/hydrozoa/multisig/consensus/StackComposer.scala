@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
@@ -60,7 +60,7 @@ final case class StackComposer(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"StackComposer.${config.ownHeadPeerNum}")
+                _ <- Tracer.routeLocal(s"StackComposer.${config.ownPeerLabel}")
                 _ <- initializeConnections
                 _ <- bootstrapInitialStack
                 _ <- Tracer.info("StackComposer started.")
@@ -146,8 +146,7 @@ final case class StackComposer(
     private def tryProgress: IO[Unit] = state.get.flatMap { s =>
         val nextStackNum = s.lastClosedStackNum.increment
         if !s.previousStackHardConfirmed then IO.unit
-        else if config.ownHeadPeerId.isSlowLeader(nextStackNum) then
-            tryCloseAsLeader(s, nextStackNum)
+        else if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
         else tryCloseAsFollower(s, nextStackNum)
     }
 
@@ -298,7 +297,7 @@ final case class StackComposer(
     ): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
             val stackNum = unsigned.brief.stackNum
-            val peer: PeerId = PeerId.Head(config.ownHeadPeerNum)
+            val peer: PeerId = config.ownPeerId
 
             val (acks, newNextOwnHardAckNum) = unsigned.effects match {
                 case i: StackEffects.Unsigned.Initial =>
@@ -365,7 +364,7 @@ final case class StackComposer(
       * inverse of [[HardAck.Round1Payload.Regular.asSlots]]).
       */
     private object EffectSigner {
-        private val wallet = config.ownHeadWallet
+        private val wallet = config.ownWallet
 
         /** Stack 0 round 1: sign the locally-derived fallback tx. */
         def mkInitialRound1Signatures(
@@ -558,7 +557,7 @@ final case class StackComposer(
 object StackComposer {
     type Handle = ActorRef[IO, Request]
 
-    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle,

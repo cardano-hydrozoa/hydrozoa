@@ -4,12 +4,12 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import io.circe.*
 import io.circe.generic.semiauto.*
 
 final case class NodePrivateConfig(
-    override val ownHeadPeerPrivate: OwnHeadPeerPrivate,
+    override val ownPeerPrivate: OwnPeerPrivate,
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
     override val hydrozoaHost: String,
@@ -23,10 +23,10 @@ object NodePrivateConfig {
     trait Section
         extends NodeOperationMultisigConfig.Section,
           NodeOperationEvacuationConfig.Section,
-          OwnHeadPeerPrivate.Section {
+          OwnPeerPrivate.Section {
         def nodePrivateConfig: NodePrivateConfig
 
-        def ownHeadPeerPrivate: OwnHeadPeerPrivate = nodePrivateConfig.ownHeadPeerPrivate
+        def ownPeerPrivate: OwnPeerPrivate = nodePrivateConfig.ownPeerPrivate
 
         def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig =
             nodePrivateConfig.nodeOperationEvacuationConfig

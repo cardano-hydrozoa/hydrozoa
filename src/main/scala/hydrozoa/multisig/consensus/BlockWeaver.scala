@@ -7,7 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{Logging, Tracer}
@@ -28,7 +28,7 @@ final case class BlockWeaver(
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
-    private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
+    private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownPeerLabel}")
     given IOLocal[Tracer] = tracerLocal
 
     override def preStart: IO[Unit] = for {
@@ -52,7 +52,7 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"BlockWeaver.${config.ownHeadPeerNum}")
+                _ <- Tracer.routeLocal(s"BlockWeaver.${config.ownPeerLabel}")
                 connections <- initializeConnections
                 startingState <- State.start(config, connections, logger)
                 _ <- become(startingState)
@@ -75,7 +75,7 @@ final case class BlockWeaver(
 }
 
 object BlockWeaver {
-    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
+    type Config = CardanoNetwork.Section & OwnPeerPublic.Section &
         NodeOperationMultisigConfig.Section
 
     final case class Connections private[BlockWeaver] (
@@ -271,7 +271,7 @@ object BlockWeaver {
             override def act(config: Config): IO[Some[NextReactiveState]] = for {
                 _ <- logStateTransition
                 newState <-
-                    if config.ownHeadPeerId.isLeader(nextBlockNumber)
+                    if config.canLeadFast(nextBlockNumber)
                     then {
                         Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act(config)
                     } else {

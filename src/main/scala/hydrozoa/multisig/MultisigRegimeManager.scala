@@ -14,7 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.peer.{PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import scala.concurrent.duration.DurationInt
@@ -80,11 +80,10 @@ trait MultisigRegimeManager(
     def preStartLocal: IO[Unit] =
         for {
             _ <- Tracer.routeLocal("MultisigRegimeManager")
-            _ <- Tracer.updateLocalCtx("peer" -> s"${config.ownHeadPeerNum: Int}")
+            _ <- Tracer.updateLocalCtx("peer" -> config.ownPeerLabel)
             _ <- Tracer.info("Starting multisig actors...")
 
-            // TODO: should be _peer/peerId_
-            nodeId = s"head:${config.ownHeadPeerNum: Int}"
+            nodeId = s"head:${config.ownPeerIndex}"
             tracer <- ProtocolTracer.jsonLines(nodeId)
 
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
@@ -127,15 +126,36 @@ trait MultisigRegimeManager(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
 
-            localPeerLiaisons <-
+            // One peer liaison toward every other head peer (the head mesh).
+            headPeerLiaisons <-
                 config.headPeerIds
-                    .filterNot(_ == config.ownHeadPeerId)
+                    .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
-                        for {
-                            localPeerLiaison <-
-                                context.actorOf(PeerLiaison(config, pid, pendingConnections))
-                        } yield localPeerLiaison
+                        context.actorOf(
+                          PeerLiaison(config, RemotePeer.Head(pid), pendingConnections)
+                        )
                     )
+
+            ownHeadNum = config.ownPeerId match {
+                case PeerId.Head(n) => n
+                case PeerId.Coil(_) =>
+                    throw new IllegalStateException(
+                      "MultisigRegimeManager runs only on head peers"
+                    )
+            }
+
+            // If this head is a hub, also one peer liaison toward each coil it hubs (§8). The coil's
+            // hard-acks arrive on these links; non-hub heads spawn none.
+            coilPeerLiaisons <-
+                config
+                    .hubbedCoilNums(ownHeadNum)
+                    .traverse(coilNum =>
+                        context.actorOf(
+                          PeerLiaison(config, RemotePeer.Coil(coilNum), pendingConnections)
+                        )
+                    )
+
+            localPeerLiaisons = headPeerLiaisons ++ coilPeerLiaisons
 
             connections = MultisigRegimeManager.Connections(
               blockWeaver = blockWeaver,
@@ -198,7 +218,7 @@ object MultisigRegimeManager {
         stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
-        remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
+        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
         tracer: ProtocolTracer = ProtocolTracer.noop,
     )
 

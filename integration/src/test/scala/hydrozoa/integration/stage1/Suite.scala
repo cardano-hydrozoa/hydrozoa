@@ -492,7 +492,7 @@ case class Suite(
 
             // Protocol tracer — runId in node field lets us detect interleaved traces
             tracerResult <- ProtocolTracer.collecting(
-              s"head:${nodeConfig.ownHeadPeerNum: Int}/${runId}"
+              s"head:${nodeConfig.ownPeerIndex}/${runId}"
             )
             (tracer, traceRef) = tracerResult
 
@@ -500,7 +500,7 @@ case class Suite(
             blockWeaver <- system.actorOf(
               new BlockWeaverMock(
                 tracer,
-                nodeConfig.ownHeadPeerNum: Int,
+                nodeConfig.ownPeerIndex,
                 nodeConfig.headPeers.nHeadPeers: Int
               )
             )

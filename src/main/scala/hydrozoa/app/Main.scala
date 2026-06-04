@@ -204,7 +204,7 @@ object Main extends IOApp {
               logger.info("Hydrozoa node shut down, running janitor...") *>
                   Janitor.cleanUp(
                     backend = backend,
-                    headPeerWallet = nodeConfig.ownHeadWallet,
+                    peerWallet = nodeConfig.ownWallet,
                     config = nodeConfig.headConfig,
                     faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
                     tokenRecoveryAddress = env.tokenRecoveryAddress

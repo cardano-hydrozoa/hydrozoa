@@ -407,7 +407,7 @@ object CommandGenerators:
             )
 
             // Get verification key for peer 0, though it's not needed for EUTXO ledger
-            userVk = config.nodeConfigs(HeadPeerNumber.zero).ownHeadWallet.exportVerificationKey
+            userVk = config.nodeConfigs(HeadPeerNumber.zero).ownWallet.exportVerificationKey
 
         } yield L2TxCommand(
           request = UserRequestWithId.TransactionRequest(
@@ -572,7 +572,7 @@ object CommandGenerators:
                                         // Get verification key for peer 0
                                         userVk = multiNodeConfig
                                             .nodeConfigs(HeadPeerNumber.zero)
-                                            .ownHeadWallet
+                                            .ownWallet
                                             .exportVerificationKey
 
                                     } yield Some(

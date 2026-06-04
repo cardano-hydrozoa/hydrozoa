@@ -34,7 +34,7 @@ import scalus.uplc.builtin.Data.fromData
 
 // TODO: relocate
 extension (tx: Transaction) {
-    def selfSigned(using config: Config): Transaction = config.ownHeadWallet.signTx(tx)
+    def selfSigned(using config: Config): Transaction = config.ownWallet.signTx(tx)
 }
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
@@ -86,7 +86,7 @@ final case class DisputeActor(
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] =
         for {
             collateralCandidates <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(config.ownHeadWallet.exportVerificationKey.shelleyAddress())
+              cardanoBackend.utxosAt(config.ownWallet.exportVerificationKey.shelleyAddress())
             )
             collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                 to.value.isOnlyAda
@@ -262,7 +262,7 @@ final case class DisputeActor(
 
             votePartition = voteUtxos.partition {
                 case VoteUtxo(_, VoteOutput(_, _, _, _, VoteStatus.AwaitingVote(peerPkh))) =>
-                    val ownPkh: PubKeyHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash
+                    val ownPkh: PubKeyHash = config.ownWallet.exportVerificationKey.pubKeyHash
                     peerPkh == ownPkh
                 case _ => false
             }

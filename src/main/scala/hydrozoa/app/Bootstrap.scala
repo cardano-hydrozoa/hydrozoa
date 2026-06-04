@@ -26,7 +26,7 @@ import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
@@ -96,7 +96,7 @@ object Bootstrap:
     ): IO[NodeConfig] = for {
         _ <- IO.pure(())
 
-        ownHeadWallet = HeadPeerWallet.scalusWallet(HeadPeerNumber.zero, vKey, sKey)
+        ownHeadWallet = PeerWallet.scalusWallet(vKey, sKey)
         startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
         blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
 
@@ -304,19 +304,21 @@ object Bootstrap:
                 )
         }
     } yield {
-        NodeConfig(
-          headConfig = headConfig,
-          ownHeadWallet = ownHeadWallet,
-          nodeOperationEvacuationConfig = NodeOperationEvacuationConfig(
-            evacuationBotPollingPeriod = 1.minute,
-            // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
-            evacuationWallet = ownHeadWallet
-          ),
-          hydrozoaHost = ???,
-          hydrozoaPort = ???,
-          blockfrostApiKey = ???,
-          nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
-        ).get
+        NodeConfig
+            .mkHeadConfig(
+              headConfig = headConfig,
+              ownHeadWallet = ownHeadWallet,
+              nodeOperationEvacuationConfig = NodeOperationEvacuationConfig(
+                evacuationBotPollingPeriod = 1.minute,
+                // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
+                evacuationWallet = ownHeadWallet
+              ),
+              hydrozoaHost = ???,
+              hydrozoaPort = ???,
+              blockfrostApiKey = ???,
+              nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
+            )
+            .get
     }
 
     // TODO: remove once we have a proper way of doing things
@@ -533,8 +535,7 @@ object Migrate extends IOApp:
                               _.transaction
                             )
 
-                        wallet = HeadPeerWallet(
-                          HeadPeerNumber.zero,
+                        wallet = PeerWallet(
                           WalletModule.Scalus,
                           env.verificationKey,
                           env.signingKey

@@ -584,6 +584,23 @@ object HeadConfig {
             final def coilPeerVKey(p: CoilPeerNumber): Option[VerificationKey] =
                 coilPeerVKeys.lift(p.convert)
 
+            /** The hub head peer for the given coil — the single head peer the coil links to
+              * (`coilPeers[…].hub`). `None` if the coil number is out of range.
+              */
+            final def coilHub(p: CoilPeerNumber): Option[HeadPeerNumber] =
+                coilPeerVKey(p).flatMap(vk => coilPeers.find(_.vkey == vk).map(_.hub))
+
+            /** The coil peers hubbed by the given head peer, by [[CoilPeerNumber]]. A hub head peer
+              * spawns one peer liaison toward each of these coils.
+              */
+            final def hubbedCoilNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
+                coilPeers.filter(_.hub == headNum).flatMap { c =>
+                    coilPeerVKeys.indexOf(c.vkey) match {
+                        case -1 => None
+                        case i  => Some(CoilPeerNumber(i))
+                    }
+                }
+
             /** The head multisig native script including the coil threshold branch — all head peers
               * plus `MOf(coilQuorum, coilPeerVKeys)`. Overrides the head-only derivation on
               * [[HeadPeers.Section]] so every `headMultisigScript` / `headMultisigAddress` call

@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -22,9 +22,9 @@ class CodecsTest extends AnyFunSuite {
 
     given CardanoNetwork.Section = CardanoNetwork.Preprod
 
-    // A single-peer fixture suffices: `GetMsgBatch.initial` only needs a `HeadPeerId` to compute
-    // the sparse-lane initial cursors via the leader-schedule helpers.
-    private val testRemoteId: HeadPeerId = HeadPeerId(0, 1)
+    // A single-peer fixture suffices: `GetMsgBatch.initial` only needs the remote's leader schedule
+    // to compute the sparse-lane initial cursors.
+    private val testRemoteId: RemotePeer = RemotePeer.Head(HeadPeerId(0, 1))
 
     private def roundTrip(frame: Frame): Frame = {
         val text = Frame.encode(frame)

@@ -6,7 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
@@ -90,7 +90,7 @@ final case class SlowConsensusActor(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"SlowConsensusActor.${config.ownHeadPeerNum}")
+                _ <- Tracer.routeLocal(s"SlowConsensusActor.${config.ownPeerLabel}")
                 _ <- initializeConnections
                 _ <- Tracer.info("SlowConsensusActor started.")
             } yield ()
@@ -112,7 +112,7 @@ final case class SlowConsensusActor(
     private def handleStackHandoff(h: StackHandoff): IO[Unit] =
         Tracer.scopedCtx("stackNum" -> h.unsigned.stackNum.toString) {
             val stackNum = h.unsigned.stackNum
-            val ownPeer: PeerId = PeerId.Head(config.ownHeadPeerNum)
+            val ownPeer: PeerId = config.ownPeerId
 
             h.unsigned.effects match {
                 case _: StackEffects.Unsigned.Initial =>
@@ -304,7 +304,7 @@ final case class SlowConsensusActor(
         _ <- Tracer.info(
           s"stack $stackNum round-1 confirmed; releasing own round-2 ack"
         )
-        ownPeer = PeerId.Head(config.ownHeadPeerNum)
+        ownPeer = config.ownPeerId
         ownR2Payload <- round2PayloadOf(c.ownRound2)
         round2 = c.round2Stash.updated(ownPeer, ownR2Payload)
         _ <- putCell(
@@ -420,7 +420,7 @@ object SlowConsensusActor {
 
     type Handle = ActorRef[IO, Request]
 
-    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Section & OwnPeerPublic.Section
 
     final case class Connections(
         stackComposer: StackComposer.Handle,

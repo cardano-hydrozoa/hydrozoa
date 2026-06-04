@@ -128,7 +128,7 @@ object DisputeActorTestHelpers {
 
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
-                env.nodePrivateConfigs.head._2.ownHeadWallet.exportVerificationKey.addrKeyHash
+                env.nodePrivateConfigs.head._2.ownWallet.exportVerificationKey.addrKeyHash
               )(using env.headConfig)
                   .label("collateral utxo")
             )
@@ -271,7 +271,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         ownWallet =
-            env.nodePrivateConfigs.head._2.ownHeadWallet
+            env.nodePrivateConfigs.head._2.ownWallet
 
         // One vote awaiting a vote with our pkh
         ownVoteUtxo <- mkVoteUtxo(
@@ -287,9 +287,9 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           3,
           VoteStatus.AwaitingVote(
             peer = env.nodePrivateConfigs.values
-                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+                .filter(_.ownWallet.exportVerificationKey != ownWallet.exportVerificationKey)
                 .head
-                .ownHeadWallet
+                .ownWallet
                 .exportVerificationKey
                 .pubKeyHash
           ),
@@ -374,7 +374,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         ownWallet =
-            env.nodePrivateConfigs.head._2.ownHeadWallet
+            env.nodePrivateConfigs.head._2.ownWallet
 
         // NOTE: This can conflict with the other txids and cause strange failures. We should probably
         // Keep a running "ResolvedUtxos" in the TestM state to avoid this.
@@ -393,9 +393,9 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           0,
           VoteStatus.AwaitingVote(
             peer = env.nodePrivateConfigs.values
-                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+                .filter(_.ownWallet.exportVerificationKey != ownWallet.exportVerificationKey)
                 .head
-                .ownHeadWallet
+                .ownWallet
                 .exportVerificationKey
                 .pubKeyHash
           ),

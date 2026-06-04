@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer}
@@ -268,10 +268,11 @@ case class Stage4Suite(
                     peers
                         .filterNot(_ == peerNum)
                         .traverse { remotePeerNum =>
-                            val remotePeerId =
-                                multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
+                            val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
                             system
-                                .actorOf(PeerLiaison(nodeConfig, remotePeerId, pending))
+                                .actorOf(
+                                  PeerLiaison(nodeConfig, RemotePeer.Head(remotePeerId), pending)
+                                )
                                 .map(remotePeerId -> _)
                         }
                         .map(liaisons => peerNum -> liaisons.toMap)
@@ -287,15 +288,14 @@ case class Stage4Suite(
             transportSetup <- transportMode match {
                 case TransportMode.Direct =>
                     val remoteLiaisonsByPeer
-                        : Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]] =
+                        : Map[HeadPeerNumber, Map[PeerId, PeerLiaison.Handle]] =
                         peers.map { peerNum =>
-                            val ownPeerId = multiNodeConfig.nodeConfigs(peerNum).ownHeadPeerId
+                            val ownPeerId = headPeerId(multiNodeConfig, peerNum)
                             peerNum -> peers
                                 .filterNot(_ == peerNum)
                                 .map { remotePeerNum =>
-                                    val remotePeerId =
-                                        multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
-                                    remotePeerId -> peerLiaisonMap(remotePeerNum)(ownPeerId)
+                                    PeerId.Head(remotePeerNum) ->
+                                        peerLiaisonMap(remotePeerNum)(ownPeerId)
                                 }
                                 .toMap
                         }.toMap
@@ -404,6 +404,15 @@ case class Stage4Suite(
       *   - the remote-handle map (proxy actors keyed by remote peer id), per peer
       *   - a cleanup IO that releases all transports on shutdown
       */
+    /** This peer's [[HeadPeerId]] — derived from its number + the head-set size, since `NodeConfig`
+      * no longer exposes a head-specific id.
+      */
+    private def headPeerId(
+        multiNodeConfig: MultiNodeConfig,
+        peerNum: HeadPeerNumber
+    ): HeadPeerId =
+        HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
+
     private def setupWebSocketTransports(
         multiNodeConfig: MultiNodeConfig,
         peers: Seq[HeadPeerNumber],
@@ -413,7 +422,7 @@ case class Stage4Suite(
     )(using
         CardanoNetwork.Section
     ): IO[
-      (Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]], IO[Unit])
+      (Map[HeadPeerNumber, Map[PeerId, PeerLiaison.Handle]], IO[Unit])
     ] = {
         // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
         // dev machines); peers dial each other at the same address+port.
@@ -428,12 +437,12 @@ case class Stage4Suite(
         // Allocate transports per peer.
         for {
             transportsAndReleases <- peers.toList.traverse { ownPeerNum =>
-                val ownPeerId = multiNodeConfig.nodeConfigs(ownPeerNum).ownHeadPeerId
+                val ownPeerId = headPeerId(multiNodeConfig, ownPeerNum)
                 val (bindH, bindP) = addrFor(ownPeerNum)
                 val remotes: Map[HeadPeerId, Uri] = peers
                     .filterNot(_ == ownPeerNum)
                     .map { rpn =>
-                        multiNodeConfig.nodeConfigs(rpn).ownHeadPeerId -> uriFor(rpn)
+                        headPeerId(multiNodeConfig, rpn) -> uriFor(rpn)
                     }
                     .toMap
                 PeerWsTransport
@@ -462,12 +471,11 @@ case class Stage4Suite(
                         .filterNot(_ == ownPeerNum)
                         .toList
                         .traverse { remotePeerNum =>
-                            val remotePeerId =
-                                multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
+                            val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
                             for {
                                 proxy <- RemotePeerProxy(remotePeerId, transport)
                                 ref <- system.actorOf(proxy)
-                            } yield remotePeerId -> ref
+                            } yield (PeerId.Head(remotePeerNum): PeerId) -> ref
                         }
                         .map(ownPeerNum -> _.toMap)
                 }

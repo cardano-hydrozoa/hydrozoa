@@ -141,7 +141,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)
 
-        addr = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
+        addr = config.nodeConfigs.head._2.ownWallet.exportVerificationKey
             .shelleyAddress()(using config.headConfig)
 
         feeUtxo <-

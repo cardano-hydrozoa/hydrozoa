@@ -6,7 +6,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
@@ -43,7 +43,7 @@ object ResolutionTx {
 
 private object ResolutionTxOps {
     type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
+        FallbackContingency.Section & HasTokenNames & OwnPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:

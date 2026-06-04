@@ -5,12 +5,13 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
 import hydrozoa.multisig.consensus.PeerLiaison.Handle
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import org.typelevel.log4cats.Logger
 
@@ -30,7 +31,7 @@ trait EventSequencer(
     private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
     private val state = State()
 
-    private given logger: Logger[IO] = Logging.loggerIO(s"EventSequencer.${config.ownHeadPeerNum}")
+    private given logger: Logger[IO] = Logging.loggerIO(s"EventSequencer.${config.ownPeerLabel}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -73,7 +74,15 @@ trait EventSequencer(
                   for {
                       conn <- getConnections
                       newNum <- state.nextLedgerEventNum()
-                      newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                      // The user-request surface is head-only, so the author is always a head peer.
+                      ownHeadPeerNum <- config.ownPeerId match {
+                          case PeerId.Head(n) => IO.pure(n)
+                          case PeerId.Coil(_) =>
+                              IO.raiseError(
+                                new IllegalStateException("EventSequencer runs only on a head peer")
+                              )
+                      }
+                      newId = RequestId(ownHeadPeerNum, newNum)
                       newRequestWithId = UserRequestWithId(
                         userRequest = userRequest,
                         requestId = newId
@@ -108,7 +117,7 @@ object EventSequencer {
     ): IO[EventSequencer] =
         IO(new EventSequencer(config, pendingConnections) {})
 
-    type Config = OwnHeadPeerPublic.Section
+    type Config = OwnPeerPublic.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
