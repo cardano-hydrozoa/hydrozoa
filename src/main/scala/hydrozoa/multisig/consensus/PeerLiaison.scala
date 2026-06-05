@@ -8,7 +8,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HubCoilAck, HubCoilAckNumber, SoftAck, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HubCoilAck, HubCoilAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.RemotePeer.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
@@ -143,6 +143,7 @@ object PeerLiaison {
             case HardAckPeerMismatch(expected: PeerId, received: PeerId)
             case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
             case HubCoilAckNumMismatch(expected: HubCoilAckNumber, received: HubCoilAckNumber)
+            case RelayedAckNumMismatch(expected: RelayedAckNumber, received: RelayedAckNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)
 
@@ -163,6 +164,8 @@ object PeerLiaison {
                     s"HardAckNumMismatch(expected=$e, received=$r)"
                 case HubCoilAckNumMismatch(e, r) =>
                     s"HubCoilAckNumMismatch(expected=$e, received=$r)"
+                case RelayedAckNumMismatch(e, r) =>
+                    s"RelayedAckNumMismatch(expected=$e, received=$r)"
                 case RequestsHeadMismatch(e, r) =>
                     s"RequestsHeadMismatch(expected=$e, received=$r)"
                 case RequestsNotConsecutive(p, n) =>
@@ -206,7 +209,8 @@ object PeerLiaison {
 
     object Request {
         type RemoteBroadcast =
-            SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck | HubCoilAck
+            SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck | HubCoilAck |
+                RelayedAck
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of acks,
           * blocks, stack briefs, hard-acks, and user requests originating from the remote peer.
@@ -307,6 +311,7 @@ object PeerLiaison {
             stackNum: StackNumber,
             hardAckNum: HardAckNumber,
             hubCoilAckNum: HubCoilAckNumber,
+            relayedAckNum: RelayedAckNumber,
             requestNum: RequestNumber
         )
 
@@ -330,6 +335,7 @@ object PeerLiaison {
                   remotePeer.nextSlowLeaderStack(StackNumber.zero).getOrElse(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
               hubCoilAckNum = HubCoilAckNumber.zero,
+              relayedAckNum = RelayedAckNumber.zero,
               requestNum = RequestNumber.zero
             )
         }
@@ -362,6 +368,7 @@ object PeerLiaison {
             stackBrief: Option[StackBrief],
             hardAck: Option[HardAck],
             hubCoilAck: Option[HubCoilAck],
+            relayedAck: Option[RelayedAck],
             requests: List[UserRequestWithId]
         )
     }

@@ -4,8 +4,8 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubCoilAckNumber, SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubCoilAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckId}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -52,6 +52,7 @@ class CodecsTest extends AnyFunSuite {
           stackNum = StackNumber(4),
           hardAckNum = HardAckNumber(8),
           hubCoilAckNum = HubCoilAckNumber(5),
+          relayedAckNum = RelayedAckNumber(17),
           requestNum = RequestNumber(7),
         )
         val frame = Frame.Msg(gmb)
@@ -63,6 +64,7 @@ class CodecsTest extends AnyFunSuite {
                 assert(decoded.stackNum == gmb.stackNum)
                 assert(decoded.hardAckNum == gmb.hardAckNum)
                 assert(decoded.hubCoilAckNum == gmb.hubCoilAckNum)
+                assert(decoded.relayedAckNum == gmb.relayedAckNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
         }
@@ -76,6 +78,7 @@ class CodecsTest extends AnyFunSuite {
           stackBrief = None,
           hardAck = None,
           hubCoilAck = None,
+          relayedAck = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -107,6 +110,7 @@ class CodecsTest extends AnyFunSuite {
           stackBrief = None,
           hardAck = None,
           hubCoilAck = None,
+          relayedAck = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -160,6 +164,7 @@ class CodecsTest extends AnyFunSuite {
               )
             ),
             hubCoilAck = None,
+            relayedAck = None,
             requests = Nil,
           )
         )
@@ -263,9 +268,65 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
+    test("Frame.Msg(NewMsgBatch with RelayedAck.Hard) round-trips") {
+        assertJsonStable(
+          Frame.Msg(
+            NewMsgBatch(
+              batchNum = PeerLiaison.Batch.Number(7),
+              softAck = None,
+              blockBrief = None,
+              stackBrief = None,
+              hardAck = None,
+              hubCoilAck = None,
+              relayedAck = Some(
+                RelayedAck.Hard(
+                  RelayedAckNumber(3),
+                  HardAck(
+                    ackId = HardAckId(PeerId.Coil(CoilPeerNumber(1)), HardAckNumber(2)),
+                    stackNum = StackNumber(4),
+                    payload = HardAck.Round1Payload.Initial(fallbackSig = sig(5, 6))
+                  )
+                )
+              ),
+              requests = Nil,
+            )
+          )
+        )
+    }
+
+    test("Frame.Msg(NewMsgBatch with RelayedAck.Soft) round-trips") {
+        assertJsonStable(
+          Frame.Msg(
+            NewMsgBatch(
+              batchNum = PeerLiaison.Batch.Number(8),
+              softAck = None,
+              blockBrief = None,
+              stackBrief = None,
+              hardAck = None,
+              hubCoilAck = None,
+              relayedAck = Some(
+                RelayedAck.Soft(
+                  RelayedAckNumber(4),
+                  SoftAck(
+                    ackId = SoftAckId(
+                      HeadPeerNumber(1),
+                      hydrozoa.multisig.consensus.ack.SoftAckNumber(9)
+                    ),
+                    blockNum = BlockNumber(9),
+                    headerSignature = BlockHeader.Minor.HeaderSignature(IArray[Byte](1.toByte)),
+                    finalizationRequested = false,
+                  )
+                )
+              ),
+              requests = Nil,
+            )
+          )
+        )
+    }
+
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
         val gmb = GetMsgBatch.initial(testRemoteId)
-        val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, None, Nil)
+        val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, None, None, Nil)
 
         assert(Frame.fromWire(gmb).contains(gmb))
         assert(Frame.fromWire(nmb).contains(nmb))

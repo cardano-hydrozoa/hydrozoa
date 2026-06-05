@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubCoilAck, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubCoilAck, RelayedAck, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
@@ -548,6 +548,12 @@ object Codecs {
     // ---- HubCoilAck ----
 
     private given Codec[HubCoilAck] = deriveCodec[HubCoilAck]
+
+    // ---- RelayedAck (sealed Soft | Hard) ----
+
+    private given Codec[RelayedAck.Soft] = deriveCodec[RelayedAck.Soft]
+    private given Codec[RelayedAck.Hard] = deriveCodec[RelayedAck.Hard]
+    private given Codec[RelayedAck] = deriveCodec[RelayedAck]
 
     // ---- GetMsgBatch / NewMsgBatch ----
 
