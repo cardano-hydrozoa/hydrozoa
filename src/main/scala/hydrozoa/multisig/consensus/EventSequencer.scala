@@ -10,7 +10,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
-import hydrozoa.multisig.consensus.PeerLiaison.Handle
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Handle
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import org.typelevel.log4cats.Logger
@@ -20,7 +20,7 @@ import org.typelevel.log4cats.Logger
   * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
   * [[RequestId]]s.
   *
-  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
+  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaisonHeadToHead]]s.
   *
   * TODO: rename to RequestSequencer (and EventSequencer companion object accordingly).
   */
@@ -121,7 +121,7 @@ object EventSequencer {
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        headPeerLiaisons: List[PeerLiaison.Handle]
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle]
     )
 
     type Handle = ActorRef[IO, Request]

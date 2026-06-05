@@ -58,7 +58,7 @@ trait MultisigRegimeManager(
                     Tracer.warn("Terminated consensus actor")
                 case Actors.JointLedger =>
                     Tracer.warn("Terminated joint ledger actor")
-                case Actors.PeerLiaison =>
+                case Actors.PeerLiaisonHeadToHead =>
                     Tracer.warn("Terminated peer liaison actor")
                 case Actors.EventSequencer =>
                     Tracer.warn("Terminated event sequencer actor")
@@ -93,7 +93,7 @@ trait MultisigRegimeManager(
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
-            // PeerLiaison, …) keep direct refs.
+            // PeerLiaisonHeadToHead, …) keep direct refs.
             blockWeaverLimiter <- context.actorOf(
               Limiter[BlockWeaver.Request](blockWeaver, config, tracerLocal)
             )
@@ -132,7 +132,7 @@ trait MultisigRegimeManager(
                     .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
                         context.actorOf(
-                          PeerLiaison(config, pid, pendingConnections)
+                          PeerLiaisonHeadToHead(config, pid, pendingConnections)
                         )
                     )
 
@@ -160,7 +160,7 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
-                      HeadPeerToCoilLiaison(config, coilNum, pendingConnections)
+                      PeerLiaisonHeadToCoil(config, coilNum, pendingConnections)
                     )
                 )
 
@@ -191,7 +191,7 @@ trait MultisigRegimeManager(
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
-                context.watch(r, TerminatedChild(Actors.PeerLiaison, r))
+                context.watch(r, TerminatedChild(Actors.PeerLiaisonHeadToHead, r))
             )
             _ <- context.watch(
               cardanoLiaison,
@@ -230,17 +230,17 @@ object MultisigRegimeManager {
         stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         /** Head-peer-mesh liaisons (one per other head peer). */
-        headPeerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
         /** In-process map from a remote peer's id to the local ActorRef of its counterpart liaison.
           * Only the in-process harness (stage4 / unit tests) populates it; in a real deployment the
           * counterpart is another process reached over the transport, so it stays empty.
           */
-        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle] = Map.empty,
+        remotePeerLiaisons: Map[PeerId, PeerLiaisonHeadToHead.Handle] = Map.empty,
         /** Hub→coil liaisons (one per coil peer this head peer hubs); empty on non-hub head peers
           * and on coil peers. The hub feed (briefs + the relayed ack stream) is fanned to these,
           * separately from the head-peer mesh (§8).
           */
-        coilPeerLiaisons: List[PeerLiaison.Handle] = Nil,
+        coilPeerLiaisons: List[PeerLiaisonHeadToHead.Handle] = Nil,
         /** Present only on a hub head peer (§8): the relay sequencer for its coil peers' hard-acks
           * (onto the head-peer mesh's `HubHardAckLane`). `None` on non-hub head peers and on coil
           * peers.
@@ -268,7 +268,8 @@ object MultisigRegimeManager {
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
       */
     enum Actors:
-        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaison, EventSequencer,
+        case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaisonHeadToHead,
+            EventSequencer,
             StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */

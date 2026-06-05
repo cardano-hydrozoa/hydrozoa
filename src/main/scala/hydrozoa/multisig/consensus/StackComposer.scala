@@ -570,12 +570,12 @@ object StackComposer {
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        headPeerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
         /** Hub→coil liaisons (empty unless a hub head peer); every stack brief (own-led and
           * received) is relayed here so the hub's coil peers get the whole stack-partition stream
           * (§8).
           */
-        coilPeerLiaisons: List[PeerLiaison.Handle] = Nil
+        coilPeerLiaisons: List[PeerLiaisonHeadToHead.Handle] = Nil
     )
 
     /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches
@@ -733,9 +733,9 @@ object StackComposer {
           // actually hard-confirm before stack 1 may close. So the trigger starts DISARMED; the
           // stack-0 `Stack.HardConfirmed` arriving back from SlowConsensusActor arms it.
           previousStackHardConfirmed = false,
-          // Next hard-ack number to assign. 0-based: the PeerLiaison hard-ack
+          // Next hard-ack number to assign. 0-based: the PeerLiaisonHeadToHead hard-ack
           // lane is next-expected with an initial cursor of 0 (see the
-          // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack
+          // GetMsgBatch cursor protocol in PeerLiaisonHeadToHead), so the first hard-ack
           // is number 0. The initial stack, once injected, takes 0 = round-1,
           // 1 = round-2.
           nextOwnHardAckNum = HardAckNumber.zero,

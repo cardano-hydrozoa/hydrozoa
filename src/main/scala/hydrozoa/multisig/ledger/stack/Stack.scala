@@ -21,10 +21,10 @@ import scala.concurrent.duration.FiniteDuration
   *
   *   - stack 0 wraps [[StackEffects.Unsigned.Initial]] / [[StackEffects.HardConfirmed.Initial]] —
   *     exogenous from `HeadConfig`; every peer derives it locally at boot, so nothing is
-  *     wire-broadcast. Only the hard-acks flow across peers (via PeerLiaison's hard-ack lane). It
-  *     still carries a (synthetic) [[StackBrief]] — zero block range, `creationEndTime` set to the
-  *     initial block's end-time — so the rate limiter has a uniform `creationEndTime` to consult on
-  *     every stack.
+  *     wire-broadcast. Only the hard-acks flow across peers (via PeerLiaisonHeadToHead's hard-ack
+  *     lane). It still carries a (synthetic) [[StackBrief]] — zero block range, `creationEndTime`
+  *     set to the initial block's end-time — so the rate limiter has a uniform `creationEndTime` to
+  *     consult on every stack.
   *   - stack 1+ wraps [[StackEffects.Unsigned.Regular]] / [[StackEffects.HardConfirmed.Regular]],
   *     driven by the leader's wire-broadcast [[StackBrief]] (block range + creation end-time) so
   *     followers know which `BlockResult`s to fold into their local effect derivation.

@@ -26,7 +26,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, CoilPeerToHeadLiaison, FastConsensusActor, EventSequencer, HeadPeerToCoilLiaison, PeerLiaison, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, PeerLiaisonCoilToHead, FastConsensusActor, EventSequencer, PeerLiaisonHeadToCoil, PeerLiaisonHeadToHead, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -50,8 +50,8 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // ===================================
 
 /** All actors + observation refs for one coil follower, assembled in `startupSut` (gated on
-  * `nCoilPeers > 0`). `headLiaison` is the hub-side `HeadPeerToCoilLiaison`; `coilLiaison` is the
-  * coil-side `CoilPeerToHeadLiaison`.
+  * `nCoilPeers > 0`). `headLiaison` is the hub-side `PeerLiaisonHeadToCoil`; `coilLiaison` is the
+  * coil-side `PeerLiaisonCoilToHead`.
   */
 private case class CoilWiring(
     coilNum: CoilPeerNumber,
@@ -60,8 +60,8 @@ private case class CoilWiring(
     stack: PeerStack,
     stackObserver: CardanoLiaison.Handle,
     stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
-    coilLiaison: CoilPeerToHeadLiaison.Handle,
-    headLiaison: HeadPeerToCoilLiaison.Handle,
+    coilLiaison: PeerLiaisonCoilToHead.Handle,
+    headLiaison: PeerLiaisonHeadToCoil.Handle,
 )
 
 case class Stage4Suite(
@@ -281,7 +281,7 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
 
-            // Create one local PeerLiaison per (local, remote) pair.
+            // Create one local PeerLiaisonHeadToHead per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers
                 .traverse { peerNum =>
@@ -293,7 +293,7 @@ case class Stage4Suite(
                             val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
                             system
                                 .actorOf(
-                                  PeerLiaison(nodeConfig, remotePeerId, pending)
+                                  PeerLiaisonHeadToHead(nodeConfig, remotePeerId, pending)
                                 )
                                 .map(remotePeerId -> _)
                         }
@@ -302,15 +302,15 @@ case class Stage4Suite(
                 .map(_.toMap)
 
             // Build the per-peer remote-liaison map. In Direct mode, this is the actual
-            // PeerLiaison handle from the other peer's actor stack. In WebSocket mode, it's
+            // PeerLiaisonHeadToHead handle from the other peer's actor stack. In WebSocket mode, it's
             // a RemotePeerProxy that forwards messages over the local PeerWsTransport.
             //
-            // remoteLiaisonsByPeer(A)(B.id) = the handle that A's PeerLiaison(A->B) uses to
-            // reach B's PeerLiaison(B->A).
+            // remoteLiaisonsByPeer(A)(B.id) = the handle that A's PeerLiaisonHeadToHead(A->B) uses to
+            // reach B's PeerLiaisonHeadToHead(B->A).
             transportSetup <- transportMode match {
                 case TransportMode.Direct =>
                     val remoteLiaisonsByPeer
-                        : Map[HeadPeerNumber, Map[PeerId, PeerLiaison.Handle]] =
+                        : Map[HeadPeerNumber, Map[PeerId, PeerLiaisonHeadToHead.Handle]] =
                         peers.map { peerNum =>
                             val ownPeerId = headPeerId(multiNodeConfig, peerNum)
                             peerNum -> peers
@@ -336,7 +336,7 @@ case class Stage4Suite(
 
             // ---- Coil followers (gated; empty for a pure-head run) ----
             // Each coil is hubbed by head 0. Build the coil peer's full follower actor stack + its single
-            // CoilPeerToHeadLiaison, plus the hub-side HeadPeerToCoilLiaison and (once) the
+            // PeerLiaisonCoilToHead, plus the hub-side PeerLiaisonHeadToCoil and (once) the
             // CoilAckSequencer. The hub's own Connections (completed below) gains the coil-ward
             // liaisons, the coil remote map, and the sequencer. Direct mode only — coil peers are wired
             // in-process like the head mesh.
@@ -387,10 +387,10 @@ case class Stage4Suite(
                           StackObserver(hubNum, cardanoLiaison, stacksRef)
                         )
                         coilLiaison <- system.actorOf(
-                          CoilPeerToHeadLiaison(coilConfig, hubHeadId, coilPending)
+                          PeerLiaisonCoilToHead(coilConfig, hubHeadId, coilPending)
                         )
                         headLiaison <- system.actorOf(
-                          HeadPeerToCoilLiaison(hubConfig, coilNum, hubPending)
+                          PeerLiaisonHeadToCoil(hubConfig, coilNum, hubPending)
                         )
                     yield CoilWiring(
                       coilNum = coilNum,
@@ -555,7 +555,7 @@ case class Stage4Suite(
 
     /** WS-mode helper: builds one [[PeerWsTransport]] per peer (each bound to a distinct localhost
       * port), spawns one [[RemotePeerProxy]] per (local, remote) pair, registers each local
-      * [[PeerLiaison]] with its peer's transport, and returns:
+      * [[PeerLiaisonHeadToHead]] with its peer's transport, and returns:
       *
       *   - the remote-handle map (proxy actors keyed by remote peer id), per peer
       *   - a cleanup IO that releases all transports on shutdown
@@ -574,11 +574,11 @@ case class Stage4Suite(
         peers: Seq[HeadPeerNumber],
         basePort: Int,
         system: ActorSystem[IO],
-        peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]],
+        peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     )(using
         CardanoNetwork.Section
     ): IO[
-      (Map[HeadPeerNumber, Map[PeerId, PeerLiaison.Handle]], IO[Unit])
+      (Map[HeadPeerNumber, Map[PeerId, PeerLiaisonHeadToHead.Handle]], IO[Unit])
     ] = {
         // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
         // dev machines); peers dial each other at the same address+port.
@@ -680,7 +680,7 @@ case class Stage4Suite(
 
             // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
             // set stable + deadLetters drained — but it does NOT wait for scheduled future
-            // sleeps. The `PeerLiaison` resend timer (`startResendTimer`) ticks in its own
+            // sleeps. The `PeerLiaisonHeadToHead` resend timer (`startResendTimer`) ticks in its own
             // fiber via `IO.sleep(peerLiaisonResendInterval) >> ResendCurrent`; between
             // ticks every actor's mailbox is empty and the system reports idle. Under
             // `TransportMode.WebSocket` that interval is real wall-clock, so when the very

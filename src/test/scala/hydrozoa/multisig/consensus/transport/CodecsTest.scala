@@ -2,8 +2,8 @@ package hydrozoa.multisig.consensus.transport
 
 import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.consensus.PeerLiaison
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
@@ -24,7 +24,7 @@ class CodecsTest extends AnyFunSuite {
 
     // A representative initial-cursor batch (single-head schedule: first brief items are 1).
     private val testGetMsgBatch: GetMsgBatch = GetMsgBatch(
-      batchNum = PeerLiaison.Batch.Number(0),
+      batchNum = PeerLiaisonHeadToHead.Batch.Number(0),
       softAckNumber = hydrozoa.multisig.consensus.ack.SoftAckNumber.zero.increment,
       blockNum = BlockNumber(1),
       stackNum = StackNumber(1),
@@ -54,7 +54,7 @@ class CodecsTest extends AnyFunSuite {
 
     test("Frame.Msg(GetMsgBatch with non-zero fields) round-trips") {
         val gmb = GetMsgBatch(
-          batchNum = PeerLiaison.Batch.Number(42),
+          batchNum = PeerLiaisonHeadToHead.Batch.Number(42),
           softAckNumber = hydrozoa.multisig.consensus.ack.SoftAckNumber(13),
           blockNum = BlockNumber(99),
           stackNum = StackNumber(4),
@@ -80,7 +80,7 @@ class CodecsTest extends AnyFunSuite {
 
     test("Frame.Msg(empty NewMsgBatch) round-trips") {
         val nmb = NewMsgBatch(
-          batchNum = PeerLiaison.Batch.Number(1),
+          batchNum = PeerLiaisonHeadToHead.Batch.Number(1),
           softAck = None,
           blockBrief = None,
           stackBrief = None,
@@ -112,7 +112,7 @@ class CodecsTest extends AnyFunSuite {
           finalizationRequested = true,
         )
         val nmb = NewMsgBatch(
-          batchNum = PeerLiaison.Batch.Number(3),
+          batchNum = PeerLiaisonHeadToHead.Batch.Number(3),
           softAck = Some(ack),
           blockBrief = None,
           stackBrief = None,
@@ -160,7 +160,7 @@ class CodecsTest extends AnyFunSuite {
     private def hardAckFrame(payload: HardAck.Payload): Frame =
         Frame.Msg(
           NewMsgBatch(
-            batchNum = PeerLiaison.Batch.Number(5),
+            batchNum = PeerLiaisonHeadToHead.Batch.Number(5),
             softAck = None,
             blockBrief = None,
             stackBrief = None,
@@ -280,7 +280,7 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           Frame.Msg(
             NewMsgBatch(
-              batchNum = PeerLiaison.Batch.Number(7),
+              batchNum = PeerLiaisonHeadToHead.Batch.Number(7),
               softAck = None,
               blockBrief = None,
               stackBrief = None,
@@ -306,7 +306,7 @@ class CodecsTest extends AnyFunSuite {
         assertJsonStable(
           Frame.Msg(
             NewMsgBatch(
-              batchNum = PeerLiaison.Batch.Number(8),
+              batchNum = PeerLiaisonHeadToHead.Batch.Number(8),
               softAck = None,
               blockBrief = None,
               stackBrief = None,
@@ -334,10 +334,19 @@ class CodecsTest extends AnyFunSuite {
 
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
         val gmb = testGetMsgBatch
-        val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, None, None, Nil)
+        val nmb = NewMsgBatch(
+          PeerLiaisonHeadToHead.Batch.Number(0),
+          None,
+          None,
+          None,
+          None,
+          None,
+          None,
+          Nil
+        )
 
         assert(Frame.fromWire(gmb).contains(gmb))
         assert(Frame.fromWire(nmb).contains(nmb))
-        assert(Frame.fromWire(PeerLiaison.PreStart).isEmpty)
+        assert(Frame.fromWire(PeerLiaisonHeadToHead.PreStart).isEmpty)
     }
 }

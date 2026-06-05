@@ -4,8 +4,8 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.NewMsgBatch
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.NewMsgBatch
 import hydrozoa.multisig.consensus.ack.RelayedMsg
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -16,23 +16,23 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   * Asymmetric: its outbox carries only this coil peer's own hard-acks (a coil peer never leads a
   * block or stack, never soft-acks, and authors no user requests — those lanes stay empty), while
   * its inbound direction receives the hub's full relayed population stream and routes it to every
-  * local actor, exactly as a head-peer-mesh [[PeerLiaison]] does.
+  * local actor, exactly as a head-peer-mesh [[PeerLiaisonHeadToHead]] does.
   *
   * The hub's own soft-/hard-acks ride the direct lanes (the inherited `author == remote` verify
   * checks hold); the rest of the population rides the relayed `relayedMsg` / `HubHardAckLane`
   * lanes, de-muxed by embedded author and verified end-to-end by signature.
   */
-abstract class CoilPeerToHeadLiaison(
+abstract class PeerLiaisonCoilToHead(
     config: Config,
     hubHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections,
 ) extends BatchProtocolLiaison(config) {
-    private val connections = Ref.unsafe[IO, Option[CoilPeerToHeadLiaison.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[PeerLiaisonCoilToHead.Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Head(hubHead.peerNum)
     override protected def remoteLabel: String = hubHead.peerNum.convert.toString
 
-    private def getConnections: IO[CoilPeerToHeadLiaison.Connections] = for {
+    private def getConnections: IO[PeerLiaisonCoilToHead.Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
@@ -46,7 +46,7 @@ abstract class CoilPeerToHeadLiaison(
             c <- pendingConnections.get
             _ <- connections.set(
               Some(
-                CoilPeerToHeadLiaison.Connections(
+                PeerLiaisonCoilToHead.Connections(
                   blockWeaver = c.blockWeaver,
                   consensusActor = c.consensusActor,
                   stackComposer = c.stackComposer,
@@ -95,13 +95,13 @@ abstract class CoilPeerToHeadLiaison(
         } yield ()
 }
 
-object CoilPeerToHeadLiaison {
+object PeerLiaisonCoilToHead {
     def apply(
         config: Config,
         hubHead: HeadPeerId,
         pendingConnections: MultisigRegimeManager.PendingConnections,
-    ): IO[CoilPeerToHeadLiaison] =
-        IO(new CoilPeerToHeadLiaison(config, hubHead, pendingConnections) {})
+    ): IO[PeerLiaisonCoilToHead] =
+        IO(new PeerLiaisonCoilToHead(config, hubHead, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 
@@ -110,6 +110,6 @@ object CoilPeerToHeadLiaison {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remotePeerLiaison: PeerLiaison.Handle
+        remotePeerLiaison: PeerLiaisonHeadToHead.Handle
     )
 }

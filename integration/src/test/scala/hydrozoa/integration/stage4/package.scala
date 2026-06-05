@@ -8,20 +8,20 @@ package hydrozoa.integration
   * `cats-actors` `ActorSystem`, and verify that the protocol behaves correctly under concurrent
   * user requests, deposits, and inevitable per-peer message reordering.
   *
-  * Each peer's `PeerLiaison` actors are wired directly to their counterparts in-process via
+  * Each peer's `PeerLiaisonHeadToHead` actors are wired directly to their counterparts in-process via
   * `cats-actors` `ActorRef`s — there is no serialization and no network. Stage 5 (planned) replaces
   * the in-process wiring with real point-to-point peer transport, container-per-peer.
   *
   * ==SUT architecture==
   *
   *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `EventSequencer`, `JointLedger`,
-  *     `FastConsensusActor`, plus one `PeerLiaison` per (local, remote) pair, all wired in-process.
+  *     `FastConsensusActor`, plus one `PeerLiaisonHeadToHead` per (local, remote) pair, all wired in-process.
   *     There is no real network transport.
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
   *     state).
   *   - Factory pattern: build all actors against a `Deferred[IO,
   *     MultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
-  *     exist so the cross-peer `PeerLiaison` graph can be wired.
+  *     exist so the cross-peer `PeerLiaisonHeadToHead` graph can be wired.
   *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `FastConsensusActor` to capture
   *     both leader-produced and follower-reproduced block briefs into per-peer
   *     `Ref[IO, Vector[BlockBrief.Intermediate]]`.

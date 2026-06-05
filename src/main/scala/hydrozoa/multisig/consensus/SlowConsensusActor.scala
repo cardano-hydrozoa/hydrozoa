@@ -444,7 +444,7 @@ object SlowConsensusActor {
     final case class Connections(
         stackComposer: StackComposer.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        headPeerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
         /** A hub's coil-link relay (§8): every hard-ack this actor sees — its own, other head
           * peers', and its coil peers' — is teed here so the hub's coil peers get the whole
           * hard-ack stream and aggregate hard-confirmation themselves. `None` off a hub.

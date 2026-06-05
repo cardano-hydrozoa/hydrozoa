@@ -4,8 +4,8 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockType}
@@ -96,13 +96,13 @@ trait BatchProtocolLiaison(
       requestNum = RequestNumber.zero
     )
 
-    override def preStart: IO[Unit] = context.self ! PeerLiaison.PreStart
+    override def preStart: IO[Unit] = context.self ! PeerLiaisonHeadToHead.PreStart
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction {
-            case PeerLiaison.PreStart      => preStartLocal
-            case PeerLiaison.ResendCurrent => resendCurrent
-            case req                       => receiveTotal(req)
+            case PeerLiaisonHeadToHead.PreStart      => preStartLocal
+            case PeerLiaisonHeadToHead.ResendCurrent => resendCurrent
+            case req                                 => receiveTotal(req)
         }
 
     private def resendCurrent: IO[Unit] =
@@ -119,11 +119,11 @@ trait BatchProtocolLiaison(
     private def receiveTotal(req: Request): IO[Unit] =
         req match {
 
-            case PeerLiaison.PreStart =>
+            case PeerLiaisonHeadToHead.PreStart =>
                 // Should never reach here since PreStart is handled in receive
                 IO.raiseError(new IllegalStateException("PreStart handled in receive"))
 
-            case PeerLiaison.ResendCurrent =>
+            case PeerLiaisonHeadToHead.ResendCurrent =>
                 // Should never reach here since ResendCurrent is handled in receive
                 IO.raiseError(new IllegalStateException("ResendCurrent handled in receive"))
 
@@ -251,7 +251,7 @@ trait BatchProtocolLiaison(
         yield ()
 
     /** Fire a periodic self-message so the request-response chain self-heals after wire-level
-      * losses, see the design note on [[PeerLiaison.ResendCurrent]] for the rationale.
+      * losses, see the design note on [[PeerLiaisonHeadToHead.ResendCurrent]] for the rationale.
       *
       * The tick is fire-and-forget: it lives as long as the actor system. We don't try to cancel it
       * on actor shutdown because the actor terminates with the system in our deployment, and an
@@ -260,7 +260,7 @@ trait BatchProtocolLiaison(
     private def startResendTimer: IO[Unit] = {
         val interval = config.peerLiaisonResendInterval
         val tick: IO[Unit] =
-            IO.sleep(interval) >> (context.self ! PeerLiaison.ResendCurrent)
+            IO.sleep(interval) >> (context.self ! PeerLiaisonHeadToHead.ResendCurrent)
         tick.foreverM.start.void
     }
 

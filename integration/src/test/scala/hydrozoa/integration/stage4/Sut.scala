@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaisonHeadToHead, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import BlockBrief.{Minor as BMinor, Major as BMajor}
@@ -150,7 +150,7 @@ case class Stage4Sut(
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from the
+  *   - [[Direct]] (default) — every peer's [[PeerLiaisonHeadToHead]] gets the actual remote handle from the
   *     corresponding peer's actor system. In-process, no network. Compatible with
   *     [[ModelBasedSuite#useTestControl]] = `true`.
   *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct

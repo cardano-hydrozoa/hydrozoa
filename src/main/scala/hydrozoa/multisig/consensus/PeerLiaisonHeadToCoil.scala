@@ -4,32 +4,32 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.NewMsgBatch
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.NewMsgBatch
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
 /** A hub head peer's liaison toward one coil peer it serves (§8 of `design/coil-network.md`).
   *
-  * Asymmetric, the mirror image of [[CoilPeerToHeadLiaison]]: its outbox carries everything the hub
+  * Asymmetric, the mirror image of [[PeerLiaisonCoilToHead]]: its outbox carries everything the hub
   * holds — briefs, soft-acks, head peer hard-acks, and the relayed `HubHardAckLane` (fed by the
   * hub's actors) — while its inbound direction receives only that coil peer's own hard-acks. Each
   * one is routed BOTH to the hub's local [[SlowConsensusActor]] (so the hub counts it toward
   * quorum) and to the [[CoilAckSequencer]] (which stamps it and relays it onto the
   * `HubHardAckLane`).
   */
-abstract class HeadPeerToCoilLiaison(
+abstract class PeerLiaisonHeadToCoil(
     config: Config,
     coil: CoilPeerNumber,
     pendingConnections: MultisigRegimeManager.PendingConnections,
 ) extends BatchProtocolLiaison(config) {
-    private val connections = Ref.unsafe[IO, Option[HeadPeerToCoilLiaison.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHeadToCoil.Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Coil(coil)
     override protected def remoteLabel: String = s"c${coil.convert}"
 
-    private def getConnections: IO[HeadPeerToCoilLiaison.Connections] = for {
+    private def getConnections: IO[PeerLiaisonHeadToCoil.Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
@@ -48,7 +48,7 @@ abstract class HeadPeerToCoilLiaison(
             )(IO.pure)
             _ <- connections.set(
               Some(
-                HeadPeerToCoilLiaison.Connections(
+                PeerLiaisonHeadToCoil.Connections(
                   slowConsensusActor = c.slowConsensusActor,
                   coilAckSequencer = sequencer,
                   remotePeerLiaison = c.remotePeerLiaisons(remotePeerId)
@@ -85,19 +85,19 @@ abstract class HeadPeerToCoilLiaison(
         } yield ()
 }
 
-object HeadPeerToCoilLiaison {
+object PeerLiaisonHeadToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
         pendingConnections: MultisigRegimeManager.PendingConnections,
-    ): IO[HeadPeerToCoilLiaison] =
-        IO(new HeadPeerToCoilLiaison(config, coil, pendingConnections) {})
+    ): IO[PeerLiaisonHeadToCoil] =
+        IO(new PeerLiaisonHeadToCoil(config, coil, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 
     final case class Connections(
         slowConsensusActor: SlowConsensusActor.Handle,
         coilAckSequencer: CoilAckSequencer.Handle,
-        remotePeerLiaison: PeerLiaison.Handle
+        remotePeerLiaison: PeerLiaisonHeadToHead.Handle
     )
 }

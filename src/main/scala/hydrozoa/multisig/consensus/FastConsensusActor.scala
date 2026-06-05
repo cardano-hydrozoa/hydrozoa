@@ -52,7 +52,7 @@ object FastConsensusActor:
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.Handle,
-        headPeerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
         /** A hub's coil-link relay (§8): every soft-ack this actor sees is teed here so the hub's

@@ -1,8 +1,8 @@
 package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.consensus.PeerLiaison
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import io.circe.*
 import io.circe.parser.decode
@@ -12,20 +12,20 @@ import io.circe.syntax.*
   *
   *   - [[Hello]] is sent as the first frame on a fresh connection so the recipient knows which peer
   *     is on the other end.
-  *   - [[Msg]] carries a wire-eligible [[PeerLiaison.Request]] (currently [[GetMsgBatch]] or
-  *     [[NewMsgBatch]]).
+  *   - [[Msg]] carries a wire-eligible [[PeerLiaisonHeadToHead.Request]] (currently [[GetMsgBatch]]
+  *     or [[NewMsgBatch]]).
   */
 sealed trait Frame
 object Frame {
     final case class Hello(peerNum: Int) extends Frame
-    final case class Msg(payload: PeerLiaison.Request) extends Frame
+    final case class Msg(payload: PeerLiaisonHeadToHead.Request) extends Frame
 
-    /** The wire-eligible subset of [[PeerLiaison.Request]]. The proxy actor only forwards these
-      * over the transport; everything else is local-only and gets dropped with a log line.
+    /** The wire-eligible subset of [[PeerLiaisonHeadToHead.Request]]. The proxy actor only forwards
+      * these over the transport; everything else is local-only and gets dropped with a log line.
       */
     type Wire = GetMsgBatch | NewMsgBatch
 
-    def fromWire(req: PeerLiaison.Request): Option[Wire] =
+    def fromWire(req: PeerLiaisonHeadToHead.Request): Option[Wire] =
         req match {
             case x: GetMsgBatch => Some(x)
             case x: NewMsgBatch => Some(x)

@@ -6,8 +6,8 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.*
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
@@ -17,10 +17,11 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 /** The head-mesh liaison: one per other head peer. Full duplex — it sends this peer's own artifacts
   * and routes the remote head's artifacts to every local consensus actor.
   */
-abstract class PeerLiaison(
+abstract class PeerLiaisonHeadToHead(
     config: Config,
     remoteHead: HeadPeerId,
-    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
+    pendingConnections: MultisigRegimeManager.PendingConnections |
+        PeerLiaisonHeadToHead.Connections,
 ) extends BatchProtocolLiaison(config) {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -61,7 +62,7 @@ abstract class PeerLiaison(
                   )
                 )
             } yield ()
-        case x: PeerLiaison.Connections => connections.set(Some(x))
+        case x: PeerLiaisonHeadToHead.Connections => connections.set(Some(x))
     }
 
     override protected def sendToRemoteLiaison(msg: Request): IO[Unit] =
@@ -86,13 +87,13 @@ abstract class PeerLiaison(
   *   - Requests communication batches from the counterpart.
   *   - Responds to the counterpart's requests for communication batches.
   */
-object PeerLiaison {
+object PeerLiaisonHeadToHead {
     def apply(
         config: Config,
         remoteHead: HeadPeerId,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
-    ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, remoteHead, pendingLocalConnections) {})
+    ): IO[PeerLiaisonHeadToHead] =
+        IO(new PeerLiaisonHeadToHead(config, remoteHead, pendingLocalConnections) {})
 
     type Config = OwnPeerPublic.Section & NodeOperationMultisigConfig.Section
 
@@ -101,7 +102,7 @@ object PeerLiaison {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remotePeerLiaison: PeerLiaison.Handle
+        remotePeerLiaison: PeerLiaisonHeadToHead.Handle
     )
 
     type Handle = ActorRef[IO, Request]
@@ -198,14 +199,14 @@ object PeerLiaison {
       *
       * Two places this responsibility could live:
       *
-      *   - '''(A) The transport.''' A "link came back up" callback would let `PeerLiaison` re-emit
-      *     `currentlyRequesting` at the moment a reconnect completes. Couples the liaison to a
-      *     specific transport's notion of "connection event" and covers only the failures that
-      *     transport can observe.
-      *   - '''(B) The protocol itself.''' `PeerLiaison` owns a slow periodic resend of its
-      *     outstanding `GetMsgBatch`. Transport-agnostic. Equally applicable to clean reconnects,
-      *     half-open TCP, paused GC on the peer, frame-corrupting NAT timeouts, or any other path
-      *     that leaves the chain stalled without a visible "reconnect" signal.
+      *   - '''(A) The transport.''' A "link came back up" callback would let
+      *     `PeerLiaisonHeadToHead` re-emit `currentlyRequesting` at the moment a reconnect
+      *     completes. Couples the liaison to a specific transport's notion of "connection event"
+      *     and covers only the failures that transport can observe.
+      *   - '''(B) The protocol itself.''' `PeerLiaisonHeadToHead` owns a slow periodic resend of
+      *     its outstanding `GetMsgBatch`. Transport-agnostic. Equally applicable to clean
+      *     reconnects, half-open TCP, paused GC on the peer, frame-corrupting NAT timeouts, or any
+      *     other path that leaves the chain stalled without a visible "reconnect" signal.
       *
       * We chose '''(B)'''. The protocol's liveness is a protocol-level concern, not the
       * transport's. It is also cheap to keep healthy: when the chain is already moving, a resend

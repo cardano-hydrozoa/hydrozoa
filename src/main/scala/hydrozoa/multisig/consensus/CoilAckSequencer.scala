@@ -15,13 +15,13 @@ import org.typelevel.log4cats.Logger
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
   * ([[EventSequencer]]).
   *
-  * A hub head peer's [[HeadPeerToCoilLiaison]]s hand it the coil peer hard-acks they receive — each
+  * A hub head peer's [[PeerLiaisonHeadToCoil]]s hand it the coil peer hard-acks they receive — each
   * exactly once, since the liaison's batch protocol dispatches a payload only when it advances the
   * cursor. It stamps each with a monotonic hub-local [[HubHardAckNumber]] and fans the resulting
-  * [[HardAckWithId]] out to all the hub's [[PeerLiaison]]s, which carry it on the contiguous
-  * `HubHardAckLane` (§8 of `design/coil-network.md`) — to the head-peer mesh and onward to coil
-  * peers. The sequence number is transport ordering only; the embedded ack is verified end-to-end
-  * by each receiving `SlowConsensusActor`.
+  * [[HardAckWithId]] out to all the hub's [[PeerLiaisonHeadToHead]]s, which carry it on the
+  * contiguous `HubHardAckLane` (§8 of `design/coil-network.md`) — to the head-peer mesh and onward
+  * to coil peers. The sequence number is transport ordering only; the embedded ack is verified
+  * end-to-end by each receiving `SlowConsensusActor`.
   *
   * In-memory only for now: the durable per-coil receive log + index CF — which on crash recovery
   * lets the sequencer resume its counter without re-stamping acks the liaisons replay — is deferred
@@ -94,7 +94,7 @@ object CoilAckSequencer {
 
     type Config = OwnPeerPublic.Section
 
-    final case class Connections(liaisons: List[PeerLiaison.Handle])
+    final case class Connections(liaisons: List[PeerLiaisonHeadToHead.Handle])
 
     type Handle = ActorRef[IO, Request]
 

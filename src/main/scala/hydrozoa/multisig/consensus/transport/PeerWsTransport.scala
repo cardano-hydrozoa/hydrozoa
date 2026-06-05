@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.PeerLiaison
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
@@ -27,27 +27,28 @@ import scala.concurrent.duration.*
   * per (own, remote) pair — full-duplex over a single WS connection.
   *
   * Outbound queues are unbounded and retained across reconnects. The protocol on top
-  * ([[PeerLiaison]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so a brief
-  * window where the same message is delivered twice during a reconnect is harmless.
+  * ([[PeerLiaisonHeadToHead]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so
+  * a brief window where the same message is delivered twice during a reconnect is harmless.
   */
 final class PeerWsTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
-    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaison.Handle]],
+    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
 )(using CardanoNetwork.Section) {
 
     private val logger = Logging.loggerIO(s"PeerWsTransport.${ownPeerId.peerNum: Int}")
 
-    /** Wire a local PeerLiaison handle as the inbound dispatch target for messages arriving from
-      * [[remote]]. Must be called before the link to [[remote]] starts receiving traffic.
+    /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
+      * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
+      * traffic.
       */
-    def register(remote: HeadPeerId, localLiaison: PeerLiaison.Handle): IO[Unit] =
+    def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    def send(remote: HeadPeerId, request: PeerLiaison.Request): IO[Unit] =
+    def send(remote: HeadPeerId, request: PeerLiaisonHeadToHead.Request): IO[Unit] =
         Frame.fromWire(request) match {
             case Some(wire) =>
                 val line = Frame.encode(Frame.Msg(wire))
@@ -63,7 +64,10 @@ final class PeerWsTransport private (
                 )
         }
 
-    private def dispatchInbound(remote: HeadPeerId, payload: PeerLiaison.Request): IO[Unit] =
+    private def dispatchInbound(
+        remote: HeadPeerId,
+        payload: PeerLiaisonHeadToHead.Request
+    ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {
                 case Some(liaison) => liaison ! payload
@@ -226,14 +230,16 @@ object PeerWsTransport {
                   .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                   .map(_.toMap)
             )
-            inboundRef <- Resource.eval(Ref[IO].of(Map.empty[HeadPeerId, PeerLiaison.Handle]))
+            inboundRef <- Resource.eval(
+              Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
+            )
             transport = new PeerWsTransport(ownPeerId, outboxes, inboundRef)
 
             _: Server <- EmberServerBuilder
                 .default[IO]
                 .withHost(bindHost)
                 .withPort(bindPort)
-                // Ember closes idle WS sockets after 60s by default. We want the PeerLiaison
+                // Ember closes idle WS sockets after 60s by default. We want the PeerLiaisonHeadToHead
                 // protocol's own retransmit timer to be the only thing that brings a stalled
                 // link back to life, so in production we'd set this to `Duration.Inf`. We
                 // intentionally leave the default in place during tests so reconnect handling

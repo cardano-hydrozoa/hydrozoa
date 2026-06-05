@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTrigg
 import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{FastConsensusActor, PeerLiaison, StackComposer, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{FastConsensusActor, PeerLiaisonHeadToHead, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -766,11 +766,11 @@ object JointLedger {
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
-        headPeerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
         /** Hub→coil liaisons (empty unless this is a hub head peer); every brief is relayed to them
           * so the hub's coil peers follow the whole block sequence (§8).
           */
-        coilPeerLiaisons: List[PeerLiaison.Handle] = Nil
+        coilPeerLiaisons: List[PeerLiaisonHeadToHead.Handle] = Nil
     )
 
     enum UserRequestError extends Throwable:

@@ -19,8 +19,8 @@ import scala.concurrent.duration.DurationInt
 /** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
   * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
-  *   - exactly one [[PeerLiaison]], toward the coil peer's hub head peer (§8), instead of the head
-  *     mesh;
+  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§8), instead of
+  *     the head mesh;
   *   - no user-request surface (the spawned [[EventSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
@@ -105,7 +105,7 @@ trait CoilMultisigRegimeManager(
 
             // Exactly one liaison, toward the hub head peer (§8).
             hubLiaison <- context.actorOf(
-              CoilPeerToHeadLiaison(config, hubPeerId, pendingConnections)
+              PeerLiaisonCoilToHead(config, hubPeerId, pendingConnections)
             )
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
@@ -130,7 +130,10 @@ trait CoilMultisigRegimeManager(
             _ <- Tracer.info("Watching coil multisig actors...")
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
-            _ <- context.watch(hubLiaison, TerminatedChild(Actors.PeerLiaison, hubLiaison))
+            _ <- context.watch(
+              hubLiaison,
+              TerminatedChild(Actors.PeerLiaisonHeadToHead, hubLiaison)
+            )
             _ <- context.watch(
               cardanoLiaison,
               TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)

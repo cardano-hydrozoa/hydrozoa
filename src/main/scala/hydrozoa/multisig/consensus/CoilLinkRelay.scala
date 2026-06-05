@@ -84,7 +84,7 @@ object CoilLinkRelay {
 
     type Config = OwnPeerPublic.Section
 
-    final case class Connections(coilPeerLiaisons: List[PeerLiaison.Handle])
+    final case class Connections(coilPeerLiaisons: List[PeerLiaisonHeadToHead.Handle])
 
     type Handle = ActorRef[IO, Request]
 

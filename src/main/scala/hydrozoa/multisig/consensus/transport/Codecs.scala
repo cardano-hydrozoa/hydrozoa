@@ -3,11 +3,11 @@ package hydrozoa.multisig.consensus.transport
 import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
+import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, RelayedMsg, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{PeerLiaisonHeadToHead, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -18,7 +18,7 @@ import io.circe.syntax.*
 import scalus.crypto.ed25519.VerificationKey
 import scodec.bits.ByteVector
 
-/** JSON codecs for the wire-eligible subset of [[PeerLiaison.Request]].
+/** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
   *
   * Only [[GetMsgBatch]] and [[NewMsgBatch]] are sent over the wire; all other request variants
   * (RemoteBroadcast, BlockConfirmed, PreStart) are local-only.
@@ -38,10 +38,10 @@ object Codecs {
           Encoder.encodeInt.contramap((a: SoftAckNumber) => a.convert)
         )
 
-    given Codec[PeerLiaison.Batch.Number] =
+    given Codec[PeerLiaisonHeadToHead.Batch.Number] =
         io.circe.Codec.from(
-          Decoder.decodeInt.map(PeerLiaison.Batch.Number.apply),
-          Encoder.encodeInt.contramap((n: PeerLiaison.Batch.Number) => n: Int)
+          Decoder.decodeInt.map(PeerLiaisonHeadToHead.Batch.Number.apply),
+          Encoder.encodeInt.contramap((n: PeerLiaisonHeadToHead.Batch.Number) => n: Int)
         )
 
     given Codec[SoftAckId] =
