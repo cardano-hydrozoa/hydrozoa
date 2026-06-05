@@ -7,6 +7,12 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   * carries its full [[HeadPeerId]] (with the head-set size needed for the round-robin leader
   * schedule); a coil remote carries only its [[CoilPeerNumber]], since coil peers never lead and
   * therefore emit no block or stack briefs.
+  *
+  * Each concrete liaison is monomorphic in its remote (the mesh liaison links only to heads, the
+  * coil liaisons to one fixed head or coil), so this sum is never resolved polymorphically at
+  * runtime. It is kept so the shared `BatchProtocolLiaison` base can hold one remote field and read
+  * the remote's id, label, and leader schedule uniformly — instead of threading those as abstract
+  * seams through all three concrete liaisons.
   */
 enum RemotePeer {
     case Head(headPeerId: HeadPeerId)
