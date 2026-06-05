@@ -325,15 +325,18 @@ and fee-sized for exactly `nHeadPeers + coilQuorum` witnesses:
 Coil **does not** produce fast-side artifacts but **does** follow the
 fast-side stream:
 
-- Receives every block brief and head soft-ack from its hub (same
-  `GetMsgBatch` / `NewMsgBatch` head peers use).
+- Receives every block brief, head soft-ack, **and head user request** from its
+  hub (the brief only lists request ids; the coil needs the request *content* to
+  reproduce block bodies). Same `GetMsgBatch` / `NewMsgBatch` shape head peers use.
 - Runs `BlockWeaver` follower-mode to drive `JointLedger` from observed
-  `BlockBrief.Next` + own `PollResults`, producing local `BlockResult`
-  records — these feed `StackComposer`'s pairing.
+  `BlockBrief.Next` + the relayed requests + own `PollResults`, producing local
+  `BlockResult` records — these feed `StackComposer`'s pairing. The follower
+  buffers a brief that arrives ahead of the requests it needs (the hub relays
+  briefs faster than requests) and replays it once the current block completes.
 - Runs `FastConsensusActor` aggregator-mode to write `SoftConfirmation`
   records locally — also feed `StackComposer`'s pairing.
 - Emits **nothing** on the fast side (no soft-ack, no block brief, no user
-  request).
+  request) — it only *follows*.
 
 ## 8. Hub topology
 
@@ -446,6 +449,11 @@ This maps onto the coil link directly:
   `SlowConsensusActor` verify each embedded signature and **aggregate by the
   embedded author**, which *is* the de-mux into per-author satellite lanes. So the
   persisted satellite structure is per-author exactly as on a head.
+- **User requests: same re-sequenced lane.** The third per-author satellite,
+  `Request`, rides the same relay lane (a `RelayedAck.Req` wrapper alongside
+  `Soft` / `Hard`): the coil needs each request's content, not just the ids the
+  brief carries, to reproduce block bodies. The coil de-muxes it to its
+  `BlockWeaver`, which keys requests by author exactly as a head does.
 
 **The single persistence change for coils:** widen the satellite `LaneId` key from
 `HeadPeerNumber` to `PeerId` (Head | Coil), so a coil's own and other coils'
@@ -462,22 +470,32 @@ Consequences:
 - Per-author monotonicity is preserved *within* the multiplexed stream (each
   author's acks keep their relative order); cross-author interleaving is free.
 
-#### Implementation plan (Pc4)
+#### Implementation plan (Pc4) — status
 
 1. **Brief relay — contiguous (DONE).** `BatchProtocolLiaison` got an overridable
-   brief-lane shape; the coil liaisons select contiguous. The hub feeds one
-   contiguous brief stream.
-2. **Ack relay — multiplexed, author-preserving.** Carry every head soft-ack +
-   hard-ack (and other coils' hard-acks) to the coil over a re-sequenced relay
-   lane; the coil's FCA/SCA aggregate by embedded author (the de-mux). Hub feed:
-   fan every (re)produced brief + every soft/hard-ack the hub sees to its coil-ward
-   liaisons, via relay sequencers analogous to `CoilAckSequencer`.
+   brief-lane shape; the coil liaisons select contiguous. `JointLedger` fans every
+   (re)produced block brief and `StackComposer` every stack brief (own + received)
+   to the hub's coil-ward liaisons.
+2. **Ack + request relay — multiplexed, author-preserving (DONE).** The
+   `relayedAck` lane carries every head soft-ack, head + coil hard-ack, **and head
+   user request** to the coil, re-sequenced by `CoilLinkRelay` (the sibling of
+   `CoilAckSequencer`). Hub feed taps: `FastConsensusActor` tees soft-acks,
+   `SlowConsensusActor` tees hard-acks (own broadcast + received), `BlockWeaver`
+   tees requests (own + received — its mempool is the single point all requests
+   pass). The coil de-muxes by type + embedded author: `Soft`→FCA, `Hard`→SCA,
+   `Req`→BlockWeaver. Plus the follower-BlockWeaver brief buffer (above).
 3. **Persistence (when recovery merges):** satellite `LaneId` key `HeadPeerNumber`
    → `PeerId`; spines + recover seams otherwise unchanged.
-4. **Settling.** With the relay in place a **paced ≥2-head / `coilQuorum`=1** config
-   (alternating leaders, unlike the never-idle single leader) lets the generative
-   stage4 harness settle, so `One-head-one-coil` graduates to a multi-head green
-   property.
+4. **Result + the open blocker.** With the relay in place the coil is a **full
+   participant** at ≥2 heads / `coilQuorum`=1: a manual stage4 run hard-confirms
+   ~11 stacks on both heads *and* the coil. But the generative `Two-heads-one-coil`
+   property is **not yet green** — and contrary to the earlier guess, the blocker
+   is **harness settling**, not leadership pacing: the coil's extra liaison link +
+   relay round-trips make the post-run `waitForIdle` drain take very long to (or
+   never) reach a stable idle (a 4× drain-budget bump ran past the wall-clock
+   limit). Correctness is proven; greening the property is an open stage4
+   drain/settling problem (why the coil-augmented mesh won't idle — relay/resend
+   timer density? continuous relay activity?), to be solved separately.
 
 ### The cost of being a hub
 
@@ -651,7 +669,7 @@ higher quorum with little new production code.
 | Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
 | Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** — spawn + coil-typed `RemotePeer` discriminator only; the relay **lane policies** (the two new liaison shapes) land in Pc3; **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
 | Pc3 | Coil-side bootstrap entry point + the two new liaison shapes (§8) — `HeadPeerToCoilLiaison` (hub relays its full fast-side stream to the coil) and `CoilPeerToHeadLiaison` (coil sends only its own hard-acks); integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1`. No `HubCoilAckLane` yet — a single head means no coil-ack relay into a mesh |
-| Pc4 | **Multi-head relay** so a coil follows the whole population through its hub (§8 "Hub→coil link lane encoding"): contiguous brief relay (done) + multiplexed ack relay de-muxed by author + hub feed. Validated by a paced ≥2-head / `coilQuorum`=1 **stage4** run (not stage1 — stage1 is slow-consensus-agnostic). `HubCoilAckLane` + `CoilAckSequencer` were pulled forward into Pc3. Recovery symmetry is the design driver; the satellite `LaneId` key widens `HeadPeerNumber`→`PeerId` when `feature/recovery` merges |
+| Pc4 | **Multi-head relay (DONE) so a coil follows the whole population through its hub** (§8 "Hub→coil link lane encoding"): contiguous brief relay + a re-sequenced `relayedAck` lane carrying head soft-acks, head + coil hard-acks, and head user requests, de-muxed by author at the coil (`CoilLinkRelay` + hub feed taps in JL / StackComposer / FCA / SCA / BlockWeaver), plus follower-BlockWeaver brief buffering. The coil becomes a full participant — a manual stage4 2h/coilQuorum=1 run hard-confirms ~11 stacks on both heads and the coil. OPEN: the generative `Two-heads-one-coil` property isn't green yet — blocker is **stage4 harness settling** (post-run `waitForIdle` drain never idles with the coil), not the relay. `HubCoilAckLane` + `CoilAckSequencer` were pulled forward into Pc3. Recovery symmetry is the design driver; satellite `LaneId` key widens `HeadPeerNumber`→`PeerId` when `feature/recovery` merges |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
 | Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified; rule-based-regime handover spawns `DisputeActor` + `EvacuationActor` on coil the same as on head |
