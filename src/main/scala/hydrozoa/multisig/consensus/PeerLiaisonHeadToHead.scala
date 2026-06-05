@@ -22,7 +22,7 @@ abstract class PeerLiaisonHeadToHead(
     remoteHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections |
         PeerLiaisonHeadToHead.Connections,
-) extends BatchProtocolLiaison(config) {
+) extends PeerLiaisonBatchProtocol(config) {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Head(remoteHead.peerNum)

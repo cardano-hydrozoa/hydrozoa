@@ -26,7 +26,7 @@ abstract class PeerLiaisonCoilToHead(
     config: Config,
     hubHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections,
-) extends BatchProtocolLiaison(config) {
+) extends PeerLiaisonBatchProtocol(config) {
     private val connections = Ref.unsafe[IO, Option[PeerLiaisonCoilToHead.Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Head(hubHead.peerNum)
