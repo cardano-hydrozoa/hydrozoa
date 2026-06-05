@@ -484,13 +484,12 @@ Consequences:
    (re)produced block brief and `StackComposer` every stack brief (own + received)
    to the hub's coil-ward liaisons.
 2. **Ack + request relay — multiplexed, author-preserving (DONE).** The
-   `relayedMsg` lane carries every head soft-ack, head + coil hard-ack, **and head
-   user request** to the coil, re-sequenced by `CoilLinkRelay` (the sibling of
-   `CoilAckSequencer`). Hub feed taps: `FastConsensusActor` tees soft-acks,
-   `SlowConsensusActor` tees hard-acks (own broadcast + received), `BlockWeaver`
-   tees requests (own + received — its mempool is the single point all requests
-   pass). The coil de-muxes by type + embedded author: `Soft`→FCA, `Hard`→SCA,
-   `Req`→BlockWeaver. Plus the follower-BlockWeaver brief buffer (above).
+   `relayedMsg` lane carries every head peer soft-ack, head peer + coil peer
+   hard-ack, **and head peer user request** to the coil peer, re-sequenced by
+   `CoilLinkRelay` (the sibling of `CoilAckSequencer`); its three feeding taps are
+   in the "Hub feed taps" table below. The coil peer de-muxes by type + embedded
+   author: `Soft`→FCA, `Hard`→SCA, `Req`→BlockWeaver. Plus the follower-BlockWeaver
+   brief buffer (above).
 3. **Persistence (when recovery merges):** satellite `LaneId` key `HeadPeerNumber`
    → `PeerId`; spines + recover seams otherwise unchanged.
 4. **Result + the open blocker.** With the relay in place the coil is a **full
@@ -514,17 +513,41 @@ the hub's *received-from-mesh* state, not its own outbox, and bandwidth scales
 
 ### Head-side spawning
 
-`MultisigRegimeManager` (a head), in addition to its head-mesh `PeerLiaison`s,
-spawns one `HeadPeerToCoilLiaison` per coil it hubs
+`MultisigRegimeManager` (a head peer), in addition to its head-peer-mesh
+`PeerLiaison`s, spawns one `HeadPeerToCoilLiaison` per coil peer it hubs
 (`coilPeers.filter(_.hub == ownHeadPeerNum)`) plus the two relay sequencers
 `CoilAckSequencer` and `CoilLinkRelay`. The shared `Connections` separates the
-head mesh (`peerLiaisons`) from the coil-ward liaisons (`coilLiaisons`); the hub
-feed fans briefs (from `JointLedger` / `StackComposer`) to `coilLiaisons` and
-tees soft-acks / hard-acks / requests (from `FastConsensusActor` /
-`SlowConsensusActor` / `BlockWeaver`) to `CoilLinkRelay`.
-`CoilMultisigRegimeManager` (a coil) spawns exactly one `CoilPeerToHeadLiaison`,
-toward `coilPeers[me].hub`. Non-hub head peers are unaffected beyond consuming
-the extra `HubHardAckLane`s on their existing head↔head links.
+head-peer mesh (`headPeerLiaisons`) from the coil-ward liaisons
+(`coilPeerLiaisons`).
+
+#### Hub feed taps
+
+The coil-ward outbound stream is sourced by **five taps** in the hub's own
+actors, in two mechanisms. Briefs ride their own dedicated contiguous lanes, so
+their producers fan straight to `coilPeerLiaisons`; requests + acks are
+multiplexed onto the single re-sequenced `relayedMsg` lane, so their producers
+tee into `CoilLinkRelay` (which stamps the `RelayedMsgNumber` and fans the
+wrapped `RelayedMsg`).
+
+| Tap (hub actor) | Artifact | Destination |
+| --- | --- | --- |
+| `JointLedger` | block briefs | → `coilPeerLiaisons` (dedicated `blockBrief` lane) |
+| `StackComposer` | stack briefs | → `coilPeerLiaisons` (dedicated `stackBrief` lane) |
+| `BlockWeaver` | user requests (own + received) | → `CoilLinkRelay` → `relayedMsg` lane |
+| `FastConsensusActor` | soft-acks (own + received) | → `CoilLinkRelay` → `relayedMsg` lane |
+| `SlowConsensusActor` | hard-acks (own + received) | → `CoilLinkRelay` → `relayedMsg` lane |
+
+The reverse direction (coil peer → head-peer mesh) is one tap:
+`HeadPeerToCoilLiaison` hands each inbound coil peer hard-ack to
+`CoilAckSequencer`, which re-publishes it on the `HubHardAckLane` (§8
+"Disseminating coil hard-acks"). Each producer fans **everything it sees** (own
+*and* received-from-mesh), not just its own artifacts — see "The cost of being a
+hub".
+
+`CoilMultisigRegimeManager` (a coil peer) spawns exactly one
+`CoilPeerToHeadLiaison`, toward `coilPeers[me].hub`. Non-hub head peers are
+unaffected beyond consuming the extra `HubHardAckLane`s on their existing
+head-peer↔head-peer links.
 
 ### Hub failure
 
