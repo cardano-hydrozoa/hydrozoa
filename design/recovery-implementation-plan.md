@@ -19,7 +19,11 @@ pure-over-store and unit-tested, wiring deferred to R3. · R3a (recover wiring +
 2026-06-04): each snapshot/boundary actor's `PreStart` self-derives `Markers` and restores via its
 R2 `recover`; StackComposer skips `bootstrapInitialStack` on a non-empty store; CardanoLiaison
 gained a `persistence` param; `StackComposerRecoveryTest` boots the actor against a seeded store.
-**Next:** R3b (`ReplayActor` + mailbox replay), then R3c (boot sequence + fail-safe).
+R3b (slow-side effects persistence + `ReplayActor`, 2026-06-04): StackComposer persists the
+closed `Stack.Unsigned` under `Cf.UnsignedStack` before each handoff (fixing a latent
+send-before-persist CR bug); `ReplayActor.replay` routes the recovered tail into the consensus
+actors' mailboxes (inline before the barrier, Plan A) and reconstructs the in-flight stack to
+SCA. **Next:** R3c (MRM boot wiring + fail-safe).
 
 ---
 
@@ -434,7 +438,7 @@ got small seed seams. `StackComposerRecoveryTest` boots the actor against a seed
 store and asserts the observable: cold ⇒ a stack-0 `StackHandoff` reaches
 `SlowConsensusActor`, non-empty ⇒ none.
 
-#### R3b — slow-side effects persistence (LANDED 2026-06-04) + `ReplayActor`
+#### R3b — slow-side effects persistence + `ReplayActor` — LANDED 2026-06-04
 
 **Write-side prerequisite — LANDED.** StackComposer persists the closed `Stack.Unsigned`
 (brief + locally-derived effects) under a new `Cf.UnsignedStack` (keyed by `stackNum`)
@@ -450,9 +454,13 @@ now precedes the brief broadcast + the handoff. Codec = `UnsignedStackCodec` (mi
 `StackEffectsCodec` / `PartitionEffectsCodec` over the BARE SEC, reusing the SEC-agnostic
 `Final` partition codec). Pruning postponed (keep-all for now).
 
-**`ReplayActor`** (new consensus-side actor): on boot — derive `Markers` + `ReplayCursors`,
-`scanLanes`, `ArrivalOrderedMerge`, decode each `RawLaneEntry` and **route it into the
-reading actor's mailbox**:
+**`ReplayActor` — LANDED 2026-06-04.** *Not* a cats-actors `Actor`: a one-shot routine
+(`ReplayActor.replay`) MRM runs **inline** after spawning the consensus actors and before
+completing the start barrier, so every send queues in each actor's mailbox behind its
+`PreStart` and drains in order (Plan A; a spawned actor would race the barrier). Takes
+`own` / `peers` / `treasuryAddress` explicitly (least-knowledge, testable); the MRM call is
+R3c. On boot — derive `Markers` + `ReplayCursors`, `scanLanes`, `ArrivalOrderedMerge`,
+decode each `RawLaneEntry` and **route it into the reading actor's mailbox**:
   - Request → BlockWeaver; SoftAck → FCA; HardAck → SCA.
   - Block spine → FCA (`softConfirmed+1`) + BlockWeaver (`softAcked+1`).
   - Stack spine (`StackBrief`) → StackComposer (`hardAckedStack+1`) as inbound leader briefs
