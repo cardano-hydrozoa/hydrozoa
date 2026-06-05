@@ -9,8 +9,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.RemotePeer.*
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -20,10 +19,20 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
   */
 abstract class PeerLiaison(
     config: Config,
-    remotePeer: RemotePeer,
+    remoteHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
-) extends BatchProtocolLiaison(config, remotePeer) {
+) extends BatchProtocolLiaison(config) {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
+
+    override protected def remotePeerId: PeerId = PeerId.Head(remoteHead.peerNum)
+    override protected def remoteLabel: String = remoteHead.peerNum.convert.toString
+
+    // The remote head's brief lanes are sparse: only the round-robin leader emits an item, so the
+    // inbound-cursor successor is the remote's leader schedule.
+    override protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber] =
+        Some(remoteHead.nextLeaderBlock(after))
+    override protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
+        Some(remoteHead.nextSlowLeaderStack(after))
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -47,7 +56,7 @@ abstract class PeerLiaison(
                       consensusActor = _connections.consensusActor,
                       stackComposer = _connections.stackComposer,
                       slowConsensusActor = _connections.slowConsensusActor,
-                      remotePeerLiaison = _connections.remotePeerLiaisons(remotePeer.peerId)
+                      remotePeerLiaison = _connections.remotePeerLiaisons(remotePeerId)
                     )
                   )
                 )
@@ -80,10 +89,10 @@ abstract class PeerLiaison(
 object PeerLiaison {
     def apply(
         config: Config,
-        remotePeer: RemotePeer,
+        remoteHead: HeadPeerId,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, remotePeer, pendingLocalConnections) {})
+        IO(new PeerLiaison(config, remoteHead, pendingLocalConnections) {})
 
     type Config = OwnPeerPublic.Section & NodeOperationMultisigConfig.Section
 
@@ -314,31 +323,6 @@ object PeerLiaison {
             relayedMsgNum: RelayedMsgNumber,
             requestNum: RequestNumber
         )
-
-        object GetMsgBatch {
-            // Initial cursor values (see the cursor-protocol note above). All lanes are
-            // next-expected:
-            //   - Contiguous lanes (ack, hardAck, request): each lane's FIRST emitted number —
-            //     requests and hard-acks are 0-based; soft-acks (== blockNum) are 1-based
-            //     because block 0 is the config-bootstrap block never acked.
-            //   - Sparse lanes (block, stackBrief): the remote's first wire-eligible item per its
-            //     leader schedule, since `remotePeerId.nextLeader…(0)` skips the out-of-band
-            //     bootstrap item 0.
-            //
-            // Per-remote because the sparse-lane initial cursor depends on which remote peer the
-            // liaison is talking to. Tests can use any [[HeadPeerId]] fixture.
-            def initial(remotePeer: RemotePeer): GetMsgBatch = GetMsgBatch(
-              batchNum = Batch.Number(0),
-              softAckNumber = SoftAckNumber.zero.increment,
-              blockNum = remotePeer.nextLeaderBlock(BlockNumber.zero).getOrElse(BlockNumber.zero),
-              stackNum =
-                  remotePeer.nextSlowLeaderStack(StackNumber.zero).getOrElse(StackNumber.zero),
-              hardAckNum = HardAckNumber.zero,
-              hubHardAckNum = HubHardAckNumber.zero,
-              relayedMsgNum = RelayedMsgNumber.zero,
-              requestNum = RequestNumber.zero
-            )
-        }
 
         /** Comm actor provides a batch in response to its remote comm-actor counterpart's request.
           *

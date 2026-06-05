@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet, RemotePeer}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, CoilPeerToHeadLiaison, FastConsensusActor, EventSequencer, HeadPeerToCoilLiaison, PeerLiaison, SlowConsensusActor, StackComposer}
@@ -293,7 +293,7 @@ case class Stage4Suite(
                             val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
                             system
                                 .actorOf(
-                                  PeerLiaison(nodeConfig, RemotePeer.Head(remotePeerId), pending)
+                                  PeerLiaison(nodeConfig, remotePeerId, pending)
                                 )
                                 .map(remotePeerId -> _)
                         }
@@ -387,10 +387,10 @@ case class Stage4Suite(
                           StackObserver(hubNum, cardanoLiaison, stacksRef)
                         )
                         coilLiaison <- system.actorOf(
-                          CoilPeerToHeadLiaison(coilConfig, RemotePeer.Head(hubHeadId), coilPending)
+                          CoilPeerToHeadLiaison(coilConfig, hubHeadId, coilPending)
                         )
                         headLiaison <- system.actorOf(
-                          HeadPeerToCoilLiaison(hubConfig, RemotePeer.Coil(coilNum), hubPending)
+                          HeadPeerToCoilLiaison(hubConfig, coilNum, hubPending)
                         )
                     yield CoilWiring(
                       coilNum = coilNum,

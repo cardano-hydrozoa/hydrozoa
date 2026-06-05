@@ -5,9 +5,9 @@ import cats.implicits.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
+import hydrozoa.multisig.consensus.PeerLiaison.Request.NewMsgBatch
 import hydrozoa.multisig.consensus.ack.RelayedMsg
-import hydrozoa.multisig.consensus.peer.RemotePeer
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
@@ -24,10 +24,13 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   */
 abstract class CoilPeerToHeadLiaison(
     config: Config,
-    hubPeer: RemotePeer,
+    hubHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections,
-) extends BatchProtocolLiaison(config, hubPeer) {
+) extends BatchProtocolLiaison(config) {
     private val connections = Ref.unsafe[IO, Option[CoilPeerToHeadLiaison.Connections]](None)
+
+    override protected def remotePeerId: PeerId = PeerId.Head(hubHead.peerNum)
+    override protected def remoteLabel: String = hubHead.peerNum.convert.toString
 
     private def getConnections: IO[CoilPeerToHeadLiaison.Connections] = for {
         mConn <- this.connections.get
@@ -48,7 +51,7 @@ abstract class CoilPeerToHeadLiaison(
                   consensusActor = c.consensusActor,
                   stackComposer = c.stackComposer,
                   slowConsensusActor = c.slowConsensusActor,
-                  remotePeerLiaison = c.remotePeerLiaisons(hubPeer.peerId)
+                  remotePeerLiaison = c.remotePeerLiaisons(remotePeerId)
                 )
               )
             )
@@ -65,8 +68,6 @@ abstract class CoilPeerToHeadLiaison(
         Some(after.increment)
     override protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
         Some(after.increment)
-    override protected def initialRequest: GetMsgBatch =
-        GetMsgBatch.initial(hubPeer).copy(blockNum = BlockNumber(1), stackNum = StackNumber(1))
 
     override protected def sendToRemoteLiaison(msg: Request): IO[Unit] =
         getConnections.flatMap(_.remotePeerLiaison ! msg)
@@ -96,10 +97,10 @@ abstract class CoilPeerToHeadLiaison(
 object CoilPeerToHeadLiaison {
     def apply(
         config: Config,
-        hubPeer: RemotePeer,
+        hubHead: HeadPeerId,
         pendingConnections: MultisigRegimeManager.PendingConnections,
     ): IO[CoilPeerToHeadLiaison] =
-        IO(new CoilPeerToHeadLiaison(config, hubPeer, pendingConnections) {})
+        IO(new CoilPeerToHeadLiaison(config, hubHead, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 

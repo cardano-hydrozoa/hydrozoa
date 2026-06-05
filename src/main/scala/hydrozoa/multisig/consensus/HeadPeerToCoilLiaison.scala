@@ -5,8 +5,8 @@ import cats.implicits.*
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.peer.RemotePeer
+import hydrozoa.multisig.consensus.PeerLiaison.Request.NewMsgBatch
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
@@ -25,10 +25,13 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   */
 abstract class HeadPeerToCoilLiaison(
     config: Config,
-    coilPeer: RemotePeer,
+    coil: CoilPeerNumber,
     pendingConnections: MultisigRegimeManager.PendingConnections,
-) extends BatchProtocolLiaison(config, coilPeer) {
+) extends BatchProtocolLiaison(config) {
     private val connections = Ref.unsafe[IO, Option[HeadPeerToCoilLiaison.Connections]](None)
+
+    override protected def remotePeerId: PeerId = PeerId.Coil(coil)
+    override protected def remoteLabel: String = s"c${coil.convert}"
 
     private def getConnections: IO[HeadPeerToCoilLiaison.Connections] = for {
         mConn <- this.connections.get
@@ -52,7 +55,7 @@ abstract class HeadPeerToCoilLiaison(
                 HeadPeerToCoilLiaison.Connections(
                   slowConsensusActor = c.slowConsensusActor,
                   coilAckSequencer = sequencer,
-                  remotePeerLiaison = c.remotePeerLiaisons(coilPeer.peerId)
+                  remotePeerLiaison = c.remotePeerLiaisons(remotePeerId)
                 )
               )
             )
@@ -69,8 +72,6 @@ abstract class HeadPeerToCoilLiaison(
         Some(after.increment)
     override protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
         Some(after.increment)
-    override protected def initialRequest: GetMsgBatch =
-        GetMsgBatch.initial(coilPeer).copy(blockNum = BlockNumber(1), stackNum = StackNumber(1))
 
     override protected def sendToRemoteLiaison(msg: Request): IO[Unit] =
         getConnections.flatMap(_.remotePeerLiaison ! msg)
@@ -90,10 +91,10 @@ abstract class HeadPeerToCoilLiaison(
 object HeadPeerToCoilLiaison {
     def apply(
         config: Config,
-        coilPeer: RemotePeer,
+        coil: CoilPeerNumber,
         pendingConnections: MultisigRegimeManager.PendingConnections,
     ): IO[HeadPeerToCoilLiaison] =
-        IO(new HeadPeerToCoilLiaison(config, coilPeer, pendingConnections) {})
+        IO(new HeadPeerToCoilLiaison(config, coil, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 

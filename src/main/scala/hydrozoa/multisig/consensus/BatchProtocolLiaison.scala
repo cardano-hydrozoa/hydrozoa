@@ -7,7 +7,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockType}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -28,18 +28,23 @@ import scala.collection.immutable.Queue
   */
 trait BatchProtocolLiaison(
     config: Config,
-    remotePeer: RemotePeer,
 ) extends Actor[IO, Request] {
     private val state = State()
 
     private val logger =
-        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remotePeer.label}")
+        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remoteLabel}")
 
     private val loggerMmd =
         Logging.loggerIO("Mermaid.PeerLiaison")
 
     private def mermaid(s: String): IO[Unit] =
-        loggerMmd.info(s"\t${config.ownPeerLabel}->>${remotePeer.label}: ${s}")
+        loggerMmd.info(s"\t${config.ownPeerLabel}->>${remoteLabel}: ${s}")
+
+    /** This liaison's remote counterpart's author id (used for ack-author verification). */
+    protected def remotePeerId: PeerId
+
+    /** Short label for the remote counterpart, for logger / tracer route names. */
+    protected def remoteLabel: String
 
     /** Resolve and cache this liaison's connections to local actors. Called once at [[preStart]].
       */
@@ -68,16 +73,28 @@ trait BatchProtocolLiaison(
     protected def nextOwnBriefStack(after: StackNumber): Option[StackNumber] =
         config.nextOwnSlowLeaderStack(after)
 
-    /** Successor on the INBOUND block-brief lane (used by verify to advance the cursor). */
-    protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber] =
-        remotePeer.nextLeaderBlock(after)
+    /** Successor on the INBOUND block-brief lane (used by verify to advance the cursor). `None` if
+      * the remote never emits briefs (a coil), in which case the lane stays empty.
+      */
+    protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber]
 
     /** Successor on the INBOUND stack-brief lane. */
-    protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber] =
-        remotePeer.nextSlowLeaderStack(after)
+    protected def nextRemoteBriefStack(after: StackNumber): Option[StackNumber]
 
-    /** The initial outstanding request — its brief cursors depend on the lane shape above. */
-    protected def initialRequest: GetMsgBatch = GetMsgBatch.initial(remotePeer)
+    /** The initial outstanding request. The contiguous lanes start at their first emitted number;
+      * the two brief lanes start at the remote's first wire-eligible item per the inbound-brief
+      * seams above (block 0 / stack 0 are out-of-band bootstrap, never sent).
+      */
+    protected def initialRequest: GetMsgBatch = GetMsgBatch(
+      batchNum = Batch.Number(0),
+      softAckNumber = SoftAckNumber.zero.increment,
+      blockNum = nextRemoteBriefBlock(BlockNumber.zero).getOrElse(BlockNumber.zero),
+      stackNum = nextRemoteBriefStack(StackNumber.zero).getOrElse(StackNumber.zero),
+      hardAckNum = HardAckNumber.zero,
+      hubHardAckNum = HubHardAckNumber.zero,
+      relayedMsgNum = RelayedMsgNumber.zero,
+      requestNum = RequestNumber.zero
+    )
 
     override def preStart: IO[Unit] = context.self ! PeerLiaison.PreStart
 
@@ -226,7 +243,7 @@ trait BatchProtocolLiaison(
 
     private def preStartLocal: IO[Unit] =
         for
-            _ <- logger.info(s"starting, remote peer: ${remotePeer.label}")
+            _ <- logger.info(s"starting, remote peer: ${remoteLabel}")
             _ <- initializeConnections
             _ <- mermaid("GetMsgBatch.initial")
             _ <- sendToRemoteLiaison(initialRequest)
@@ -575,8 +592,8 @@ trait BatchProtocolLiaison(
             //    number must equal the next-expected `current.ackNum` (next-expected
             //    cursor — same pattern as requestNum below).
             received.softAck match
-                case Some(a) if remotePeer.peerId != PeerId.Head(a.ackId.peerNum) =>
-                    return Reject(Rejection.AckPeerMismatch(remotePeer.peerId, a.ackId.peerNum))
+                case Some(a) if remotePeerId != PeerId.Head(a.ackId.peerNum) =>
+                    return Reject(Rejection.AckPeerMismatch(remotePeerId, a.ackId.peerNum))
                 case Some(a) if a.ackNum != current.softAckNumber =>
                     return Reject(Rejection.AckNumMismatch(current.softAckNumber, a.ackNum))
                 case _ => ()
@@ -608,9 +625,9 @@ trait BatchProtocolLiaison(
             // 3b. If a hard-ack is present, its peer must be the remote peer and its
             //     hardAckNum must equal the next-expected `current.hardAckNum`.
             received.hardAck match
-                case Some(h) if h.ackId.peerId != remotePeer.peerId =>
+                case Some(h) if h.ackId.peerId != remotePeerId =>
                     return Reject(
-                      Rejection.HardAckPeerMismatch(remotePeer.peerId, h.ackId.peerId)
+                      Rejection.HardAckPeerMismatch(remotePeerId, h.ackId.peerId)
                     )
                 case Some(h) if h.hardAckNum != current.hardAckNum =>
                     return Reject(

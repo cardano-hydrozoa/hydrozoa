@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -22,9 +22,17 @@ class CodecsTest extends AnyFunSuite {
 
     given CardanoNetwork.Section = CardanoNetwork.Preprod
 
-    // A single-peer fixture suffices: `GetMsgBatch.initial` only needs the remote's leader schedule
-    // to compute the sparse-lane initial cursors.
-    private val testRemoteId: RemotePeer = RemotePeer.Head(HeadPeerId(0, 1))
+    // A representative initial-cursor batch (single-head schedule: first brief items are 1).
+    private val testGetMsgBatch: GetMsgBatch = GetMsgBatch(
+      batchNum = PeerLiaison.Batch.Number(0),
+      softAckNumber = hydrozoa.multisig.consensus.ack.SoftAckNumber.zero.increment,
+      blockNum = BlockNumber(1),
+      stackNum = StackNumber(1),
+      hardAckNum = HardAckNumber.zero,
+      hubHardAckNum = HubHardAckNumber.zero,
+      relayedMsgNum = RelayedMsgNumber.zero,
+      requestNum = RequestNumber.zero
+    )
 
     private def roundTrip(frame: Frame): Frame = {
         val text = Frame.encode(frame)
@@ -39,8 +47,8 @@ class CodecsTest extends AnyFunSuite {
         assert(roundTrip(frame) == frame)
     }
 
-    test("Frame.Msg(GetMsgBatch.initial) round-trips") {
-        val frame = Frame.Msg(GetMsgBatch.initial(testRemoteId))
+    test("Frame.Msg(GetMsgBatch initial cursors) round-trips") {
+        val frame = Frame.Msg(testGetMsgBatch)
         assert(roundTrip(frame) == frame)
     }
 
@@ -325,7 +333,7 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test("Frame.fromWire accepts GetMsgBatch and NewMsgBatch, rejects others") {
-        val gmb = GetMsgBatch.initial(testRemoteId)
+        val gmb = testGetMsgBatch
         val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, None, None, Nil)
 
         assert(Frame.fromWire(gmb).contains(gmb))

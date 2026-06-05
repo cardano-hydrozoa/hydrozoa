@@ -11,7 +11,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -147,14 +147,14 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                             headLiaison <- system.actorOf(
                               HeadPeerToCoilLiaison(
                                 headConfig,
-                                RemotePeer.Coil(coilNum),
+                                coilNum,
                                 headPending
                               )
                             )
                             coilLiaison <- system.actorOf(
                               CoilPeerToHeadLiaison(
                                 coilConfig(coilNum),
-                                RemotePeer.Head(HeadPeerId(0, 1)),
+                                HeadPeerId(0, 1),
                                 pending
                               )
                             )

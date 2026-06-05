@@ -14,7 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.peer.{PeerId, RemotePeer}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import scala.concurrent.duration.DurationInt
@@ -132,7 +132,7 @@ trait MultisigRegimeManager(
                     .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
                         context.actorOf(
-                          PeerLiaison(config, RemotePeer.Head(pid), pendingConnections)
+                          PeerLiaison(config, pid, pendingConnections)
                         )
                     )
 
@@ -159,7 +159,7 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoils.traverse(coilNum =>
                     context.actorOf(
-                      HeadPeerToCoilLiaison(config, RemotePeer.Coil(coilNum), pendingConnections)
+                      HeadPeerToCoilLiaison(config, coilNum, pendingConnections)
                     )
                 )
 

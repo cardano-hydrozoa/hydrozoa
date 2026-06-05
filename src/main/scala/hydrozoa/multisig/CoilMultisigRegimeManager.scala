@@ -11,8 +11,8 @@ import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, RemotePeer}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import scala.concurrent.duration.DurationInt
@@ -111,7 +111,7 @@ trait CoilMultisigRegimeManager(
 
             // Exactly one liaison, toward the hub head peer (§8).
             hubLiaison <- context.actorOf(
-              CoilPeerToHeadLiaison(config, RemotePeer.Head(hubPeerId), pendingConnections)
+              CoilPeerToHeadLiaison(config, hubPeerId, pendingConnections)
             )
 
             connections = Connections(
