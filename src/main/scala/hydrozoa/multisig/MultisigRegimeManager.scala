@@ -242,7 +242,7 @@ object MultisigRegimeManager {
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Present only on a hub head (§8): the relay that fans the population's soft/hard-acks
-          * down to its coils (the coil-link `relayedAck` lane). `None` elsewhere.
+          * down to its coils (the coil-link `relayedMsg` lane). `None` elsewhere.
           */
         coilLinkRelay: Option[CoilLinkRelay.Handle] = None,
         tracer: ProtocolTracer = ProtocolTracer.noop,

@@ -6,7 +6,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.RelayedAck
+import hydrozoa.multisig.consensus.ack.RelayedMsg
 import hydrozoa.multisig.consensus.peer.RemotePeer
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -84,10 +84,10 @@ abstract class CoilPeerToHeadLiaison(
             // The hub→coil relay lane: de-mux each wrapped ack by type+author. Soft-acks to the
             // FastConsensusActor, hard-acks to the SlowConsensusActor; each verifies the embedded
             // signature and aggregates by the embedded author (the de-mux into per-author lanes).
-            _ <- batch.relayedAck.traverse_ {
-                case RelayedAck.Soft(_, ack) => conn.consensusActor ! ack
-                case RelayedAck.Hard(_, ack) => conn.slowConsensusActor ! ack
-                case RelayedAck.Req(_, req)  => conn.blockWeaver ! req
+            _ <- batch.relayedMsg.traverse_ {
+                case RelayedMsg.Soft(_, ack) => conn.consensusActor ! ack
+                case RelayedMsg.Hard(_, ack) => conn.slowConsensusActor ! ack
+                case RelayedMsg.Req(_, req)  => conn.blockWeaver ! req
             }
             _ <- batch.requests.traverse_(conn.blockWeaver ! _)
         } yield ()

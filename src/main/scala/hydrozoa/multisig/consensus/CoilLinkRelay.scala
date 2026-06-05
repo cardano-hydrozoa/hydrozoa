@@ -8,7 +8,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilLinkRelay.*
-import hydrozoa.multisig.consensus.ack.{HardAck, RelayedAck, RelayedAckNumber, SoftAck}
+import hydrozoa.multisig.consensus.ack.{HardAck, RelayedMsg, RelayedMsgNumber, SoftAck}
 import org.typelevel.log4cats.Logger
 
 /** The hub-side relay that fans the **whole population's** fast-side acks down to a hub's coils (§8
@@ -16,8 +16,8 @@ import org.typelevel.log4cats.Logger
   *
   * The hub's `FastConsensusActor` tees every soft-ack it sees here, and its `SlowConsensusActor`
   * tees every hard-ack (head and coil alike). Each is stamped with a monotonic hub-local
-  * [[RelayedAckNumber]] and fanned, wrapped as a [[RelayedAck]], onto the coil-ward liaisons'
-  * contiguous `relayedAck` lane. The sequence number is transport ordering only — the embedded
+  * [[RelayedMsgNumber]] and fanned, wrapped as a [[RelayedMsg]], onto the coil-ward liaisons'
+  * contiguous `relayedMsg` lane. The sequence number is transport ordering only — the embedded
   * signed ack still carries its own author, so each coil verifies the signature and **aggregates by
   * author** (the de-mux into the same per-author lane structure a head keeps).
   *
@@ -29,7 +29,7 @@ trait CoilLinkRelay(
     pendingConnections: MultisigRegimeManager.PendingConnections | CoilLinkRelay.Connections
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilLinkRelay.Connections]](None)
-    private val nextSeq = Ref.unsafe[IO, RelayedAckNumber](RelayedAckNumber.zero)
+    private val nextSeq = Ref.unsafe[IO, RelayedMsgNumber](RelayedMsgNumber.zero)
 
     private given logger: Logger[IO] = Logging.loggerIO(s"CoilLinkRelay.${config.ownPeerLabel}")
 
@@ -54,13 +54,13 @@ trait CoilLinkRelay(
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case CoilLinkRelay.PreStart     => initializeConnections
-        case ack: SoftAck               => relay(seq => RelayedAck.Soft(seq, ack))
-        case ack: HardAck               => relay(seq => RelayedAck.Hard(seq, ack))
-        case request: UserRequestWithId => relay(seq => RelayedAck.Req(seq, request))
+        case ack: SoftAck               => relay(seq => RelayedMsg.Soft(seq, ack))
+        case ack: HardAck               => relay(seq => RelayedMsg.Hard(seq, ack))
+        case request: UserRequestWithId => relay(seq => RelayedMsg.Req(seq, request))
     }
 
     /** Stamp the next sequence number and fan the wrapped ack to the coil-ward liaisons. */
-    private def relay(wrap: RelayedAckNumber => RelayedAck): IO[Unit] =
+    private def relay(wrap: RelayedMsgNumber => RelayedMsg): IO[Unit] =
         for {
             conn <- getConnections
             seq <- nextSeq.getAndUpdate(_.increment)

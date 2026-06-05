@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, RelayedAck, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, RelayedMsg, SoftAck, SoftAckId, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
@@ -549,14 +549,14 @@ object Codecs {
 
     private given Codec[HardAckWithId] = deriveCodec[HardAckWithId]
 
-    // ---- RelayedAck (sealed Soft | Hard) ----
+    // ---- RelayedMsg (sealed Soft | Hard) ----
 
-    private given Codec[RelayedAck.Soft] = deriveCodec[RelayedAck.Soft]
-    private given Codec[RelayedAck.Hard] = deriveCodec[RelayedAck.Hard]
+    private given Codec[RelayedMsg.Soft] = deriveCodec[RelayedMsg.Soft]
+    private given Codec[RelayedMsg.Hard] = deriveCodec[RelayedMsg.Hard]
     // Req embeds a UserRequestWithId, whose codec needs the network section.
-    private given (using CardanoNetwork.Section): Codec[RelayedAck.Req] =
-        deriveCodec[RelayedAck.Req]
-    private given (using CardanoNetwork.Section): Codec[RelayedAck] = deriveCodec[RelayedAck]
+    private given (using CardanoNetwork.Section): Codec[RelayedMsg.Req] =
+        deriveCodec[RelayedMsg.Req]
+    private given (using CardanoNetwork.Section): Codec[RelayedMsg] = deriveCodec[RelayedMsg]
 
     // ---- GetMsgBatch / NewMsgBatch ----
 

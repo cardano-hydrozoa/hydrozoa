@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus.ack
 
 import io.circe.*
 
-/** Monotonic hub-local sequence number for the `relayedAck` lane on a hub→coil link.
+/** Monotonic hub-local sequence number for the `relayedMsg` lane on a hub→coil link.
   *
   * A hub assigns these to every ack it relays to a coil — head soft-acks, head hard-acks, and coil
   * hard-acks alike — in arrival order, so the per-link relay lane is contiguous and reuses the
@@ -10,28 +10,28 @@ import io.circe.*
   * [[HardAck]] still carries its own author + number for end-to-end verification and per-author
   * aggregation at the coil. Distinct from [[HubHardAckNumber]] (the head-mesh coil-ack lane).
   */
-type RelayedAckNumber = RelayedAckNumber.RelayedAckNumber
+type RelayedMsgNumber = RelayedMsgNumber.RelayedMsgNumber
 
-object RelayedAckNumber {
-    opaque type RelayedAckNumber = Int
+object RelayedMsgNumber {
+    opaque type RelayedMsgNumber = Int
 
-    given Codec[RelayedAckNumber] = Codec.from(
+    given Codec[RelayedMsgNumber] = Codec.from(
       encodeA = Encoder.encodeInt,
       decodeA = Decoder.decodeInt
     )
 
-    def apply(i: Int): RelayedAckNumber = {
+    def apply(i: Int): RelayedMsgNumber = {
         require(i >= 0)
         i
     }
 
-    val zero: RelayedAckNumber = 0
+    val zero: RelayedMsgNumber = 0
 
-    given Conversion[RelayedAckNumber, Int] = identity
+    given Conversion[RelayedMsgNumber, Int] = identity
 
-    given Ordering[RelayedAckNumber] with {
-        override def compare(x: RelayedAckNumber, y: RelayedAckNumber): Int = x.compare(y)
+    given Ordering[RelayedMsgNumber] with {
+        override def compare(x: RelayedMsgNumber, y: RelayedMsgNumber): Int = x.compare(y)
     }
 
-    extension (self: RelayedAckNumber) def increment: RelayedAckNumber = RelayedAckNumber(self + 1)
+    extension (self: RelayedMsgNumber) def increment: RelayedMsgNumber = RelayedMsgNumber(self + 1)
 }

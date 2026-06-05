@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubHardAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckId}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -52,7 +52,7 @@ class CodecsTest extends AnyFunSuite {
           stackNum = StackNumber(4),
           hardAckNum = HardAckNumber(8),
           hubHardAckNum = HubHardAckNumber(5),
-          relayedAckNum = RelayedAckNumber(17),
+          relayedMsgNum = RelayedMsgNumber(17),
           requestNum = RequestNumber(7),
         )
         val frame = Frame.Msg(gmb)
@@ -64,7 +64,7 @@ class CodecsTest extends AnyFunSuite {
                 assert(decoded.stackNum == gmb.stackNum)
                 assert(decoded.hardAckNum == gmb.hardAckNum)
                 assert(decoded.hubHardAckNum == gmb.hubHardAckNum)
-                assert(decoded.relayedAckNum == gmb.relayedAckNum)
+                assert(decoded.relayedMsgNum == gmb.relayedMsgNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
         }
@@ -78,7 +78,7 @@ class CodecsTest extends AnyFunSuite {
           stackBrief = None,
           hardAck = None,
           hubHardAck = None,
-          relayedAck = None,
+          relayedMsg = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -110,7 +110,7 @@ class CodecsTest extends AnyFunSuite {
           stackBrief = None,
           hardAck = None,
           hubHardAck = None,
-          relayedAck = None,
+          relayedMsg = None,
           requests = Nil,
         )
         val frame = Frame.Msg(nmb)
@@ -164,7 +164,7 @@ class CodecsTest extends AnyFunSuite {
               )
             ),
             hubHardAck = None,
-            relayedAck = None,
+            relayedMsg = None,
             requests = Nil,
           )
         )
@@ -268,7 +268,7 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(NewMsgBatch with RelayedAck.Hard) round-trips") {
+    test("Frame.Msg(NewMsgBatch with RelayedMsg.Hard) round-trips") {
         assertJsonStable(
           Frame.Msg(
             NewMsgBatch(
@@ -278,9 +278,9 @@ class CodecsTest extends AnyFunSuite {
               stackBrief = None,
               hardAck = None,
               hubHardAck = None,
-              relayedAck = Some(
-                RelayedAck.Hard(
-                  RelayedAckNumber(3),
+              relayedMsg = Some(
+                RelayedMsg.Hard(
+                  RelayedMsgNumber(3),
                   HardAck(
                     ackId = HardAckId(PeerId.Coil(CoilPeerNumber(1)), HardAckNumber(2)),
                     stackNum = StackNumber(4),
@@ -294,7 +294,7 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(NewMsgBatch with RelayedAck.Soft) round-trips") {
+    test("Frame.Msg(NewMsgBatch with RelayedMsg.Soft) round-trips") {
         assertJsonStable(
           Frame.Msg(
             NewMsgBatch(
@@ -304,9 +304,9 @@ class CodecsTest extends AnyFunSuite {
               stackBrief = None,
               hardAck = None,
               hubHardAck = None,
-              relayedAck = Some(
-                RelayedAck.Soft(
-                  RelayedAckNumber(4),
+              relayedMsg = Some(
+                RelayedMsg.Soft(
+                  RelayedMsgNumber(4),
                   SoftAck(
                     ackId = SoftAckId(
                       HeadPeerNumber(1),

@@ -8,7 +8,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedMsg, RelayedMsgNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.RemotePeer.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockStatus, BlockType}
@@ -143,7 +143,7 @@ object PeerLiaison {
             case HardAckPeerMismatch(expected: PeerId, received: PeerId)
             case HardAckNumMismatch(expected: HardAckNumber, received: HardAckNumber)
             case HubHardAckNumMismatch(expected: HubHardAckNumber, received: HubHardAckNumber)
-            case RelayedAckNumMismatch(expected: RelayedAckNumber, received: RelayedAckNumber)
+            case RelayedMsgNumMismatch(expected: RelayedMsgNumber, received: RelayedMsgNumber)
             case RequestsHeadMismatch(expected: RequestNumber, received: RequestNumber)
             case RequestsNotConsecutive(prev: RequestId, next: RequestId)
 
@@ -164,8 +164,8 @@ object PeerLiaison {
                     s"HardAckNumMismatch(expected=$e, received=$r)"
                 case HubHardAckNumMismatch(e, r) =>
                     s"HubHardAckNumMismatch(expected=$e, received=$r)"
-                case RelayedAckNumMismatch(e, r) =>
-                    s"RelayedAckNumMismatch(expected=$e, received=$r)"
+                case RelayedMsgNumMismatch(e, r) =>
+                    s"RelayedMsgNumMismatch(expected=$e, received=$r)"
                 case RequestsHeadMismatch(e, r) =>
                     s"RequestsHeadMismatch(expected=$e, received=$r)"
                 case RequestsNotConsecutive(p, n) =>
@@ -210,7 +210,7 @@ object PeerLiaison {
     object Request {
         type RemoteBroadcast =
             SoftAck | BlockBrief.Next | UserRequestWithId | StackBrief | HardAck | HardAckWithId |
-                RelayedAck
+                RelayedMsg
 
         /** Request by a comm actor to its remote comm-actor counterpart for a batch of acks,
           * blocks, stack briefs, hard-acks, and user requests originating from the remote peer.
@@ -311,7 +311,7 @@ object PeerLiaison {
             stackNum: StackNumber,
             hardAckNum: HardAckNumber,
             hubHardAckNum: HubHardAckNumber,
-            relayedAckNum: RelayedAckNumber,
+            relayedMsgNum: RelayedMsgNumber,
             requestNum: RequestNumber
         )
 
@@ -335,7 +335,7 @@ object PeerLiaison {
                   remotePeer.nextSlowLeaderStack(StackNumber.zero).getOrElse(StackNumber.zero),
               hardAckNum = HardAckNumber.zero,
               hubHardAckNum = HubHardAckNumber.zero,
-              relayedAckNum = RelayedAckNumber.zero,
+              relayedMsgNum = RelayedMsgNumber.zero,
               requestNum = RequestNumber.zero
             )
         }
@@ -368,7 +368,7 @@ object PeerLiaison {
             stackBrief: Option[StackBrief],
             hardAck: Option[HardAck],
             hubHardAck: Option[HardAckWithId],
-            relayedAck: Option[RelayedAck],
+            relayedMsg: Option[RelayedMsg],
             requests: List[UserRequestWithId]
         )
     }
