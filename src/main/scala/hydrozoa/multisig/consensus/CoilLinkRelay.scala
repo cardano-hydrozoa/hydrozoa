@@ -1,0 +1,87 @@
+package hydrozoa.multisig.consensus
+
+import cats.effect.{IO, Ref}
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorRef.ActorRef
+import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.node.owninfo.OwnPeerPublic
+import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.consensus.CoilLinkRelay.*
+import hydrozoa.multisig.consensus.ack.{HardAck, RelayedAck, RelayedAckNumber, SoftAck}
+import org.typelevel.log4cats.Logger
+
+/** The hub-side relay that fans the **whole population's** fast-side acks down to a hub's coils (§8
+  * "Hub→coil link lane encoding" of `design/coil-network.md`).
+  *
+  * The hub's `FastConsensusActor` tees every soft-ack it sees here, and its `SlowConsensusActor`
+  * tees every hard-ack (head and coil alike). Each is stamped with a monotonic hub-local
+  * [[RelayedAckNumber]] and fanned, wrapped as a [[RelayedAck]], onto the coil-ward liaisons'
+  * contiguous `relayedAck` lane. The sequence number is transport ordering only — the embedded
+  * signed ack still carries its own author, so each coil verifies the signature and **aggregates by
+  * author** (the de-mux into the same per-author lane structure a head keeps).
+  *
+  * In-memory only for now (durable resume index deferred to coil-persistence), exactly like
+  * [[CoilAckSequencer]].
+  */
+trait CoilLinkRelay(
+    config: Config,
+    pendingConnections: MultisigRegimeManager.PendingConnections | CoilLinkRelay.Connections
+) extends Actor[IO, Request] {
+    private val connections = Ref.unsafe[IO, Option[CoilLinkRelay.Connections]](None)
+    private val nextSeq = Ref.unsafe[IO, RelayedAckNumber](RelayedAckNumber.zero)
+
+    private given logger: Logger[IO] = Logging.loggerIO(s"CoilLinkRelay.${config.ownPeerLabel}")
+
+    private def getConnections: IO[Connections] = for {
+        mConn <- this.connections.get
+        conn <- mConn.fold(
+          IO.raiseError(
+            java.lang.Error("Coil-link relay is missing its connections to other actors.")
+          )
+        )(IO.pure)
+    } yield conn
+
+    private def initializeConnections: IO[Unit] = pendingConnections match {
+        case x: MultisigRegimeManager.PendingConnections =>
+            x.get.flatMap(c => connections.set(Some(Connections(coilLiaisons = c.coilLiaisons))))
+        case x: CoilLinkRelay.Connections => connections.set(Some(x))
+    }
+
+    override def preStart: IO[Unit] = context.self ! CoilLinkRelay.PreStart
+
+    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
+
+    private def receiveTotal(req: Request): IO[Unit] = req match {
+        case CoilLinkRelay.PreStart => initializeConnections
+        case ack: SoftAck           => relay(seq => RelayedAck.Soft(seq, ack))
+        case ack: HardAck           => relay(seq => RelayedAck.Hard(seq, ack))
+    }
+
+    /** Stamp the next sequence number and fan the wrapped ack to the coil-ward liaisons. */
+    private def relay(wrap: RelayedAckNumber => RelayedAck): IO[Unit] =
+        for {
+            conn <- getConnections
+            seq <- nextSeq.getAndUpdate(_.increment)
+            relayed = wrap(seq)
+            _ <- logger.debug(s"relaying ack as seq $seq") >> (conn.coilLiaisons ! relayed).parallel
+        } yield ()
+}
+
+object CoilLinkRelay {
+    def apply(
+        config: Config,
+        pendingConnections: MultisigRegimeManager.PendingConnections
+    ): IO[CoilLinkRelay] =
+        IO(new CoilLinkRelay(config, pendingConnections) {})
+
+    type Config = OwnPeerPublic.Section
+
+    final case class Connections(coilLiaisons: List[PeerLiaison.Handle])
+
+    type Handle = ActorRef[IO, Request]
+
+    type Request = PreStart.type | SoftAck | HardAck
+
+    case object PreStart
+}

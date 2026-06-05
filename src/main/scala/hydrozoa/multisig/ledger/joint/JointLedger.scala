@@ -99,7 +99,8 @@ final case class JointLedger(
                     Connections(
                       fastConsensusActor = _connections.consensusActor,
                       stackComposer = _connections.stackComposer,
-                      peerLiaisons = _connections.peerLiaisons
+                      peerLiaisons = _connections.peerLiaisons,
+                      coilLiaisons = _connections.coilLiaisons
                     )
                   )
                 )
@@ -697,6 +698,10 @@ final case class JointLedger(
             )
             // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
+            // A hub relays EVERY brief (own-led and follower-reproduced) to its coils, in block
+            // order, so they follow the whole population — contiguous, not the head mesh's
+            // own-led-only subset (§8). No-op off a hub (the list is empty).
+            _ <- (conn.coilLiaisons ! brief).parallel
             // Only a head emits on the fast cycle — it broadcasts the brief when it leads the
             // block, and authors a soft-ack for every block. A coil never leads and authors none.
             _ <- config.ownPeerId match {
@@ -758,7 +763,11 @@ object JointLedger {
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        peerLiaisons: List[PeerLiaison.Handle],
+        /** Hub→coil liaisons (empty unless this is a hub head); every brief is relayed to them so
+          * the hub's coils follow the whole block sequence (§8).
+          */
+        coilLiaisons: List[PeerLiaison.Handle] = Nil
     )
 
     enum UserRequestError extends Throwable:

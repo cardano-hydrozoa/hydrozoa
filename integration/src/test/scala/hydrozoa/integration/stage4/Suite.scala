@@ -26,7 +26,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet, RemotePeer}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilPeerToHeadLiaison, FastConsensusActor, EventSequencer, HeadPeerToCoilLiaison, PeerLiaison, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, CoilPeerToHeadLiaison, FastConsensusActor, EventSequencer, HeadPeerToCoilLiaison, PeerLiaison, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -349,6 +349,10 @@ case class Stage4Suite(
                 if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
 
+            coilLinkRelay <-
+                if coilConfigs.isEmpty then IO.none[CoilLinkRelay.Handle]
+                else system.actorOf(CoilLinkRelay(hubConfig, hubPending)).map(Some(_))
+
             coilWirings <- coilConfigs.traverse { coilConfig =>
                 val coilNum = coilConfig.ownPeerId match {
                     case PeerId.Coil(n) => n
@@ -419,9 +423,10 @@ case class Stage4Suite(
                 val stack = peerStackMap(peerNum)
                 val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
-                // The hub head additionally fans to its coil-ward liaisons and owns the sequencer.
+                // The hub head additionally fans the population stream to its coil-ward liaisons
+                // (kept separate from the head mesh) and owns the relay sequencers.
                 val isHub = peerNum == hubNum
-                val allLiaisons = if isHub then localLiaisons ++ hubExtraLiaisons else localLiaisons
+                val hubCoilLiaisons = if isHub then hubExtraLiaisons else Nil
                 val allRemote =
                     if isHub then remoteLiaisonsByPeer(peerNum) ++ hubExtraRemote
                     else remoteLiaisonsByPeer(peerNum)
@@ -454,9 +459,11 @@ case class Stage4Suite(
                             stackComposer = stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = stack.slowConsensusActor,
-                            peerLiaisons = allLiaisons,
+                            peerLiaisons = localLiaisons,
                             remotePeerLiaisons = allRemote,
+                            coilLiaisons = hubCoilLiaisons,
                             coilAckSequencer = if isHub then coilAckSequencer else None,
+                            coilLinkRelay = if isHub then coilLinkRelay else None,
                           )
                         )
                         .void

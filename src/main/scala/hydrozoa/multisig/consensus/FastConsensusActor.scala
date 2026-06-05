@@ -55,6 +55,11 @@ object FastConsensusActor:
         peerLiaisons: List[PeerLiaison.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
+        /** A hub's coil-link relay (§8): every soft-ack this actor sees is teed here so the hub's
+          * coils receive — and independently verify + aggregate — the whole fast-side stream.
+          * `None` off a hub.
+          */
+        coilLinkRelay: Option[CoilLinkRelay.Handle] = None,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
@@ -176,6 +181,7 @@ class FastConsensusActor(
                       peerLiaisons = _connections.peerLiaisons,
                       jointLedger = _connections.jointLedger,
                       stackComposer = _connections.stackComposer,
+                      coilLinkRelay = _connections.coilLinkRelay,
                       tracer = _connections.tracer,
                     )
                   )
@@ -218,6 +224,10 @@ class FastConsensusActor(
                 .headPeerVKey(ack.peerNum)
                 .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
             _ <- withCell(ack.blockNum)(_.acceptAck(ack, vk))
+            // A hub tees every valid soft-ack (own and received) to its coil-link relay, so its
+            // coils get the whole fast-side stream and aggregate soft-confirmation themselves. No-op
+            // off a hub.
+            _ <- conn.coilLinkRelay.traverse_(_ ! ack)
             // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
             // if the previous block's cell still exists, to maintain the spec ordering).
             _ <- IO.whenA(config.ownPeerId == PeerId.Head(ack.peerNum))(scheduleOwnAck(ack))
