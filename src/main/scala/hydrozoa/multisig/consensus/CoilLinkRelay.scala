@@ -11,15 +11,17 @@ import hydrozoa.multisig.consensus.CoilLinkRelay.*
 import hydrozoa.multisig.consensus.ack.{HardAck, RelayedMsg, RelayedMsgNumber, SoftAck}
 import org.typelevel.log4cats.Logger
 
-/** The hub-side relay that fans the **whole population's** fast-side acks down to a hub's coil
-  * peers (§8 "Hub→coil link lane encoding" of `design/coil-network.md`).
+/** The hub-side relay that fans the **whole population's** multiplexed consensus stream down to a
+  * hub's coil peers (§8 "Hub→coil link lane encoding" of `design/coil-network.md`).
   *
-  * The hub's `FastConsensusActor` tees every soft-ack it sees here, and its `SlowConsensusActor`
-  * tees every hard-ack (head peer and coil peer alike). Each is stamped with a monotonic hub-local
+  * Three of the hub's actors tee here: its `FastConsensusActor` every soft-ack (fast side), its
+  * `SlowConsensusActor` every hard-ack (slow side; head peer and coil peer alike), and its
+  * `BlockWeaver` every user request. Each is stamped with a monotonic hub-local
   * [[RelayedMsgNumber]] and fanned, wrapped as a [[RelayedMsg]], onto the coil-ward liaisons'
   * contiguous `relayedMsg` lane. The sequence number is transport ordering only — the embedded
-  * signed ack still carries its own author, so each coil peer verifies the signature and
-  * **aggregates by author** (the de-mux into the same per-author lane structure a head peer keeps).
+  * signed artifact still carries its own author, so each coil peer verifies it and **routes by type
+  * + author** (`Soft`→FCA, `Hard`→SCA, `Req`→BlockWeaver — the de-mux into the same per-author lane
+  * structure a head peer keeps).
   *
   * In-memory only for now (durable resume index deferred to coil-persistence), exactly like
   * [[CoilAckSequencer]].
