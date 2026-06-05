@@ -26,7 +26,7 @@ import scala.collection.immutable.Queue
   *     hub→coil link routes only the coil peer's own hard-acks; a coil→hub link routes the full
   *     relayed stream).
   */
-trait PeerLiaisonBatchProtocol(
+trait PeerLiaisonBase(
     config: Config,
 ) extends Actor[IO, Request] {
     private val state = State()
