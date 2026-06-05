@@ -47,7 +47,7 @@ future-work spec**. It builds on this node-type but is not part of M5.
 ## Resolved decisions (2026-05-30)
 
 Decided after reviewing `peer-network`, `slow-consensus`, and
-`initialization`. These supersede the matching entries in §14.
+`initialization`.
 
 - **D-coil-1 — peer identity is a tagged sum.**
   `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
@@ -777,24 +777,3 @@ each must be honored even though none is owned by a single section:
   node, but head-private validations must be skipped / replaced. Enumerate which
   `NodeConfig.apply`-time checks are head-specific when building the coil apply
   path.
-
-## 14. Open questions
-
-- **D-coil-1 — RESOLVED.** Tagged sum `PeerId = Head(HeadPeerNumber) |
-  Coil(CoilPeerNumber)`; wire = peer number + one-bit tag (`1` head, `0`
-  coil). See Resolved decisions and §6.
-- **D-coil-2 — RESOLVED.** Reuse `HeadConfig` wholesale; identity differs via
-  `OwnCoilPeerPrivate` at the `NodeConfig` private layer. No slim
-  `CoilConfig`. See §5.
-- **D-coil-3.** Hub-fallover semantics for M5 (§8) — strictly out of
-  scope, or worth a stub?
-- **D-coil-4.** Concrete skip-stack triggers (§12).
-- **D-coil-5 — RESOLVED (2026-06-04).** Same as a head's, by design: the coil's
-  whole point is recovery symmetry (§8 "Hub→coil link lane encoding"), so it keeps
-  the head's lane structure — contiguous spines (`BlockSpine`/`StackSpine`) built
-  by the same `JointLedger`/`StackComposer`, per-author satellites keyed by
-  `PeerId` — and shares the head's restore-by-block-boundary `L2Ledger` interface
-  and recover seams unchanged. Byte-determinism holds because the coil runs the
-  same effect derivation over the same contiguous spine.
-- **D-coil-6 — RESOLVED.** Fully parallel `CoilMultisigRegimeManager`
-  (`RuleBasedRegimeManager` stays shared). See §3, §5.
