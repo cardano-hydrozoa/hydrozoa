@@ -326,6 +326,22 @@ and fee-sized for exactly `nHeadPeers + coilQuorum` witnesses:
   `{2,3}` — same count, both satisfy the on-chain `AtLeast(coilQuorum, …)`, and
   L1 duplicate-rejection decides which lands. No cross-peer witness agreement
   is required.
+- **Two-phase stacks: the chosen coil peers sign *both* rounds.** A 2-phase
+  stack signs in two rounds — round 1 over every effect except the unlock,
+  round 2 over the unlock/SEC tx (§6). One peer attaches a *single* fixed signer
+  set (`nHeadPeers + coilQuorum`) to *all* of its effect txs, and those txs span
+  both rounds, so each chosen signer must have a signature on every tx. Head
+  peers sign both rounds anyway (`AllOf(head)` binds every tx); for coil peers
+  this means the `coilQuorum` slots are drawn from the **intersection** of the
+  round-1 and round-2 signers (`SlowConsensusActor.chooseSigners`), and the cell
+  only hard-confirms once that intersection is saturated. This is the
+  uniform-fixed-set choice, not an on-chain requirement — each tx is validated
+  independently, so a relaxed scheme could let different coil peers satisfy the
+  quorum per round, at the cost of a non-uniform witness set and more aggregation
+  bookkeeping. The uniform set is preferred for deterministic tx size and simple
+  aggregation; its cost is a liveness delay if coil peers churn between the two
+  rounds (the cell waits for `coilQuorum` *both-round* coil peers rather than
+  failing).
 
 ## 7. Fast-consensus participation — receive-only
 
