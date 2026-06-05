@@ -146,8 +146,9 @@ trait MultisigRegimeManager(
 
             hubbedCoils = config.hubbedCoilNums(ownHeadNum)
 
-            // If this head is a hub, spawn the relay sequencer for its coils' hard-acks (§8) plus
-            // one head→coil liaison per coil it hubs. Non-hub heads spawn neither.
+            // If this head peer is a hub, spawn the relay sequencer for its coil peers' hard-acks
+            // (§8) plus one head→coil liaison per coil peer it hubs. Non-hub head peers spawn
+            // neither.
             coilAckSequencer <-
                 if hubbedCoils.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
@@ -176,9 +177,9 @@ trait MultisigRegimeManager(
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = slowConsensusActor,
-              peerLiaisons = headPeerLiaisons,
+              headPeerLiaisons = headPeerLiaisons,
               remotePeerLiaisons = Map.empty,
-              coilLiaisons = coilPeerLiaisons,
+              coilPeerLiaisons = coilPeerLiaisons,
               coilAckSequencer = coilAckSequencer,
               coilLinkRelay = coilLinkRelay,
               tracer = tracer,
@@ -229,20 +230,22 @@ object MultisigRegimeManager {
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
         stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        /** Head-mesh liaisons (one per other head peer). */
-        peerLiaisons: List[PeerLiaison.Handle],
+        /** Head-peer-mesh liaisons (one per other head peer). */
+        headPeerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
-        /** Hub→coil liaisons (one per coil this head hubs); empty on non-hub heads and on coils.
-          * The hub feed (briefs + the relayed ack stream) is fanned to these, separately from the
-          * head mesh (§8).
+        /** Hub→coil liaisons (one per coil peer this head peer hubs); empty on non-hub head peers
+          * and on coil peers. The hub feed (briefs + the relayed ack stream) is fanned to these,
+          * separately from the head-peer mesh (§8).
           */
-        coilLiaisons: List[PeerLiaison.Handle] = Nil,
-        /** Present only on a hub head (§8): the relay sequencer for its coils' hard-acks (onto the
-          * head mesh's `HubHardAckLane`). `None` on non-hub heads and on coils.
+        coilPeerLiaisons: List[PeerLiaison.Handle] = Nil,
+        /** Present only on a hub head peer (§8): the relay sequencer for its coil peers' hard-acks
+          * (onto the head-peer mesh's `HubHardAckLane`). `None` on non-hub head peers and on coil
+          * peers.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
-        /** Present only on a hub head (§8): the relay that fans the population's soft/hard-acks
-          * down to its coils (the coil-link `relayedMsg` lane). `None` elsewhere.
+        /** Present only on a hub head peer (§8): the relay that fans the population's
+          * soft/hard-acks down to its coil peers (the coil-link `relayedMsg` lane). `None`
+          * elsewhere.
           */
         coilLinkRelay: Option[CoilLinkRelay.Handle] = None,
         tracer: ProtocolTracer = ProtocolTracer.noop,

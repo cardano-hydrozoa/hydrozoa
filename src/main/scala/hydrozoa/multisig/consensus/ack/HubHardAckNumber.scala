@@ -4,10 +4,11 @@ import io.circe.*
 
 /** Monotonic hub-local sequence number for the [[HardAckWithId]] relay lane.
   *
-  * A hub head assigns these to the coil hard-acks it relays (one per newly-received coil ack,
-  * across all of its coils, in arrival order), so the per-link relay lane is contiguous and slots
-  * into the same next-expected cursor machinery as the other lanes. Independent of the coil's own
-  * [[HardAckNumber]] (which the embedded [[HardAck]] still carries for end-to-end verification).
+  * A hub head peer assigns these to the coil peer hard-acks it relays (one per newly-received coil
+  * peer ack, across all of its coil peers, in arrival order), so the per-link relay lane is
+  * contiguous and slots into the same next-expected cursor machinery as the other lanes.
+  * Independent of the coil peer's own [[HardAckNumber]] (which the embedded [[HardAck]] still
+  * carries for end-to-end verification).
   */
 type HubHardAckNumber = HubHardAckNumber.HubHardAckNumber
 

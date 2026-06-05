@@ -2,13 +2,14 @@ package hydrozoa.multisig.consensus.ack
 
 import hydrozoa.multisig.consensus.UserRequestWithId
 
-/** A fast-side artifact a hub relays to one of its coils on the contiguous `relayedMsg` lane (§8 of
-  * `design/coil-network.md`), stamped with a hub-local [[RelayedMsgNumber]] for transport ordering.
+/** A fast-side artifact a hub relays to one of its coil peers on the contiguous `relayedMsg` lane
+  * (§8 of `design/coil-network.md`), stamped with a hub-local [[RelayedMsgNumber]] for transport
+  * ordering.
   *
   * The coil link multiplexes the whole population's stream over a single physical link; the
-  * receiving coil **de-multiplexes by type and embedded author** — [[Soft]] to its
+  * receiving coil peer **de-multiplexes by type and embedded author** — [[Soft]] to its
   * `FastConsensusActor`, [[Hard]] to its `SlowConsensusActor`, [[Req]] to its `BlockWeaver` — which
-  * reconstructs the same per-author lane structure a head keeps (the basis for shared
+  * reconstructs the same per-author lane structure a head peer keeps (the basis for shared
   * crash-recovery). The hub is never trusted to vouch for the artifact: it is fully signed and
   * verified end-to-end downstream.
   */

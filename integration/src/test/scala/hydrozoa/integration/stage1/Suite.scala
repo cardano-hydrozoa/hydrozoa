@@ -534,7 +534,7 @@ case class Suite(
             jointLedgerConnections = JointLedger.Connections(
               fastConsensusActor = agent,
               stackComposer = stackComposerStub,
-              peerLiaisons = List(),
+              headPeerLiaisons = List(),
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
@@ -555,7 +555,7 @@ case class Suite(
               blockWeaver = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               eventSequencer = eventSequencerStub,
-              peerLiaisons = List.empty,
+              headPeerLiaisons = List.empty,
               jointLedger = jointLedger,
               stackComposer = stackComposerStub,
               tracer = tracer

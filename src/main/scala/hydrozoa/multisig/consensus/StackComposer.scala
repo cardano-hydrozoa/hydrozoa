@@ -125,10 +125,10 @@ final case class StackComposer(
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
         _ <- Tracer.debug(s"StackBrief received for stack ${brief.stackNum}")
         _ <- state.update(_.withInboundLeaderBrief(brief))
-        // A hub relays every received stack brief (other heads' partitions) to its coils, so they
-        // follow the whole stack partitioning. No-op off a hub.
+        // A hub relays every received stack brief (other head peers' partitions) to its coil peers,
+        // so they follow the whole stack partitioning. No-op off a hub.
         conn <- getConnections
-        _ <- (conn.coilLiaisons ! brief).parallel
+        _ <- (conn.coilPeerLiaisons ! brief).parallel
         _ <- tryProgress
     } yield ()
 
@@ -174,9 +174,9 @@ final case class StackComposer(
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
-                    _ <- (conn.peerLiaisons ! brief).parallel
-                    // A hub also relays its own stack brief to its coils (§8). No-op off a hub.
-                    _ <- (conn.coilLiaisons ! brief).parallel
+                    _ <- (conn.headPeerLiaisons ! brief).parallel
+                    // A hub also relays its own stack brief to its coil peers (§8). No-op off a hub.
+                    _ <- (conn.coilPeerLiaisons ! brief).parallel
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
@@ -551,8 +551,8 @@ final case class StackComposer(
                       jointLedger = c.jointLedger,
                       fastConsensusActor = c.consensusActor,
                       slowConsensusActor = c.slowConsensusActor,
-                      peerLiaisons = c.peerLiaisons,
-                      coilLiaisons = c.coilLiaisons
+                      headPeerLiaisons = c.headPeerLiaisons,
+                      coilPeerLiaisons = c.coilPeerLiaisons
                     )
                   )
                 )
@@ -570,11 +570,12 @@ object StackComposer {
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle],
-        /** Hub→coil liaisons (empty unless a hub head); every stack brief (own-led and received) is
-          * relayed here so the hub's coils get the whole stack-partition stream (§8).
+        headPeerLiaisons: List[PeerLiaison.Handle],
+        /** Hub→coil liaisons (empty unless a hub head peer); every stack brief (own-led and
+          * received) is relayed here so the hub's coil peers get the whole stack-partition stream
+          * (§8).
           */
-        coilLiaisons: List[PeerLiaison.Handle] = Nil
+        coilPeerLiaisons: List[PeerLiaison.Handle] = Nil
     )
 
     /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches

@@ -11,15 +11,15 @@ import hydrozoa.multisig.consensus.CoilLinkRelay.*
 import hydrozoa.multisig.consensus.ack.{HardAck, RelayedMsg, RelayedMsgNumber, SoftAck}
 import org.typelevel.log4cats.Logger
 
-/** The hub-side relay that fans the **whole population's** fast-side acks down to a hub's coils (§8
-  * "Hub→coil link lane encoding" of `design/coil-network.md`).
+/** The hub-side relay that fans the **whole population's** fast-side acks down to a hub's coil
+  * peers (§8 "Hub→coil link lane encoding" of `design/coil-network.md`).
   *
   * The hub's `FastConsensusActor` tees every soft-ack it sees here, and its `SlowConsensusActor`
-  * tees every hard-ack (head and coil alike). Each is stamped with a monotonic hub-local
+  * tees every hard-ack (head peer and coil peer alike). Each is stamped with a monotonic hub-local
   * [[RelayedMsgNumber]] and fanned, wrapped as a [[RelayedMsg]], onto the coil-ward liaisons'
   * contiguous `relayedMsg` lane. The sequence number is transport ordering only — the embedded
-  * signed ack still carries its own author, so each coil verifies the signature and **aggregates by
-  * author** (the de-mux into the same per-author lane structure a head keeps).
+  * signed ack still carries its own author, so each coil peer verifies the signature and
+  * **aggregates by author** (the de-mux into the same per-author lane structure a head peer keeps).
   *
   * In-memory only for now (durable resume index deferred to coil-persistence), exactly like
   * [[CoilAckSequencer]].
@@ -44,7 +44,9 @@ trait CoilLinkRelay(
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: MultisigRegimeManager.PendingConnections =>
-            x.get.flatMap(c => connections.set(Some(Connections(coilLiaisons = c.coilLiaisons))))
+            x.get.flatMap(c =>
+                connections.set(Some(Connections(coilPeerLiaisons = c.coilPeerLiaisons)))
+            )
         case x: CoilLinkRelay.Connections => connections.set(Some(x))
     }
 
@@ -65,7 +67,9 @@ trait CoilLinkRelay(
             conn <- getConnections
             seq <- nextSeq.getAndUpdate(_.increment)
             relayed = wrap(seq)
-            _ <- logger.debug(s"relaying ack as seq $seq") >> (conn.coilLiaisons ! relayed).parallel
+            _ <- logger.debug(
+              s"relaying ack as seq $seq"
+            ) >> (conn.coilPeerLiaisons ! relayed).parallel
         } yield ()
 }
 
@@ -78,7 +82,7 @@ object CoilLinkRelay {
 
     type Config = OwnPeerPublic.Section
 
-    final case class Connections(coilLiaisons: List[PeerLiaison.Handle])
+    final case class Connections(coilPeerLiaisons: List[PeerLiaison.Handle])
 
     type Handle = ActorRef[IO, Request]
 

@@ -74,8 +74,8 @@ abstract class PeerLiaison(
             _ <- batch.blockBrief.traverse_(conn.blockWeaver ! _)
             _ <- batch.stackBrief.traverse_(conn.stackComposer ! _)
             _ <- batch.hardAck.traverse_(conn.slowConsensusActor ! _)
-            // Relayed coil hard-acks: unwrap and hand the raw, signed coil ack to the local
-            // SlowConsensusActor (verified end-to-end there).
+            // Relayed coil peer hard-acks: unwrap and hand the raw, signed coil peer ack to the
+            // local SlowConsensusActor (verified end-to-end there).
             _ <- batch.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
             _ <- batch.requests.traverse_(conn.blockWeaver ! _)
         } yield ()

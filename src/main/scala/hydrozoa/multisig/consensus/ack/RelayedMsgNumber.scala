@@ -4,11 +4,12 @@ import io.circe.*
 
 /** Monotonic hub-local sequence number for the `relayedMsg` lane on a hub→coil link.
   *
-  * A hub assigns these to every ack it relays to a coil — head soft-acks, head hard-acks, and coil
-  * hard-acks alike — in arrival order, so the per-link relay lane is contiguous and reuses the
-  * next-expected cursor machinery. It is pure transport ordering: the embedded [[SoftAck]] /
-  * [[HardAck]] still carries its own author + number for end-to-end verification and per-author
-  * aggregation at the coil. Distinct from [[HubHardAckNumber]] (the head-mesh coil-ack lane).
+  * A hub assigns these to every ack it relays to a coil peer — head peer soft-acks, head peer
+  * hard-acks, and coil peer hard-acks alike — in arrival order, so the per-link relay lane is
+  * contiguous and reuses the next-expected cursor machinery. It is pure transport ordering: the
+  * embedded [[SoftAck]] / [[HardAck]] still carries its own author + number for end-to-end
+  * verification and per-author aggregation at the coil peer. Distinct from [[HubHardAckNumber]]
+  * (the coil-peer-ack lane on the head-peer mesh).
   */
 type RelayedMsgNumber = RelayedMsgNumber.RelayedMsgNumber
 

@@ -22,9 +22,9 @@ import scala.collection.immutable.Queue
   *   - [[initializeConnections]] — resolve and cache this liaison's connections at start.
   *   - [[sendToRemoteLiaison]] — how to reach the counterpart liaison on the other end of the link.
   *   - [[dispatchVerifiedBatch]] — where to route a verified inbound batch's payloads. This is the
-  *     one behavioral axis on which the three shapes differ (head mesh routes everything; a
-  *     hub→coil link routes only the coil's own hard-acks; a coil→hub link routes the full relayed
-  *     stream).
+  *     one behavioral axis on which the three shapes differ (head-peer mesh routes everything; a
+  *     hub→coil link routes only the coil peer's own hard-acks; a coil→hub link routes the full
+  *     relayed stream).
   */
 trait BatchProtocolLiaison(
     config: Config,
@@ -375,7 +375,7 @@ trait BatchProtocolLiaison(
                         _ <- this.qHardAck.update(_ :+ y)
                     } yield ()
                 case y: HardAckWithId =>
-                    // Relayed coil hard-acks, hub-sequenced: contiguous per-link by `seqNum`
+                    // Relayed coil peer hard-acks, hub-sequenced: contiguous per-link by `seqNum`
                     // (mirrors the hard-ack lane). The hub's CoilAckSequencer assigns the seqNums.
                     for {
                         nHub <- this.nHubHardAck.get
@@ -570,11 +570,10 @@ trait BatchProtocolLiaison(
           * Predicates are checked in a fixed order; the first failure short-circuits, so the
           * reported [[VerifyOutcome.Rejection]] is the most specific one available.
           *
-          * TODO(Pc4): for a coil→hub link carrying the relayed multi-head stream, the soft-ack and
-          * hard-ack author checks must relax from `author == remote` to `author ∈ population,
-          * verified by signature` (§8.3) — the hub relays other heads' artifacts, so their author
-          * is not the remote hub. Sound at one head (sole author == remote); revisit when
-          * multi-head.
+          * On a coil→hub link the direct soft-ack / hard-ack lanes carry only the hub's own acks,
+          * so the `author == remote` checks below hold. The rest of the population rides the
+          * separate relayed lanes (`relayedMsg` / `HubHardAckLane`), de-muxed by embedded author
+          * and verified end-to-end by signature, so it is not subject to these checks (§8.3).
           */
         private def verifyAgainst(
             current: GetMsgBatch,
@@ -635,7 +634,7 @@ trait BatchProtocolLiaison(
                     )
                 case _ => ()
 
-            // 3c. If a relayed coil hard-ack is present, its seqNum must equal the next-expected
+            // 3c. If a relayed coil peer hard-ack is present, its seqNum must equal the next-expected
             //     `current.hubHardAckNum`. No author check — the embedded ack is a coil's, verified
             //     end-to-end by SlowConsensusActor; the seqNum is the remote hub's relay ordering.
             received.hubHardAck match

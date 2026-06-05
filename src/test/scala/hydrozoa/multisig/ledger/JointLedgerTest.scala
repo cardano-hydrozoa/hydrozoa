@@ -158,7 +158,7 @@ object JointLedgerTestHelpers {
                   JointLedger.Connections(
                     fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
                     stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
-                    peerLiaisons = List()
+                    headPeerLiaisons = List()
                   ),
                   eutxoLedger,
                   hydrozoa.lib.tracing.ProtocolTracer.noop,

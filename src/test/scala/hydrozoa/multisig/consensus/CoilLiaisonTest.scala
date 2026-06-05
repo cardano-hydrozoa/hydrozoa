@@ -21,8 +21,9 @@ import org.scalacheck.{Prop, Properties}
 /** Pc3/Pc4 plumbing tests for the coil hard-ack relay (§8 of `design/coil-network.md`), one hub
   * head serving N coils. A coil's hard-ack travels up its [[CoilPeerToHeadLiaison]] to the hub's
   * [[HeadPeerToCoilLiaison]], which routes it to BOTH the hub's slow-consensus actor and the
-  * [[CoilAckSequencer]]; the sequencer stamps it and relays the resulting `HardAckWithId` down EVERY
-  * coil link, so each coil hears every coil's ack (its own echo included — deduped downstream).
+  * [[CoilAckSequencer]]; the sequencer stamps it and relays the resulting `HardAckWithId` down
+  * EVERY coil link, so each coil hears every coil's ack (its own echo included — deduped
+  * downstream).
   *
   * Everything around the three new actors is stubbed: the liaison `Config` is a hand-built
   * `OwnPeerPublic.Section & NodeOperationMultisigConfig.Section`, and every consensus actor a
@@ -88,7 +89,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     private def mkConnections(
         system: ActorSystem[IO],
         slowConsensus: SlowConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle],
+        headPeerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
         coilAckSequencer: Option[CoilAckSequencer.Handle],
     ): IO[MultisigRegimeManager.Connections] =
@@ -109,7 +110,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
           stackComposer = stackComposer,
           stackComposerLimiter = stackComposer,
           slowConsensusActor = slowConsensus,
-          peerLiaisons = peerLiaisons,
+          headPeerLiaisons = headPeerLiaisons,
           remotePeerLiaisons = remotePeerLiaisons,
           coilAckSequencer = coilAckSequencer,
         )
@@ -171,7 +172,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                     headConnections <- mkConnections(
                       system,
                       slowConsensus = hubSlowConsensus,
-                      peerLiaisons = coils.map(_.headLiaison),
+                      headPeerLiaisons = coils.map(_.headLiaison),
                       remotePeerLiaisons =
                           coils.map(c => PeerId.Coil(c.coilNum) -> c.coilLiaison).toMap,
                       coilAckSequencer = Some(sequencer),
@@ -181,7 +182,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                         mkConnections(
                           system,
                           slowConsensus = c.coilSlowConsensus,
-                          peerLiaisons = List(c.coilLiaison),
+                          headPeerLiaisons = List(c.coilLiaison),
                           remotePeerLiaisons = Map(headPeerId -> c.headLiaison),
                           coilAckSequencer = None,
                         ).flatMap(c.pending.complete)

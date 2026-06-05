@@ -52,7 +52,7 @@ trait EventSequencer(
                   Some(
                     Connections(
                       blockWeaver = _connections.blockWeaver,
-                      peerLiaisons = _connections.peerLiaisons
+                      headPeerLiaisons = _connections.headPeerLiaisons
                     )
                   )
                 )
@@ -92,7 +92,7 @@ trait EventSequencer(
                       )
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
-                      _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+                      _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
                   } yield newId
             )
     }
@@ -121,7 +121,7 @@ object EventSequencer {
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        headPeerLiaisons: List[PeerLiaison.Handle]
     )
 
     type Handle = ActorRef[IO, Request]

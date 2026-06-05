@@ -11,16 +11,16 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
-/** A coil's single liaison, toward its hub head (§8 of `design/coil-network.md`).
+/** A coil peer's single liaison, toward its hub head peer (§8 of `design/coil-network.md`).
   *
-  * Asymmetric: its outbox carries only this coil's own hard-acks (a coil never leads a block or
-  * stack, never soft-acks, and authors no user requests — those lanes stay empty), while its
-  * inbound direction receives the hub's full relayed population stream and routes it to every local
-  * actor, exactly as a head-mesh [[PeerLiaison]] does.
+  * Asymmetric: its outbox carries only this coil peer's own hard-acks (a coil peer never leads a
+  * block or stack, never soft-acks, and authors no user requests — those lanes stay empty), while
+  * its inbound direction receives the hub's full relayed population stream and routes it to every
+  * local actor, exactly as a head-peer-mesh [[PeerLiaison]] does.
   *
-  * At one head the hub is the sole author, so the inherited `author == remote` verify checks hold.
-  * The multi-head relax (`author ∈ population, verified by signature`, §8.3) is a Pc4 concern,
-  * noted on `BatchProtocolLiaison.State.verifyAgainst`.
+  * The hub's own soft-/hard-acks ride the direct lanes (the inherited `author == remote` verify
+  * checks hold); the rest of the population rides the relayed `relayedMsg` / `HubHardAckLane`
+  * lanes, de-muxed by embedded author and verified end-to-end by signature.
   */
 abstract class CoilPeerToHeadLiaison(
     config: Config,
@@ -79,8 +79,9 @@ abstract class CoilPeerToHeadLiaison(
             _ <- batch.blockBrief.traverse_(conn.blockWeaver ! _)
             _ <- batch.stackBrief.traverse_(conn.stackComposer ! _)
             _ <- batch.hardAck.traverse_(conn.slowConsensusActor ! _)
-            // Relayed coil hard-acks (other coils, plus this coil's own echo, deduped downstream):
-            // unwrap to the raw signed ack for the local SlowConsensusActor, verified end-to-end.
+            // Relayed coil peer hard-acks (other coil peers, plus this coil peer's own echo,
+            // deduped downstream): unwrap to the raw signed ack for the local SlowConsensusActor,
+            // verified end-to-end.
             _ <- batch.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
             // The hub→coil relay lane: de-mux each wrapped ack by type+author. Soft-acks to the
             // FastConsensusActor, hard-acks to the SlowConsensusActor; each verifies the embedded

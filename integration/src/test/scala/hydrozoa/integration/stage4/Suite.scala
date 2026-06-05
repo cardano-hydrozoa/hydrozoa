@@ -459,9 +459,9 @@ case class Stage4Suite(
                             stackComposer = stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = stack.slowConsensusActor,
-                            peerLiaisons = localLiaisons,
+                            headPeerLiaisons = localLiaisons,
                             remotePeerLiaisons = allRemote,
-                            coilLiaisons = hubCoilLiaisons,
+                            coilPeerLiaisons = hubCoilLiaisons,
                             coilAckSequencer = if isHub then coilAckSequencer else None,
                             coilLinkRelay = if isHub then coilLinkRelay else None,
                           )
@@ -493,7 +493,7 @@ case class Stage4Suite(
                             stackComposer = c.stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = c.stack.slowConsensusActor,
-                            peerLiaisons = List(c.coilLiaison),
+                            headPeerLiaisons = List(c.coilLiaison),
                             remotePeerLiaisons = Map((PeerId.Head(hubNum): PeerId) -> c.headLiaison),
                             coilAckSequencer = None,
                           )

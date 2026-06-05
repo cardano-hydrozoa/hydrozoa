@@ -12,16 +12,16 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, HubHardAckNumber
 import hydrozoa.multisig.consensus.peer.PeerId
 import org.typelevel.log4cats.Logger
 
-/** The hub-side relay sequencer for coil hard-acks — analogous to the request sequencer
+/** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
   * ([[EventSequencer]]).
   *
-  * A hub head's [[HeadPeerToCoilLiaison]]s hand it the coil hard-acks they receive — each exactly
-  * once, since the liaison's batch protocol dispatches a payload only when it advances the cursor.
-  * It stamps each with a monotonic hub-local [[HubHardAckNumber]] and fans the resulting
+  * A hub head peer's [[HeadPeerToCoilLiaison]]s hand it the coil peer hard-acks they receive — each
+  * exactly once, since the liaison's batch protocol dispatches a payload only when it advances the
+  * cursor. It stamps each with a monotonic hub-local [[HubHardAckNumber]] and fans the resulting
   * [[HardAckWithId]] out to all the hub's [[PeerLiaison]]s, which carry it on the contiguous
-  * `HubHardAckLane` (§8 of `design/coil-network.md`) — to the head mesh and onward to coils. The
-  * sequence number is transport ordering only; the embedded ack is verified end-to-end by each
-  * receiving `SlowConsensusActor`.
+  * `HubHardAckLane` (§8 of `design/coil-network.md`) — to the head-peer mesh and onward to coil
+  * peers. The sequence number is transport ordering only; the embedded ack is verified end-to-end
+  * by each receiving `SlowConsensusActor`.
   *
   * In-memory only for now: the durable per-coil receive log + index CF — which on crash recovery
   * lets the sequencer resume its counter without re-stamping acks the liaisons replay — is deferred
@@ -47,7 +47,7 @@ trait CoilAckSequencer(
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: MultisigRegimeManager.PendingConnections =>
-            x.get.flatMap(c => connections.set(Some(Connections(liaisons = c.peerLiaisons))))
+            x.get.flatMap(c => connections.set(Some(Connections(liaisons = c.headPeerLiaisons))))
         case x: CoilAckSequencer.Connections => connections.set(Some(x))
     }
 
@@ -62,7 +62,7 @@ trait CoilAckSequencer(
                 case PeerId.Head(_) =>
                     IO.raiseError(
                       new IllegalStateException(
-                        s"CoilAckSequencer received a head hard-ack: ${ack.peerId}"
+                        s"CoilAckSequencer received a head peer hard-ack: ${ack.peerId}"
                       )
                     )
                 case PeerId.Coil(coilNum) =>

@@ -10,18 +10,14 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 
-/** A hub head's liaison toward one coil it serves (§8 of `design/coil-network.md`).
+/** A hub head peer's liaison toward one coil peer it serves (§8 of `design/coil-network.md`).
   *
   * Asymmetric, the mirror image of [[CoilPeerToHeadLiaison]]: its outbox carries everything the hub
-  * holds — briefs, soft-acks, head hard-acks, and the relayed `HubHardAckLane` (fed by the hub's
-  * actors) — while its inbound direction receives only that coil's own hard-acks. Each one is
-  * routed BOTH to the hub's local [[SlowConsensusActor]] (so the hub counts it toward quorum) and
-  * to the [[CoilAckSequencer]] (which stamps it and relays it onto the `HubHardAckLane`).
-  *
-  * Pc3 scope is one head / one coil, where the hub is the sole head author so the outbox is sourced
-  * from the hub's own production (sparse briefs == full at one leader). The multi-head relay — full
-  * briefs from all leaders and multiplexed soft/hard-acks sourced from the hub's received-from-mesh
-  * state (§8 "cost of being a hub") — is deferred to Pc4.
+  * holds — briefs, soft-acks, head peer hard-acks, and the relayed `HubHardAckLane` (fed by the
+  * hub's actors) — while its inbound direction receives only that coil peer's own hard-acks. Each
+  * one is routed BOTH to the hub's local [[SlowConsensusActor]] (so the hub counts it toward
+  * quorum) and to the [[CoilAckSequencer]] (which stamps it and relays it onto the
+  * `HubHardAckLane`).
   */
 abstract class HeadPeerToCoilLiaison(
     config: Config,

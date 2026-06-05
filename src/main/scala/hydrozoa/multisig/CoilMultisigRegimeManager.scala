@@ -124,7 +124,7 @@ trait CoilMultisigRegimeManager(
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = slowConsensusActor,
-              peerLiaisons = List(hubLiaison),
+              headPeerLiaisons = List(hubLiaison),
               remotePeerLiaisons = Map.empty,
               tracer = tracer,
             )

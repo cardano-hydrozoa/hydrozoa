@@ -21,8 +21,8 @@ object PeerId {
       Encoder.encodeInt.contramap(_.toWireInt)
     )
 
-    /** Heads sort before coils; within a kind, by peer number. Gives the signer population a stable
-      * total order for deterministic iteration.
+    /** Head peers sort before coil peers; within a kind, by peer number. Gives the signer
+      * population a stable total order for deterministic iteration.
       */
     given Ordering[PeerId] with {
         override def compare(x: PeerId, y: PeerId): Int = (x, y) match {
