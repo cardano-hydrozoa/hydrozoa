@@ -6,7 +6,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HubCoilAck, HubCoilAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber, BlockType}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -128,7 +128,7 @@ trait BatchProtocolLiaison(
                               s"outbox: hard ack stack=${y.stackNum} peer=${y.peerId} " +
                                   s"round=${y.payload.round}"
                             )
-                        case y: HubCoilAck =>
+                        case y: HardAckWithId =>
                             logger.debug(
                               s"outbox: hub-coil ack seq=${y.seqNum} coil=${y.ack.peerId}"
                             )
@@ -260,14 +260,14 @@ trait BatchProtocolLiaison(
         private val nRequest = Ref.unsafe[IO, RequestNumber](RequestNumber.zero)
         private val nStackBrief = Ref.unsafe[IO, StackNumber](StackNumber.zero)
         private val nHardAck = Ref.unsafe[IO, HardAckNumber](HardAckNumber.zero)
-        private val nHubCoilAck = Ref.unsafe[IO, HubCoilAckNumber](HubCoilAckNumber.zero)
+        private val nHubHardAck = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
         private val nRelayedAck = Ref.unsafe[IO, RelayedAckNumber](RelayedAckNumber.zero)
         private val qAck = Ref.unsafe[IO, Queue[SoftAck]](Queue())
         private val qBlock = Ref.unsafe[IO, Queue[BlockBrief.Next]](Queue())
         private val qRequest = Ref.unsafe[IO, Queue[UserRequestWithId]](Queue())
         private val qStackBrief = Ref.unsafe[IO, Queue[StackBrief]](Queue())
         private val qHardAck = Ref.unsafe[IO, Queue[HardAck]](Queue())
-        private val qHubCoilAck = Ref.unsafe[IO, Queue[HubCoilAck]](Queue())
+        private val qHubHardAck = Ref.unsafe[IO, Queue[HardAckWithId]](Queue())
         private val qRelayedAck = Ref.unsafe[IO, Queue[RelayedAck]](Queue())
         private val sendBatchImmediately = Ref.unsafe[IO, Option[GetMsgBatch]](None)
 
@@ -281,9 +281,9 @@ trait BatchProtocolLiaison(
                 event <- this.qRequest.get.map(_.isEmpty)
                 stackBrief <- this.qStackBrief.get.map(_.isEmpty)
                 hardAck <- this.qHardAck.get.map(_.isEmpty)
-                hubCoilAck <- this.qHubCoilAck.get.map(_.isEmpty)
+                hubHardAck <- this.qHubHardAck.get.map(_.isEmpty)
                 relayedAck <- this.qRelayedAck.get.map(_.isEmpty)
-            } yield ack && block && event && stackBrief && hardAck && hubCoilAck && relayedAck
+            } yield ack && block && event && stackBrief && hardAck && hubHardAck && relayedAck
 
         infix def appendToOutbox(x: RemoteBroadcast): IO[Unit] =
             x match {
@@ -357,19 +357,19 @@ trait BatchProtocolLiaison(
                         _ <- this.nHardAck.set(nY)
                         _ <- this.qHardAck.update(_ :+ y)
                     } yield ()
-                case y: HubCoilAck =>
+                case y: HardAckWithId =>
                     // Relayed coil hard-acks, hub-sequenced: contiguous per-link by `seqNum`
                     // (mirrors the hard-ack lane). The hub's CoilAckSequencer assigns the seqNums.
                     for {
-                        nHub <- this.nHubCoilAck.get
+                        nHub <- this.nHubHardAck.get
                         nY = y.seqNum
                         _ <- IO.raiseWhen(nY.convert != 0 && nHub.increment != nY)(
                           Error(
-                            s"Bad HubCoilAck increment: last-appended: $nHub, attempted: $nY"
+                            s"Bad HardAckWithId increment: last-appended: $nHub, attempted: $nY"
                           )
                         )
-                        _ <- this.nHubCoilAck.set(nY)
-                        _ <- this.qHubCoilAck.update(_ :+ y)
+                        _ <- this.nHubHardAck.set(nY)
+                        _ <- this.qHubHardAck.update(_ :+ y)
                     } yield ()
                 case y: RelayedAck =>
                     // Relayed acks (head soft/hard + coil hard), hub-sequenced: contiguous per-link
@@ -425,7 +425,7 @@ trait BatchProtocolLiaison(
                 nBlock <- this.nBlock.get
                 nStack <- this.nStackBrief.get
                 nHard <- this.nHardAck.get
-                nHub <- this.nHubCoilAck.get
+                nHub <- this.nHubHardAck.get
                 nRelayed <- this.nRelayedAck.get
                 nRequest <- this.nRequest.get
 
@@ -451,7 +451,7 @@ trait BatchProtocolLiaison(
                       nextOwnBriefBlock(nBlock).exists(_ < batchReq.blockNum) ||
                       nextOwnBriefStack(nStack).exists(_ < batchReq.stackNum) ||
                       nHard.increment < batchReq.hardAckNum ||
-                      nHub.increment < batchReq.hubCoilAckNum ||
+                      nHub.increment < batchReq.hubHardAckNum ||
                       nRelayed.increment < batchReq.relayedAckNum ||
                       nRequest.increment < batchReq.requestNum
                 )(OutOfBoundsGetMsgBatch)
@@ -488,8 +488,8 @@ trait BatchProtocolLiaison(
                     val pruned = q.dropWhile(_.hardAckNum < batchReq.hardAckNum)
                     (pruned, pruned.headOption)
                 }
-                mHubCoilAck <- this.qHubCoilAck.modify { q =>
-                    val pruned = q.dropWhile(_.seqNum < batchReq.hubCoilAckNum)
+                mHubHardAck <- this.qHubHardAck.modify { q =>
+                    val pruned = q.dropWhile(_.seqNum < batchReq.hubHardAckNum)
                     (pruned, pruned.headOption)
                 }
                 mRelayedAck <- this.qRelayedAck.modify { q =>
@@ -503,7 +503,7 @@ trait BatchProtocolLiaison(
 
                 _ <- IO.raiseWhen(
                   mAck.isEmpty && mBlock.isEmpty && events.isEmpty &&
-                      mStackBrief.isEmpty && mHardAck.isEmpty && mHubCoilAck.isEmpty &&
+                      mStackBrief.isEmpty && mHardAck.isEmpty && mHubHardAck.isEmpty &&
                       mRelayedAck.isEmpty
                 )(EmptyNewMsgBatch)
             } yield NewMsgBatch(
@@ -512,7 +512,7 @@ trait BatchProtocolLiaison(
               blockBrief = mBlock,
               stackBrief = mStackBrief,
               hardAck = mHardAck,
-              hubCoilAck = mHubCoilAck,
+              hubHardAck = mHubHardAck,
               relayedAck = mRelayedAck,
               requests = events.toList
             )).attemptNarrow
@@ -619,12 +619,12 @@ trait BatchProtocolLiaison(
                 case _ => ()
 
             // 3c. If a relayed coil hard-ack is present, its seqNum must equal the next-expected
-            //     `current.hubCoilAckNum`. No author check — the embedded ack is a coil's, verified
+            //     `current.hubHardAckNum`. No author check — the embedded ack is a coil's, verified
             //     end-to-end by SlowConsensusActor; the seqNum is the remote hub's relay ordering.
-            received.hubCoilAck match
-                case Some(hc) if hc.seqNum != current.hubCoilAckNum =>
+            received.hubHardAck match
+                case Some(hc) if hc.seqNum != current.hubHardAckNum =>
                     return Reject(
-                      Rejection.HubCoilAckNumMismatch(current.hubCoilAckNum, hc.seqNum)
+                      Rejection.HubHardAckNumMismatch(current.hubHardAckNum, hc.seqNum)
                     )
                 case _ => ()
 
@@ -671,7 +671,7 @@ trait BatchProtocolLiaison(
                     nextRemoteBriefStack(sb.stackNum).getOrElse(current.stackNum)
                 ),
                 hardAckNum = received.hardAck.fold(current.hardAckNum)(_.hardAckNum.increment),
-                hubCoilAckNum = received.hubCoilAck.fold(current.hubCoilAckNum)(_.seqNum.increment),
+                hubHardAckNum = received.hubHardAck.fold(current.hubHardAckNum)(_.seqNum.increment),
                 relayedAckNum = received.relayedAck.fold(current.relayedAckNum)(_.seqNum.increment),
                 requestNum = received.requests.lastOption.fold(current.requestNum)(
                   _.requestId.requestNum.increment

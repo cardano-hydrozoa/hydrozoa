@@ -21,7 +21,7 @@ import org.scalacheck.{Prop, Properties}
 /** Pc3/Pc4 plumbing tests for the coil hard-ack relay (§8 of `design/coil-network.md`), one hub
   * head serving N coils. A coil's hard-ack travels up its [[CoilPeerToHeadLiaison]] to the hub's
   * [[HeadPeerToCoilLiaison]], which routes it to BOTH the hub's slow-consensus actor and the
-  * [[CoilAckSequencer]]; the sequencer stamps it and relays the resulting `HubCoilAck` down EVERY
+  * [[CoilAckSequencer]]; the sequencer stamps it and relays the resulting `HardAckWithId` down EVERY
   * coil link, so each coil hears every coil's ack (its own echo included — deduped downstream).
   *
   * Everything around the three new actors is stubbed: the liaison `Config` is a hand-built
@@ -204,7 +204,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet
 
     val _ = property(
-      "a coil hard-ack reaches the hub and is relayed back via the HubCoilAckLane"
+      "a coil hard-ack reaches the hub and is relayed back via the HubHardAckLane"
     ) = {
         val coil0 = CoilPeerNumber(0)
         val (hub, perCoil) = runRelay(List(List(coilAck(coil0, 0))))
@@ -213,7 +213,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             s"coil saw: ${perCoil.head}"
     }
 
-    val _ = property("two coils each hear both acks via the hub's HubCoilAckLane") = {
+    val _ = property("two coils each hear both acks via the hub's HubHardAckLane") = {
         val coil0 = CoilPeerNumber(0)
         val coil1 = CoilPeerNumber(1)
         val (hub, perCoil) = runRelay(List(List(coilAck(coil0, 0)), List(coilAck(coil1, 0))))

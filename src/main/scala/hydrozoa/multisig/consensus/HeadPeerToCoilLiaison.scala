@@ -13,10 +13,10 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 /** A hub head's liaison toward one coil it serves (§8 of `design/coil-network.md`).
   *
   * Asymmetric, the mirror image of [[CoilPeerToHeadLiaison]]: its outbox carries everything the hub
-  * holds — briefs, soft-acks, head hard-acks, and the relayed `HubCoilAckLane` (fed by the hub's
+  * holds — briefs, soft-acks, head hard-acks, and the relayed `HubHardAckLane` (fed by the hub's
   * actors) — while its inbound direction receives only that coil's own hard-acks. Each one is
   * routed BOTH to the hub's local [[SlowConsensusActor]] (so the hub counts it toward quorum) and
-  * to the [[CoilAckSequencer]] (which stamps it and relays it onto the `HubCoilAckLane`).
+  * to the [[CoilAckSequencer]] (which stamps it and relays it onto the `HubHardAckLane`).
   *
   * Pc3 scope is one head / one coil, where the hub is the sole head author so the outbox is sourced
   * from the hub's own production (sparse briefs == full at one leader). The multi-head relay — full
@@ -76,7 +76,7 @@ abstract class HeadPeerToCoilLiaison(
         getConnections.flatMap(_.remotePeerLiaison ! msg)
 
     /** The coil sends only its own hard-acks. Route each both to the hub's [[SlowConsensusActor]]
-      * (for quorum) and to the [[CoilAckSequencer]] (for re-publication onto the `HubCoilAckLane`).
+      * (for quorum) and to the [[CoilAckSequencer]] (for re-publication onto the `HubHardAckLane`).
       */
     override protected def dispatchVerifiedBatch(batch: NewMsgBatch): IO[Unit] =
         for {

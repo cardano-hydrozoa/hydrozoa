@@ -238,7 +238,7 @@ object MultisigRegimeManager {
           */
         coilLiaisons: List[PeerLiaison.Handle] = Nil,
         /** Present only on a hub head (§8): the relay sequencer for its coils' hard-acks (onto the
-          * head mesh's `HubCoilAckLane`). `None` on non-hub heads and on coils.
+          * head mesh's `HubHardAckLane`). `None` on non-hub heads and on coils.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Present only on a hub head (§8): the relay that fans the population's soft/hard-acks

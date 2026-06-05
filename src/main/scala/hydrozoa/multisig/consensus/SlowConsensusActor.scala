@@ -221,7 +221,7 @@ final case class SlowConsensusActor(
     private def handleRemoteHardAck(h: HardAck): IO[Unit] =
         Tracer.scopedCtx(h.toContext*) {
             if h.peerId == config.ownPeerId then
-                // Our own hard-ack echoed back on the `HubCoilAckLane`: a hub re-publishes a coil's
+                // Our own hard-ack echoed back on the `HubHardAckLane`: a hub re-publishes a coil's
                 // acks to every coil it serves, the author included (filtering would punch gaps in
                 // the contiguous lane). We already hold our own ack locally, so drop the echo —
                 // re-applying it would, once the cell has advanced past the echoed round, hit the

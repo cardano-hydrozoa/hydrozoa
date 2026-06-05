@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.PeerLiaison
 import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubCoilAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckId}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HubHardAckNumber, RelayedAck, RelayedAckNumber, SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, RemotePeer}
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -51,7 +51,7 @@ class CodecsTest extends AnyFunSuite {
           blockNum = BlockNumber(99),
           stackNum = StackNumber(4),
           hardAckNum = HardAckNumber(8),
-          hubCoilAckNum = HubCoilAckNumber(5),
+          hubHardAckNum = HubHardAckNumber(5),
           relayedAckNum = RelayedAckNumber(17),
           requestNum = RequestNumber(7),
         )
@@ -63,7 +63,7 @@ class CodecsTest extends AnyFunSuite {
                 assert(decoded.blockNum == gmb.blockNum)
                 assert(decoded.stackNum == gmb.stackNum)
                 assert(decoded.hardAckNum == gmb.hardAckNum)
-                assert(decoded.hubCoilAckNum == gmb.hubCoilAckNum)
+                assert(decoded.hubHardAckNum == gmb.hubHardAckNum)
                 assert(decoded.relayedAckNum == gmb.relayedAckNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
@@ -77,7 +77,7 @@ class CodecsTest extends AnyFunSuite {
           blockBrief = None,
           stackBrief = None,
           hardAck = None,
-          hubCoilAck = None,
+          hubHardAck = None,
           relayedAck = None,
           requests = Nil,
         )
@@ -109,7 +109,7 @@ class CodecsTest extends AnyFunSuite {
           blockBrief = None,
           stackBrief = None,
           hardAck = None,
-          hubCoilAck = None,
+          hubHardAck = None,
           relayedAck = None,
           requests = Nil,
         )
@@ -163,7 +163,7 @@ class CodecsTest extends AnyFunSuite {
                 payload = payload
               )
             ),
-            hubCoilAck = None,
+            hubHardAck = None,
             relayedAck = None,
             requests = Nil,
           )
@@ -277,7 +277,7 @@ class CodecsTest extends AnyFunSuite {
               blockBrief = None,
               stackBrief = None,
               hardAck = None,
-              hubCoilAck = None,
+              hubHardAck = None,
               relayedAck = Some(
                 RelayedAck.Hard(
                   RelayedAckNumber(3),
@@ -303,7 +303,7 @@ class CodecsTest extends AnyFunSuite {
               blockBrief = None,
               stackBrief = None,
               hardAck = None,
-              hubCoilAck = None,
+              hubHardAck = None,
               relayedAck = Some(
                 RelayedAck.Soft(
                   RelayedAckNumber(4),

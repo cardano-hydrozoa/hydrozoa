@@ -8,7 +8,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
-import hydrozoa.multisig.consensus.ack.{HardAck, HubCoilAck, HubCoilAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
 import org.typelevel.log4cats.Logger
 
@@ -17,9 +17,9 @@ import org.typelevel.log4cats.Logger
   *
   * A hub head's [[HeadPeerToCoilLiaison]]s hand it the coil hard-acks they receive — each exactly
   * once, since the liaison's batch protocol dispatches a payload only when it advances the cursor.
-  * It stamps each with a monotonic hub-local [[HubCoilAckNumber]] and fans the resulting
-  * [[HubCoilAck]] out to all the hub's [[PeerLiaison]]s, which carry it on the contiguous
-  * `HubCoilAckLane` (§8 of `design/coil-network.md`) — to the head mesh and onward to coils. The
+  * It stamps each with a monotonic hub-local [[HubHardAckNumber]] and fans the resulting
+  * [[HardAckWithId]] out to all the hub's [[PeerLiaison]]s, which carry it on the contiguous
+  * `HubHardAckLane` (§8 of `design/coil-network.md`) — to the head mesh and onward to coils. The
   * sequence number is transport ordering only; the embedded ack is verified end-to-end by each
   * receiving `SlowConsensusActor`.
   *
@@ -69,7 +69,7 @@ trait CoilAckSequencer(
                     for {
                         conn <- getConnections
                         seq <- state.nextSeqNum
-                        hubAck = HubCoilAck(seq, ack)
+                        hubAck = HardAckWithId(seq, ack)
                         _ <- logger.debug(
                           s"sequenced coil $coilNum ack ${ack.hardAckNum} as seq $seq"
                         ) >> (conn.liaisons ! hubAck).parallel
@@ -78,10 +78,10 @@ trait CoilAckSequencer(
     }
 
     private final class State {
-        private val nextSeq = Ref.unsafe[IO, HubCoilAckNumber](HubCoilAckNumber.zero)
+        private val nextSeq = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
 
         /** The next hub-local sequence number, advancing the counter. */
-        def nextSeqNum: IO[HubCoilAckNumber] = nextSeq.getAndUpdate(_.increment)
+        def nextSeqNum: IO[HubHardAckNumber] = nextSeq.getAndUpdate(_.increment)
     }
 }
 

@@ -8,7 +8,7 @@ import io.circe.*
   * hard-acks alike — in arrival order, so the per-link relay lane is contiguous and reuses the
   * next-expected cursor machinery. It is pure transport ordering: the embedded [[SoftAck]] /
   * [[HardAck]] still carries its own author + number for end-to-end verification and per-author
-  * aggregation at the coil. Distinct from [[HubCoilAckNumber]] (the head-mesh coil-ack lane).
+  * aggregation at the coil. Distinct from [[HubHardAckNumber]] (the head-mesh coil-ack lane).
   */
 type RelayedAckNumber = RelayedAckNumber.RelayedAckNumber
 
