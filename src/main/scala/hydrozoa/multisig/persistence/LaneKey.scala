@@ -103,7 +103,8 @@ object LaneKey:
             requireLen(cf, bytes, 1 + 4)
             HardAck(HeadPeerNumber(readPeer(bytes, 0)), HardAckNumber(readIntBE(bytes, 1)))
         case Cf.BlockResult | Cf.SoftConfirmation | Cf.HardConfirmation | Cf.DepositMap |
-            Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.L2CommandNumber | Cf.Meta =>
+            Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.L2CommandNumber |
+            Cf.UnsignedStack | Cf.Meta =>
             throw new IllegalArgumentException(
               s"$cf is not a lane CF; LaneKey.decode is undefined for it"
             )

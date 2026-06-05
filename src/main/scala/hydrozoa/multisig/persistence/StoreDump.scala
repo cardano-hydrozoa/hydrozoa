@@ -115,7 +115,7 @@ object StoreDump:
                 try LaneKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
-                Cf.EvacuationMap =>
+                Cf.EvacuationMap | Cf.UnsignedStack =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>

@@ -888,9 +888,13 @@ Post-split, owns only the fast-side state; treasury moved to StackComposer.
   See §3.2.
 - **Recover (replay):** rebuild only the **in-flight cells** above the side's
   confirmed mark — FastConsensusActor for cells `> softConfirmed`,
-  SlowConsensusActor for cells `> hardConfirmed` — from briefs + acks. Re-acquire
-  the acked-but-unconfirmed band (`[softConfirmed + 1, softAcked]` on the fast
-  side; the slow counterpart) per §10 Q9 (signing nothing, the aggregator may
+  SlowConsensusActor for cells `> hardConfirmed` — from briefs + acks (fast side)
+  / the persisted `Stack.Unsigned` + acks (slow side). Re-acquire the
+  acked-but-unconfirmed band (`[softConfirmed + 1, softAcked]` on the fast side;
+  `[hardConfirmed + 1, hardAcked]` — at most one stack, single-flight — on the
+  slow side, where the `ReplayActor` reconstructs a `StackHandoff` from that
+  stack's `UnsignedStack` + the own acks, so SCA forms the cell via its existing
+  path; StackComposer stays out) per §10 Q9 (signing nothing, the aggregator may
   re-aggregate freely). The aggregator does **not** reload past
   confirmation records: a cell is dropped once it confirms, so confirmations
   below the confirmed mark are not aggregator state — they were persisted for
@@ -944,8 +948,15 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
 - **Inputs:** `BlockResult` (JointLedger), `Block.SoftConfirmed` (FastConsensusActor),
   `StackBrief` (remote leader, via PeerLiaison — the StackLane), `Stack.HardConfirmed`
   (SlowConsensusActor — arms the next close).
-- **Persists:** at each stack close, one atomic `WriteBatch` (CR4/CR6/CR8)
-  spanning four CFs:
+- **Persists:** at each stack close, one atomic `WriteBatch` (CR4/CR6/CR8),
+  **before the handoff to SlowConsensusActor** (whose own acks SCA immediately
+  broadcasts — so they must be durable before crossing the peer boundary),
+  spanning five CFs:
+    - the closed **`Stack.Unsigned`** (brief + locally-derived effects) →
+      **`UnsignedStack`** CF (keyed by `stackNum`; every close, leader or
+      follower) — the source SlowConsensusActor's recovery re-forms its in-flight
+      cell from (a `HardAck` signs the effects, which the `StackBrief` alone does
+      not carry),
     - the own `StackBrief` → **`Stack`** CF (leader only — StackLane author),
     - this peer's `HardAck`s for the stack (round-1 + round-2, or the sole ack)
       → **`HardAck`** CF (HardAckLane author),
@@ -963,8 +974,11 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
 
   Bundling the two snapshots with the acks keeps them aligned with the
   `hardAcked` anchor — exactly as deposits ride JointLedger's soft-ack write.
-  The `StackEffects` themselves are **not** persisted — they re-derive from
-  the prefix + `treasury` + `evacuationMap` (`StackEffectsBuilder`).
+  The unsigned `StackEffects` **are** persisted (inside `Stack.Unsigned`, above)
+  so the slow-side aggregator can re-form its in-flight cell on recovery; they
+  remain deterministically re-derivable from the prefix + `treasury` +
+  `evacuationMap` (`StackEffectsBuilder`) — which is how a follower builds them in
+  the first place.
   Hard-**confirmation** is *not* written here — it is `SlowConsensusActor`'s
   output (above). Round-2 is signed at close but released by SlowConsensusActor
   only after local round-1 confirmation, so it must be durable **before** that
@@ -1049,7 +1063,7 @@ Two further mechanisms we lean on:
     - **Per-CF metrics + backup granularity** — observability and (later) backups
       are CF-level.
 
-Our store opens **14 CFs** — singular names throughout, no marker CF (every
+Our store opens **15 CFs** — singular names throughout, no marker CF (every
 marker derives from a single-CF scan, §5.1):
 
 ```
@@ -1134,10 +1148,11 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   else that would breach the R10 evacuation floor (§5.1 note). The storage
   engine's own **native (SST) compaction** runs underneath and is a separate,
   internal matter.
-- **Column families.** Fourteen CFs — five lane (`Block`, `Stack`, `Request`,
-  `SoftAck`, `HardAck`; §7.1), five spine-indexed working / confirmation
+- **Column families.** Fifteen CFs — five lane (`Block`, `Stack`, `Request`,
+  `SoftAck`, `HardAck`; §7.1), six spine-indexed working / confirmation
   (`BlockResult`, `SoftConfirmation`, `HardConfirmation`, `RequestHighWater`,
-  `L2CommandNumber`), three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs;
+  `L2CommandNumber`, `UnsignedStack` — the last the `Stack.Unsigned` StackComposer
+  persists before each handoff, keyed by `stackNum`), three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs;
   `EvacuationMap` keyed per committed block), and one metadata
   (`Meta`, store version + the arrival-stamp generation counter, §5.4). The
   generic benefits of CF-per-concern (per-CF
@@ -1150,7 +1165,7 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
   committed block (§3.2).
 
-**Per-CF profile — what CF-per-concern buys us.** The fourteen CFs have very
+**Per-CF profile — what CF-per-concern buys us.** The fifteen CFs have very
 different workload shapes, and the win of splitting them is that each one's
 tuning knobs (block size, Bloom-filter bits / prefix extractor, MemTable size,
 compaction style) can match its shape. Concretely:

@@ -205,6 +205,17 @@ final case class StackComposer(
                     ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
+                    // Persist the close bundle BEFORE anything leaves this node (CR4/CR8): the brief
+                    // and the own hard-acks both cross the peer boundary below (the brief direct to
+                    // PeerLiaisons, the acks via SlowConsensusActor's broadcast), so they must be
+                    // durable first.
+                    _ <- persistOwnStackClose(
+                      s.evacuationMap,
+                      partitions,
+                      newTreasury,
+                      unsigned,
+                      handoff.ownAcks
+                    )
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.peerLiaisons ! brief).parallel
@@ -212,13 +223,6 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
-                    _ <- persistOwnStackClose(
-                      s.evacuationMap,
-                      partitions,
-                      newTreasury,
-                      brief,
-                      handoff.ownAcks
-                    )
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
                 } yield ()
         }
@@ -248,19 +252,23 @@ final case class StackComposer(
         startMap: EvacuationMap,
         partitions: NonEmptyList[StackPartition],
         newTreasury: MultisigTreasuryUtxo,
-        brief: StackBrief,
+        unsigned: Stack.Unsigned,
         ownAcks: List[HardAck]
     ): IO[Unit] = {
+        val brief = unsigned.brief
         val committed = committedBlockNums(partitions)
         val orderedResults = partitions.toList.flatMap(_.blocks.toList)
         for {
             stamp <- persistence.arrivalStamp
-            // Own lane outputs: StackBrief (leader only — StackLane author) + this peer's HardAcks.
+            // Own outputs: the unsigned stack (so SCA can re-form its in-flight cell on recovery —
+            // every close, leader or follower), StackBrief (leader only — StackLane author), and
+            // this peer's HardAcks.
             laneBatch = {
+                val base = WriteBatch.start.put(StoreKey.UnsignedStack(brief.stackNum))(unsigned)
                 val withBrief =
                     if config.ownHeadPeerId.isSlowLeader(brief.stackNum) then
-                        WriteBatch.start.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
-                    else WriteBatch.start
+                        base.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
+                    else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
                     b.put(LaneKey.HardAck(ack.peerNum, ack.hardAckNum))(LaneValue(stamp, ack))
                 )
@@ -373,14 +381,16 @@ final case class StackComposer(
                                 ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
-                                _ <- conn.slowConsensusActor ! handoff
+                                // Persist the close bundle before the own acks leave this node via
+                                // SlowConsensusActor's broadcast (CR4/CR8).
                                 _ <- persistOwnStackClose(
                                   s.evacuationMap,
                                   partitions,
                                   newTreasury,
-                                  brief,
+                                  unsigned,
                                   handoff.ownAcks
                                 )
+                                _ <- conn.slowConsensusActor ! handoff
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )

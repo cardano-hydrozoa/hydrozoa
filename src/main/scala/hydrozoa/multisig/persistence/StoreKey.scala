@@ -8,15 +8,15 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
-import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
+import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
   * Every column family ([[Cf]]) has exactly one **key shape** and exactly one **value type** — a
   * corresponding `StoreKey` subtype captures both, so actor code addresses entries by name and
   * exchanges typed values, never raw bytes. The 5 lane CFs are reached through [[LaneKey]] (which
-  * extends `StoreKey`); the 9 non-lane CFs are covered by the cases declared in the companion
+  * extends `StoreKey`); the 10 non-lane CFs are covered by the cases declared in the companion
   * below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -26,6 +26,7 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, R
   *     keyed by `blockNum` (per-block; see the case docstring for why).
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
+  *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
@@ -168,6 +169,21 @@ object StoreKey:
         import LedgerL2CommandNumber.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.L2CommandNumber
+        def encode: Array[Byte] = LaneKey.intBytes(num)
+
+    /** Key for [[Cf.UnsignedStack]] — the `Stack.Unsigned` (brief + locally-derived effects)
+      * StackComposer closed for `stackNum`, persisted **before** the handoff to
+      * `SlowConsensusActor` (CR4/CR8: durable before the own ack crosses the peer boundary via
+      * SCA's broadcast). On recovery the `ReplayActor` reads the in-flight stack's value and the
+      * own acks (HardAck lane) to reconstruct the handoff into SCA — a `HardAck` signs the effects,
+      * which a `StackBrief` alone does not carry, so the effects must be durable. Keyed by
+      * `stackNum`.
+      */
+    final case class UnsignedStack(num: StackNumber) extends StoreKey:
+        type Value = Stack.Unsigned
+        import UnsignedStackCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.UnsignedStack
         def encode: Array[Byte] = LaneKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */

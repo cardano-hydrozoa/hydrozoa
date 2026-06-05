@@ -1,5 +1,6 @@
 package hydrozoa.multisig.persistence.recovery
 
+import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, IOLocal}
 import cats.syntax.all.*
@@ -22,13 +23,14 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
-import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, LaneKey, LaneValue, Markers, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import scalus.uplc.builtin.ByteString
 
 /** Tests for the R2-fast recover seams — the pure-over-store reconstruction of `JointLedger`'s and
   * `StackComposer`'s passive state after a crash. Each test seeds a store with the typed values the
@@ -241,6 +243,37 @@ class RecoverSeamsTest extends AnyFunSuite:
                     .recover(p, markers.hardAcked, markers.hardConfirmed, own)
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
+        }
+    }
+
+    // ---- UnsignedStack (SCA in-flight-cell recovery source) ----
+
+    test("UnsignedStack round-trips a Regular stack's unsigned effects through the store") {
+        withStore { p =>
+            val key = StoreKey.UnsignedStack(StackNumber(1))
+            val sec = StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(1),
+              blockVersion = BlockVersion.Full(0, 0),
+              kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
+                Array.fill[Byte](32)(7)
+              )
+            )
+            for
+                brief <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
+                unsigned = Stack.Unsigned(
+                  brief,
+                  StackEffects.Unsigned.Regular(
+                    NonEmptyList.one[PartitionEffects[StandaloneEvacuationCommitment]](
+                      PartitionEffects.Minor(sec, List.empty)
+                    )
+                  )
+                )
+                _ <- p.put(key)(unsigned)
+                got <- p.getOrFail(key)
+            // The SEC header is an `IArray[Byte]` (reference equality), so compare the re-encoded
+            // bytes rather than the case-class value: a faithful decode re-encodes identically.
+            yield assert(key.encodeValue(unsigned) sameElements key.encodeValue(got))
         }
     }
 

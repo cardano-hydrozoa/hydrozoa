@@ -434,15 +434,38 @@ got small seed seams. `StackComposerRecoveryTest` boots the actor against a seed
 store and asserts the observable: cold ⇒ a stack-0 `StackHandoff` reaches
 `SlowConsensusActor`, non-empty ⇒ none.
 
-#### R3b — `ReplayActor` + mailbox replay
+#### R3b — slow-side effects persistence (LANDED 2026-06-04) + `ReplayActor`
 
-- **`ReplayActor`** (new consensus-side actor): on boot — derive `Markers` +
-  `ReplayCursors`, `scanLanes`, `ArrivalOrderedMerge`, decode each `RawLaneEntry` and
-  **route it into the reading actor's mailbox** (Request→BlockWeaver, SoftAck→FCA,
-  HardAck→SCA, Block spine→FCA at `softConfirmed+1` and BlockWeaver at `softAcked+1`,
-  Stack spine→SCA at `hardConfirmed+1` and StackComposer at `hardAcked+1`); read L1
-  from `CardanoBackend.utxosAt(treasuryAddress)` and send the first `PollResults` to
-  BlockWeaver. Spawned by MRM **before** `pendingConnections.complete` (Plan A).
+**Write-side prerequisite — LANDED.** StackComposer persists the closed `Stack.Unsigned`
+(brief + locally-derived effects) under a new `Cf.UnsignedStack` (keyed by `stackNum`)
+**before** handing the stack to `SlowConsensusActor`, in both close paths
+(`tryCloseAsLeader` / `tryCloseAsFollower`) — every close, leader or follower. This fills a
+real gap: the design's "SCA rebuilds cells from briefs + acks" holds on the fast side (a
+`SoftAck` signs the block *header*, carried by `BlockBrief`) but **not** the slow side — a
+`HardAck` signs the *effects*, which a `StackBrief` (range only) does not carry — so the
+effects must be durable for SCA's in-flight-cell recovery. It also fixes a latent CR4/CR8
+ordering bug: the close paths sent the handoff (whose own acks SCA immediately broadcasts)
+*before* persisting, so an own ack could cross the peer boundary unpersisted; the persist
+now precedes the brief broadcast + the handoff. Codec = `UnsignedStackCodec` (mirrors
+`StackEffectsCodec` / `PartitionEffectsCodec` over the BARE SEC, reusing the SEC-agnostic
+`Final` partition codec). Pruning postponed (keep-all for now).
+
+**`ReplayActor`** (new consensus-side actor): on boot — derive `Markers` + `ReplayCursors`,
+`scanLanes`, `ArrivalOrderedMerge`, decode each `RawLaneEntry` and **route it into the
+reading actor's mailbox**:
+  - Request → BlockWeaver; SoftAck → FCA; HardAck → SCA.
+  - Block spine → FCA (`softConfirmed+1`) + BlockWeaver (`softAcked+1`).
+  - Stack spine (`StackBrief`) → StackComposer (`hardAckedStack+1`) as inbound leader briefs
+    for the forward stacks it re-closes. (SCA does **not** consume `StackBrief`; its
+    `Request` = `PreStart | StackHandoff | HardAck`.)
+  - **In-flight acked-but-unconfirmed stack** (≤1, single-flight — the §9 "crash mid-stack"
+    case): read its `UnsignedStack` + the own acks (HardAck lane) and send SCA a
+    **reconstructed `StackHandoff`**, so SCA forms its cell via its existing path and
+    re-aggregates the replayed + live remote acks. SC stays out of recovery for the acked
+    band (Ilia: acked-but-unconfirmed stacks go to SCA, not SC). Stack 0 in-flight is the
+    exception — re-bootstrapped (R3a), not reconstructed.
+  - Read L1 (`CardanoBackend.utxosAt(treasuryAddress)`) → first `PollResults` → BlockWeaver.
+  - Spawned by MRM **before** `pendingConnections.complete` (Plan A).
 - No inbound restore from PeerLiaison — it forwards; the ReplayActor re-feeds.
 
 #### R3c — boot sequence (§8) + fail-safe
