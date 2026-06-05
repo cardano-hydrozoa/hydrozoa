@@ -1,9 +1,24 @@
 # Coil-Ready Peer (M5)
 
 **Status:** Active M5 workstream — core decisions locked 2026-05-30 (see
-**Resolved decisions** below). **Pc1 implemented** (identity spine + threshold
-script; compiles, lints, unit suite green; uncommitted on `feature/coil`).
-**Pc2 next**.
+**Resolved decisions** below). **Pc1–Pc4 implemented on `feature/coil`:** the
+identity spine + threshold script (Pc1), the `CoilMultisigRegimeManager` +
+identity seam + role-gated actor wiring (Pc2), the two coil liaison shapes +
+`CoilAckSequencer` + the 1h/1c spine (Pc3), and the **multi-head relay** (Pc4) —
+contiguous brief relay + a re-sequenced `relayedAck` lane (`CoilLinkRelay`)
+carrying head soft-acks, head + coil hard-acks, and head user requests, de-muxed
+by author at the coil, plus follower-`BlockWeaver` brief buffering.
+
+A coil is now a **full consensus participant (fast + slow)**: a manual stage4 run
+at 2 heads / `coilQuorum`=1 hard-confirms ~11 stacks on both heads *and* the coil.
+Open items: (a) the generative stage4 `Two-heads-one-coil` property isn't green —
+blocker is **harness settling** (the coil's extra liaison + relay round-trips
+keep the post-run drain from idling), not the relay; (b) **coil persistence /
+crash-recovery** is designed-for (recovery symmetry drove the relay design) but
+unbuilt here — it lands on `feature/recovery` (the satellite `LaneId` key widens
+`HeadPeerNumber → PeerId`); (c) the **app-level launch path** (`Main` dispatch +
+a coil config-*loader*) is untouched — only the actor-level `CoilMultisigRegimeManager`
+is wired. Later phases Pc5–Pc7 (§13) remain.
 
 This spec describes the **coil-peer node type**: the process that joins a
 Gummiworm head as a custodial slow-consensus follower. It is M5's "coil
@@ -133,7 +148,7 @@ reference. Coil's multisig regime is a strict subset (separate manager —
 | `FastConsensusActor` | aggregator-only — verifies + aggregates head soft-acks into `SoftConfirmation`s; **signs nothing** (soft-acks are authored by `JointLedger`). On coil it still aggregates the head soft-acks relayed via the hub; a coil simply has no own soft-ack to add |
 | `StackComposer` | **follower-only** — pairs `BlockResult` × `Block.SoftConfirmed` × inbound `StackBrief` from the leader, never closes a stack as leader |
 | `SlowConsensusActor` | same as head |
-| `PeerLiaison` | **one** `CoilPeerToHeadLiaison` toward the hub (`coilPeers[me].hub`) — sends only own hard-acks, receives the full relayed population stream. The hub head runs the counterpart `HeadPeerToCoilLiaison` + a `CoilAckSequencer` (§8) |
+| `PeerLiaison` | **one** `CoilPeerToHeadLiaison` toward the hub (`coilPeers[me].hub`) — sends only own hard-acks, receives the full relayed population stream (contiguous briefs + the re-sequenced `relayedAck` lane, de-muxed by author). The hub head runs the counterpart `HeadPeerToCoilLiaison` + the two relay sequencers `CoilAckSequencer` (coil acks → head mesh) and `CoilLinkRelay` (the whole population's soft-acks / hard-acks / requests → its coils) (§8) |
 | `CardanoLiaison` | same as head |
 
 Absent actors → no scaffolding spawned. Present actors → existing head-peer
@@ -217,22 +232,14 @@ independent `CardanoBackend` connection (§9); the `L2Ledger` is constructed
 from the same configuration head peers use (byte-deterministic across head and
 coil). This resolves **D-coil-2** toward reuse.
 
-**Script accessor — make coil context type-level (Pc2).** Pc1 wires the
-threshold script via an *override* of `headMultisigScript` on
-`HeadConfig.Bootstrap.Section` (which has `coilPeers` + `coilQuorum`), leaving
-the head-only derivation on `HeadPeers.Section` as the base. Dynamic dispatch
-makes every runtime caller coil-aware (they all hold a `HeadConfig`), but the
-head-only base stays reachable for a bare `HeadPeers` value — a latent footgun
-(`headConfig.headPeers.headMultisigScript` would silently drop the coil branch
-with no compile error). Pc2 closes this: **move `headMultisigScript` /
-`headMultisigAddress` off `HeadPeers.Section` onto the coil-aware
-`Bootstrap.Section` and delete the head-only base**, so coil context becomes a
-*type* requirement rather than a runtime invariant. This widens the ~12
-tx-builder `Config` aliases currently typed `… & HeadPeers.Section & …`
-(Initialization / Settlement / Refund / Deposit / Finalization / Rollout /
-MultisigRegimeUtxo + rulebased Vote / Tally / Resolution / Deinit /
-RuleBasedTreasury) to carry `Bootstrap.Section`. Deferred to Pc2 (not Pc1)
-because the config-seam work already re-types this layer.
+**Script accessor — coil context is type-level (done, Pc2).** `headMultisigScript`
+/ `headMultisigAddress` live on the coil-aware `HeadConfig.Bootstrap.Section`
+(which has `coilPeers` + `coilQuorum`); the head-only derivation on
+`HeadPeers.Section` was deleted, so coil context is a *type* requirement, not a
+runtime invariant — a bare `HeadPeers` value can no longer silently drop the coil
+branch. The ~12 tx-builder `Config` aliases (Initialization / Settlement / Refund
+/ Deposit / Finalization / Rollout / MultisigRegimeUtxo + rulebased Vote / Tally /
+Resolution / Deinit / RuleBasedTreasury) carry `Bootstrap.Section` accordingly.
 
 ## 6. Slow-consensus participation
 
@@ -361,13 +368,13 @@ selected by the `(own, remote)` kinds, so they share the cursor protocol and
 differ only in lane policy (one batch-protocol core + three policies, not three
 hand-rolled actors).
 
-> **Provisional — `RemotePeer`.** Pc2 added a `RemotePeer = Head(HeadPeerId) |
-> Coil(CoilPeerNumber)` discriminator so a `PeerLiaison` can name a head or coil
-> remote. It may not survive: once the lane policies land (Pc3/Pc4) the
-> `(own, remote)` kind that selects them may be a better home for the
-> distinction, subsuming `RemotePeer`, or it may fold into the lane-policy type.
-> Kept for now; **revisit when the liaison shapes are implemented** and remove if
-> it isn't pulling its weight.
+> **`RemotePeer` — kept (revisited Pc3/Pc4).** Pc2 added
+> `RemotePeer = Head(HeadPeerId) | Coil(CoilPeerNumber)` so a liaison can name a
+> head or coil remote. With the liaison shapes now implemented as three concrete
+> actors over one `BatchProtocolLiaison` core, `RemotePeer` is what each one
+> passes for its remote (it drives the brief-lane successor + the initial cursor),
+> so it earns its place and is retained. It could still fold into a richer
+> `(own, remote)` kind later, but there's no pressure to remove it now.
 
 ### Disseminating coil hard-acks — the `HubCoilAckLane`
 
@@ -509,7 +516,12 @@ the hub's *received-from-mesh* state, not its own outbox, and bandwidth scales
 
 `MultisigRegimeManager` (a head), in addition to its head-mesh `PeerLiaison`s,
 spawns one `HeadPeerToCoilLiaison` per coil it hubs
-(`coilPeers.filter(_.hub == ownHeadPeerNum)`) plus the `CoilAckSequencer`.
+(`coilPeers.filter(_.hub == ownHeadPeerNum)`) plus the two relay sequencers
+`CoilAckSequencer` and `CoilLinkRelay`. The shared `Connections` separates the
+head mesh (`peerLiaisons`) from the coil-ward liaisons (`coilLiaisons`); the hub
+feed fans briefs (from `JointLedger` / `StackComposer`) to `coilLiaisons` and
+tees soft-acks / hard-acks / requests (from `FastConsensusActor` /
+`SlowConsensusActor` / `BlockWeaver`) to `CoilLinkRelay`.
 `CoilMultisigRegimeManager` (a coil) spawns exactly one `CoilPeerToHeadLiaison`,
 toward `coilPeers[me].hub`. Non-hub head peers are unaffected beyond consuming
 the extra `HubCoilAckLane`s on their existing head↔head links.
@@ -660,15 +672,18 @@ is a recovery concern picked up later in
 
 ## 13. Implementation phasing
 
-**First PR = Pc1–Pc3** (the whole spine). `coilQuorum` is a parameter, so the
-thin slice already builds the general mechanism; Pc4 then validates it at
-higher quorum with little new production code.
+**First PR = Pc1–Pc3** (the spine), all done. `coilQuorum` is a parameter, so the
+thin slice already builds the general mechanism. Pc4 then carries it to a full
+multi-head population — which turned out to be substantial (the relay lane +
+`CoilLinkRelay` + the hub feed + follower brief buffering), not the "little new
+code" first guessed, because a coil following >1 head needs the whole population
+stream relayed and de-muxed.
 
 | Step | Deliverable |
 |---|---|
-| Pc1 | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
-| Pc2 | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); **head `MultisigRegimeManager` hub spawns coil-ward `PeerLiaison`(s)** — spawn + coil-typed `RemotePeer` discriminator only; the relay **lane policies** (the two new liaison shapes) land in Pc3; **move `headMultisigScript` / `headMultisigAddress` to the coil-aware `Bootstrap.Section` and delete the head-only base** (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
-| Pc3 | Coil-side bootstrap entry point + the two new liaison shapes (§8) — `HeadPeerToCoilLiaison` (hub relays its full fast-side stream to the coil) and `CoilPeerToHeadLiaison` (coil sends only its own hard-acks); integration test: 1 head + 1 coil reach `Stack(0).HardConfirmed` with `coilQuorum = 1`. No `HubCoilAckLane` yet — a single head means no coil-ack relay into a mesh |
+| Pc1 — **DONE** | `PeerId` tagged sum (Head / Coil) + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator vkey map; threshold `HeadMultisigScript` (`AllOf(head) ∧ AtLeast(coilQuorum, coil)`) with the mandatory-head / fixed-count-coil signer split (resolves D-coil-1) |
+| Pc2 — **DONE** | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); actor wiring with role gates on BW / JL / FCA / SC / SCA / PL (single-hub); fixed-count aggregator (saturate at `coilQuorum`, cap hard); head `MultisigRegimeManager` hub spawns coil-ward liaisons; coil-typed `RemotePeer` discriminator; `headMultisigScript` / `headMultisigAddress` moved to the coil-aware `Bootstrap.Section`, head-only base deleted (§5); `CardanoLiaison` reused unchanged; `RuleBasedRegimeManager` shared (resolves D-coil-2, D-coil-6) |
+| Pc3 — **DONE** (consensus spine) | The two new liaison shapes over one `BatchProtocolLiaison` core (§8) — `HeadPeerToCoilLiaison` + `CoilPeerToHeadLiaison`; `HubCoilAckLane` + `CoilAckSequencer` were **pulled forward** to here; demonstrative 1h/1c stage4 run reaches stack hard-confirmation with `coilQuorum = 1`. **Carve-out still open:** the *app-level* "coil-side bootstrap entry point" (`Main` dispatch + a coil config-loader) — only the actor-level `CoilMultisigRegimeManager` is wired |
 | Pc4 | **Multi-head relay (DONE) so a coil follows the whole population through its hub** (§8 "Hub→coil link lane encoding"): contiguous brief relay + a re-sequenced `relayedAck` lane carrying head soft-acks, head + coil hard-acks, and head user requests, de-muxed by author at the coil (`CoilLinkRelay` + hub feed taps in JL / StackComposer / FCA / SCA / BlockWeaver), plus follower-BlockWeaver brief buffering. The coil becomes a full participant — a manual stage4 2h/coilQuorum=1 run hard-confirms ~11 stacks on both heads and the coil. OPEN: the generative `Two-heads-one-coil` property isn't green yet — blocker is **stage4 harness settling** (post-run `waitForIdle` drain never idles with the coil), not the relay. `HubCoilAckLane` + `CoilAckSequencer` were pulled forward into Pc3. Recovery symmetry is the design driver; satellite `LaneId` key widens `HeadPeerNumber`→`PeerId` when `feature/recovery` merges |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
