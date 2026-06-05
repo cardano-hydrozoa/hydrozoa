@@ -23,7 +23,10 @@ R3b (slow-side effects persistence + `ReplayActor`, 2026-06-04): StackComposer p
 closed `Stack.Unsigned` under `Cf.UnsignedStack` before each handoff (fixing a latent
 send-before-persist CR bug); `ReplayActor.replay` routes the recovered tail into the consensus
 actors' mailboxes (inline before the barrier, Plan A) and reconstructs the in-flight stack to
-SCA. **Next:** R3c (MRM boot wiring + fail-safe).
+SCA. · R3c (boot wiring + fail-safe, 2026-06-05): `MultisigRegimeManager.preStartLocal` runs
+`ReplayActor.replay` inline before the barrier; `validateInvariants` refuses start on a
+confirmed > acked store. **R3 complete. Next:** R4 (crash-restart tests; the CR7 catch-up
+timing-budget abort is deferred runtime hardening).
 
 ---
 
@@ -476,14 +479,26 @@ decode each `RawLaneEntry` and **route it into the reading actor's mailbox**:
   - Spawned by MRM **before** `pendingConnections.complete` (Plan A).
 - No inbound restore from PeerLiaison — it forwards; the ReplayActor re-feeds.
 
-#### R3c — boot sequence (§8) + fail-safe
+#### R3c — boot sequence (§8) + fail-safe — LANDED 2026-06-05
 
-- **`MultisigRegimeManager.preStartLocal`** grows the §8 steps: spawn actors →
-  `ReplayActor` seeds mailboxes → open the start barrier → boundaries restore + filter
-  → reconcile L1 → resume `GetMsgBatch`.
-- **Fail-safe (CR6/CR7):** validate marker/snapshot consistency on load (anchors
-  aligned, counters monotone) → refuse start on violation; abort + signal/evacuate
-  if catch-up can't finish within the timing budget.
+- **`MultisigRegimeManager.preStartLocal`** now calls `ReplayActor.replay` **inline**
+  after spawning the consensus actors and **before** `pendingConnections.complete`
+  (Plan A) — passing the four target handles + `own` / `peers` / `treasuryAddress`. This
+  activates recovery end-to-end: on a non-empty store the actors recover their base state
+  (R3a) then re-derive from the replayed tail; on a cold store it is a near-no-op (empty
+  tail) plus the early L1 `PollResults`. The §8 boundary restores already run in each
+  actor's own `PreStart` (R3a/R2-bnd); L1 reconcile is CardanoLiaison's live re-sample.
+- **Fail-safe (CR6/CR7):** `ReplayActor.validateInvariants` refuses to start when a
+  confirmed mark exceeds its acked mark (a torn / regressed store) — the raise fails
+  `preStartLocal`. The recover seams already fail-safe on a missing snapshot via
+  `getOrFail`; this catches the marker-vs-marker inconsistency before any replay is fed.
+- **Deferred:** the CR7 **catch-up timing-budget abort** (abort + signal/evacuate if
+  catch-up can't finish in budget) — post-boot runtime hardening, not boot wiring.
+- **Verified:** the timing-sensitive stage1/stage4 cold boots now run replay inline and
+  pass; `ReplayActorTest` covers the routing + the inconsistency-refusal.
+
+**R3 complete** (R3a recover wiring + R3b ReplayActor/slow-side persistence + R3c boot
+wiring). Next is R4 (crash-restart tests).
 
 ### R4 — Tests (design §9, priority Pg).
 
