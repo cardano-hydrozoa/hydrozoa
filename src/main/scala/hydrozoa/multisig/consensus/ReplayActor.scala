@@ -65,12 +65,14 @@ object ReplayActor:
         val backend = persistence.backend
         for
             markers <- Markers.derive(backend, own)
-            // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
-            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
-            // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             hardAckedStack <- markers.hardAcked.traverse(n =>
                 persistence.getOrFail(LaneKey.HardAck(own, n)).map(_.payload.stackNum)
             )
+            // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
+            _ <- validateInvariants(markers, hardAckedStack)
+            // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
+            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
+            // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- reconstructInflightHandoff(persistence, own, markers.hardConfirmed, hardAckedStack)
                 .flatMap(_.traverse_(targets.slowConsensusActor ! _))
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
@@ -79,6 +81,30 @@ object ReplayActor:
             perLane <- LaneScan.scanLanes(backend, cursors)
             _ <- ArrivalOrderedMerge.merge(perLane).traverse_(route(_, cursors, targets))
         yield ()
+
+    /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
+      * (`confirmed ≤ acked` — we confirm only what we have acked). A violation means a torn or
+      * regressed store, so refuse to start — the raise fails `MultisigRegimeManager.preStartLocal`.
+      * (The recover seams already fail-safe on a missing snapshot via `getOrFail`; this catches the
+      * marker-vs-marker inconsistency before any replay is fed.)
+      */
+    private def validateInvariants(
+        markers: Markers,
+        hardAckedStack: Option[StackNumber]
+    ): IO[Unit] =
+        val softOk = (markers.softConfirmed, markers.softAcked) match
+            case (Some(confirmed), Some(acked)) =>
+                Ordering[BlockNumber].lteq(confirmed, acked.blockNum)
+            case _ => true
+        val hardOk = (markers.hardConfirmed, hardAckedStack) match
+            case (Some(confirmed), Some(acked)) => Ordering[StackNumber].lteq(confirmed, acked)
+            case _                              => true
+        IO.raiseUnless(softOk && hardOk)(
+          new IllegalStateException(
+            s"Recovery refused: store inconsistency (confirmed > acked). markers=$markers, " +
+                s"hardAckedStack=$hardAckedStack"
+          )
+        )
 
     /** Read L1 directly and send BlockWeaver the first [[PollResults]] (§5.5). */
     private def seedFirstPollResults(

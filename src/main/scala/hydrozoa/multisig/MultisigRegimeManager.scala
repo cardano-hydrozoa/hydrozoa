@@ -164,6 +164,26 @@ trait MultisigRegimeManager(
               tracer = tracer,
             )
 
+            // R3 boot replay (§8 step 3): before opening the start barrier, re-feed the consensus
+            // actors from the persisted lane tail and seed BlockWeaver's first L1 PollResults. Run
+            // INLINE here, not as a spawned actor, so every send queues in each actor's mailbox
+            // behind its PreStart and drains in order once `pendingConnections.complete` opens the
+            // barrier (Plan A). On a cold store this is a near-no-op: an empty tail plus the early
+            // L1 sample.
+            _ <- ReplayActor.replay(
+              persistence,
+              cardanoBackend,
+              ReplayActor.Targets(
+                blockWeaver = blockWeaver,
+                fastConsensusActor = consensusActor,
+                slowConsensusActor = slowConsensusActor,
+                stackComposer = stackComposer
+              ),
+              own = config.ownHeadPeerNum,
+              peers = config.headPeerIds.map(_.peerNum).toList,
+              treasuryAddress = config.initializationTx.treasuryProduced.address
+            )(using config)
+
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
