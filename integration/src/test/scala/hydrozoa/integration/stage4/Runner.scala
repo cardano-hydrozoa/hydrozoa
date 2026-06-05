@@ -137,13 +137,14 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
-    // Two heads hubbing one coil (coilQuorum = 1). The Pc4 multi-head relay feeds the coil every
-    // leader's briefs + every soft/hard-ack (de-muxed by author): the SLOW side fully works — the
-    // coil hard-confirms stacks using the relayed head acks, and both heads hard-confirm using the
-    // coil's ack. WIP / not in the default green set: the FAST side still needs (a) relaying the
-    // user requests the coil needs to reproduce block content, and (b) the follower BlockWeaver
-    // tolerating a brief that arrives ahead of those requests (`Follower.AwaitingRequest` has no
-    // BlockBrief.Next case today). Point the propFilter here to exercise the slow-side relay.
+    // Two heads hubbing one coil (coilQuorum = 1). The Pc4 multi-head relay makes the coil a full
+    // participant: it follows every leader's blocks (relayed briefs + relayed user requests,
+    // de-muxed by author, with the follower BlockWeaver buffering early briefs) and co-signs every
+    // stack — a manual run hard-confirms ~11 stacks on BOTH heads AND the coil. NOT in the default
+    // green set: the only thing blocking is harness settling — the coil's extra liaison link + relay
+    // round-trips make the generative post-run `waitForIdle` drain take very long to (or never)
+    // reach a stable idle. Correctness is proven; the green gating is a stage4 drain/settling problem
+    // to solve separately. Point the propFilter here to watch the full fast+slow relay run.
     val _ = property("Two-heads-one-coil works") =
         Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoils = 1).property()
 

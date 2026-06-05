@@ -53,9 +53,10 @@ trait CoilLinkRelay(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case CoilLinkRelay.PreStart => initializeConnections
-        case ack: SoftAck           => relay(seq => RelayedAck.Soft(seq, ack))
-        case ack: HardAck           => relay(seq => RelayedAck.Hard(seq, ack))
+        case CoilLinkRelay.PreStart     => initializeConnections
+        case ack: SoftAck               => relay(seq => RelayedAck.Soft(seq, ack))
+        case ack: HardAck               => relay(seq => RelayedAck.Hard(seq, ack))
+        case request: UserRequestWithId => relay(seq => RelayedAck.Req(seq, request))
     }
 
     /** Stamp the next sequence number and fan the wrapped ack to the coil-ward liaisons. */
@@ -81,7 +82,7 @@ object CoilLinkRelay {
 
     type Handle = ActorRef[IO, Request]
 
-    type Request = PreStart.type | SoftAck | HardAck
+    type Request = PreStart.type | SoftAck | HardAck | UserRequestWithId
 
     case object PreStart
 }

@@ -87,6 +87,7 @@ abstract class CoilPeerToHeadLiaison(
             _ <- batch.relayedAck.traverse_ {
                 case RelayedAck.Soft(_, ack) => conn.consensusActor ! ack
                 case RelayedAck.Hard(_, ack) => conn.slowConsensusActor ! ack
+                case RelayedAck.Req(_, req)  => conn.blockWeaver ! req
             }
             _ <- batch.requests.traverse_(conn.blockWeaver ! _)
         } yield ()

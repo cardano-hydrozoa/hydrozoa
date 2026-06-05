@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.typelevel.log4cats.Logger
+import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
@@ -40,6 +41,13 @@ final case class BlockWeaver(
         context.become(
           PartialFunction.fromFunction(req =>
               for {
+                  // A hub relays every user request it sees (own + received) to its coils, which
+                  // need the request content to reproduce block bodies. No-op off a hub.
+                  _ <- req match {
+                      case ur: UserRequestWithId =>
+                          state.connections.coilLinkRelay.traverse_(_ ! ur)
+                      case _ => IO.unit
+                  }
                   // Handle the request using the current state's handler
                   mNewState <- state.react(config)(req)
                   // If the handler returns a new state, become that state.
@@ -68,7 +76,8 @@ final case class BlockWeaver(
                 c <- pc.get
             } yield BlockWeaver.Connections(
               blockWeaver = context.self,
-              jointLedger = c.jointLedger
+              jointLedger = c.jointLedger,
+              coilLinkRelay = c.coilLinkRelay
             )
         case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
@@ -80,7 +89,12 @@ object BlockWeaver {
 
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
-        jointLedger: JointLedger.Handle
+        jointLedger: JointLedger.Handle,
+        /** A hub's coil-link relay (§8): every user request this actor sees is teed here so the
+          * hub's coils get the request content they need to reproduce block bodies. `None` off a
+          * hub.
+          */
+        coilLinkRelay: Option[CoilLinkRelay.Handle] = None
     )
 
     final case class ConnectionsPartial(jointLedger: JointLedger.Handle) {
@@ -453,7 +467,13 @@ object BlockWeaver {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
-                incompleteExtraction: Mempool.Extraction.Incomplete
+                incompleteExtraction: Mempool.Extraction.Incomplete,
+                // Briefs for later blocks that arrived while we were blocked on this block's
+                // requests. The hub relays briefs faster than the requests they need, so a coil (or
+                // any follower) can see the next brief before finishing the current block. Buffer
+                // them in order and replay (re-send to self) once this block completes — they are
+                // then handled normally from the next AwaitingBlockBrief.
+                stashedBriefs: Queue[BlockBrief.Next] = Queue.empty
             ) extends Reactive,
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingRequest"
@@ -490,6 +510,12 @@ object BlockWeaver {
                                                         _ <- sendCompleteBlockAsFollower(
                                                           reproducingBlockBrief
                                                         )
+                                                        // Replay buffered later-block briefs in
+                                                        // order; they re-enter from the next
+                                                        // AwaitingBlockBrief.
+                                                        _ <- stashedBriefs.traverse_(
+                                                          connections.blockWeaver ! _
+                                                        )
                                                         newState <- DecidingRole(
                                                           this,
                                                           survivingMempool,
@@ -497,11 +523,12 @@ object BlockWeaver {
                                                         ).act(config)
                                                     } yield newState
                                                 case result: Mempool.Extraction.Incomplete =>
+                                                    // Still missing a request — keep waiting, but
+                                                    // carry the buffered briefs over.
                                                     pure(
-                                                      Follower.AwaitingRequest(
-                                                        this,
-                                                        reproducingBlockBrief,
-                                                        result
+                                                      copy(
+                                                        mempool = result.survivingMempool,
+                                                        incompleteExtraction = result
                                                       )
                                                     )
                                             }
@@ -534,6 +561,16 @@ object BlockWeaver {
                               s"Ignoring soft block confirmation ${bc.blockNum}"
                             ) >> pure(this)
 
+                        case bb: BlockBrief.Next =>
+                            // A later block's brief arrived while we're still blocked on this
+                            // block's requests (the hub relays briefs faster than the requests they
+                            // need). Buffer it; we replay it once this block completes.
+                            logger.info(
+                              s"Buffering early brief ${bb.blockNum} while awaiting " +
+                                  s"${incompleteExtraction.awaitingRequestId} for block " +
+                                  s"${reproducingBlockBrief.blockNum}"
+                            ) >> pure(copy(stashedBriefs = stashedBriefs :+ bb))
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -561,7 +598,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next
+                type Unexpected = PreStart.type
 
                 private[State] def apply(
                     state: State,

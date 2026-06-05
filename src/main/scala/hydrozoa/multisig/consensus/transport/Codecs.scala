@@ -553,7 +553,10 @@ object Codecs {
 
     private given Codec[RelayedAck.Soft] = deriveCodec[RelayedAck.Soft]
     private given Codec[RelayedAck.Hard] = deriveCodec[RelayedAck.Hard]
-    private given Codec[RelayedAck] = deriveCodec[RelayedAck]
+    // Req embeds a UserRequestWithId, whose codec needs the network section.
+    private given (using CardanoNetwork.Section): Codec[RelayedAck.Req] =
+        deriveCodec[RelayedAck.Req]
+    private given (using CardanoNetwork.Section): Codec[RelayedAck] = deriveCodec[RelayedAck]
 
     // ---- GetMsgBatch / NewMsgBatch ----
 
