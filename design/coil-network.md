@@ -672,10 +672,13 @@ higher quorum with little new production code.
 | Pc4 | **Multi-head relay (DONE) so a coil follows the whole population through its hub** (§8 "Hub→coil link lane encoding"): contiguous brief relay + a re-sequenced `relayedAck` lane carrying head soft-acks, head + coil hard-acks, and head user requests, de-muxed by author at the coil (`CoilLinkRelay` + hub feed taps in JL / StackComposer / FCA / SCA / BlockWeaver), plus follower-BlockWeaver brief buffering. The coil becomes a full participant — a manual stage4 2h/coilQuorum=1 run hard-confirms ~11 stacks on both heads and the coil. OPEN: the generative `Two-heads-one-coil` property isn't green yet — blocker is **stage4 harness settling** (post-run `waitForIdle` drain never idles with the coil), not the relay. `HubCoilAckLane` + `CoilAckSequencer` were pulled forward into Pc3. Recovery symmetry is the design driver; satellite `LaneId` key widens `HeadPeerNumber`→`PeerId` when `feature/recovery` merges |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s) |
 | Pc6 | Skip-stack policy plumbing (resolves D-coil-4) |
-| Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified; rule-based-regime handover spawns `DisputeActor` + `EvacuationActor` on coil the same as on head |
+| Pc7 | Coil submits happy-path + fallback alongside head (R8/R9) verified |
 
 Persistence + crash-recovery for coil deferred to
 `persistence-and-crash-recovery.md` §11.
+
+Rule-based-regime handover for a coil (spawning `DisputeActor` + `EvacuationActor`
+the same as on a head) is a **separate task**, out of this consensus phasing.
 
 ## Cross-cutting concerns (Pc1 readiness audit, 2026-05-31)
 
