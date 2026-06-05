@@ -165,7 +165,7 @@ private object VoteTxOps {
             } yield VoteTx(
               voteUtxoSpent = uncastVoteUtxo,
               voteUtxoProduced = VoteUtxo(
-                TransactionInput(finalized.transaction.id, 0),
+                TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
               tx = finalized.transaction

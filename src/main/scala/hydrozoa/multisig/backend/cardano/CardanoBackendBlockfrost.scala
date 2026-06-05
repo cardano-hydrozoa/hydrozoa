@@ -397,7 +397,7 @@ class CardanoBackendBlockfrost private (
     override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
+    ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]] =
         val unit = s"${asset._1.toHex}${asset._2.bytes.toHex}"
         val hex = after.toHex
         (for {
@@ -418,7 +418,9 @@ class CardanoBackendBlockfrost private (
               )
             )
 
-            txRets <- txIds.traverse(txHash => EitherT(continuingInputRedeemer(txHash, unit)))
+            txRets <- txIds.traverse(txHash =>
+                EitherT(continuingInputRedeemerAndOutputDatum(txHash, unit))
+            )
 
         } yield txRets.flatten).value
 
@@ -432,10 +434,10 @@ class CardanoBackendBlockfrost private (
       *   the asset unit string (policyId + assetName hex)
       * @return
       */
-    private def continuingInputRedeemer(
+    private def continuingInputRedeemerAndOutputDatum(
         txHash: TransactionHash,
         unit: String
-    ): IO[Either[CardanoBackend.Error, Option[(TransactionHash, Data)]]] = {
+    ): IO[Either[CardanoBackend.Error, Option[(TransactionHash, Data, Data)]]] = {
         (for {
             utxos <- EitherT(txUtxos(txHash))
             inputIx <- EitherT.fromOption[IO](
@@ -446,12 +448,21 @@ class CardanoBackendBlockfrost private (
                   .map(_._2),
               ifNone = NoTxInputWithAsset(txHash, unit)
             )
-            _ <- EitherT.fromOption[IO](
+            output <- EitherT.fromOption[IO](
               opt = utxos.getOutputs.asScala.find { output =>
                   output.getAmount.asScala.exists(_.getUnit == unit)
               },
               ifNone = NoTxOutputWithAsset(txHash, unit)
             )
+            outputDatum <- EitherT.fromOption[IO](
+              opt = scala.util.Try {
+                  val datumBytes =
+                      ByteString.fromHex(output.getInlineDatum)
+                  Cbor.decode(datumBytes.bytes).to[Data].value
+              }.toOption,
+              ifNone = ErrorDecodingDatumCbor(output.getInlineDatum)
+            )
+
             redeemerInfo <- EitherT(txRedeemer(txHash, inputIx))
 
             redeemerData <- EitherT(redeemerByHash(redeemerInfo.getDatumHash))
@@ -465,7 +476,7 @@ class CardanoBackendBlockfrost private (
               ifNone = ErrorDecodingRedeemerCbor(redeemerData.getCbor)
             )
 
-        } yield Some(txHash -> redeemer)).value.map {
+        } yield Some(txHash, redeemer, outputDatum)).value.map {
             // Some errors are ignored - there may be txs that doesn't conform
             // the pattern.
             case Left(NoTxInputWithAsset(_, _))       => Right(None)

@@ -92,17 +92,17 @@ class CardanoBackendMock private (
     override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): MockStateF[Either[Error, List[(TransactionHash, Data)]]] = {
+    ): MockStateF[Either[Error, List[(TransactionHash, Data, Data)]]] = {
 
         extension (v: Value)
             def contains(asset: (PolicyId, AssetName)): Boolean =
                 v.assets.assets.get(asset._1).flatMap(_.get(asset._2)).isDefined
 
-        def continuingInputRedeemer(
+        def continuingInputRedeemerAndOutputDatum(
             tx: Transaction,
             asset: (PolicyId, AssetName),
             utxos: Utxos
-        ): Option[Data] = {
+        ): Option[(Data, Data)] = {
             // Find the input index that contains the asset
             val inputWithAssetIdx = tx.body.value.inputs.toSeq.zipWithIndex
                 .find { (input, _) =>
@@ -110,18 +110,19 @@ class CardanoBackendMock private (
                 }
                 .map(_._2)
 
-            // Check if there's an output with the asset (continuing pattern)
-            val hasOutputWithAsset = tx.body.value.outputs.exists(_.value.value.contains(asset))
-
             // Extract the redeemer for the spending input
             for {
+                // Check if there's an output with the asset (continuing pattern)
+                outputDatum <- for {
+                    outputWithAsset <- tx.body.value.outputs.find(_.value.value.contains(asset))
+                    datum <- outputWithAsset.value.inlineDatum
+                } yield datum
                 inputIx <- inputWithAssetIdx
-                _ <- if hasOutputWithAsset then Some(()) else None
                 redeemers <- tx.witnessSet.redeemers.map(_.value)
                 redeemer <- redeemers.toSeq.find { r =>
                     r.tag == RedeemerTag.Spend && r.index.toInt == inputIx
                 }
-            } yield redeemer.data
+            } yield (redeemer.data, outputDatum)
         }
 
         for {
@@ -134,7 +135,9 @@ class CardanoBackendMock private (
             // Use the pre-application UTxO snapshot so historical inputs (already consumed)
             // can still be found — mirrors the Blockfrost implementation's historical query.
             result = txsAfter.flatMap { (preUtxos, tx) =>
-                continuingInputRedeemer(tx, asset, preUtxos).map(redeemer => tx.id -> redeemer)
+                continuingInputRedeemerAndOutputDatum(tx, asset, preUtxos).map((r, d) =>
+                    (tx.id, r, d)
+                )
             }
         } yield Right(result)
     }
@@ -254,7 +257,7 @@ object CardanoBackendMock {
                 override def lastContinuingTxs(
                     asset: (PolicyId, AssetName),
                     after: TransactionHash
-                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
+                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]] =
                     transformer(mock.lastContinuingTxs(asset, after))
 
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
