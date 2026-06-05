@@ -10,7 +10,6 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -84,9 +83,6 @@ trait CoilMultisigRegimeManager(
             pendingConnections <- Deferred[IO, Connections]
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
-            blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](blockWeaver, config, tracerLocal)
-            )
             cardanoLiaison <-
                 context.actorOf(
                   CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
@@ -103,9 +99,6 @@ trait CoilMultisigRegimeManager(
             stackComposer <- context.actorOf(
               StackComposer(config, pendingConnections, tracerLocal)
             )
-            stackComposerLimiter <- context.actorOf(
-              Limiter[StackComposer.Request](stackComposer, config, tracerLocal)
-            )
             slowConsensusActor <- context.actorOf(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
@@ -115,18 +108,19 @@ trait CoilMultisigRegimeManager(
               CoilPeerToHeadLiaison(config, hubPeerId, pendingConnections)
             )
 
+            // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
+            // slots alias the unthrottled handles directly (no `Limiter` actors spawned).
             connections = Connections(
               blockWeaver = blockWeaver,
-              blockWeaverLimiter = blockWeaverLimiter,
+              blockWeaverLimiter = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
               eventSequencer = eventSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
-              stackComposerLimiter = stackComposerLimiter,
+              stackComposerLimiter = stackComposer,
               slowConsensusActor = slowConsensusActor,
               headPeerLiaisons = List(hubLiaison),
-              remotePeerLiaisons = Map.empty,
               tracer = tracer,
             )
 

@@ -178,7 +178,6 @@ trait MultisigRegimeManager(
               stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = slowConsensusActor,
               headPeerLiaisons = headPeerLiaisons,
-              remotePeerLiaisons = Map.empty,
               coilPeerLiaisons = coilPeerLiaisons,
               coilAckSequencer = coilAckSequencer,
               coilLinkRelay = coilLinkRelay,
@@ -232,7 +231,11 @@ object MultisigRegimeManager {
         slowConsensusActor: SlowConsensusActor.Handle,
         /** Head-peer-mesh liaisons (one per other head peer). */
         headPeerLiaisons: List[PeerLiaison.Handle],
-        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle],
+        /** In-process map from a remote peer's id to the local ActorRef of its counterpart liaison.
+          * Only the in-process harness (stage4 / unit tests) populates it; in a real deployment the
+          * counterpart is another process reached over the transport, so it stays empty.
+          */
+        remotePeerLiaisons: Map[PeerId, PeerLiaison.Handle] = Map.empty,
         /** Hub→coil liaisons (one per coil peer this head peer hubs); empty on non-hub head peers
           * and on coil peers. The hub feed (briefs + the relayed ack stream) is fanned to these,
           * separately from the head-peer mesh (§8).
