@@ -32,7 +32,8 @@ import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -183,11 +184,31 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
 
+            // Per-peer Ref capturing every BlockBrief.Intermediate the peer's JointLedger emits.
+            // Populated via a ContraTracer sink attached to JL; consumed by propLiveness /
+            // propDepositTiming / propValidRatio / propStackCoverage.
+            blockBriefsMap <- peers
+                .traverse { peerNum =>
+                    Ref[IO].of(Vector.empty[BlockBrief.Intermediate]).map(peerNum -> _)
+                }
+                .map(_.toMap)
+
             // Create full actor stack per peer; all actors wait on pendingConnections.
             peerStackMap <- peers
                 .traverse { peerNum =>
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
+                    // Capture sink: only briefs go into the per-peer Ref.
+                    val captureSink: ContraTracer[IO, JointLedgerEvent] =
+                        ContraTracer.emit[IO, JointLedgerEvent] {
+                            case JointLedgerEvent.BriefProduced(b) =>
+                                blockBriefsMap(peerNum).update(_ :+ b)
+                            case _ => IO.unit
+                        }
+                    // SLF4J sink: all JL events get a human-readable line so test runs are debuggable.
+                    val textSink: ContraTracer[IO, JointLedgerEvent] =
+                        Tracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum))
+                    val jlTracer: ContraTracer[IO, JointLedgerEvent] = captureSink |+| textSink
                     Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
                         for
                             // Per-peer persistence backend — InMemory by default; RocksDb when the
@@ -214,8 +235,7 @@ case class Stage4Suite(
                                 nodeConfig,
                                 pending,
                                 l2Ledger,
-                                ProtocolTracer.noop,
-                                tracerLocal,
+                                jlTracer,
                                 persistence
                               )
                             )
@@ -240,29 +260,6 @@ case class Stage4Suite(
                           persistence
                         )
                     }
-                }
-                .map(_.toMap)
-
-            // Create brief-collecting observers wrapping each peer's FastConsensusActor.
-            // Injected via Connections so JointLedger is unaware; captures both leader-produced
-            // and follower-reproduced blocks (both go through JointLedger.handleBlock).
-            blockBriefsMap <- peers
-                .traverse { peerNum =>
-                    Ref[IO].of(Vector.empty[BlockBrief.Intermediate]).map(peerNum -> _)
-                }
-                .map(_.toMap)
-
-            observerMap <- peers
-                .traverse { peerNum =>
-                    system
-                        .actorOf(
-                          BlockBriefObserver(
-                            peerNum,
-                            peerStackMap(peerNum).consensusActor,
-                            blockBriefsMap(peerNum)
-                          )
-                        )
-                        .map(peerNum -> _)
                 }
                 .map(_.toMap)
 
@@ -375,9 +372,9 @@ case class Stage4Suite(
                             blockWeaverLimiter = blockWeaverLimiter,
                             // Route the slow cycle's Stack.HardConfirmed through StackObserver
                             // (forwards to the real CardanoLiaison) so the test can assert
-                            // coverage; mirrors observerMap on consensusActor.
+                            // coverage.
                             cardanoLiaison = stackObserverMap(peerNum),
-                            consensusActor = observerMap(peerNum),
+                            consensusActor = stack.consensusActor,
                             eventSequencer = stack.eventSequencer,
                             jointLedger = stack.jointLedger,
                             stackComposer = stack.stackComposer,

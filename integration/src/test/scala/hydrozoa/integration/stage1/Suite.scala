@@ -21,7 +21,7 @@ import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.{ContraTracer, Logging, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -30,7 +30,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusAc
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
@@ -551,8 +551,7 @@ case class Suite(
                 nodeConfig,
                 jointLedgerConnections,
                 l2Ledger,
-                tracer,
-                tracerLocal,
+                ContraTracer.nullTracer[IO, JointLedgerEvent],
                 persistence
               )
             )

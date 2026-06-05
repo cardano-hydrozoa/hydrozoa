@@ -1,6 +1,7 @@
 package hydrozoa.app
 
 import cats.effect.{ExitCode, IO, IOApp, IOLocal, Resource}
+import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{host, port}
@@ -10,6 +11,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -231,13 +233,19 @@ object Main extends IOApp {
 
         resource.use {
             case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
+                val peerNum: Int = nodeConfig.ownHeadPeerNum
+                val nodeId = s"head:$peerNum"
+                val jlTracer =
+                    Tracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum)) |+|
+                        Tracer.sink.traceMaybe(JointLedgerEventFormat.jsonlFormat(nodeId))
                 for {
                     mrm <- MultisigRegimeManager.apply(
                       nodeConfig,
                       backend,
                       remoteL2Ledger,
                       persistence,
-                      tracerLocal
+                      tracerLocal,
+                      jlTracer
                     )
                     _ <- system.actorOf(mrm, "MultisigRegimeManager")
                     _ <- logger.info("Hydrozoa node started successfully")
@@ -266,5 +274,4 @@ object Main extends IOApp {
                     _ <- system.waitForTermination
                 } yield ExitCode.Success
         }
-
 }

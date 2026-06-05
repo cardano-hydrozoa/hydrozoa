@@ -57,7 +57,8 @@ extension (t: Tracer)
 
 object Tracer:
 
-    private val base: ContraTracer[IO, LogEvent] = ContraTracer.emit((ev: LogEvent) =>
+    /** SLF4J sink — routes [[LogEvent]] to the correct logger via [[LogEvent.routingKey]]. */
+    val sink: ContraTracer[IO, LogEvent] = ContraTracer.emit((ev: LogEvent) =>
         val lg = Logging.loggerIO(ev.routingKey.getOrElse("hydrozoa"))
         val prefix =
             if ev.ctx.isEmpty then ""
@@ -74,7 +75,7 @@ object Tracer:
     /** Creates a fresh [[IOLocal]] seeded with the base tracer. All routing is then set per-fiber
       * via [[routeLocal]] in each actor's preStartLocal.
       */
-    def makeLocal: IO[IOLocal[Tracer]] = IOLocal(base)
+    def makeLocal: IO[IOLocal[Tracer]] = IOLocal(sink)
 
     /** Permanently sets the routing key for events with no explicit [[LogEvent.routingKey]] in this
       * fiber. Events with an explicit [[Some]] routing key pass through unchanged.

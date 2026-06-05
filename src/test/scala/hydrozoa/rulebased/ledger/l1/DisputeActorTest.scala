@@ -22,8 +22,7 @@ import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
-import org.scalacheck.rng.Seed
-import org.scalacheck.{Arbitrary, Gen, Properties, Test}
+import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -85,7 +84,7 @@ object DisputeActorTestHelpers {
               versionMajor = versionMajor,
               // this is cribbed from the CommonGenerators.scala test
               setup = TrustedSetup
-                  .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerT + 1)
+                  .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                   .map(p2 => G2Element(p2).toCompressedByteString)
             )
             treasuryUtxo = RuleBasedTreasuryUtxo(

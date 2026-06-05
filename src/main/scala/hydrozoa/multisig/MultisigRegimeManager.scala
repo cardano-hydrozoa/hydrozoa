@@ -8,14 +8,14 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.{ContraTracer, Tracer}
 import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.HeadPeerId
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
@@ -25,7 +25,8 @@ trait MultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    jlTracer: ContraTracer[IO, JointLedgerEvent]
 ) extends Actor[IO, Request] {
 
     given IOLocal[Tracer] = tracerLocal
@@ -115,7 +116,7 @@ trait MultisigRegimeManager(
             )
 
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
+              JointLedger(config, pendingConnections, l2Ledger, jlTracer, persistence)
             )
 
             stackComposer <- context.actorOf(
@@ -215,7 +216,8 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracerLocal: IOLocal[Tracer]
+        tracerLocal: IOLocal[Tracer],
+        jlTracer: ContraTracer[IO, JointLedgerEvent]
     ): IO[MultisigRegimeManager] =
         IO(
           new MultisigRegimeManager(
@@ -223,7 +225,8 @@ object MultisigRegimeManager {
             cardanoBackend,
             virtualLedger,
             persistence,
-            tracerLocal
+            tracerLocal,
+            jlTracer
           ) {}
         )
 

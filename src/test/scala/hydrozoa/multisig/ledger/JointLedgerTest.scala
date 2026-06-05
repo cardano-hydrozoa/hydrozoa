@@ -170,8 +170,8 @@ object JointLedgerTestHelpers {
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
-                  hydrozoa.lib.tracing.ProtocolTracer.noop,
-                  tracerLocal,
+                  hydrozoa.lib.logging.ContraTracer
+                      .nullTracer[IO, hydrozoa.multisig.ledger.joint.JointLedgerEvent],
                   persistence
                 )
               )
