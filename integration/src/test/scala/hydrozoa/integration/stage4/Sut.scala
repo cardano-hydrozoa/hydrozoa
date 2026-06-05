@@ -137,8 +137,8 @@ case class Stage4Sut(
     // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
     // `analyzeBlockBriefs` to assert the slow side covered every observed block.
     stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-    // Per-coil hard-confirmed stacks, captured by a [[StackObserver]] on each coil follower.
-    // Empty for a pure-head run. Used to assert the coil participates in the slow cycle.
+    // Per-coil hard-confirmed stacks, captured by a [[StackObserver]] on each coil peer follower.
+    // Empty for a pure-head run. Used to assert the coil peer participates in the slow cycle.
     coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],

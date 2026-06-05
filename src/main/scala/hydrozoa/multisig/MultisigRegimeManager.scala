@@ -144,21 +144,21 @@ trait MultisigRegimeManager(
                     )
             }
 
-            hubbedCoils = config.hubbedCoilNums(ownHeadNum)
+            hubbedCoilPeers = config.hubbedCoilPeerNums(ownHeadNum)
 
             // If this head peer is a hub, spawn the relay sequencer for its coil peers' hard-acks
             // (§8) plus one head→coil liaison per coil peer it hubs. Non-hub head peers spawn
             // neither.
             coilAckSequencer <-
-                if hubbedCoils.isEmpty then IO.none[CoilAckSequencer.Handle]
+                if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
 
             coilLinkRelay <-
-                if hubbedCoils.isEmpty then IO.none[CoilLinkRelay.Handle]
+                if hubbedCoilPeers.isEmpty then IO.none[CoilLinkRelay.Handle]
                 else context.actorOf(CoilLinkRelay(config, pendingConnections)).map(Some(_))
 
             coilPeerLiaisons <-
-                hubbedCoils.traverse(coilNum =>
+                hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
                       HeadPeerToCoilLiaison(config, coilNum, pendingConnections)
                     )

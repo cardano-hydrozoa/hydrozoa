@@ -672,11 +672,13 @@ final case class JointLedger(
     }
 
     /** When the joint ledger finishes producing (or reproducing) a brief:
-      *   1. Forward the brief to the consensus actor — every peer does this.
-      *   2. If this peer is a head: broadcast the brief to peer liaisons when it leads the block,
-      *      and author its own soft-ack. A coil does neither — it can't lead (leadership implies
-      *      being a head peer) and authors no soft-acks.
-      *   3. Hand the block result to the stack composer (slow side).
+      *   1. Forward the brief to the fast-consensus actor — every peer does this.
+      *   2. If this peer is a hub, relay the brief to its coil peers — every brief, in block order.
+      *      No-op off a hub.
+      *   3. If this peer is a head peer: broadcast the brief to the head-peer mesh when it leads
+      *      the block, and author its own soft-ack (for every block). A coil peer does neither — it
+      *      can't lead (leadership implies being a head peer) and authors no soft-acks.
+      *   4. Hand the block result to the stack composer (slow side).
       *
       * L1 effect signing (slow consensus) does not happen here.
       */

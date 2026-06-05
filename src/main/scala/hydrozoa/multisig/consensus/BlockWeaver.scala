@@ -469,7 +469,7 @@ object BlockWeaver {
                 reproducingBlockBrief: BlockBrief.Next,
                 incompleteExtraction: Mempool.Extraction.Incomplete,
                 // Briefs for later blocks that arrived while we were blocked on this block's
-                // requests. The hub relays briefs faster than the requests they need, so a coil (or
+                // requests. The hub relays briefs faster than the requests they need, so a coil peer (or
                 // any follower) can see the next brief before finishing the current block. Buffer
                 // them in order and replay (re-send to self) once this block completes — they are
                 // then handled normally from the next AwaitingBlockBrief.

@@ -20,9 +20,10 @@ import scala.concurrent.duration.DurationInt
 /** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
   * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
-  *   - exactly one [[PeerLiaison]], toward the coil's hub head peer (§8), instead of the head mesh;
+  *   - exactly one [[PeerLiaison]], toward the coil peer's hub head peer (§8), instead of the head
+  *     mesh;
   *   - no user-request surface (the spawned [[EventSequencer]] is inert: no HTTP server routes to
-  *     it, and a coil authors no requests).
+  *     it, and a coil peer authors no requests).
   *
   * It completes the shared [[MultisigRegimeManager.Connections]] so the reused child actors resolve
   * their slots exactly as on a head.
@@ -71,7 +72,7 @@ trait CoilMultisigRegimeManager(
                     )
             }
             hubNum = config
-                .coilHub(ownCoilNum)
+                .coilPeerHub(ownCoilNum)
                 .getOrElse(
                   throw new IllegalStateException(s"No hub configured for coil $ownCoilNum")
                 )
@@ -93,7 +94,7 @@ trait CoilMultisigRegimeManager(
             consensusActor <- context.actorOf(
               FastConsensusActor(config, pendingConnections, tracerLocal)
             )
-            // Inert on a coil: no HTTP server routes user requests here, and a coil authors none.
+            // Inert on a coil: no HTTP server routes user requests here, and a coil peer authors none.
             // Present only to fill the shared Connections slot the reused actors resolve.
             eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
             jointLedger <- context.actorOf(

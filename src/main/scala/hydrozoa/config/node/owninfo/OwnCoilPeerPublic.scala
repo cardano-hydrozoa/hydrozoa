@@ -6,9 +6,9 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 import scalus.crypto.ed25519.VerificationKey
 
 /** A coil node's own public identity. A coil never leads and authors no soft acks, so the
-  * leadership / soft-ack surface is constant. The [[CoilPeerNumber]] is the coil's index in the
-  * canonical `coilPeerVKeys` order (sorted by key bytes), located by matching its own verification
-  * key.
+  * leadership / soft-ack surface is constant. The [[CoilPeerNumber]] is the coil peer's index in
+  * the canonical `coilPeerVKeys` order (sorted by key bytes), located by matching its own
+  * verification key.
   */
 final case class OwnCoilPeerPublic private[owninfo] (
     ownCoilPeerNum: CoilPeerNumber,

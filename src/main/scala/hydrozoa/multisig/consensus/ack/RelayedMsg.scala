@@ -25,8 +25,8 @@ object RelayedMsg {
     /** A relayed hard-ack (authored by a head or coil peer). */
     final case class Hard(seqNum: RelayedMsgNumber, ack: HardAck) extends RelayedMsg
 
-    /** A relayed user request — the coil needs the request content (not just the brief's ids) to
-      * reproduce block bodies and derive `BlockResult`s.
+    /** A relayed user request — the coil peer needs the request content (not just the brief's ids)
+      * to reproduce block bodies and derive `BlockResult`s.
       */
     final case class Req(seqNum: RelayedMsgNumber, request: UserRequestWithId) extends RelayedMsg
 }

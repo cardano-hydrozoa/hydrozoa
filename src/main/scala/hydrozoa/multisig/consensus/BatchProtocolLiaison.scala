@@ -74,7 +74,7 @@ trait BatchProtocolLiaison(
         config.nextOwnSlowLeaderStack(after)
 
     /** Successor on the INBOUND block-brief lane (used by verify to advance the cursor). `None` if
-      * the remote never emits briefs (a coil), in which case the lane stays empty.
+      * the remote never emits briefs (a coil peer), in which case the lane stays empty.
       */
     protected def nextRemoteBriefBlock(after: BlockNumber): Option[BlockNumber]
 
@@ -635,7 +635,7 @@ trait BatchProtocolLiaison(
                 case _ => ()
 
             // 3c. If a relayed coil peer hard-ack is present, its seqNum must equal the next-expected
-            //     `current.hubHardAckNum`. No author check — the embedded ack is a coil's, verified
+            //     `current.hubHardAckNum`. No author check — the embedded ack is a coil peer's, verified
             //     end-to-end by SlowConsensusActor; the seqNum is the remote hub's relay ordering.
             received.hubHardAck match
                 case Some(hc) if hc.seqNum != current.hubHardAckNum =>
@@ -646,7 +646,7 @@ trait BatchProtocolLiaison(
 
             // 3d. If a relayed ack is present, its seqNum must equal the next-expected
             //     `current.relayedMsgNum`. No author check — the embedded soft/hard-ack is signed
-            //     and verified end-to-end (and aggregated per author) by the coil's FCA/SCA; the
+            //     and verified end-to-end (and aggregated per author) by the coil peer's FCA/SCA; the
             //     seqNum is the hub's relay ordering.
             received.relayedMsg match
                 case Some(ra) if ra.seqNum != current.relayedMsgNum =>

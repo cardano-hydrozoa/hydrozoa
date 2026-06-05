@@ -72,8 +72,9 @@ abstract class HeadPeerToCoilLiaison(
     override protected def sendToRemoteLiaison(msg: Request): IO[Unit] =
         getConnections.flatMap(_.remotePeerLiaison ! msg)
 
-    /** The coil sends only its own hard-acks. Route each both to the hub's [[SlowConsensusActor]]
-      * (for quorum) and to the [[CoilAckSequencer]] (for re-publication onto the `HubHardAckLane`).
+    /** The coil peer sends only its own hard-acks. Route each both to the hub's
+      * [[SlowConsensusActor]] (for quorum) and to the [[CoilAckSequencer]] (for re-publication onto
+      * the `HubHardAckLane`).
       */
     override protected def dispatchVerifiedBatch(batch: NewMsgBatch): IO[Unit] =
         for {

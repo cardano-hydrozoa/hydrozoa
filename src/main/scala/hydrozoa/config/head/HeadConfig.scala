@@ -584,16 +584,16 @@ object HeadConfig {
             final def coilPeerVKey(p: CoilPeerNumber): Option[VerificationKey] =
                 coilPeerVKeys.lift(p.convert)
 
-            /** The hub head peer for the given coil — the single head peer the coil links to
-              * (`coilPeers[…].hub`). `None` if the coil number is out of range.
+            /** The hub head peer for the given coil peer — the single head peer the coil peer links
+              * to (`coilPeers[…].hub`). `None` if the coil peer number is out of range.
               */
-            final def coilHub(p: CoilPeerNumber): Option[HeadPeerNumber] =
+            final def coilPeerHub(p: CoilPeerNumber): Option[HeadPeerNumber] =
                 coilPeerVKey(p).flatMap(vk => coilPeers.find(_.vkey == vk).map(_.hub))
 
             /** The coil peers hubbed by the given head peer, by [[CoilPeerNumber]]. A hub head peer
-              * spawns one peer liaison toward each of these coils.
+              * spawns one peer liaison toward each of these coil peers.
               */
-            final def hubbedCoilNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
+            final def hubbedCoilPeerNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
                 coilPeers.filter(_.hub == headNum).flatMap { c =>
                     coilPeerVKeys.indexOf(c.vkey) match {
                         case -1 => None

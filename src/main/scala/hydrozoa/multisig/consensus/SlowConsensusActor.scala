@@ -67,7 +67,7 @@ final case class SlowConsensusActor(
 
     private def coilQuorum: Int = config.coilQuorum
 
-    private def coilCount(peers: Set[PeerId]): Int =
+    private def coilPeerCount(peers: Set[PeerId]): Int =
         peers.count {
             case _: PeerId.Coil => true
             case _: PeerId.Head => false
@@ -77,7 +77,7 @@ final case class SlowConsensusActor(
       * contributed.
       */
     private def isSaturated(present: Set[PeerId]): Boolean =
-        allHeadPeers.subsetOf(present) && coilCount(present) >= coilQuorum
+        allHeadPeers.subsetOf(present) && coilPeerCount(present) >= coilQuorum
 
     private val ackVerifier = HardAckSignatureVerifier(config)
     private val ackAggregator = HardAckAggregator()
@@ -371,9 +371,9 @@ final case class SlowConsensusActor(
             case c: Cell.WaitingRound2 => c.round1.keySet.intersect(c.round2.keySet)
             case c: Cell.WaitingSole   => c.sole.keySet
         }
-        val coils =
+        val coilPeers =
             present.collect { case c: PeerId.Coil => c: PeerId }.toList.sorted.take(coilQuorum)
-        allHeadPeers.toList.sorted ++ coils
+        allHeadPeers.toList.sorted ++ coilPeers
     }
 
     // ===================================
@@ -382,8 +382,8 @@ final case class SlowConsensusActor(
 
     private def broadcast(ack: HardAck): IO[Unit] =
         getConnections.flatMap { conn =>
-            // Broadcast our own hard-ack to the head mesh, and (on a hub) tee it to the coil-link
-            // relay so our coil peers receive it.
+            // Broadcast our own hard-ack to the head-peer mesh, and (on a hub) tee it to the
+            // coil-link relay so our coil peers receive it.
             (conn.headPeerLiaisons ! ack).parallel >> conn.coilLinkRelay.traverse_(_ ! ack)
         }
 

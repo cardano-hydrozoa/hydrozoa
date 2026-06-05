@@ -50,7 +50,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // ===================================
 
 /** All actors + observation refs for one coil follower, assembled in `startupSut` (gated on
-  * `nCoils > 0`). `headLiaison` is the hub-side `HeadPeerToCoilLiaison`; `coilLiaison` is the
+  * `nCoilPeers > 0`). `headLiaison` is the hub-side `HeadPeerToCoilLiaison`; `coilLiaison` is the
   * coil-side `CoilPeerToHeadLiaison`.
   */
 private case class CoilWiring(
@@ -67,7 +67,7 @@ private case class CoilWiring(
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
-    nCoils: Int = 0,
+    nCoilPeers: Int = 0,
     transportMode: TransportMode = TransportMode.Direct,
 ) extends ModelBasedSuite:
 
@@ -102,7 +102,7 @@ case class Stage4Suite(
     override def genInitialState(env: Unit): Gen[ModelState] =
         Stage4Suite.genInitialState(
           nPeers = nPeers,
-          nCoils = nCoils,
+          nCoilPeers = nCoilPeers,
           useTestControl = useTestControl
         )
 
@@ -335,10 +335,10 @@ case class Stage4Suite(
             (remoteLiaisonsByPeer, transportCleanup) = transportSetup
 
             // ---- Coil followers (gated; empty for a pure-head run) ----
-            // Each coil is hubbed by head 0. Build the coil's full follower actor stack + its single
+            // Each coil is hubbed by head 0. Build the coil peer's full follower actor stack + its single
             // CoilPeerToHeadLiaison, plus the hub-side HeadPeerToCoilLiaison and (once) the
             // CoilAckSequencer. The hub's own Connections (completed below) gains the coil-ward
-            // liaisons, the coil remote map, and the sequencer. Direct mode only — coils are wired
+            // liaisons, the coil remote map, and the sequencer. Direct mode only — coil peers are wired
             // in-process like the head mesh.
             hubNum = HeadPeerNumber(0)
             hubConfig = multiNodeConfig.nodeConfigs(hubNum)
@@ -470,7 +470,7 @@ case class Stage4Suite(
                 } yield ()
             }
 
-            // Complete each coil's deferred with its follower wiring: its single liaison toward the
+            // Complete each coil peer's deferred with its follower wiring: its single liaison toward the
             // hub, the hub-side liaison as its only remote, the StackObserver in the cardanoLiaison
             // slot to capture its hard-confirmed stacks.
             _ <- coilWirings.traverse_ { c =>
@@ -527,7 +527,7 @@ case class Stage4Suite(
                 (IO.sleep(pollingPeriod) >> (liaison ! CardanoLiaison.Timeout)).foreverM.start
             }
 
-            // Same polling tick for each coil's CardanoLiaison.
+            // Same polling tick for each coil peer's CardanoLiaison.
             coilTickFibers <- coilWirings.traverse { c =>
                 val pollingPeriod =
                     c.config.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
@@ -780,9 +780,9 @@ case class Stage4Suite(
             effectsLandedProp
     }
 
-    /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coils' acks, so
+    /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coil peers' acks, so
       * [[propStackCoverage]] already proves coil participation on the head side. This additionally
-      * checks the relay back: each coil follower itself hard-confirms stacks (it received the head
+      * checks the relay back: each coil peer follower itself hard-confirms stacks (it received the head
       * acks + its own echo), and never hard-confirms a stack the canonical head didn't. No-op for a
       * pure-head run.
       */
@@ -1058,7 +1058,7 @@ object Stage4Suite:
 
     def genInitialState(
         nPeers: Int = 2,
-        nCoils: Int = 0,
+        nCoilPeers: Int = 0,
         absorptionSlack: FiniteDuration = 60.seconds,
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
         useTestControl: Boolean = true,
@@ -1067,15 +1067,15 @@ object Stage4Suite:
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        // Coil wallets are extra keys from the same seed, beyond the head set; each coil is hubbed
+        // Coil wallets are extra keys from the same seed, beyond the head set; each coil peer is hubbed
         // by head 0. Empty for a pure-head run. Their vkeys go into the head bootstrap so the
         // threshold script requires `coilQuorum` of them, and `mkCoilConfig` (below) derives each
         // coil's own node config from the shared head config.
         val coilWallets: List[PeerWallet] =
-            if nCoils == 0 then Nil
+            if nCoilPeers == 0 then Nil
             else {
-                val withCoils = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoils)
-                (0 until nCoils).toList.map(i => withCoils.walletFor(HeadPeerNumber(nPeers + i)))
+                val withCoils = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoilPeers)
+                (0 until nCoilPeers).toList.map(i => withCoils.walletFor(HeadPeerNumber(nPeers + i)))
             }
         val coilPeerList: List[CoilPeer] =
             coilWallets.map(w => CoilPeer(w.exportVerificationKey, HeadPeerNumber(0)))
@@ -1108,7 +1108,7 @@ object Stage4Suite:
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
           generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
-              .map(_.copy(coilQuorum = nCoils)),
+              .map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
               generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
