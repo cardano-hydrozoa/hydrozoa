@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -8,6 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
@@ -29,8 +30,27 @@ import org.typelevel.log4cats.Logger
 abstract class PeerLiaisonHeadToHead(
     config: PeerLiaisonHeadToHead.Config,
     remoteHead: HeadPeerId,
-    pendingConnections: Deferred[IO, PeerLiaisonHeadToHead.Connections]
+    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHeadToHead.Connections
 ) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+
+    /** Resolve this liaison's connections — either projected from the shared regime `Connections`
+      * (the remote handle from the in-process `remoteHeadLiaisons` map) or supplied directly.
+      */
+    private def resolveConnections: IO[PeerLiaisonHeadToHead.Connections] =
+        pendingConnections match {
+            case shared: MultisigRegimeManager.PendingConnections =>
+                shared.get.map(s =>
+                    PeerLiaisonHeadToHead.Connections(
+                      blockWeaver = s.blockWeaver,
+                      consensusActor = s.consensusActor,
+                      stackComposer = s.stackComposer,
+                      slowConsensusActor = s.slowConsensusActor,
+                      remoteHead = s.remoteHeadLiaisons(remoteHead.peerNum),
+                      coilRelay = s.coilRelay
+                    )
+                )
+            case own: PeerLiaisonHeadToHead.Connections => IO.pure(own)
+        }
 
     private given logger: Logger[IO] =
         Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
@@ -223,7 +243,7 @@ abstract class PeerLiaisonHeadToHead(
 
     private def preStartLocal: IO[Unit] =
         for {
-            c <- pendingConnections.get
+            c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- logger.info(s"starting, remote head peer ${remoteHead.peerNum.convert}")
             _ <- puller.start
@@ -240,7 +260,7 @@ object PeerLiaisonHeadToHead {
     def apply(
         config: Config,
         remoteHead: HeadPeerId,
-        pendingConnections: Deferred[IO, Connections]
+        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
     ): IO[PeerLiaisonHeadToHead] =
         IO(new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections) {})
 

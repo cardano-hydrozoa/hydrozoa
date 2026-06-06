@@ -41,13 +41,6 @@ final case class BlockWeaver(
         context.become(
           PartialFunction.fromFunction(req =>
               for {
-                  // A hub relays every user request it sees (own + received) to its coil peers, which
-                  // need the request content to reproduce block bodies. No-op off a hub.
-                  _ <- req match {
-                      case ur: UserRequestWithId =>
-                          state.connections.coilLinkRelay.traverse_(_ ! ur)
-                      case _ => IO.unit
-                  }
                   // Handle the request using the current state's handler
                   mNewState <- state.react(config)(req)
                   // If the handler returns a new state, become that state.
@@ -76,8 +69,7 @@ final case class BlockWeaver(
                 c <- pc.get
             } yield BlockWeaver.Connections(
               blockWeaver = context.self,
-              jointLedger = c.jointLedger,
-              coilLinkRelay = c.coilLinkRelay
+              jointLedger = c.jointLedger
             )
         case c: BlockWeaver.ConnectionsPartial => IO.pure(c(context.self))
     }
@@ -89,12 +81,7 @@ object BlockWeaver {
 
     final case class Connections private[BlockWeaver] (
         blockWeaver: BlockWeaver.Handle,
-        jointLedger: JointLedger.Handle,
-        /** A hub's coil-link relay (§8): every user request this actor sees is teed here so the
-          * hub's coil peers get the request content they need to reproduce block bodies. `None` off
-          * a hub.
-          */
-        coilLinkRelay: Option[CoilLinkRelay.Handle] = None
+        jointLedger: JointLedger.Handle
     )
 
     final case class ConnectionsPartial(jointLedger: JointLedger.Handle) {

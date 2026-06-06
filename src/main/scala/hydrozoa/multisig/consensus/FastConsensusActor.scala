@@ -52,14 +52,13 @@ object FastConsensusActor:
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         eventSequencer: EventSequencer.Handle,
-        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
-        /** A hub's coil-link relay (§8): every soft-ack this actor sees is teed here so the hub's
-          * coil peers receive — and independently verify + aggregate — the whole fast-side stream.
-          * `None` off a hub.
+        /** A hub's coil relay (§8.3): this actor's **own** soft-ack is sent here so the hub's coil
+          * peers receive it. `None` off a hub.
           */
-        coilLinkRelay: Option[CoilLinkRelay.Handle] = None,
+        coilRelay: Option[liaison.CoilRelay.Handle] = None,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 
@@ -181,7 +180,7 @@ class FastConsensusActor(
                       headPeerLiaisons = _connections.headPeerLiaisons,
                       jointLedger = _connections.jointLedger,
                       stackComposer = _connections.stackComposer,
-                      coilLinkRelay = _connections.coilLinkRelay,
+                      coilRelay = _connections.coilRelay,
                       tracer = _connections.tracer,
                     )
                   )
@@ -224,10 +223,6 @@ class FastConsensusActor(
                 .headPeerVKey(ack.peerNum)
                 .liftTo[IO](CollectingError.UnexpectedPeer(ack.peerNum))
             _ <- withCell(ack.blockNum)(_.acceptAck(ack, vk))
-            // A hub tees every valid soft-ack (own and received) to its coil-link relay, so its coil
-            // peers get the whole fast-side stream and aggregate soft-confirmation themselves. No-op
-            // off a hub.
-            _ <- conn.coilLinkRelay.traverse_(_ ! ack)
             // Own ack scheduling: if this is the local peer's own ack, broadcast it (or postpone
             // if the previous block's cell still exists, to maintain the spec ordering).
             _ <- IO.whenA(config.ownPeerId == PeerId.Head(ack.peerNum))(scheduleOwnAck(ack))
@@ -304,9 +299,9 @@ class FastConsensusActor(
           confirmed.blockBrief.blockVersion.minor: Int
         )
 
-        // Fan out the soft-confirmed block.
+        // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the
+        // new lane protocol prunes per-reply, not on local confirmation.)
         _ <- conn.blockWeaver ! confirmed
-        _ <- (conn.headPeerLiaisons ! confirmed).parallel
         _ <- conn.jointLedger ! confirmed
         _ <- conn.stackComposer ! confirmed
 
@@ -330,8 +325,12 @@ class FastConsensusActor(
             }
             .void
 
+    // Broadcast this peer's own soft-ack to the head-peer mesh, and (on a hub) to CoilRelay so its
+    // coil peers receive it.
     private def announceAck(ack: SoftAck): IO[Unit] =
-        getConnections.flatMap(conn => (conn.headPeerLiaisons ! ack).parallel)
+        getConnections.flatMap(conn =>
+            (conn.headPeerLiaisons ! ack).parallel >> conn.coilRelay.traverse_(_ ! ack)
+        )
 
     private def mkSoftConfirmed(
         brief: BlockBrief.Next,

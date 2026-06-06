@@ -229,11 +229,6 @@ final case class SlowConsensusActor(
                 Tracer.debug(s"ignoring echo of own hard-ack for stack ${h.stackNum}")
             else
                 for {
-                    conn <- getConnections
-                    // A hub relays every received hard-ack (other head peers' + its coil peers') to
-                    // its coil-link relay, so its coil peers get the whole hard-ack stream and
-                    // aggregate hard-confirmation themselves. No-op off a hub.
-                    _ <- conn.coilLinkRelay.traverse_(_ ! h)
                     s <- stateRef.get
                     _ <- s.cells.get(h.stackNum) match {
                         case None =>
@@ -380,11 +375,13 @@ final case class SlowConsensusActor(
     // Plumbing
     // ===================================
 
+    // Broadcast our own hard-ack to the head-peer mesh (on a head peer) or up to the hub (on a coil
+    // peer), and (on a hub) to CoilRelay so our coil peers receive it.
     private def broadcast(ack: HardAck): IO[Unit] =
         getConnections.flatMap { conn =>
-            // Broadcast our own hard-ack to the head-peer mesh, and (on a hub) tee it to the
-            // coil-link relay so our coil peers receive it.
-            (conn.headPeerLiaisons ! ack).parallel >> conn.coilLinkRelay.traverse_(_ ! ack)
+            (conn.headPeerLiaisons ! ack).parallel >>
+                conn.coilUplink.traverse_(_ ! ack) >>
+                conn.coilRelay.traverse_(_ ! ack)
         }
 
     private def putCell(stackNum: StackNumber, cell: Cell): IO[Unit] =
@@ -426,7 +423,8 @@ final case class SlowConsensusActor(
                       stackComposer = c.stackComposerLimiter,
                       cardanoLiaison = c.cardanoLiaison,
                       headPeerLiaisons = c.headPeerLiaisons,
-                      coilLinkRelay = c.coilLinkRelay
+                      coilUplink = c.coilUplink,
+                      coilRelay = c.coilRelay
                     )
                   )
                 )
@@ -444,12 +442,18 @@ object SlowConsensusActor {
     final case class Connections(
         stackComposer: StackComposer.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
-        /** A hub's coil-link relay (§8): every hard-ack this actor sees — its own, other head
-          * peers', and its coil peers' — is teed here so the hub's coil peers get the whole
-          * hard-ack stream and aggregate hard-confirmation themselves. `None` off a hub.
+        /** Head-peer-mesh liaisons; this actor broadcasts its **own** hard-ack here (empty on a
+          * coil peer).
           */
-        coilLinkRelay: Option[CoilLinkRelay.Handle] = None
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        /** A coil peer's single uplink to its hub; this actor's own hard-ack also goes here. `None`
+          * on a head peer.
+          */
+        coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
+        /** A hub's coil relay (§8.3): this actor's **own** hard-ack is sent here so the hub's coil
+          * peers receive it. `None` off a hub.
+          */
+        coilRelay: Option[liaison.CoilRelay.Handle] = None
     )
 
     type Request = PreStart.type | StackHandoff | HardAck

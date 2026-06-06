@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -8,6 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
@@ -34,8 +35,32 @@ import org.typelevel.log4cats.Logger
 abstract class PeerLiaisonHubToCoil(
     config: PeerLiaisonHubToCoil.Config,
     coil: CoilPeerNumber,
-    pendingConnections: Deferred[IO, PeerLiaisonHubToCoil.Connections]
+    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
+
+    /** Resolve connections — projected from the shared regime `Connections` (remote coil handle
+      * from the in-process `remoteCoilLiaisons` map) or supplied directly.
+      */
+    private def resolveConnections: IO[PeerLiaisonHubToCoil.Connections] =
+        pendingConnections match {
+            case shared: MultisigRegimeManager.PendingConnections =>
+                shared.get.flatMap(s =>
+                    s.coilAckSequencer.fold(
+                      IO.raiseError(
+                        java.lang.Error("Hub→coil liaison requires a CoilAckSequencer.")
+                      )
+                    )(seq =>
+                        IO.pure(
+                          PeerLiaisonHubToCoil.Connections(
+                            slowConsensusActor = s.slowConsensusActor,
+                            coilAckSequencer = seq,
+                            remoteCoil = s.remoteCoilLiaisons(coil)
+                          )
+                        )
+                    )
+                )
+            case own: PeerLiaisonHubToCoil.Connections => IO.pure(own)
+        }
 
     private given logger: Logger[IO] =
         Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->c${coil.convert}")
@@ -231,7 +256,7 @@ abstract class PeerLiaisonHubToCoil(
 
     private def preStartLocal: IO[Unit] =
         for {
-            c <- pendingConnections.get
+            c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- logger.info(s"starting, coil peer c${coil.convert}")
             _ <- puller.start
@@ -248,7 +273,7 @@ object PeerLiaisonHubToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
-        pendingConnections: Deferred[IO, Connections]
+        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
     ): IO[PeerLiaisonHubToCoil] =
         IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections) {})
 

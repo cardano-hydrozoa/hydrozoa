@@ -103,13 +103,16 @@ trait CoilMultisigRegimeManager(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
 
-            // Exactly one liaison, toward the hub head peer (§8).
+            // Exactly one liaison, toward the hub head peer (§8). It projects its connections from
+            // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) stays empty in
+            // this production placeholder (in-process wiring fills it).
             hubLiaison <- context.actorOf(
-              PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections)
+              liaison.PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections)
             )
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
-            // slots alias the unthrottled handles directly (no `Limiter` actors spawned).
+            // slots alias the unthrottled handles directly (no `Limiter` actors spawned). A coil has
+            // no head mesh — its `SlowConsensusActor` broadcasts its own hard-ack up `coilUplink`.
             connections = Connections(
               blockWeaver = blockWeaver,
               blockWeaverLimiter = blockWeaver,
@@ -120,7 +123,7 @@ trait CoilMultisigRegimeManager(
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposer,
               slowConsensusActor = slowConsensusActor,
-              headPeerLiaisons = List(hubLiaison),
+              coilUplink = Some(hubLiaison),
               tracer = tracer,
             )
 

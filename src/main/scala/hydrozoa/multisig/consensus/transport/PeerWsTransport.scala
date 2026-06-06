@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
@@ -36,6 +36,7 @@ final class PeerWsTransport private (
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
 )(using CardanoNetwork.Section) {
 
+    // TODO @Claude use peer's label here
     private val logger = Logging.loggerIO(s"PeerWsTransport.${ownPeerId.peerNum: Int}")
 
     /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
@@ -48,7 +49,7 @@ final class PeerWsTransport private (
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    def send(remote: HeadPeerId, request: PeerLiaisonHeadToHead.Request): IO[Unit] =
+    def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
         Frame.fromWire(request) match {
             case Some(wire) =>
                 val line = Frame.encode(Frame.Msg(wire))
@@ -66,7 +67,7 @@ final class PeerWsTransport private (
 
     private def dispatchInbound(
         remote: HeadPeerId,
-        payload: PeerLiaisonHeadToHead.Request
+        payload: LiaisonProtocol.HeadToHeadRequest
     ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {

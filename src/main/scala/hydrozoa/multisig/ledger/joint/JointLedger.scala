@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.joint
 
 import cats.effect.{IO, IOLocal, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
@@ -16,9 +17,10 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.ack.SoftAck
+import hydrozoa.multisig.consensus.liaison.{CoilRelay, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{FastConsensusActor, PeerLiaisonHeadToHead, StackComposer, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -100,7 +102,7 @@ final case class JointLedger(
                       fastConsensusActor = _connections.consensusActor,
                       stackComposer = _connections.stackComposer,
                       headPeerLiaisons = _connections.headPeerLiaisons,
-                      coilPeerLiaisons = _connections.coilPeerLiaisons
+                      coilRelay = _connections.coilRelay
                     )
                   )
                 )
@@ -700,10 +702,11 @@ final case class JointLedger(
             )
             // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
-            // A hub relays EVERY brief (own-led and follower-reproduced) to its coil peers, in
-            // block order, so they follow the whole population — contiguous, not the head-peer
-            // mesh's own-led-only subset (§8). No-op off a hub (the list is empty).
-            _ <- (conn.coilPeerLiaisons ! brief).parallel
+            // A hub sends EVERY brief (own-led and follower-reproduced) to CoilRelay, in block order,
+            // so its coil peers follow the whole contiguous block spine (§8.3). This is the spine
+            // source: the mesh liaisons forward satellites only, never briefs, so the spine is not
+            // double-fed. No-op off a hub.
+            _ <- conn.coilRelay.traverse_(_ ! brief)
             // Only a head peer emits on the fast cycle — it broadcasts the brief when it leads the
             // block, and authors a soft-ack for every block. A coil peer never leads and authors
             // none.
@@ -766,11 +769,12 @@ object JointLedger {
     final case class Connections(
         fastConsensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
+        /** Head-peer-mesh liaisons; this peer broadcasts its own-led brief here when it leads. */
         headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
-        /** Hub→coil liaisons (empty unless this is a hub head peer); every brief is relayed to them
-          * so the hub's coil peers follow the whole block sequence (§8).
+        /** A hub's coil relay (§8.3): EVERY (re)produced brief is sent here so the hub's coil peers
+          * follow the whole contiguous block spine. `None` off a hub.
           */
-        coilPeerLiaisons: List[PeerLiaisonHeadToHead.Handle] = Nil
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     enum UserRequestError extends Throwable:

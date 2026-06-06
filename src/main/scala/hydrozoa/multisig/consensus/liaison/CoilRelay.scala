@@ -1,9 +1,10 @@
 package hydrozoa.multisig.consensus.liaison
 
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -24,7 +25,7 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   *     artifacts.
   */
 abstract class CoilRelay(
-    pendingConnections: Deferred[IO, CoilRelay.Connections]
+    pendingConnections: MultisigRegimeManager.PendingConnections | CoilRelay.Connections
 ) extends Actor[IO, CoilRelay.Request] {
     private val connections = Ref.unsafe[IO, Option[CoilRelay.Connections]](None)
 
@@ -33,20 +34,28 @@ abstract class CoilRelay(
           _.fold(IO.raiseError(java.lang.Error("CoilRelay missing its connections.")))(IO.pure)
         )
 
+    private def resolveConnections: IO[CoilRelay.Connections] = pendingConnections match {
+        case shared: MultisigRegimeManager.PendingConnections =>
+            shared.get.map(s => CoilRelay.Connections(coilPeerLiaisons = s.coilPeerLiaisons))
+        case own: CoilRelay.Connections => IO.pure(own)
+    }
+
     override def preStart: IO[Unit] = context.self ! CoilRelay.PreStart
 
     override def receive: Receive[IO, CoilRelay.Request] =
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: CoilRelay.Request): IO[Unit] = req match {
-        case CoilRelay.PreStart => pendingConnections.get.flatMap(c => connections.set(Some(c)))
+        case CoilRelay.PreStart => resolveConnections.flatMap(c => connections.set(Some(c)))
         case artifact: CoilRelay.Artifact =>
             getConnections.flatMap(c => (c.coilPeerLiaisons ! artifact).parallel)
     }
 }
 
 object CoilRelay {
-    def apply(pendingConnections: Deferred[IO, Connections]): IO[CoilRelay] =
+    def apply(
+        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
+    ): IO[CoilRelay] =
         IO(new CoilRelay(pendingConnections) {})
 
     case object PreStart

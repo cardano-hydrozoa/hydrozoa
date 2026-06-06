@@ -10,7 +10,6 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.EventSequencer.*
-import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Handle
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import org.typelevel.log4cats.Logger
@@ -52,7 +51,8 @@ trait EventSequencer(
                   Some(
                     Connections(
                       blockWeaver = _connections.blockWeaver,
-                      headPeerLiaisons = _connections.headPeerLiaisons
+                      headPeerLiaisons = _connections.headPeerLiaisons,
+                      coilRelay = _connections.coilRelay
                     )
                   )
                 )
@@ -92,7 +92,10 @@ trait EventSequencer(
                       )
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
+                      // To the head-peer mesh, and (on a hub) to CoilRelay so its coil peers get the
+                      // request content they need to reproduce block bodies.
                       _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
+                      _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
                   } yield newId
             )
     }
@@ -121,7 +124,11 @@ object EventSequencer {
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle]
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        /** A hub's coil relay (§8.3): this peer's own requests are sent here so its coil peers get
+          * the request content. `None` off a hub.
+          */
+        coilRelay: Option[liaison.CoilRelay.Handle] = None
     )
 
     type Handle = ActorRef[IO, Request]

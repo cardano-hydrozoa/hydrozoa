@@ -3,11 +3,12 @@ package hydrozoa.multisig.consensus.transport
 import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.multisig.consensus.PeerLiaisonHeadToHead.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, RelayedMsg, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
+import hydrozoa.multisig.consensus.liaison.BatchNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{PeerLiaisonHeadToHead, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -36,12 +37,6 @@ object Codecs {
         io.circe.Codec.from(
           Decoder.decodeInt.map(SoftAckNumber.apply),
           Encoder.encodeInt.contramap((a: SoftAckNumber) => a.convert)
-        )
-
-    given Codec[PeerLiaisonHeadToHead.Batch.Number] =
-        io.circe.Codec.from(
-          Decoder.decodeInt.map(PeerLiaisonHeadToHead.Batch.Number.apply),
-          Encoder.encodeInt.contramap((n: PeerLiaisonHeadToHead.Batch.Number) => n: Int)
         )
 
     given Codec[SoftAckId] =
@@ -549,18 +544,9 @@ object Codecs {
 
     private given Codec[HardAckWithId] = deriveCodec[HardAckWithId]
 
-    // ---- RelayedMsg (sealed Soft | Hard) ----
+    // ---- Head-mesh batch messages (the only wire-eligible liaison messages) ----
 
-    private given Codec[RelayedMsg.Soft] = deriveCodec[RelayedMsg.Soft]
-    private given Codec[RelayedMsg.Hard] = deriveCodec[RelayedMsg.Hard]
-    // Req embeds a UserRequestWithId, whose codec needs the network section.
-    private given (using CardanoNetwork.Section): Codec[RelayedMsg.Req] =
-        deriveCodec[RelayedMsg.Req]
-    private given (using CardanoNetwork.Section): Codec[RelayedMsg] = deriveCodec[RelayedMsg]
+    given Codec[Mesh.Get] = deriveCodec[Mesh.Get]
 
-    // ---- GetMsgBatch / NewMsgBatch ----
-
-    given Codec[GetMsgBatch] = deriveCodec[GetMsgBatch]
-
-    given (using CardanoNetwork.Section): Codec[NewMsgBatch] = deriveCodec[NewMsgBatch]
+    given (using CardanoNetwork.Section): Codec[Mesh.New] = deriveCodec[Mesh.New]
 }

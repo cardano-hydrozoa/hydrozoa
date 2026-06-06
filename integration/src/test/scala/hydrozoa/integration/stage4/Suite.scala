@@ -26,7 +26,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, PeerLiaisonCoilToHub, FastConsensusActor, EventSequencer, PeerLiaisonHubToCoil, PeerLiaisonHeadToHead, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.liaison.{CoilRelay, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -310,14 +311,13 @@ case class Stage4Suite(
             transportSetup <- transportMode match {
                 case TransportMode.Direct =>
                     val remoteLiaisonsByPeer
-                        : Map[HeadPeerNumber, Map[PeerId, PeerLiaisonHeadToHead.Handle]] =
+                        : Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]] =
                         peers.map { peerNum =>
                             val ownPeerId = headPeerId(multiNodeConfig, peerNum)
                             peerNum -> peers
                                 .filterNot(_ == peerNum)
                                 .map { remotePeerNum =>
-                                    PeerId.Head(remotePeerNum) ->
-                                        peerLiaisonMap(remotePeerNum)(ownPeerId)
+                                    remotePeerNum -> peerLiaisonMap(remotePeerNum)(ownPeerId)
                                 }
                                 .toMap
                         }.toMap
@@ -349,9 +349,9 @@ case class Stage4Suite(
                 if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
 
-            coilLinkRelay <-
-                if coilConfigs.isEmpty then IO.none[CoilLinkRelay.Handle]
-                else system.actorOf(CoilLinkRelay(hubConfig, hubPending)).map(Some(_))
+            coilRelay <-
+                if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
+                else system.actorOf(CoilRelay(hubPending)).map(Some(_))
 
             coilWirings <- coilConfigs.traverse { coilConfig =>
                 val coilNum = coilConfig.ownPeerId match {
@@ -415,8 +415,7 @@ case class Stage4Suite(
 
             // Coil-ward additions merged into the hub head's Connections (below).
             hubExtraLiaisons = coilWirings.map(_.headLiaison)
-            hubExtraRemote =
-                coilWirings.map(c => (PeerId.Coil(c.coilNum): PeerId) -> c.coilLiaison).toMap
+            hubRemoteCoil = coilWirings.map(c => c.coilNum -> c.coilLiaison).toMap
 
             // Complete each peer's deferred with its full wiring.
             _ <- peers.traverse { peerNum =>
@@ -427,9 +426,6 @@ case class Stage4Suite(
                 // (kept separate from the head mesh) and owns the relay sequencers.
                 val isHub = peerNum == hubNum
                 val hubCoilLiaisons = if isHub then hubExtraLiaisons else Nil
-                val allRemote =
-                    if isHub then remoteLiaisonsByPeer(peerNum) ++ hubExtraRemote
-                    else remoteLiaisonsByPeer(peerNum)
                 for {
                     // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
                     // default RateLimits config (zero periods) these are no-ops; non-zero
@@ -460,10 +456,11 @@ case class Stage4Suite(
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = stack.slowConsensusActor,
                             headPeerLiaisons = localLiaisons,
-                            remotePeerLiaisons = allRemote,
+                            remoteHeadLiaisons = remoteLiaisonsByPeer(peerNum),
+                            remoteCoilLiaisons = if isHub then hubRemoteCoil else Map.empty,
                             coilPeerLiaisons = hubCoilLiaisons,
                             coilAckSequencer = if isHub then coilAckSequencer else None,
-                            coilLinkRelay = if isHub then coilLinkRelay else None,
+                            coilRelay = if isHub then coilRelay else None,
                           )
                         )
                         .void
@@ -493,9 +490,8 @@ case class Stage4Suite(
                             stackComposer = c.stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = c.stack.slowConsensusActor,
-                            headPeerLiaisons = List(c.coilLiaison),
-                            remotePeerLiaisons = Map((PeerId.Head(hubNum): PeerId) -> c.headLiaison),
-                            coilAckSequencer = None,
+                            coilUplink = Some(c.coilLiaison),
+                            remoteHubLiaison = Some(c.headLiaison),
                           )
                         )
                         .void
@@ -578,7 +574,7 @@ case class Stage4Suite(
     )(using
         CardanoNetwork.Section
     ): IO[
-      (Map[HeadPeerNumber, Map[PeerId, PeerLiaisonHeadToHead.Handle]], IO[Unit])
+      (Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]], IO[Unit])
     ] = {
         // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
         // dev machines); peers dial each other at the same address+port.
@@ -631,7 +627,7 @@ case class Stage4Suite(
                             for {
                                 proxy <- RemotePeerProxy(remotePeerId, transport)
                                 ref <- system.actorOf(proxy)
-                            } yield (PeerId.Head(remotePeerNum): PeerId) -> ref
+                            } yield remotePeerNum -> ref
                         }
                         .map(ownPeerNum -> _.toMap)
                 }

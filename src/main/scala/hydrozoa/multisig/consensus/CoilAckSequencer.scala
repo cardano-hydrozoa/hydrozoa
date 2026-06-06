@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.{IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
@@ -54,7 +55,11 @@ trait CoilAckSequencer(
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
         case x: MultisigRegimeManager.PendingConnections =>
-            x.get.flatMap(c => connections.set(Some(Connections(liaisons = c.headPeerLiaisons))))
+            x.get.flatMap(c =>
+                connections.set(
+                  Some(Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay))
+                )
+            )
         case x: CoilAckSequencer.Connections => connections.set(Some(x))
     }
 
@@ -77,9 +82,13 @@ trait CoilAckSequencer(
                         conn <- getConnections
                         seq <- state.nextSeqNum
                         hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
+                        // To the head-peer mesh (other heads) and to CoilRelay (this hub's coil
+                        // peers), both carrying it on a `HubHardAckLane`.
                         _ <- logger.debug(
                           s"sequenced coil $coilNum ack ${ack.hardAckNum} as seq $seq"
-                        ) >> (conn.liaisons ! hubAck).parallel
+                        ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(
+                          _ ! hubAck
+                        )
                     } yield ()
             }
     }
@@ -101,7 +110,10 @@ object CoilAckSequencer {
 
     type Config = OwnPeerPublic.Section
 
-    final case class Connections(liaisons: List[PeerLiaisonHeadToHead.Handle])
+    final case class Connections(
+        liaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        coilRelay: Option[liaison.CoilRelay.Handle] = None
+    )
 
     type Handle = ActorRef[IO, Request]
 
