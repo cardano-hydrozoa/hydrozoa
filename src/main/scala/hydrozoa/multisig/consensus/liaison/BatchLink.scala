@@ -103,7 +103,7 @@ final class Puller[G, N](
   */
 final class Server[G, N](
     serve: G => IO[BatchLink.Served[N]]
-)(send: N => IO[Unit])(using logger: Logger[IO]) {
+)(send: N => IO[Unit]) {
     import BatchLink.Served
 
     private val sendImmediately = Ref.unsafe[IO, Option[G]](None)
