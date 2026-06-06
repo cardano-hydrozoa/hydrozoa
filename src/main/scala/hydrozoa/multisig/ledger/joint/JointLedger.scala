@@ -17,10 +17,10 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.ack.SoftAck
-import hydrozoa.multisig.consensus.liaison.{CoilRelay, PeerLiaisonHeadToHead}
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag

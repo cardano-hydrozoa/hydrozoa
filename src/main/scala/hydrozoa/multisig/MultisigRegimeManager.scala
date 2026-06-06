@@ -156,8 +156,8 @@ trait MultisigRegimeManager(
                 else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
 
             coilRelay <-
-                if hubbedCoilPeers.isEmpty then IO.none[liaison.CoilRelay.Handle]
-                else context.actorOf(liaison.CoilRelay(pendingConnections)).map(Some(_))
+                if hubbedCoilPeers.isEmpty then IO.none[CoilRelay.Handle]
+                else context.actorOf(CoilRelay(pendingConnections)).map(Some(_))
 
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
@@ -244,7 +244,7 @@ object MultisigRegimeManager {
         /** Present only on a hub head peer (§8.3): the fan-out that relays the population to its
           * coil peers. Producers send only their own production here. `None` elsewhere.
           */
-        coilRelay: Option[liaison.CoilRelay.Handle] = None,
+        coilRelay: Option[CoilRelay.Handle] = None,
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
         // Only the in-process harness (stage4 / unit tests) populates these; in a real deployment
         // the counterpart is another process reached over the transport, so they stay empty.

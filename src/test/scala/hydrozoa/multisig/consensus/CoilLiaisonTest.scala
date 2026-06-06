@@ -14,7 +14,7 @@ import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.liaison.{CoilRelay, PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature

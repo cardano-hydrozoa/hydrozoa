@@ -13,7 +13,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, H
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
 import hydrozoa.multisig.consensus.peer.HeadPeerId
-import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -178,7 +178,7 @@ abstract class PeerLiaisonHeadToHead(
     )(g => getConnections.flatMap(_.remoteHead ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------
-    private def serve(get: Mesh.Get): IO[BatchLink.Served[Mesh.New]] =
+    private def serve(get: Mesh.Get): IO[Server.Served[Mesh.New]] =
         for {
             blockR <- blockLane.reply(get.block)
             stackR <- stackLane.reply(get.stack)
@@ -188,14 +188,14 @@ abstract class PeerLiaisonHeadToHead(
             hubR <- hubHardAckLane.reply(get.hubHardAck)
         } yield {
             val all = List(blockR, stackR, reqR, saR, hhR, hubR)
-            if all.contains(Lane.OutOfBounds) then BatchLink.Served.OutOfBounds
+            if all.contains(Lane.OutOfBounds) then Server.Served.OutOfBounds
             else {
                 def items[T](r: Lane.Reply[T]): List[T] = r match
                     case Lane.Items(xs)   => xs
                     case Lane.OutOfBounds => Nil
-                if all.forall(items(_).isEmpty) then BatchLink.Served.Empty
+                if all.forall(items(_).isEmpty) then Server.Served.Empty
                 else
-                    BatchLink.Served.Reply(
+                    Server.Served.Reply(
                       Mesh.New(
                         get.batchNum,
                         items(blockR).headOption,

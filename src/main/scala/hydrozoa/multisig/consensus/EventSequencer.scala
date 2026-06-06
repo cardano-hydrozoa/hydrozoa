@@ -128,7 +128,7 @@ object EventSequencer {
         /** A hub's coil relay (§8.3): this peer's own requests are sent here so its coil peers get
           * the request content. `None` off a hub.
           */
-        coilRelay: Option[liaison.CoilRelay.Handle] = None
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     type Handle = ActorRef[IO, Request]

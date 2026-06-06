@@ -7,10 +7,10 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.noop.NoOpLogger
 
-/** Unit tests for the [[Puller]] / [[Server]] orchestration engines, with `Int`-cursor fake batch
-  * types so the cross-lane state machine is exercised in isolation from real lanes.
+/** Unit tests for the [[Puller]] pull-side state machine, with `Int`-cursor fake batch types so it
+  * is exercised in isolation from real lanes.
   */
-class BatchLinkTest extends AnyFunSuite {
+class PullerTest extends AnyFunSuite {
     private given Logger[IO] = NoOpLogger[IO]
 
     final case class Get(batchNum: BatchNumber, cursor: Int)
@@ -57,23 +57,5 @@ class BatchLinkTest extends AnyFunSuite {
         puller.handleReply(New(BatchNumber(1), Some(2))).unsafeRunSync()
         assert(cursor.get.unsafeRunSync() == 1)
         assert(sent.get.unsafeRunSync().size == before)
-    }
-
-    test("Server stashes an empty pull and re-answers after an append") {
-        val queue = Ref.unsafe[IO, List[Int]](Nil)
-        val sent = Ref.unsafe[IO, List[New]](Nil)
-
-        def serve(g: Get): IO[BatchLink.Served[New]] = queue.get.map { q =>
-            q.find(_ >= g.cursor) match
-                case Some(v) => BatchLink.Served.Reply(New(g.batchNum, Some(v)))
-                case None    => BatchLink.Served.Empty
-        }
-        val server = new Server[Get, New](serve)(n => sent.update(_ :+ n))
-
-        server.handleGet(Get(BatchNumber.zero, 5)).unsafeRunSync() // nothing yet -> stash
-        assert(sent.get.unsafeRunSync().isEmpty)
-        queue.set(List(5)).unsafeRunSync()
-        server.afterAppend.unsafeRunSync() // content arrived -> answer
-        assert(sent.get.unsafeRunSync() == List(New(BatchNumber.zero, Some(5))))
     }
 }

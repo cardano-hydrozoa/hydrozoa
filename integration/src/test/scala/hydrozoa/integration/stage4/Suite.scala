@@ -26,8 +26,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer}
-import hydrozoa.multisig.consensus.liaison.{CoilRelay, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief

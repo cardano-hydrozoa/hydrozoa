@@ -207,12 +207,12 @@ abstract class PeerLiaisonCoilToHub(
     )(g => getConnections.flatMap(_.remoteHub ! g))
 
     // ---- Serve half (own hard-ack) --------------------------------------------------------------
-    private def serve(get: OwnHardAck.Get): IO[BatchLink.Served[OwnHardAck.New]] =
+    private def serve(get: OwnHardAck.Get): IO[Server.Served[OwnHardAck.New]] =
         ownHardAckLane.reply(get.hardAck).map {
-            case Lane.OutOfBounds => BatchLink.Served.OutOfBounds
-            case Lane.Items(Nil)  => BatchLink.Served.Empty
+            case Lane.OutOfBounds => Server.Served.OutOfBounds
+            case Lane.Items(Nil)  => Server.Served.Empty
             case Lane.Items(items) =>
-                BatchLink.Served.Reply(OwnHardAck.New(get.batchNum, items.headOption))
+                Server.Served.Reply(OwnHardAck.New(get.batchNum, items.headOption))
         }
 
     private val server = new Server[OwnHardAck.Get, OwnHardAck.New](serve)(n =>

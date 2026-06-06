@@ -58,7 +58,7 @@ object FastConsensusActor:
         /** A hub's coil relay (§8.3): this actor's **own** soft-ack is sent here so the hub's coil
           * peers receive it. `None` off a hub.
           */
-        coilRelay: Option[liaison.CoilRelay.Handle] = None,
+        coilRelay: Option[CoilRelay.Handle] = None,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
     )
 

@@ -1,12 +1,12 @@
-package hydrozoa.multisig.consensus.liaison
+package hydrozoa.multisig.consensus
 
 import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 

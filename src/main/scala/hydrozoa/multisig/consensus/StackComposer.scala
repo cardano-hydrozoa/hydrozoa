@@ -576,7 +576,7 @@ object StackComposer {
         /** A hub's coil relay (§8.3): every stack brief (own-led and received) is sent here so the
           * hub's coil peers get the whole stack spine. `None` off a hub.
           */
-        coilRelay: Option[liaison.CoilRelay.Handle] = None
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches

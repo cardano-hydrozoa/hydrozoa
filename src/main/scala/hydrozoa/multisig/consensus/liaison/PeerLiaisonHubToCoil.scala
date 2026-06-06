@@ -122,7 +122,7 @@ abstract class PeerLiaisonHubToCoil(
         )
 
     // ---- Serve half (population) ----------------------------------------------------------------
-    private def serve(get: Population.Get): IO[BatchLink.Served[Population.New]] =
+    private def serve(get: Population.Get): IO[Server.Served[Population.New]] =
         for {
             blockR <- blockLane.reply(get.block)
             stackR <- stackLane.reply(get.stack)
@@ -140,7 +140,7 @@ abstract class PeerLiaisonHubToCoil(
             }
         } yield {
             val all = blockR :: stackR :: (reqR ::: saR ::: hhR ::: chR).map(_._2)
-            if all.contains(Lane.OutOfBounds) then BatchLink.Served.OutOfBounds
+            if all.contains(Lane.OutOfBounds) then Server.Served.OutOfBounds
             else {
                 def items[T](r: Lane.Reply[T]): List[T] = r match
                     case Lane.Items(xs)   => xs
@@ -157,9 +157,9 @@ abstract class PeerLiaisonHubToCoil(
                           _.nonEmpty
                         ) ||
                         coilHardAcks.values.exists(_.nonEmpty)
-                if !anyContent then BatchLink.Served.Empty
+                if !anyContent then Server.Served.Empty
                 else
-                    BatchLink.Served.Reply(
+                    Server.Served.Reply(
                       Population.New(
                         get.batchNum,
                         block,

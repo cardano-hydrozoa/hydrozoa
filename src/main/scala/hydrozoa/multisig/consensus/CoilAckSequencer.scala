@@ -112,7 +112,7 @@ object CoilAckSequencer {
 
     final case class Connections(
         liaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
-        coilRelay: Option[liaison.CoilRelay.Handle] = None
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     type Handle = ActorRef[IO, Request]
