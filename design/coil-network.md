@@ -392,10 +392,13 @@ every *received* hard-ack past that point, purely to relay it — complicating t
 actor we most want to keep simple. So relaying moves out of the core actors into a
 dedicated **`CoilRelay`** (one per hub).
 
-**What it does.** `CoilRelay` is a pure fan-out: it receives each population lane
-item and forwards it to **every** `PeerLiaisonHubToCoil` the hub runs (each
-appends to its own per-lane outbox). It aggregates **nothing** — the six lane
-families stay separate end-to-end.
+**What it does.** `CoilRelay` is a pure, **stateless** fan-out: it receives each
+population lane item and forwards it to **every** `PeerLiaisonHubToCoil` the hub
+runs. It holds no buffer and no cursors of its own — each
+`PeerLiaisonHubToCoil` owns its **own** per-lane outbox queues and serves its coil
+peer's `GetMsgBatch` from them (D-coil-5, pinned: per-liaison outboxes, not a
+shared `CoilRelay` buffer). It aggregates **nothing** — the six lane families stay
+separate end-to-end.
 
 **What feeds it:**
 
@@ -686,7 +689,11 @@ is owned by a single section:
   escalation.
 - **D-coil-4 — skip triggers + deadline.** The concrete availability deadline and
   whether to enable the quorum-already-satisfied optimization (§12).
-- **D-coil-5 — `CoilRelay` outbox sharing.** Whether the `nHubs`/`nHeadPeers`
-  lanes are buffered once in `CoilRelay` and sliced per coil peer, or appended
-  independently into each `PeerLiaisonHubToCoil` outbox. Affects hub memory at
-  scale; decide during the rework.
+
+**D-coil-5 — `CoilRelay` outbox ownership — RESOLVED (per-liaison outboxes).**
+`CoilRelay` is a stateless fan-out; each `PeerLiaisonHubToCoil` owns its own
+per-lane outbox queues + cursors (§8.3). This keeps the liaison the single owner
+of a link's send-state (uniform with `PeerLiaisonHeadToHead`) and recovery-aligned
+per link, at the cost of buffering each lane item once per coil peer on the hub —
+the accepted hub cost (§8.8). A shared `CoilRelay` buffer sliced per coil peer was
+the rejected alternative.
