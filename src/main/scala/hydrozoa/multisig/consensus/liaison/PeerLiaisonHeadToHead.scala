@@ -134,6 +134,17 @@ abstract class PeerLiaisonHeadToHead(
                 _ <- m.softAck.traverse_(conn.consensusActor ! _)
                 _ <- m.headHardAck.traverse_(conn.slowConsensusActor ! _)
                 _ <- m.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
+                // On a hub, forward this remote head peer's SATELLITES to CoilRelay so its coil peers
+                // hear the whole population. Briefs (the contiguous block/stack spines) are NOT
+                // forwarded — the hub's own JointLedger / StackComposer re-produce every block/stack
+                // and feed those to CoilRelay directly, so forwarding mesh briefs too would
+                // double-feed the spine.
+                _ <- conn.coilRelay.traverse_ { cr =>
+                    m.requests.traverse_(cr ! _) >>
+                        m.softAck.traverse_(cr ! _) >>
+                        m.headHardAck.traverse_(cr ! _) >>
+                        m.hubHardAck.traverse_(cr ! _)
+                }
             } yield ()
         }
 
@@ -243,6 +254,10 @@ object PeerLiaisonHeadToHead {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remoteHead: LiaisonProtocol.HeadToHeadHandle
+        remoteHead: LiaisonProtocol.HeadToHeadHandle,
+        /** Present only on a hub head peer: this remote head peer's satellites are forwarded here
+          * so the hub's coil peers hear the whole population. `None` on non-hub head peers.
+          */
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 }
