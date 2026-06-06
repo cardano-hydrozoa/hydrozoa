@@ -22,17 +22,17 @@ import hydrozoa.multisig.ledger.stack.StackNumber
   * checks hold); the rest of the population rides the relayed `relayedMsg` / `HubHardAckLane`
   * lanes, de-muxed by embedded author and verified end-to-end by signature.
   */
-abstract class PeerLiaisonCoilToHead(
+abstract class PeerLiaisonCoilToHub(
     config: Config,
     hubHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections,
 ) extends PeerLiaisonBase(config) {
-    private val connections = Ref.unsafe[IO, Option[PeerLiaisonCoilToHead.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[PeerLiaisonCoilToHub.Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Head(hubHead.peerNum)
     override protected def remoteLabel: String = hubHead.peerNum.convert.toString
 
-    private def getConnections: IO[PeerLiaisonCoilToHead.Connections] = for {
+    private def getConnections: IO[PeerLiaisonCoilToHub.Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
@@ -46,7 +46,7 @@ abstract class PeerLiaisonCoilToHead(
             c <- pendingConnections.get
             _ <- connections.set(
               Some(
-                PeerLiaisonCoilToHead.Connections(
+                PeerLiaisonCoilToHub.Connections(
                   blockWeaver = c.blockWeaver,
                   consensusActor = c.consensusActor,
                   stackComposer = c.stackComposer,
@@ -95,13 +95,13 @@ abstract class PeerLiaisonCoilToHead(
         } yield ()
 }
 
-object PeerLiaisonCoilToHead {
+object PeerLiaisonCoilToHub {
     def apply(
         config: Config,
         hubHead: HeadPeerId,
         pendingConnections: MultisigRegimeManager.PendingConnections,
-    ): IO[PeerLiaisonCoilToHead] =
-        IO(new PeerLiaisonCoilToHead(config, hubHead, pendingConnections) {})
+    ): IO[PeerLiaisonCoilToHub] =
+        IO(new PeerLiaisonCoilToHub(config, hubHead, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 

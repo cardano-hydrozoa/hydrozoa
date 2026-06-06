@@ -26,7 +26,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, PeerLiaisonCoilToHead, FastConsensusActor, EventSequencer, PeerLiaisonHeadToCoil, PeerLiaisonHeadToHead, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilLinkRelay, PeerLiaisonCoilToHub, FastConsensusActor, EventSequencer, PeerLiaisonHubToCoil, PeerLiaisonHeadToHead, SlowConsensusActor, StackComposer}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -50,8 +50,8 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 // ===================================
 
 /** All actors + observation refs for one coil follower, assembled in `startupSut` (gated on
-  * `nCoilPeers > 0`). `headLiaison` is the hub-side `PeerLiaisonHeadToCoil`; `coilLiaison` is the
-  * coil-side `PeerLiaisonCoilToHead`.
+  * `nCoilPeers > 0`). `headLiaison` is the hub-side `PeerLiaisonHubToCoil`; `coilLiaison` is the
+  * coil-side `PeerLiaisonCoilToHub`.
   */
 private case class CoilWiring(
     coilNum: CoilPeerNumber,
@@ -60,8 +60,8 @@ private case class CoilWiring(
     stack: PeerStack,
     stackObserver: CardanoLiaison.Handle,
     stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
-    coilLiaison: PeerLiaisonCoilToHead.Handle,
-    headLiaison: PeerLiaisonHeadToCoil.Handle,
+    coilLiaison: PeerLiaisonCoilToHub.Handle,
+    headLiaison: PeerLiaisonHubToCoil.Handle,
 )
 
 case class Stage4Suite(
@@ -336,7 +336,7 @@ case class Stage4Suite(
 
             // ---- Coil followers (gated; empty for a pure-head run) ----
             // Each coil is hubbed by head 0. Build the coil peer's full follower actor stack + its single
-            // PeerLiaisonCoilToHead, plus the hub-side PeerLiaisonHeadToCoil and (once) the
+            // PeerLiaisonCoilToHub, plus the hub-side PeerLiaisonHubToCoil and (once) the
             // CoilAckSequencer. The hub's own Connections (completed below) gains the coil-ward
             // liaisons, the coil remote map, and the sequencer. Direct mode only — coil peers are wired
             // in-process like the head mesh.
@@ -387,10 +387,10 @@ case class Stage4Suite(
                           StackObserver(hubNum, cardanoLiaison, stacksRef)
                         )
                         coilLiaison <- system.actorOf(
-                          PeerLiaisonCoilToHead(coilConfig, hubHeadId, coilPending)
+                          PeerLiaisonCoilToHub(coilConfig, hubHeadId, coilPending)
                         )
                         headLiaison <- system.actorOf(
-                          PeerLiaisonHeadToCoil(hubConfig, coilNum, hubPending)
+                          PeerLiaisonHubToCoil(hubConfig, coilNum, hubPending)
                         )
                     yield CoilWiring(
                       coilNum = coilNum,

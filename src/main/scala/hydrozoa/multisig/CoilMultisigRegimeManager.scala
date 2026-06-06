@@ -105,7 +105,7 @@ trait CoilMultisigRegimeManager(
 
             // Exactly one liaison, toward the hub head peer (§8).
             hubLiaison <- context.actorOf(
-              PeerLiaisonCoilToHead(config, hubPeerId, pendingConnections)
+              PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections)
             )
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter

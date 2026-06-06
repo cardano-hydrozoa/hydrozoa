@@ -20,7 +20,7 @@ import org.scalacheck.{Prop, Properties}
 
 /** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§8 of `design/coil-network.md`), one
   * hub head peer serving N coil peers. A coil peer's hard-ack travels up its
-  * [[PeerLiaisonCoilToHead]] to the hub's [[PeerLiaisonHeadToCoil]], which routes it to BOTH the
+  * [[PeerLiaisonCoilToHub]] to the hub's [[PeerLiaisonHubToCoil]], which routes it to BOTH the
   * hub's slow-consensus actor and the [[CoilAckSequencer]]; the sequencer stamps it and relays the
   * resulting `HardAckWithId` down EVERY coil link, so each coil peer hears every coil peer's ack
   * (its own echo included — deduped downstream).
@@ -121,8 +121,8 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         pending: Deferred[IO, MultisigRegimeManager.Connections],
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
-        headLiaison: PeerLiaisonHeadToCoil.Handle,
-        coilLiaison: PeerLiaisonCoilToHead.Handle,
+        headLiaison: PeerLiaisonHubToCoil.Handle,
+        coilLiaison: PeerLiaisonCoilToHub.Handle,
     )
 
     /** Stand up one hub head serving `acksByCoil.size` coil peers, inject each coil peer's
@@ -146,14 +146,14 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                             coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                             coilSlowConsensus <- system.actorOf(new HardAckRecorder(coilSeen))
                             headLiaison <- system.actorOf(
-                              PeerLiaisonHeadToCoil(
+                              PeerLiaisonHubToCoil(
                                 headConfig,
                                 coilNum,
                                 headPending
                               )
                             )
                             coilLiaison <- system.actorOf(
-                              PeerLiaisonCoilToHead(
+                              PeerLiaisonCoilToHub(
                                 coilConfig(coilNum),
                                 HeadPeerId(0, 1),
                                 pending

@@ -160,7 +160,7 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
-                      PeerLiaisonHeadToCoil(config, coilNum, pendingConnections)
+                      PeerLiaisonHubToCoil(config, coilNum, pendingConnections)
                     )
                 )
 

@@ -16,6 +16,14 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 
 /** The head-mesh liaison: one per other head peer. Full duplex — it sends this peer's own artifacts
   * and routes the remote head's artifacts to every local consensus actor.
+  *
+  * '''Lanes exercised.''' All three liaison shapes share the same `Request` ADT and the same fat
+  * `GetMsgBatch` / `NewMsgBatch` (8 lanes), but each shape only ever exercises a subset; the rest
+  * stay `None` / cursor-at-initial. This shape uses every `RemoteBroadcast` variant '''except'''
+  * `RelayedMsg` — `SoftAck`, `BlockBrief`, `StackBrief`, `HardAck`, `UserRequestWithId`,
+  * `HardAckWithId` — i.e. every batch lane except `relayedMsg`, in both directions (the mesh is
+  * symmetric). `BlockConfirmed` (prune signal), `PreStart`, and `ResendCurrent` are all used. A
+  * clean per-shape split of these types is deferred (see `design/coil-network.md` §8).
   */
 abstract class PeerLiaisonHeadToHead(
     config: Config,

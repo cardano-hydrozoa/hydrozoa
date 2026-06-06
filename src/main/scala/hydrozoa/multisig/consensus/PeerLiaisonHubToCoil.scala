@@ -12,24 +12,30 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 
 /** A hub head peer's liaison toward one coil peer it serves (§8 of `design/coil-network.md`).
   *
-  * Asymmetric, the mirror image of [[PeerLiaisonCoilToHead]]: its outbox carries everything the hub
-  * holds — briefs, soft-acks, head peer hard-acks, and the relayed `HubHardAckLane` (fed by the
-  * hub's actors) — while its inbound direction receives only that coil peer's own hard-acks. Each
-  * one is routed BOTH to the hub's local [[SlowConsensusActor]] (so the hub counts it toward
-  * quorum) and to the [[CoilAckSequencer]] (which stamps it and relays it onto the
-  * `HubHardAckLane`).
+  * Asymmetric, the mirror image of [[PeerLiaisonCoilToHub]].
+  *
+  * '''Lanes exercised.''' All three liaison shapes share the same fat `GetMsgBatch` / `NewMsgBatch`
+  * (8 lanes), but each uses only a subset; the rest stay `None`. Outbound (hub → coil) carries
+  * exactly three lanes: `blockBrief` and `stackBrief` (fanned contiguously from `JointLedger` /
+  * `StackComposer`) and `relayedMsg` (the whole population's soft-acks / hard-acks / requests,
+  * already multiplexed by [[CoilLinkRelay]], the hub's own included). It carries NO separate
+  * `softAck` / `hardAck` / `hubHardAck` (`HubHardAckLane`) / `request` lanes — those either ride
+  * inside `relayedMsg` or go only to the head mesh. Inbound (coil → hub) carries exactly one lane:
+  * the coil peer's own `hardAck`, routed BOTH to the hub's [[SlowConsensusActor]] (for quorum) and
+  * to the [[CoilAckSequencer]] (which stamps it onto the mesh's `HubHardAckLane`). A clean
+  * per-shape split of these types is deferred (see `design/coil-network.md` §8).
   */
-abstract class PeerLiaisonHeadToCoil(
+abstract class PeerLiaisonHubToCoil(
     config: Config,
     coil: CoilPeerNumber,
     pendingConnections: MultisigRegimeManager.PendingConnections,
 ) extends PeerLiaisonBase(config) {
-    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHeadToCoil.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
 
     override protected def remotePeerId: PeerId = PeerId.Coil(coil)
     override protected def remoteLabel: String = s"c${coil.convert}"
 
-    private def getConnections: IO[PeerLiaisonHeadToCoil.Connections] = for {
+    private def getConnections: IO[PeerLiaisonHubToCoil.Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
@@ -48,7 +54,7 @@ abstract class PeerLiaisonHeadToCoil(
             )(IO.pure)
             _ <- connections.set(
               Some(
-                PeerLiaisonHeadToCoil.Connections(
+                PeerLiaisonHubToCoil.Connections(
                   slowConsensusActor = c.slowConsensusActor,
                   coilAckSequencer = sequencer,
                   remotePeerLiaison = c.remotePeerLiaisons(remotePeerId)
@@ -85,13 +91,13 @@ abstract class PeerLiaisonHeadToCoil(
         } yield ()
 }
 
-object PeerLiaisonHeadToCoil {
+object PeerLiaisonHubToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
         pendingConnections: MultisigRegimeManager.PendingConnections,
-    ): IO[PeerLiaisonHeadToCoil] =
-        IO(new PeerLiaisonHeadToCoil(config, coil, pendingConnections) {})
+    ): IO[PeerLiaisonHubToCoil] =
+        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections) {})
 
     type Handle = ActorRef[IO, Request]
 
