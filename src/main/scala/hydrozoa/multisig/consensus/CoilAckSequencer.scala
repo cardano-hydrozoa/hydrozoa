@@ -9,7 +9,7 @@ import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, HubHardAckNumber}
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import org.typelevel.log4cats.Logger
 
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
@@ -33,6 +33,13 @@ trait CoilAckSequencer(
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
+
+    // The sequencer runs on a hub, so its own id is the hub each stamped ack is scoped to.
+    private val hubPeerNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) =>
+            throw new IllegalStateException("CoilAckSequencer runs only on a hub head peer")
+    }
 
     private given logger: Logger[IO] = Logging.loggerIO(s"CoilAckSequencer.${config.ownPeerLabel}")
 
@@ -69,7 +76,7 @@ trait CoilAckSequencer(
                     for {
                         conn <- getConnections
                         seq <- state.nextSeqNum
-                        hubAck = HardAckWithId(seq, ack)
+                        hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
                         _ <- logger.debug(
                           s"sequenced coil $coilNum ack ${ack.hardAckNum} as seq $seq"
                         ) >> (conn.liaisons ! hubAck).parallel
