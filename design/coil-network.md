@@ -647,6 +647,50 @@ Persistence + crash-recovery for coil peers deferred to
 `persistence-and-crash-recovery.md` §11. Rule-based-regime handover for a coil
 peer (spawning `DisputeActor` + `EvacuationActor`) is a **separate task**.
 
+### Pc4 rework — build status (2026-06-05)
+
+The new liaison layer is **built and unit-tested** in `consensus.liaison`, sitting
+alongside the old liaisons (which are still wired):
+
+- `Lane[T, N]` — the per-lane next-expected unit (append / reply / verify /
+  advanceTo; contiguous + sparse constructors). `BatchNumber`, and the per-shape
+  batch types `BatchMessages.{Mesh, Population, OwnHardAck}.{Get, New}`.
+- `BatchLink` — the `Puller` (pull half) + `Server` (serve half) composition
+  engines; the pull/serve split covers the asymmetric hub↔coil link.
+- The three actors `PeerLiaison{HeadToHead, HubToCoil, CoilToHub}` by composition
+  (no inheritance), `LiaisonProtocol` (shared `Request`/`Handle` aliases), and
+  `CoilRelay` (stateless fan-out). `HardAckWithId` gained `hubPeer` so a
+  re-sequenced coil ack self-describes its hub.
+
+**The wiring swap (remaining) is one atomic, transport-coupled migration** — it
+can't compile partially, because the shared `Connections` + the transport ADT are
+read by both old and new. Open design questions are all resolved:
+
+- **`ActorRef` is contravariant** in its message type, so a producer can broadcast
+  its own artifact to whichever liaison shape accepts it. Shared `Connections`
+  becomes `headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle]` (the mesh, empty
+  on a coil), `coilUplink: Option[PeerLiaisonCoilToHub.Handle]` (Some on a coil),
+  and `coilRelay: Option[CoilRelay.Handle]` (Some on a hub). `SlowConsensusActor`
+  broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink` (both widen to
+  `ActorRef[IO, HardAck]`); the other producers use `headPeerLiaisons`.
+- **Producer rewiring:** drop the `coilLinkRelay` field + received-traffic taps;
+  send only *own* production to `coilRelay`. FCA own soft-ack; SCA own hard-ack
+  (mesh/uplink + `coilRelay`); JL every (re)produced brief → `coilRelay`; SC own
+  brief; ES own request; `CoilAckSequencer` its `HubHardAckLane` → mesh +
+  `coilRelay`. Remove FCA's `BlockConfirmed`→liaisons send. **Spines are not
+  forwarded by the mesh liaisons** (only satellites) — the hub's own JL/SC
+  re-produce every block/stack, so mesh-forwarding briefs would double-feed the
+  contiguous spine.
+- **Per-liaison `Connections`** (each new liaison takes its own `Deferred`): the
+  managers spawn the new liaisons + `CoilRelay` (+ `CoilAckSequencer` on a hub)
+  and complete them.
+- **Transport (the coupling):** `Frame` / `Codecs` / `RemotePeerProxy` /
+  `PeerWsTransport` are typed to the *single old* `Request` + `RelayedMsg`. They
+  must migrate to the three per-shape messages (the `Population` maps need
+  `HeadPeerNumber` `KeyEncoder`/`KeyDecoder`, which exist). Then delete
+  `PeerLiaisonBase`, the old liaisons, `CoilLinkRelay`, `RelayedMsg*`, and rewire
+  the stage4 harness + `CoilLiaisonTest` / `CodecsTest`.
+
 ## Cross-cutting concerns
 
 Concerns that cut across the phases above; each must be honored even though none
