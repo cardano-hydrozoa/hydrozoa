@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.{BlockWeaver, EventSequencer}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
 import org.http4s.server.middleware.CORS
@@ -29,8 +29,8 @@ object HydrozoaServer {
 
     /** Create and start the HTTP server
       *
-      * @param eventSequencer
-      *   Handle to the EventSequencer actor
+      * @param requestSequencer
+      *   Handle to the RequestSequencer actor
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
       * @param headConfig
@@ -41,14 +41,14 @@ object HydrozoaServer {
       *   Resource that manages the server lifecycle
       */
     def create(
-        eventSequencer: EventSequencer.Handle,
+        requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
         config: Config
     ): Resource[IO, Server] =
         for {
             hydrozoaRoutes <- Resource.eval(
-              HydrozoaRoutes(eventSequencer, blockWeaver, headConfig, config)
+              HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, config)
             )
             server <- EmberServerBuilder
                 .default[IO]
@@ -69,12 +69,12 @@ object HydrozoaServer {
       * Note: In production, this would be integrated into HydrozoaNode
       */
     def run(
-        eventSequencer: EventSequencer.Handle,
+        requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
         config: Config
     ): IO[Nothing] = {
-        create(eventSequencer, blockWeaver, headConfig, config)
+        create(requestSequencer, blockWeaver, headConfig, config)
             .use(_ => IO.never)
     }
 }

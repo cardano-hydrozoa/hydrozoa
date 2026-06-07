@@ -14,7 +14,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import org.typelevel.log4cats.Logger
 
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
-  * ([[EventSequencer]]).
+  * ([[RequestSequencer]]).
   *
   * A hub head peer's [[PeerLiaisonHubToCoil]]s hand it the coil peer hard-acks they receive — each
   * exactly once, since the liaison's batch protocol dispatches a payload only when it advances the

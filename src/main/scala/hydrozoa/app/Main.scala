@@ -219,7 +219,7 @@ object Main extends IOApp {
                 _ <- system.actorOf(mrm, "MultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 
-                // Start HTTP server once EventSequencer is available
+                // Start HTTP server once RequestSequencer is available
                 _ <- mrm.connectionsDeferred.get.flatMap { connections =>
                     val serverConfig = HydrozoaServer.Config(
                       host = host"0.0.0.0",
@@ -230,7 +230,7 @@ object Main extends IOApp {
                     logger.info("Starting HTTP server...") *>
                         HydrozoaServer
                             .create(
-                              connections.eventSequencer,
+                              connections.requestSequencer,
                               connections.blockWeaver,
                               nodeConfig.headConfig,
                               serverConfig

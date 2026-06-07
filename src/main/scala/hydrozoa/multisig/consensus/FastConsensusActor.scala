@@ -51,7 +51,7 @@ object FastConsensusActor:
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        eventSequencer: EventSequencer.Handle,
+        requestSequencer: RequestSequencer.Handle,
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
@@ -176,7 +176,7 @@ class FastConsensusActor(
                       // hydrozoa.multisig.consensus.limiter.Limiter).
                       blockWeaver = _connections.blockWeaverLimiter,
                       cardanoLiaison = _connections.cardanoLiaison,
-                      eventSequencer = _connections.eventSequencer,
+                      requestSequencer = _connections.requestSequencer,
                       headPeerLiaisons = _connections.headPeerLiaisons,
                       jointLedger = _connections.jointLedger,
                       stackComposer = _connections.stackComposer,

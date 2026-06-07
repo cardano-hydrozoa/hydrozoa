@@ -9,35 +9,33 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.EventSequencer.*
+import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
-  * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
-  * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
+  * [[HydrozoaServer]]. Only one request sequencer is running per node, specifically to handle
+  * _only_ the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
   * [[RequestId]]s.
   *
   * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaisonHeadToHead]]s.
-  *
-  * TODO: rename to RequestSequencer (and EventSequencer companion object accordingly).
   */
-trait EventSequencer(
+trait RequestSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections | RequestSequencer.Connections
 ) extends Actor[IO, Request] {
-    private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
 
-    private given logger: Logger[IO] = Logging.loggerIO(s"EventSequencer.${config.ownPeerLabel}")
+    private given logger: Logger[IO] = Logging.loggerIO(s"RequestSequencer.${config.ownPeerLabel}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
         conn <- mConn.fold(
           IO.raiseError(
             java.lang.Error(
-              "Event sequencer is missing its connections to other actors."
+              "Request sequencer is missing its connections to other actors."
             )
           )
         )(IO.pure)
@@ -57,16 +55,16 @@ trait EventSequencer(
                   )
                 )
             } yield ()
-        case x: EventSequencer.Connections => connections.set(Some(x))
+        case x: RequestSequencer.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
+    override def preStart: IO[Unit] = context.self ! RequestSequencer.PreStart
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case EventSequencer.PreStart => preStartLocal
+        case RequestSequencer.PreStart => preStartLocal
         case req: UserRequest.Sync =>
             req.request.handleSync(
               req,
@@ -79,7 +77,9 @@ trait EventSequencer(
                           case PeerId.Head(n) => IO.pure(n)
                           case PeerId.Coil(_) =>
                               IO.raiseError(
-                                new IllegalStateException("EventSequencer runs only on a head peer")
+                                new IllegalStateException(
+                                  "RequestSequencer runs only on a head peer"
+                                )
                               )
                       }
                       newId = RequestId(ownHeadPeerNum, newNum)
@@ -110,15 +110,15 @@ trait EventSequencer(
     }
 }
 
-/** Event sequencer receives local submissions of users' requests (via an http server), assigns
+/** Request sequencer receives local submissions of users' requests (via an http server), assigns
   * ledger event ids and emits them sequentially into the consensus system.
   */
-object EventSequencer {
+object RequestSequencer {
     def apply(
         config: Config,
         pendingConnections: MultisigRegimeManager.PendingConnections
-    ): IO[EventSequencer] =
-        IO(new EventSequencer(config, pendingConnections) {})
+    ): IO[RequestSequencer] =
+        IO(new RequestSequencer(config, pendingConnections) {})
 
     type Config = OwnPeerPublic.Section
 

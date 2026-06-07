@@ -60,8 +60,8 @@ trait MultisigRegimeManager(
                     Tracer.warn("Terminated joint ledger actor")
                 case Actors.PeerLiaisonHeadToHead =>
                     Tracer.warn("Terminated peer liaison actor")
-                case Actors.EventSequencer =>
-                    Tracer.warn("Terminated event sequencer actor")
+                case Actors.RequestSequencer =>
+                    Tracer.warn("Terminated request sequencer actor")
                 case Actors.StackComposer =>
                     Tracer.warn("Terminated stack composer actor")
                 case Actors.SlowConsensus =>
@@ -107,7 +107,7 @@ trait MultisigRegimeManager(
               FastConsensusActor(config, pendingConnections, tracerLocal)
             )
 
-            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
+            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
 
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
@@ -171,7 +171,7 @@ trait MultisigRegimeManager(
               blockWeaverLimiter = blockWeaverLimiter,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
-              eventSequencer = eventSequencer,
+              requestSequencer = requestSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposerLimiter,
@@ -200,8 +200,8 @@ trait MultisigRegimeManager(
               TerminatedChild(Actors.CardanoLiaison, cardanoLiaison)
             )
             _ <- context.watch(
-              eventSequencer,
-              TerminatedChild(Actors.EventSequencer, eventSequencer)
+              requestSequencer,
+              TerminatedChild(Actors.RequestSequencer, requestSequencer)
             )
             _ <- context.watch(
               stackComposer,
@@ -225,7 +225,7 @@ object MultisigRegimeManager {
         blockWeaverLimiter: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         consensusActor: FastConsensusActor.Handle,
-        eventSequencer: EventSequencer.Handle,
+        requestSequencer: RequestSequencer.Handle,
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
@@ -275,7 +275,7 @@ object MultisigRegimeManager {
       */
     enum Actors:
         case BlockWeaver, CardanoLiaison, Consensus, JointLedger, PeerLiaisonHeadToHead,
-            EventSequencer,
+            RequestSequencer,
             StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */

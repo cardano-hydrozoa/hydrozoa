@@ -5,7 +5,7 @@ import fs2.Stream
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.{BlockWeaver, EventSequencer, UserRequest}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
@@ -20,7 +20,7 @@ import org.typelevel.log4cats.Logger
   * proxy -- load-balancer, unified api).
   */
 class HydrozoaRoutes(
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config
@@ -77,8 +77,8 @@ class HydrozoaRoutes(
                 newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
                 transactionRequest <- newReq.as[UserRequest]
                 _ <- logger.debug(s"POST /api/l2/submit - Decoded: $transactionRequest")
-                // Send synchronous request to EventSequencer and get back RequestId
-                requestId <- eventSequencer ?: transactionRequest
+                // Send synchronous request to RequestSequencer and get back RequestId
+                requestId <- requestSequencer ?: transactionRequest
                 response = RequestAccepted(requestId = requestId)
                 resp <- Ok(response.asJson)
             } yield resp
@@ -122,8 +122,8 @@ class HydrozoaRoutes(
                 newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
                 depositRequest <- newReq.as[UserRequest]
                 _ <- logger.debug(s"POST /api/deposit/register - Decoded: $depositRequest")
-                // Send synchronous request to EventSequencer and get back RequestId
-                requestId <- eventSequencer ?: depositRequest
+                // Send synchronous request to RequestSequencer and get back RequestId
+                requestId <- requestSequencer ?: depositRequest
                 response = RequestAccepted(requestId)
                 resp <- Ok(response.asJson)
             } yield resp
@@ -215,10 +215,10 @@ class HydrozoaRoutes(
 
 object HydrozoaRoutes {
     def apply(
-        eventSequencer: EventSequencer.Handle,
+        requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config
     ): IO[HydrozoaRoutes] =
-        IO.pure(new HydrozoaRoutes(eventSequencer, blockWeaver, headConfig, serverConfig))
+        IO.pure(new HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, serverConfig))
 }

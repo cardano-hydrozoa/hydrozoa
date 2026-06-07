@@ -26,7 +26,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTes
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{CoilHubTransport, CoilUplinkTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, RequestSequencer, SlowConsensusActor, StackComposer}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
 import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -228,7 +228,7 @@ case class Stage4Suite(
                             cardanoLiaison <- system.actorOf(
                               CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                             )
-                            eventSequencer <- system.actorOf(EventSequencer(nodeConfig, pending))
+                            requestSequencer <- system.actorOf(RequestSequencer(nodeConfig, pending))
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
                             jointLedger <- system.actorOf(
                               JointLedger(
@@ -251,7 +251,7 @@ case class Stage4Suite(
                         yield peerNum -> PeerStack(
                           blockWeaver,
                           cardanoLiaison,
-                          eventSequencer,
+                          requestSequencer,
                           jointLedger,
                           consensusActor,
                           stackComposer,
@@ -394,7 +394,7 @@ case class Stage4Suite(
                         cardanoLiaison <- system.actorOf(
                           CardanoLiaison(coilConfig, cardanoBackend, coilPending, tracerLocal)
                         )
-                        eventSequencer <- system.actorOf(EventSequencer(coilConfig, coilPending))
+                        requestSequencer <- system.actorOf(RequestSequencer(coilConfig, coilPending))
                         l2Ledger <- EutxoL2Ledger(coilConfig)
                         jointLedger <- system.actorOf(
                           JointLedger(coilConfig, coilPending, l2Ledger, ProtocolTracer.noop, tracerLocal)
@@ -425,7 +425,7 @@ case class Stage4Suite(
                       stack = PeerStack(
                         blockWeaver,
                         cardanoLiaison,
-                        eventSequencer,
+                        requestSequencer,
                         jointLedger,
                         consensusActor,
                         stackComposer,
@@ -487,7 +487,7 @@ case class Stage4Suite(
                             // coverage; mirrors observerMap on consensusActor.
                             cardanoLiaison = stackObserverMap(peerNum),
                             consensusActor = observerMap(peerNum),
-                            eventSequencer = stack.eventSequencer,
+                            requestSequencer = stack.requestSequencer,
                             jointLedger = stack.jointLedger,
                             stackComposer = stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
@@ -522,7 +522,7 @@ case class Stage4Suite(
                             blockWeaverLimiter = blockWeaverLimiter,
                             cardanoLiaison = c.stackObserver,
                             consensusActor = c.stack.consensusActor,
-                            eventSequencer = c.stack.eventSequencer,
+                            requestSequencer = c.stack.requestSequencer,
                             jointLedger = c.stack.jointLedger,
                             stackComposer = c.stack.stackComposer,
                             stackComposerLimiter = stackComposerLimiter,
@@ -575,7 +575,7 @@ case class Stage4Suite(
           system = system,
           cardanoBackend = cardanoBackend,
           peers = peerStackMap.map { case (peerNum, stack) =>
-              peerNum -> Stage4PeerHandle(eventSequencer = stack.eventSequencer)
+              peerNum -> Stage4PeerHandle(requestSequencer = stack.requestSequencer)
           },
           sutErrors = sutErrors,
           errorDrainer = errorDrainer,

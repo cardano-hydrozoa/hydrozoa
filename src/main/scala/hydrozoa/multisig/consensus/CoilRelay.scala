@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   * outbox (D-coil-5: per-liaison outboxes). It exists so the core consensus actors are not relay
   * taps: an actor's job ends when its cell saturates, but a relay must keep forwarding, so relaying
   * lives here instead. It is fed by:
-  *   - the hub's own producers (`JointLedger` / `StackComposer` / `EventSequencer` /
+  *   - the hub's own producers (`JointLedger` / `StackComposer` / `RequestSequencer` /
   *     `FastConsensusActor` / `SlowConsensusActor` / `CoilAckSequencer`), each sending only its
   *     **own** output — one extra recipient, no received-traffic relay; and
   *   - the hub's mesh [[PeerLiaisonHeadToHead]]s, forwarding **other** head peers' inbound

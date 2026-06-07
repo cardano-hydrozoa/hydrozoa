@@ -14,7 +14,7 @@ package hydrozoa.integration
   *
   * ==SUT architecture==
   *
-  *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `EventSequencer`, `JointLedger`,
+  *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `RequestSequencer`, `JointLedger`,
   *     `FastConsensusActor`, plus one `PeerLiaisonHeadToHead` per (local, remote) pair, all wired in-process.
   *     There is no real network transport.
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
@@ -76,8 +76,8 @@ package hydrozoa.integration
   * Without TestControl the model clock and the harness submission wall-clock still stay in lockstep
   * at every command boundary — the harness sleeps `interArrivalDelay` real milliseconds and the
   * model advances by the same `interArrivalDelay` in `runState`, so the value the model assigns to
-  * a request's submission time matches the wall time when `EventSequencer` accepts the `?:`. The
-  * subtler concern is one level deeper: the `?:` returns as soon as the EventSequencer enqueues the
+  * a request's submission time matches the wall time when `RequestSequencer` accepts the `?:`. The
+  * subtler concern is one level deeper: the `?:` returns as soon as the RequestSequencer enqueues the
   * request, '''not''' when the leader actually folds it into a block. Block production, cross-peer
   * consensus, peer round-trips, and L1 polling all happen asynchronously on real wall-clock time
   * when TestControl is off. The leader evaluates the event at its block's `blockCreationStartTime`,
@@ -137,7 +137,7 @@ package hydrozoa.integration
   *      ([[Generator.CommandGenerators.genL2TxCommand]] or
   *      [[Generator.CommandGenerators.genRegisterDepositCommand]]).
   *   2. '''Execution''' — `SutCommand.run` submits each request directly to the owning peer's
-  *      `EventSequencer`. Validity is recorded per request in [[Model.ModelState.modelFlags]]; the
+  *      `RequestSequencer`. Validity is recorded per request in [[Model.ModelState.modelFlags]]; the
   *      SUT's verdicts come later from the block briefs.
   *   3. '''Shutdown / analysis''' — `Stage4Suite.shutdownSut` cancels the liaison tick fibers,
   *      drains the actor system via `waitForIdle` so any in-progress block seals and is captured by

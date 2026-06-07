@@ -114,7 +114,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             blockWeaver <- noop[BlockWeaver.Request](system)
             cardanoLiaison <- noop[CardanoLiaison.Request](system)
             consensusActor <- noop[FastConsensusActor.Request](system)
-            eventSequencer <- noop[EventSequencer.Request](system)
+            requestSequencer <- noop[RequestSequencer.Request](system)
             jointLedger <- noop[JointLedger.Requests.Request](system)
             stackComposer <- noop[StackComposer.Request](system)
         } yield MultisigRegimeManager.Connections(
@@ -122,7 +122,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
           blockWeaverLimiter = blockWeaver,
           cardanoLiaison = cardanoLiaison,
           consensusActor = consensusActor,
-          eventSequencer = eventSequencer,
+          requestSequencer = requestSequencer,
           jointLedger = jointLedger,
           stackComposer = stackComposer,
           stackComposerLimiter = stackComposer,

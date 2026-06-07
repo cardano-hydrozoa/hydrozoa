@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.{Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, RequestSequencer, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import BlockBrief.{Minor as BMinor, Major as BMajor}
@@ -24,7 +24,7 @@ import org.scalacheck.commands.SutCommand
 private[stage4] case class PeerStack(
     blockWeaver: BlockWeaver.Handle,
     cardanoLiaison: CardanoLiaison.Handle,
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
     jointLedger: JointLedger.Handle,
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
@@ -115,7 +115,7 @@ private[stage4] class StackObserver(
 
 /** Per-peer actor handles exposed to SUT commands. */
 case class Stage4PeerHandle(
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
 )
 
 case class Stage4Sut(
@@ -176,27 +176,27 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's EventSequencer.
+    // L2 tx: submit directly to the peer's RequestSequencer.
     // Result is always Valid (trivial); oracle check in shutdownSut compares model
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             given IOLocal[Tracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
                 _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with EventSequencer AND submit the signed deposit tx to the shared
+    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             given IOLocal[Tracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
                 _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)

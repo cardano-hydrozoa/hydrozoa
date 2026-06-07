@@ -21,7 +21,7 @@ import scala.concurrent.duration.DurationInt
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
   *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§8), instead of
   *     the head mesh;
-  *   - no user-request surface (the spawned [[EventSequencer]] is inert: no HTTP server routes to
+  *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
   * It completes the shared [[MultisigRegimeManager.Connections]] so the reused child actors resolve
@@ -92,7 +92,7 @@ trait CoilMultisigRegimeManager(
             )
             // Inert on a coil: no HTTP server routes user requests here, and a coil peer authors none.
             // Present only to fill the shared Connections slot the reused actors resolve.
-            eventSequencer <- context.actorOf(EventSequencer(config, pendingConnections))
+            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
             )
@@ -118,7 +118,7 @@ trait CoilMultisigRegimeManager(
               blockWeaverLimiter = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
-              eventSequencer = eventSequencer,
+              requestSequencer = requestSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposer,
