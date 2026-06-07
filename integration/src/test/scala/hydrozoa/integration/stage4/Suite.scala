@@ -24,11 +24,13 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
+import hydrozoa.multisig.consensus.transport.{CoilHubTransport, CoilUplinkTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, EventSequencer, SlowConsensusActor, StackComposer}
-import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
 import org.http4s.Uri
+import org.http4s.jdkhttpclient.JdkWSClient
+import org.http4s.server.websocket.WebSocketBuilder2
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
@@ -63,6 +65,23 @@ private case class CoilWiring(
     stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
     coilLiaison: PeerLiaisonCoilToHub.Handle,
     headLiaison: PeerLiaisonHubToCoil.Handle,
+)
+
+/** The WS network for one SUT: the head-mesh remote handles per peer, plus (when coils run over WS)
+  * the coil transports and the proxy handles that stand in for the remote hub/coil liaisons. In
+  * Direct mode the coil fields are empty and the coil links are wired in-process.
+  *
+  *   - `remoteHeadByPeer(A)(B)` is the handle A's mesh liaison toward B sends through.
+  *   - `remoteCoilProxies(c)` is the hub's handle toward coil `c` (a `RemoteCoilProxy`).
+  *   - `remoteHubProxies(c)` is coil `c`'s handle toward the hub (a `RemoteHubProxy`).
+  */
+private case class WsNetwork(
+    remoteHeadByPeer: Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]],
+    coilHubTransport: Option[CoilHubTransport],
+    coilUplinks: Map[CoilPeerNumber, CoilUplinkTransport],
+    remoteCoilProxies: Map[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle],
+    remoteHubProxies: Map[CoilPeerNumber, LiaisonProtocol.HubToCoilHandle],
+    cleanup: IO[Unit],
 )
 
 case class Stage4Suite(
@@ -114,6 +133,13 @@ case class Stage4Suite(
         val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val coilConfigs = state.params.coilNodeConfigs
+
+        // Every coil is hubbed by head 0 in stage4.
+        val hubNum = HeadPeerNumber(0)
+        val wsMode = transportMode match {
+            case _: TransportMode.WebSocket => true
+            case TransportMode.Direct       => false
+        }
 
         // Advance simulated clock to the head's start epoch BEFORE creating the ActorSystem.
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
@@ -308,9 +334,9 @@ case class Stage4Suite(
             //
             // remoteLiaisonsByPeer(A)(B.id) = the handle that A's PeerLiaisonHeadToHead(A->B) uses to
             // reach B's PeerLiaisonHeadToHead(B->A).
-            transportSetup <- transportMode match {
+            ws <- transportMode match {
                 case TransportMode.Direct =>
-                    val remoteLiaisonsByPeer
+                    val remoteHeadByPeer
                         : Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]] =
                         peers.map { peerNum =>
                             val ownPeerId = headPeerId(multiNodeConfig, peerNum)
@@ -321,26 +347,26 @@ case class Stage4Suite(
                                 }
                                 .toMap
                         }.toMap
-                    IO.pure((remoteLiaisonsByPeer, IO.unit))
+                    IO.pure(WsNetwork(remoteHeadByPeer, None, Map.empty, Map.empty, Map.empty, IO.unit))
                 case TransportMode.WebSocket(basePort) =>
                     given CardanoNetwork.Section = multiNodeConfig.headConfig
-                    setupWebSocketTransports(
+                    setupWebSocketNetwork(
                       multiNodeConfig,
                       peers,
                       basePort,
                       system,
                       peerLiaisonMap,
+                      coilConfigs,
+                      hubNum,
                     )
             }
-            (remoteLiaisonsByPeer, transportCleanup) = transportSetup
 
             // ---- Coil followers (gated; empty for a pure-head run) ----
             // Each coil is hubbed by head 0. Build the coil peer's full follower actor stack + its single
             // PeerLiaisonCoilToHub, plus the hub-side PeerLiaisonHubToCoil and (once) the
             // CoilAckSequencer. The hub's own Connections (completed below) gains the coil-ward
-            // liaisons, the coil remote map, and the sequencer. Direct mode only — coil peers are wired
-            // in-process like the head mesh.
-            hubNum = HeadPeerNumber(0)
+            // liaisons, the coil remote map, and the sequencer. In WS mode the coil links run over
+            // the shared per-peer server; in Direct mode they are wired in-process.
             hubConfig = multiNodeConfig.nodeConfigs(hubNum)
             hubHeadId = headPeerId(multiNodeConfig, hubNum)
             hubPending = pendingConnsMap(hubNum)
@@ -413,9 +439,20 @@ case class Stage4Suite(
                 }
             }
 
-            // Coil-ward additions merged into the hub head's Connections (below).
+            // In WS mode, register each coil's now-spawned liaisons as the inbound dispatch targets
+            // on the coil transports (the hub→coil server and the coil's uplink dialer).
+            _ <- IO.whenA(wsMode)(coilWirings.traverse_ { c =>
+                ws.coilHubTransport.traverse_(_.register(c.coilNum, c.headLiaison)) >>
+                    ws.coilUplinks.get(c.coilNum).traverse_(_.register(c.coilLiaison))
+            })
+
+            // Coil-ward additions merged into the hub head's Connections (below). The hub's view of
+            // each coil's liaison is the in-process handle in Direct mode, or a `RemoteCoilProxy`
+            // (over the shared server) in WS mode.
             hubExtraLiaisons = coilWirings.map(_.headLiaison)
-            hubRemoteCoil = coilWirings.map(c => c.coilNum -> c.coilLiaison).toMap
+            hubRemoteCoil =
+                if wsMode then ws.remoteCoilProxies
+                else coilWirings.map(c => c.coilNum -> c.coilLiaison).toMap
 
             // Complete each peer's deferred with its full wiring.
             _ <- peers.traverse { peerNum =>
@@ -456,7 +493,7 @@ case class Stage4Suite(
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = stack.slowConsensusActor,
                             headPeerLiaisons = localLiaisons,
-                            remoteHeadLiaisons = remoteLiaisonsByPeer(peerNum),
+                            remoteHeadLiaisons = ws.remoteHeadByPeer(peerNum),
                             remoteCoilLiaisons = if isHub then hubRemoteCoil else Map.empty,
                             coilPeerLiaisons = hubCoilLiaisons,
                             coilAckSequencer = if isHub then coilAckSequencer else None,
@@ -491,7 +528,10 @@ case class Stage4Suite(
                             stackComposerLimiter = stackComposerLimiter,
                             slowConsensusActor = c.stack.slowConsensusActor,
                             coilUplink = Some(c.coilLiaison),
-                            remoteHubLiaison = Some(c.headLiaison),
+                            // The coil's view of its hub liaison: in-process in Direct mode, a
+                            // `RemoteHubProxy` (over the coil's uplink) in WS mode.
+                            remoteHubLiaison =
+                                Some(if wsMode then ws.remoteHubProxies(c.coilNum) else c.headLiaison),
                           )
                         )
                         .void
@@ -545,17 +585,10 @@ case class Stage4Suite(
           coilStacks = coilWirings.map(c => c.coilNum -> c.stacksRef).toMap,
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
-          transportCleanup = transportCleanup,
+          transportCleanup = ws.cleanup,
         )
     }
 
-    /** WS-mode helper: builds one [[PeerWsTransport]] per peer (each bound to a distinct localhost
-      * port), spawns one [[RemotePeerProxy]] per (local, remote) pair, registers each local
-      * [[PeerLiaisonHeadToHead]] with its peer's transport, and returns:
-      *
-      *   - the remote-handle map (proxy actors keyed by remote peer id), per peer
-      *   - a cleanup IO that releases all transports on shutdown
-      */
     /** This peer's [[HeadPeerId]] — derived from its number + the head-set size, since `NodeConfig`
       * no longer exposes a head-specific id.
       */
@@ -565,17 +598,25 @@ case class Stage4Suite(
     ): HeadPeerId =
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
-    private def setupWebSocketTransports(
+    /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub) the
+      * [[CoilHubTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/peer`
+      * and `/coil`), and starts the mesh dialers. For each coil peer it builds a
+      * [[CoilUplinkTransport]] dialing the hub's `/coil`. Returns the head-mesh remote-proxy map plus
+      * the coil transports and the [[RemoteCoilProxy]] / [[RemoteHubProxy]] handles, and a cleanup IO
+      * that releases every server/dialer/client.
+      *
+      * The real coil liaisons are spawned later (in the coil-followers section) and registered onto
+      * these transports there.
+      */
+    private def setupWebSocketNetwork(
         multiNodeConfig: MultiNodeConfig,
         peers: Seq[HeadPeerNumber],
         basePort: Int,
         system: ActorSystem[IO],
         peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
-    )(using
-        CardanoNetwork.Section
-    ): IO[
-      (Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]], IO[Unit])
-    ] = {
+        coilConfigs: List[NodeConfig],
+        hubNum: HeadPeerNumber,
+    )(using CardanoNetwork.Section): IO[WsNetwork] = {
         // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
         // dev machines); peers dial each other at the same address+port.
         def addrFor(peerNum: HeadPeerNumber): (Host, Port) =
@@ -586,53 +627,112 @@ case class Stage4Suite(
             Uri.unsafeFromString(s"ws://$h:$p/peer")
         }
 
-        // Allocate transports per peer.
-        for {
-            transportsAndReleases <- peers.toList.traverse { ownPeerNum =>
-                val ownPeerId = headPeerId(multiNodeConfig, ownPeerNum)
-                val (bindH, bindP) = addrFor(ownPeerNum)
-                val remotes: Map[HeadPeerId, Uri] = peers
-                    .filterNot(_ == ownPeerNum)
-                    .map { rpn =>
-                        headPeerId(multiNodeConfig, rpn) -> uriFor(rpn)
-                    }
-                    .toMap
-                PeerWsTransport
-                    .resource(ownPeerId, bindH, bindP, remotes)
-                    .allocated
-                    .map(ownPeerNum -> _)
-            }
-            transports = transportsAndReleases.map { case (pn, (t, _)) => pn -> t }.toMap
-            cleanup = transportsAndReleases.map { case (_, (_, r)) => r }.sequence_
+        val coilNums: List[CoilPeerNumber] = coilConfigs.map(_.ownPeerId match {
+            case PeerId.Coil(n) => n
+            case PeerId.Head(_) => throw new IllegalStateException("coil config carries a head id")
+        })
+        val (hubHost, hubPort) = addrFor(hubNum)
+        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/coil")
 
-            // Register each local liaison so inbound msgs from remote get dispatched correctly.
-            // peerLiaisonMap(A)(B.id) is A's local liaison for talking to B. When A's transport
-            // receives a msg from B, it dispatches to that liaison.
+        for {
+            // Per-head mesh transports (no server yet) + the hub's coil-serving transport.
+            meshTransports <- peers.toList
+                .traverse { ownPeerNum =>
+                    val ownPeerId = headPeerId(multiNodeConfig, ownPeerNum)
+                    val remotes: Map[HeadPeerId, Uri] = peers
+                        .filterNot(_ == ownPeerNum)
+                        .map(rpn => headPeerId(multiNodeConfig, rpn) -> uriFor(rpn))
+                        .toMap
+                    PeerWsTransport.create(ownPeerId, remotes).map(ownPeerNum -> _)
+                }
+                .map(_.toMap)
+            coilHubTransportOpt <-
+                if coilNums.isEmpty then IO.none[CoilHubTransport]
+                else CoilHubTransport.create(coilNums).map(Some(_))
+
+            // One shared WS client for every dialer on this SUT.
+            client <- JdkWSClient.simple[IO]
+
+            // One shared server per peer: mesh `/peer` for every head, plus the hub's `/coil`.
+            serverReleases <- peers.toList.traverse { ownPeerNum =>
+                val (bindH, bindP) = addrFor(ownPeerNum)
+                val meshRoute = (wsb: WebSocketBuilder2[IO]) => meshTransports(ownPeerNum).routes(wsb)
+                val coilRoute =
+                    if ownPeerNum == hubNum then
+                        coilHubTransportOpt.toList.map(t =>
+                            (wsb: WebSocketBuilder2[IO]) => t.routes(wsb)
+                        )
+                    else Nil
+                NodeWsServer.resource(bindH, bindP, meshRoute :: coilRoute).allocated.map(_._2)
+            }
+
+            // Register each local mesh liaison so inbound from a remote dispatches correctly.
             _ <- peers.toList.traverse_ { ownPeerNum =>
-                val transport = transports(ownPeerNum)
                 peerLiaisonMap(ownPeerNum).toList.traverse_ { case (remotePeerId, localLiaison) =>
-                    transport.register(remotePeerId, localLiaison)
+                    meshTransports(ownPeerNum).register(remotePeerId, localLiaison)
                 }
             }
 
-            // Build the proxy actors: one per (local peer, remote peer) pair.
-            remoteHandlesByPeer <- peers.toList
+            // Start the mesh dialers (lower dials higher).
+            dialerReleases <- peers.toList.traverse { ownPeerNum =>
+                meshTransports(ownPeerNum).startDialers(client).allocated.map(_._2)
+            }
+
+            // Mesh remote-handle proxies: one RemotePeerProxy per (local, remote) pair.
+            remoteHeadByPeer <- peers.toList
                 .traverse { ownPeerNum =>
-                    val transport = transports(ownPeerNum)
+                    val transport = meshTransports(ownPeerNum)
                     peers
                         .filterNot(_ == ownPeerNum)
                         .toList
                         .traverse { remotePeerNum =>
                             val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
-                            for {
-                                proxy <- RemotePeerProxy(remotePeerId, transport)
-                                ref <- system.actorOf(proxy)
-                            } yield remotePeerNum -> ref
+                            RemotePeerProxy(remotePeerId, transport)
+                                .flatMap(system.actorOf)
+                                .map(remotePeerNum -> _)
                         }
                         .map(ownPeerNum -> _.toMap)
                 }
                 .map(_.toMap)
-        } yield (remoteHandlesByPeer, cleanup)
+
+            // Coil uplinks (coil dials hub) + their dialers.
+            uplinkEntries <- coilNums.traverse { coilNum =>
+                CoilUplinkTransport
+                    .create(coilNum, hubCoilUri)
+                    .flatMap(up =>
+                        up.startDialer(client).allocated.map(_._2).map(rel => (coilNum, up, rel))
+                    )
+            }
+            coilUplinks = uplinkEntries.map(e => e._1 -> e._2).toMap
+            uplinkReleases = uplinkEntries.map(_._3)
+
+            // Each coil's view of the hub: a RemoteHubProxy over its uplink.
+            remoteHubProxies <- coilNums
+                .traverse { coilNum =>
+                    RemoteHubProxy(coilUplinks(coilNum)).flatMap(system.actorOf).map(coilNum -> _)
+                }
+                .map(_.toMap)
+
+            // The hub's view of each coil: a RemoteCoilProxy over the hub's coil transport.
+            remoteCoilProxies <- coilHubTransportOpt match {
+                case None => IO.pure(Map.empty[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle])
+                case Some(t) =>
+                    coilNums
+                        .traverse(coilNum =>
+                            RemoteCoilProxy(coilNum, t).flatMap(system.actorOf).map(coilNum -> _)
+                        )
+                        .map(_.toMap)
+            }
+
+            cleanup = (serverReleases ++ dialerReleases ++ uplinkReleases).sequence_
+        } yield WsNetwork(
+          remoteHeadByPeer = remoteHeadByPeer,
+          coilHubTransport = coilHubTransportOpt,
+          coilUplinks = coilUplinks,
+          remoteCoilProxies = remoteCoilProxies,
+          remoteHubProxies = remoteHubProxies,
+          cleanup = cleanup,
+        )
     }
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =

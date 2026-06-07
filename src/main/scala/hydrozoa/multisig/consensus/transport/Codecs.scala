@@ -5,8 +5,9 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Mesh, OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.BatchNumber.given
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
@@ -549,4 +550,19 @@ object Codecs {
     given Codec[Mesh.Get] = deriveCodec[Mesh.Get]
 
     given (using CardanoNetwork.Section): Codec[Mesh.New] = deriveCodec[Mesh.New]
+
+    // ---- Hub→coil batch messages (the wire-eligible coil-link messages) ----
+    //
+    // Population.Get/New carry per-head-peer lane families as `Map[HeadPeerNumber, _]`; the
+    // `KeyEncoder`/`KeyDecoder[HeadPeerNumber]` (imported above) make those maps derive, and the
+    // value codecs are the same ones the Mesh messages use.
+
+    given populationGetCodec: Codec[Population.Get] = deriveCodec[Population.Get]
+
+    given populationNewCodec(using CardanoNetwork.Section): Codec[Population.New] =
+        deriveCodec[Population.New]
+
+    given ownHardAckGetCodec: Codec[OwnHardAck.Get] = deriveCodec[OwnHardAck.Get]
+
+    given ownHardAckNewCodec: Codec[OwnHardAck.New] = deriveCodec[OwnHardAck.New]
 }

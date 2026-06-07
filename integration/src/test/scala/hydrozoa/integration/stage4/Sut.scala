@@ -150,13 +150,14 @@ case class Stage4Sut(
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaisonHeadToHead]] gets the actual remote handle from the
-  *     corresponding peer's actor system. In-process, no network. Compatible with
-  *     [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct
-  *     port. Cross-peer communication happens over real WebSocket connections. Forces
-  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
-  *     Ports start at [[basePort]] and increase by `peerNum`.
+  *   - [[Direct]] (default) — every peer's liaison gets the actual remote handle from the
+  *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
+  *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
+  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
+  *     on a distinct port, mounting `/peer` for the head mesh and (on a hub) `/coil` for its coil
+  *     peers; each coil dials its hub's `/coil`. Cross-peer communication happens over real
+  *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
+  *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
   */
 enum TransportMode:
     case Direct
