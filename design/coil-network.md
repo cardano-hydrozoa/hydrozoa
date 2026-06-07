@@ -170,7 +170,9 @@ empty (the coil peer is a strict subset of a head peer's `Connections`).
 - `HardAckAggregator`, `HardAckSignatureVerifier`, `EffectSigner`.
 - `CardanoLiaison` — same target-state / `happyPathEffects` / `fallbackEffects`
   maps and submission FSM (R8/R9), over an independent `CardanoBackend`.
-- Transport (`PeerWsTransport`, `Frame`, `Codecs`).
+- The head-mesh transport (`PeerWsTransport`, `Frame`, `Codecs`) — the link logic
+  is unchanged, though server ownership was lifted out into `NodeWsServer` so a hub
+  shares one server across the mesh and the coil link (§8.10).
 - `L2Ledger` black box — a coil peer instantiates its own deterministic copy.
 
 **New types / actors:**
@@ -507,6 +509,30 @@ retransmission covers transient outages. A durable hub-down leaves its partition
 coil peers dark until the hub recovers or the head escalates to the rule-based
 regime / evacuation. **D-coil-3** flags whether even a stub failover is M5-worth.
 
+### 8.10 Transport — one shared WS server per peer
+
+A coil peer is a separate process, so the hub↔coil link runs over a real
+WebSocket transport, not only the in-process wiring used by tests. **Each peer
+binds exactly one WS server** (`NodeWsServer`) — a hub does **not** run a second
+server. That one server mounts two routes:
+
+- **`/peer`** — the head mesh (`PeerWsTransport`, `Frame` envelope, `Mesh.Get` /
+  `Mesh.New`). Topology: lower-numbered head peer dials higher.
+- **`/coil`** — the hub→coil links (`CoilHubTransport`, `CoilFrame` envelope,
+  `Population.Get/New` + `OwnHardAck.Get/New`). Mounted only on a hub.
+
+The hub↔coil link is a **star**: each coil peer dials its single hub's `/coil`
+(`CoilUplinkTransport`) and identifies itself with `CoilFrame.Hello(coilNum)`; the
+hub binds that socket to the coil's `CoilPeerNumber`, routes inbound batches to
+that coil's `PeerLiaisonHubToCoil`, and drains that coil's outbox for outbound
+batches. A coil runs **no server** — only the uplink dialer.
+
+The liaisons reach their counterparts through proxy actors that stand in for the
+remote handle and forward over the transport: `RemoteHubProxy` (coil → hub) and
+`RemoteCoilProxy` (hub → one coil), mirroring the mesh's `RemotePeerProxy`. The
+wire carries the **full signed** artifacts (§8.6), so verification stays
+end-to-end regardless of transport.
+
 ## 9. L1 access — independent (multisig regime)
 
 A coil peer maintains its **own** Cardano backend connection — not mediated by
@@ -625,7 +651,7 @@ restart — a recovery concern for `persistence-and-crash-recovery.md` §11.
 `CoilMultisigRegimeManager` + identity seam + role-gated wiring (Pc2), and the
 single-hub liaison spine + `CoilAckSequencer` (Pc3) are built on `feature/coil`.
 
-**Relay reworked (current).** An initial Pc4 built the multiplexed `relayedMsg`
+**Relay reworked (done — see status note below).** An initial Pc4 built the multiplexed `relayedMsg`
 relay (`CoilLinkRelay` + core-actor taps). It is being replaced by the §8
 architecture: separate per-author lanes, the `CoilRelay` fan-out actor, and
 composition liaisons with per-shape batch types. The renames are
@@ -662,9 +688,10 @@ alongside the old liaisons (which are still wired):
   `CoilRelay` (stateless fan-out). `HardAckWithId` gained `hubPeer` so a
   re-sequenced coil ack self-describes its hub.
 
-**The wiring swap (remaining) is one atomic, transport-coupled migration** — it
-can't compile partially, because the shared `Connections` + the transport ADT are
-read by both old and new. Open design questions are all resolved:
+**The wiring swap was one atomic, transport-coupled migration** (now done — see
+the status note at the end of this section) — it could not compile partially,
+because the shared `Connections` + the transport ADT are read by both old and new.
+The design questions it turned on:
 
 - **`ActorRef` is contravariant** in its message type, so a producer can broadcast
   its own artifact to whichever liaison shape accepts it. Shared `Connections`
@@ -690,6 +717,15 @@ read by both old and new. Open design questions are all resolved:
   `HeadPeerNumber` `KeyEncoder`/`KeyDecoder`, which exist). Then delete
   `PeerLiaisonBase`, the old liaisons, `CoilLinkRelay`, `RelayedMsg*`, and rewire
   the stage4 harness + `CoilLiaisonTest` / `CodecsTest`.
+
+**Done (2026-06-06).** The atomic swap landed (composition liaisons under
+`consensus/liaison/`, `CoilRelay`, reshaped `Connections`, `Mesh`/`Population`/
+`OwnHardAck` wire codecs; old liaison subsystem deleted). Follow-ups: `BatchLink`
+split into `Puller` + `Server` (`Served` in `Server`'s companion); `CoilRelay`
+moved next to `CoilAckSequencer`. The hub↔coil **WebSocket transport** is built
+(§8.10): `NodeWsServer` (one server per peer, `/peer` + `/coil`), `CoilHubTransport`
+/ `CoilUplinkTransport` / `CoilFrame`, `RemoteCoilProxy` / `RemoteHubProxy`; stage4
+WebSocket mode wires coils over WS (opt-in prop "Two-heads-one-coil works WS").
 
 ## Cross-cutting concerns
 

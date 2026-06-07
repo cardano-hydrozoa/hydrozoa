@@ -14,8 +14,8 @@ import io.circe.syntax.*
   *     is on the other end.
   *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
-  * Only the head mesh runs over the WebSocket transport; hub↔coil links are in-process (Direct
-  * mode), so their `Population` / `OwnHardAck` batches never reach this envelope.
+  * This is the `/peer` (head-mesh) envelope only. The hub↔coil link has its own envelope
+  * ([[CoilFrame]], on the `/coil` route), so `Population` / `OwnHardAck` batches never reach here.
   */
 sealed trait Frame
 object Frame {
