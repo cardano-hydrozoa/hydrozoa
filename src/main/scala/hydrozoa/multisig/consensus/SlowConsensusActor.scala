@@ -297,11 +297,13 @@ final case class SlowConsensusActor(
         s.cells.get(stackNum) match {
             case Some(c: Cell.WaitingRound1) if isSaturated(c.round1.keySet) =>
                 completeRound1(stackNum, c)
-            // Round 2 completes once the set of peers who signed BOTH rounds is saturated
-            // (every head peer + ≥ coilQuorum coil peers) — only such peers yield a coherent, fully-signed
-            // witness set across the round-1 effects and the round-2 unlock.
-            case Some(c: Cell.WaitingRound2)
-                if isSaturated(c.round1.keySet.intersect(c.round2.keySet)) =>
+            // The two rounds are independent — they sign different txs (round-1 effects vs the
+            // round-2 unlock), each validated on its own against the threshold script. Round 2
+            // completes once the round-2 set is saturated by itself; round 1 is already saturated
+            // (we only reach WaitingRound2 after completeRound1). Each round's coil quorum is chosen
+            // independently, so a peer that signed round 1 cannot withhold round 2 to block the
+            // stack while other coil peers satisfy the round-2 quorum.
+            case Some(c: Cell.WaitingRound2) if isSaturated(c.round2.keySet) =>
                 completeStack(stackNum, c)
             case Some(c: Cell.WaitingSole) if isSaturated(c.sole.keySet) =>
                 completeStack(stackNum, c)
@@ -339,33 +341,60 @@ final case class SlowConsensusActor(
         cell: Cell.WaitingRound2 | Cell.WaitingSole
     ): IO[Unit] = for {
         conn <- getConnections
-        signers = chooseSigners(cell)
-        vkeys <- signers
+        // Pick each round's signer set independently and restrict the cell to it, so a round's txs
+        // carry exactly that round's quorum (head peers + `coilQuorum` coil peers) — the round-1
+        // and round-2 coil subsets need not coincide.
+        selection = selectSigners(cell)
+        (restricted, txSigners, secSigners) = selection
+        vkeys <- txSigners
             .traverse(p => ackVerifier.resolvePeerVKey(p).map(p -> _))
             .map(_.toMap)
-        wmap = ackAggregator.aggregateTxSignatures(cell, vkeys)
-        evac = ackAggregator.collectSecSignatures(cell, signers)
-        signed <- ackAggregator.attachWitnesses(cell.unsigned, wmap, evac)
+        wmap = ackAggregator.aggregateTxSignatures(restricted, vkeys)
+        evac = ackAggregator.collectSecSignatures(restricted, secSigners)
+        signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
         _ <- Tracer.info(
           s"stack $stackNum HARD-CONFIRMED — aggregated ackAggregator onto ${wmap.size} " +
               "effect tx(s); emitting downstream"
         )
-        hardConfirmed = Stack.HardConfirmed(cell.unsigned.brief, signed)
+        hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
 
-    /** The fixed signer set attached at hard-confirmation: every head peer plus exactly
-      * `coilQuorum` coil peers (the lowest-ordered coil peers that contributed every required
-      * round), so every effect tx carries exactly `nHeadPeers + coilQuorum` witnesses regardless of
-      * how many coil peers acked.
+    /** Choose the witness set for a saturated cell, treating each round independently. Returns the
+      * cell restricted to the chosen per-round signers, the union of all signers (whose vkeys the
+      * aggregator needs), and the round-1 signers (the SEC header sigs are a round-1 artifact).
+      *
+      * Each round's quorum is every head peer plus exactly `coilQuorum` coil peers
+      * ([[quorumSigners]]), so every tx carries exactly `nHeadPeers + coilQuorum` witnesses. Round
+      * 1 (the effect txs) and round 2 (the unlock tx) sign different transactions, validated
+      * independently against the threshold script, so their coil subsets may differ; restricting
+      * `round1` / `round2` to their own quorum keeps each tx's witness count exact even when they
+      * do.
       */
-    private def chooseSigners(cell: Cell.WaitingRound2 | Cell.WaitingSole): List[PeerId] = {
-        val present: Set[PeerId] = cell match {
-            case c: Cell.WaitingRound2 => c.round1.keySet.intersect(c.round2.keySet)
-            case c: Cell.WaitingSole   => c.sole.keySet
+    private def selectSigners(
+        cell: Cell.WaitingRound2 | Cell.WaitingSole
+    ): (Cell.WaitingRound2 | Cell.WaitingSole, List[PeerId], List[PeerId]) =
+        cell match {
+            case c: Cell.WaitingRound2 =>
+                val r1 = quorumSigners(c.round1.keySet)
+                val r2 = quorumSigners(c.round2.keySet)
+                val restricted = c.copy(
+                  round1 = c.round1.view.filterKeys(r1.toSet).toMap,
+                  round2 = c.round2.view.filterKeys(r2.toSet).toMap
+                )
+                (restricted, (r1 ++ r2).distinct, r1)
+            case c: Cell.WaitingSole =>
+                val s = quorumSigners(c.sole.keySet)
+                val restricted = c.copy(sole = c.sole.view.filterKeys(s.toSet).toMap)
+                (restricted, s, s)
         }
+
+    /** Every head peer plus exactly `coilQuorum` coil peers (lowest-ordered) from the present set —
+      * the fixed `nHeadPeers + coilQuorum` witness count one round attaches to its txs.
+      */
+    private def quorumSigners(present: Set[PeerId]): List[PeerId] = {
         val coilPeers =
             present.collect { case c: PeerId.Coil => c: PeerId }.toList.sorted.take(coilQuorum)
         allHeadPeers.toList.sorted ++ coilPeers

@@ -295,20 +295,23 @@ witness-set size, the witness *count* must be fixed: `nHeadPeers + coilQuorum`.
   (R8/R9); peer A may attach coil peers `{1,2}` and peer B `{2,3}` — same count,
   both satisfy the on-chain `AtLeast`, and L1 duplicate-rejection decides which
   lands. No cross-peer witness agreement is required.
-- **Two-phase stacks: the chosen coil peers sign *both* rounds.** A 2-phase stack
-  signs in two rounds — round 1 over every effect except the unlock, round 2 over
-  the unlock/SEC tx. One peer attaches a *single* fixed signer set to *all* of its
-  effect txs, and those txs span both rounds, so each chosen signer must have a
-  signature on every tx. Head peers sign both rounds anyway (`AllOf(head)` binds
-  every tx); for coil peers the `coilQuorum` slots are drawn from the
-  **intersection** of the round-1 and round-2 signers
-  (`SlowConsensusActor.chooseSigners`), and the cell only hard-confirms once that
-  intersection is saturated. This is the uniform-fixed-set choice, not an on-chain
-  requirement — each tx is validated independently, so a relaxed scheme could let
-  different coil peers satisfy the quorum per round, at the cost of a non-uniform
-  witness set and more bookkeeping. The uniform set is preferred for deterministic
-  tx size and simple aggregation; its cost is a liveness delay if coil peers churn
-  between the two rounds.
+- **Two-phase stacks: each round picks its coil quorum independently.** A 2-phase
+  stack signs in two rounds — round 1 over every effect except the unlock, round 2
+  over the unlock/SEC tx. These are **different transactions**, each validated on
+  its own against the threshold script (head peers via `AllOf(head)`, coil peers via
+  `AtLeast(coilQuorum, …)`), so there is **no** requirement that the same coil peers
+  sign both. Each round draws its own `coilQuorum` coil slots from the peers that
+  signed *that* round (`SlowConsensusActor.selectSigners` → `quorumSigners`), and
+  round 2 hard-confirms once the round-2 set is saturated by itself — not the
+  intersection with round 1. The aggregator restricts each round's witnesses to its
+  own quorum, so every tx still carries exactly `nHeadPeers + coilQuorum` witnesses
+  even when the two coil subsets differ.
+
+  Independent rounds are both **faster** (no waiting for the same coil peers to
+  appear in both rounds) and **safer**: requiring the intersection would let a coil
+  peer that signed round 1 withhold round 2 and block the stack — effective veto
+  power — even though other coil peers could satisfy the round-2 quorum. Decoupling
+  the rounds removes that leverage.
 
 ## 7. Fast-consensus participation — receive-only
 
