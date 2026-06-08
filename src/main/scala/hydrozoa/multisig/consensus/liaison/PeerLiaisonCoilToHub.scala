@@ -65,7 +65,7 @@ abstract class PeerLiaisonCoilToHub(
         Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${hubHead.peerNum.convert}")
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
-    private val hubNums: List[HeadPeerNumber] = config.coilPeers.map(_.hub).distinct
+    private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Lanes ----------------------------------------------------------------------------------
     // Inbound population (pulled from the hub): block + stack spines are contiguous (the hub relays

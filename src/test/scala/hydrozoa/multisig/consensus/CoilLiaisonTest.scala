@@ -7,7 +7,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import hydrozoa.config.head.coil.CoilPeer
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
@@ -54,7 +54,9 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
               generateHeadConfig = generateHeadConfig(
                 genHeadConfigBootstrap = generateHeadConfigBootstrap(
                   generateHeadParams = generateHeadParameters().map(_.copy(coilQuorum = 1)),
-                  coilPeers = coilWallets.map(w => CoilPeer(w.exportVerificationKey, hubNum))
+                  coilPeers = CoilPeers.indexed(
+                    coilWallets.map(w => CoilPeerData(w.exportVerificationKey, hubNum))
+                  )
                 )
               )
             )

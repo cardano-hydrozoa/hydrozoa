@@ -66,7 +66,7 @@ abstract class PeerLiaisonHubToCoil(
         Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->c${coil.convert}")
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
-    private val hubNums: List[HeadPeerNumber] = config.coilPeers.map(_.hub).distinct
+    private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
     private val blockLane =

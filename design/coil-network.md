@@ -52,10 +52,11 @@ Decided after reviewing `peer-network`, `slow-consensus`, and `initialization`.
 
 - **D-coil-1 — peer identity is a tagged sum.**
   `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
-  `CoilPeerNumber` is the coil peer's index in `coilPeers` sorted canonically
-  **by verification-key bytes** (independent of the config's list order — every
-  peer must derive the same index→vkey map AND the same `MOf` branch order, else
-  the script hash diverges). Wire form: the peer number plus a one-bit tag
+  `CoilPeerNumber` is the coil peer's **explicit** number — the key in the
+  `CoilPeers` map (§5), authoritative and config-given, not derived from
+  verification-key ordering. Every peer reads the same number→vkey map and the
+  same `MOf` branch order (number order), so the script hash agrees. Wire form:
+  the peer number plus a one-bit tag
   (`1` = head, `0` = coil), so the existing 2-int `HardAckId` tuple grows by one
   bit rather than gaining a structural tag field. `HardAckId`, the slow-consensus
   quorum set, the aggregator's vkey map, the verifier, and the native-script
@@ -101,7 +102,7 @@ independently** if consensus breaks down (R10). Whitepaper anchors —
 
 The protocol is fully designed in the whitepaper; the codebase stops at the
 static config (`HeadConfig.coilPeers`, `HeadParameters.coilQuorum`,
-`config.head.coil.CoilPeer`) and never spawns coil-side actors. M5 closes
+`config.head.coil.CoilPeers`) and never spawns coil-side actors. M5 closes
 that gap.
 
 Out of scope here:
@@ -209,11 +210,19 @@ NodeConfig(headConfig: HeadConfig,        // shared verbatim, head & coil
 ```
 
 A coil node swaps the `OwnHeadPeerPrivate` for an **`OwnCoilPeerPrivate`** — this
-coil peer's signing key plus its derived `CoilPeerNumber` (its index in
-`coilPeers` sorted canonically by verification-key bytes, located by matching its
-own vkey). `HeadConfig` is untouched; `CoilMultisigRegimeManager` reads the
-private side to know "I am coil peer N" and finds its hub via the matching
-`coilPeers` entry (`coilPeerHub`).
+coil peer's signing key plus its derived `CoilPeerNumber`, located by matching its
+own vkey against `coilPeerVKeys`. `HeadConfig` is untouched; `CoilMultisigRegimeManager`
+reads the private side to know "I am coil peer N" and finds its hub via the
+matching `coilPeers` entry (`coilPeerHub`).
+
+**Coil peers are explicitly numbered** — `coilPeers` is a `CoilPeers` wrapper
+(`SortedMap[CoilPeerNumber, CoilPeerData]`, `CoilPeerData = {verificationKey,
+hubHeadPeerNumber}`) with a contiguity-from-0 (or empty) invariant, mirroring
+`HeadPeers`. The number is authoritative — it orders the threshold native
+script's coil branch and resolves hard-ack signer vkeys — and is **not** derived
+from verification-key ordering. JSON is keyed by the number:
+`"coilPeers": { "0": { "verificationKey": …, "hubHeadPeerNumber": 1 }, … }`.
+`coilPeerVKeys` is the map's values in number order.
 
 Everything else a coil peer reads from the shared `HeadConfig`: the head set,
 `coilQuorum`, slow-consensus timing, finalization rules. L1 access is an

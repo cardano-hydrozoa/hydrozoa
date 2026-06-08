@@ -1,6 +1,6 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.head.coil.CoilPeer
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
@@ -28,7 +28,7 @@ object CoilConfigGenTest extends Properties("Coil config generation") {
               generateHeadConfig = generateHeadConfig(
                 genHeadConfigBootstrap = generateHeadConfigBootstrap(
                   generateHeadParams = generateHeadParameters().map(_.copy(coilQuorum = 1)),
-                  coilPeers = List(CoilPeer(coilVKey, HeadPeerNumber(0)))
+                  coilPeers = CoilPeers.indexed(List(CoilPeerData(coilVKey, HeadPeerNumber(0))))
                 )
               )
             )

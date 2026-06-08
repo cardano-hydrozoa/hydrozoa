@@ -11,7 +11,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEnd
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
-import hydrozoa.config.head.coil.CoilPeer
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Model.*
@@ -1173,8 +1173,10 @@ object Stage4Suite:
                 val withCoils = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoilPeers)
                 (0 until nCoilPeers).toList.map(i => withCoils.walletFor(HeadPeerNumber(nPeers + i)))
             }
-        val coilPeerList: List[CoilPeer] =
-            coilWallets.map(w => CoilPeer(w.exportVerificationKey, HeadPeerNumber(0)))
+        val coilPeers: CoilPeers =
+            CoilPeers.indexed(
+              coilWallets.map(w => CoilPeerData(w.exportVerificationKey, HeadPeerNumber(0)))
+            )
 
         // For non-TestControl runs we need the head's initial block end-time anchored at a
         // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
@@ -1212,7 +1214,7 @@ object Stage4Suite:
               )
             )
           ),
-          coilPeers = coilPeerList
+          coilPeers = coilPeers
         )
 
         val generateHeadConfig_ = generateHeadConfig(

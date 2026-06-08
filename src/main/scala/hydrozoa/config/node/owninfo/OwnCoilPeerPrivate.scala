@@ -17,8 +17,9 @@ final case class OwnCoilPeerPrivate private (
 
 object OwnCoilPeerPrivate {
 
-    /** Build a coil node's private identity from its signing wallet and the canonical
-      * `coilPeerVKeys` order. `None` if the wallet's key is not in the configured coil set.
+    /** Build a coil node's private identity from its signing wallet and `coilPeerVKeys` (in
+      * explicit coil-peer-number order). `None` if the wallet's key is not in the configured coil
+      * set.
       */
     def apply(
         ownCoilWallet: PeerWallet,

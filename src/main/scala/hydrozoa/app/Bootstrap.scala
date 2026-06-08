@@ -6,6 +6,7 @@ import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -239,7 +240,7 @@ object Bootstrap:
                 cardanoNetwork = cardanoNetwork,
                 headParams = headParams,
                 headPeers = headPeers,
-                coilPeers = List.empty,
+                coilPeers = CoilPeers.empty,
                 initializationParams = initializationParameters,
                 scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
               )
