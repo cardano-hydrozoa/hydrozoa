@@ -46,45 +46,6 @@ separate future-work spec**. It builds on this node-type but is not part of M5.
 
 ---
 
-## Resolved decisions
-
-Decided after reviewing `peer-network`, `slow-consensus`, and `initialization`.
-
-- **D-coil-1 — peer identity is a tagged sum.**
-  `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`, where
-  `CoilPeerNumber` is the coil peer's **explicit** number — the key in the
-  `CoilPeers` map (§5), authoritative and config-given, not derived from
-  verification-key ordering. Every peer reads the same number→vkey map and the
-  same `MOf` branch order (number order), so the script hash agrees. Wire form:
-  the peer number plus a one-bit tag
-  (`1` = head, `0` = coil), so the existing 2-int `HardAckId` tuple grows by one
-  bit rather than gaining a structural tag field. `HardAckId`, the slow-consensus
-  quorum set, the aggregator's vkey map, the verifier, and the native-script
-  signer ordering all carry it. **Both** peer types thread it — head peers
-  aggregate coil-peer hard-acks to hard-confirm, so this is not coil-only. (§6.)
-- **Threshold native script.** The head's native script becomes
-  `AllOf(headSigs) ∧ AtLeast(coilQuorum, coilSigs)`. It governs beacon-token
-  minting, the treasury / multisig-regime spend, and the head address — one
-  script, all uses. Confirmed by `initialization`: the init tx "must be signed
-  by all head peers and a quorum of coil peers." (§6.)
-- **Fixed-count coil-peer witnesses.** Every effect tx is built and fee-sized for
-  exactly `nHeadPeers + coilQuorum` witnesses; any `coilQuorum` coil-peer
-  signatures satisfy the on-chain `AtLeast`. (§6.)
-- **D-coil-2 / D-coil-6 — reuse `HeadConfig`, parallel manager.** A coil peer
-  reuses `HeadConfig` wholesale (distribution delivers the same head config to
-  head and coil peers); the only difference is identity, carried at the
-  `NodeConfig` private layer as an `OwnCoilPeerPrivate` (signing key + derived
-  `CoilPeerNumber`) in place of `OwnHeadPeerPrivate`. A separate
-  `CoilMultisigRegimeManager` spawns the follower actor subset. No slim
-  `CoilConfig`. (§5.)
-- **Relay/lane rework (2026-06-05).** The coil link keeps lanes **separate**
-  (no `relayedMsg` multiplexing); a dedicated **`CoilRelay`** fan-out actor does
-  hub→coil distribution so the core consensus actors are not relay taps; the
-  three liaisons are **composition** over a shared per-lane protocol with separate
-  per-shape batch types. (§8.)
-
----
-
 ## 1. Goal
 
 Build the **coil-peer node type**: a process that joins a Gummiworm head as a
@@ -161,6 +122,12 @@ Absent actors → no scaffolding spawned. Present actors → existing head-peer
 implementations reused, with the shared `Connections` holding the unused slots
 empty (the coil peer is a strict subset of a head peer's `Connections`).
 
+**No rate limiters.** A coil peer spawns no `Limiter` actors — the
+`blockWeaverLimiter` / `stackComposerLimiter` slots in `Connections` alias the
+unthrottled `BlockWeaver` / `StackComposer` handles directly. A `Limiter` paces a
+*leader*'s output against L1 timing; a coil peer never leads, so there is nothing
+to pace.
+
 ## 4. What changes vs. head-peer code today
 
 **Reused unchanged:**
@@ -187,6 +154,41 @@ empty (the coil peer is a strict subset of a head peer's `Connections`).
   `PeerLiaisonCoilToHub`, over a shared per-lane protocol.
 - Coil-side bootstrap entry point (`app/` layer), parallel to head's.
 
+**Changed — slow-side identity (D-coil-1).** Coil-authored hard-acks travel the
+same lanes as head-peer ones, so every slow-side identity slot changes from
+`HeadPeerNumber` to the tagged `PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`:
+
+- `HardAckId` becomes `(PeerId, HardAckNumber)`. Wire form: peer number + a
+  one-bit tag (`1` = head, `0` = coil), so the existing 2-int tuple grows by one
+  bit rather than gaining a structural tag field.
+- `SlowConsensusActor`'s quorum set and `HardAckAggregator`'s
+  `vkeys: Map[PeerId, VerificationKey]` key on `PeerId`; the verifier rebuilds each
+  `VKeyWitness` from the `PeerId → vkey` lookup, so a peer can only ever contribute
+  a witness under its own key (head or coil).
+
+This lands on **both** peer types — head peers aggregate coil-peer hard-acks to
+reach hard-confirmation, so the widening is not coil-local.
+
+**Changed — threshold native script (D-coil-1 cont.).** `HeadMultisigScript`
+becomes a threshold composition:
+
+```
+AllOf(
+  headPeerVKeys.map(Signature)                        // every head peer
+    :+ MOf(coilQuorum, coilPeerVKeys.map(Signature))  // any coilQuorum coil peers
+)
+```
+
+`MOf` is Scalus's k-of-n `Timelock` constructor (Blockfrost JSON
+`atLeast`/`required`). The one script governs all four uses: minting the `HYDR` /
+`HMRW` beacon tokens, spending the treasury and multisig-regime outputs, and the
+head address. With **no coil peers configured** the `MOf` branch is omitted and the
+script is **byte-identical** to today's head-only `AllOf(headSigs)` — same script
+hash, address, and policy id — so coil-free heads are unaffected. `requiredSigners`
+no longer flattens `AllOf → Signature`: the head keys stay **mandatory**; the
+coil-peer contribution is a fixed **count** of `coilQuorum` slots (not all coil
+peers, not identity-pinned) — the fee-sizing rule §6 leans on.
+
 **Behavioral gates on reused actors** are read from the regime manager at
 construction — **never** carried in a wire message:
 - `BlockWeaver`: gate the Leader role; follower path unchanged.
@@ -194,15 +196,22 @@ construction — **never** carried in a wire message:
   soft-ack production (head-only). The `Producing` cycle itself is un-gated.
 - `FastConsensusActor`: aggregator-only, no gate of its own.
 - `StackComposer`: gate the leader-close path; full derivation otherwise.
+- `SlowConsensusActor`: **no** role gate — aggregates head + coil hard-acks
+  identically and signs its own. On a coil its own hard-ack is broadcast up the
+  uplink rather than across the mesh, but that is a `Connections` wiring
+  difference, not a behavioral gate. (Its skip-stack choice, §12, is a *runtime*
+  decision, not a construction gate.)
 - `CardanoLiaison`: **no** role gate — submits happy-path + fallback identically.
 
 ## 5. Configuration
 
-**A coil peer reuses `HeadConfig` wholesale** — `initialization`'s distribution
-phase delivers the *same* head config to head and coil peers, and a coil peer
-needs nearly all of it (`coilPeers`, `coilQuorum`, `headParams`, timing,
-`initTx`, `headId`). The only thing that differs between a head node and a coil
-node is **identity**, carried at the `NodeConfig` private layer:
+**A coil peer reuses `HeadConfig` wholesale (D-coil-2 / D-coil-6)** —
+`initialization`'s distribution phase delivers the *same* head config to head and
+coil peers, and a coil peer needs nearly all of it (`coilPeers`, `coilQuorum`,
+`headParams`, timing, `initTx`, `headId`). There is **no** slim `CoilConfig`, and a
+separate `CoilMultisigRegimeManager` spawns the follower subset. The only thing
+that differs between a head node and a coil node is **identity**, carried at the
+`NodeConfig` private layer:
 
 ```
 NodeConfig(headConfig: HeadConfig,        // shared verbatim, head & coil
@@ -251,43 +260,8 @@ the identity of the signing key and the gappy allowance:
   population (head + coil) the same way head's does: all head-peer hard-acks +
   `coilQuorum` coil-peer hard-acks → write `HardConfirmation` → fan out.
 
-### Peer identity — `PeerId`
-
-Coil-authored hard-acks travel the same lanes as head-peer ones, so every
-slow-side identity slot widens from `HeadPeerNumber` to the tagged
-`PeerId = Head(HeadPeerNumber) | Coil(CoilPeerNumber)`:
-
-- `HardAckId` becomes `(PeerId, HardAckNumber)`. Wire form: peer number + a
-  one-bit tag, so the existing 2-int tuple grows by one bit.
-- `SlowConsensusActor`'s quorum set and `HardAckAggregator`'s
-  `vkeys: Map[PeerId, VerificationKey]` key on `PeerId`.
-- The verifier rebuilds each `VKeyWitness` from the `PeerId → vkey` lookup, so a
-  peer can only ever contribute a witness under its own key (head or coil).
-
-This lands on **both** peer types: head peers aggregate coil-peer hard-acks to
-reach hard-confirmation, so the widening is not coil-local.
-
-### Threshold native script
-
-The head's native script (`HeadMultisigScript`) becomes a threshold composition:
-
-```
-AllOf(
-  headPeerVKeys.map(Signature)                        // every head peer
-    :+ MOf(coilQuorum, coilPeerVKeys.map(Signature))  // any coilQuorum coil peers
-)
-```
-
-`MOf` is Scalus's k-of-n `Timelock` constructor (Blockfrost JSON
-`atLeast`/`required`). It governs all four uses: minting the `HYDR` / `HMRW`
-beacon tokens, spending the treasury and multisig-regime outputs, and the head
-address. With **no coil peers configured** the `MOf` branch is omitted entirely
-and the script is **byte-identical** to today's head-only `AllOf(headSigs)` —
-same script hash, address, and policy id — so coil-free heads are unaffected.
-
-`HeadMultisigScript.requiredSigners` no longer flattens `AllOf → Signature`: the
-head keys stay **mandatory**; the coil-peer contribution is a fixed **count** of
-`coilQuorum` slots — not all coil peers, and not identity-pinned for fee purposes.
+The slow-side identity widening to `PeerId` and the threshold native script (both
+prerequisites for coil hard-acks) are code-shape changes — see §4.
 
 ### Fixed-count coil-peer witnesses
 
@@ -622,6 +596,11 @@ degenerate one. A coil peer's `Round2Payload.Initial.individualSig` is always
 
 ## 12. Skip-hard-ack policy
 
+**Status: designed, not yet applied (Pc6).** Today a coil peer signs every stack;
+the skip *triggers* (D-coil-4) are not plumbed. The lane protocol, however, already
+accommodates skipping for free — see "Lane protocol" below — so turning it on is a
+slow-consensus decision change, not a wire-format change.
+
 A coil peer's freedom to *skip* is **scoped to its hard-ack signature output
 only**. Every other piece of slow-side work is mandatory and runs on every block /
 stack:
@@ -650,6 +629,19 @@ Either way the **persisted shape is the same**: no entry in own `HardAck` lane f
 that stack, but `BlockResult` and the `Treasury` / `EvacuationMap` snapshots
 advance through the skipped stack on the normal cadence — cumulative slow-side
 state is never gappy even when own hard-acks are.
+
+**Lane protocol — no special support needed for gaps.** A `HardAck` carries its
+`hardAckNum` and its `stackNum` as **separate** fields, and `hardAckNum` is a
+**dense per-coil counter** (`StackComposer.nextOwnHardAckNum`) advanced only when
+an ack is actually produced — a 2-phase stack consumes two numbers, a sole stack
+one, a **skipped** stack zero. So a skip never consumes a `hardAckNum`: the own
+`HardAck` lane (`Lane.contiguous`, successor `+1`) stays gap-free on the wire, and
+so does the hub's re-sequenced `HubHardAckLane`. The gap lives **only** in the
+`stackNum` dimension, carried *inside* each `HardAck`; the receiving
+`SlowConsensusActor` places each ack by its embedded `stackNum` and simply never
+sees a coil ack for a skipped stack (it reaches the quorum from other coil peers).
+No sparse lane, skip marker, or out-of-band signal is required — the contiguous
+next-expected protocol already supports skipping unchanged.
 
 **D-coil-4** picks the concrete triggers + deadline: for (1), the deadline beyond
 which a missing input forces skip; for (2), whether to enable it at all and how to
