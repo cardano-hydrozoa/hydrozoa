@@ -6,6 +6,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.tx.Tx.SignatureError.InvalidSignature
 import monocle.{Focus, Lens}
 import scala.Function.const
+import scala.annotation.nowarn
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionWitnessSet.given
 import scalus.cardano.ledger.rules.STS.Validator
@@ -65,6 +66,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
       *     existing signatures) are incorrect
       *   - Valid[Transaction] with the signatures applied otherwise
       */
+    @nowarn("msg=unused local definition")
     final def addSignatures(
         vkw: Set[VKeyWitness]
     ): ValidatedNel[InvalidSignature[Self], Self] =

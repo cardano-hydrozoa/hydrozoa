@@ -1,3 +1,4 @@
 package hydrozoa.lib.petri.net
 
-import hydrozoa.lib.petri.net.components.*
+/** Net-level visual layout. */
+trait Presentation

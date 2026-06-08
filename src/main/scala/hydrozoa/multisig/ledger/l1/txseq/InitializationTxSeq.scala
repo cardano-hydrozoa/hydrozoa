@@ -81,10 +81,20 @@ private object InitializationTxSeqOps {
             )
             case TTLValidityStartGapError(difference: Slot, actual: Slot)
 
-            // TODO: Finish cases
             override def toString: String = this match {
+                case InitializationTxParseError(wrapped) =>
+                    s"InitializationTxParseError($wrapped)"
+                case FallbackTxBuildError(wrapped) =>
+                    s"FallbackTxBuildError($wrapped)"
                 case FallbackTxMismatch(expected, actual) =>
                     s"Fallback Tx Mismatch.\n\tExpected:\n ${expected.tx}\n\tActual:\n$actual"
+                case FallbackTxValidityStartIsMissing =>
+                    "FallbackTxValidityStartIsMissing"
+                case FallbackTxValidityStartError(lowerPossible, upperPossible, actual) =>
+                    s"FallbackTxValidityStartError(lowerPossible=$lowerPossible, " +
+                        s"upperPossible=$upperPossible, actual=$actual)"
+                case TTLValidityStartGapError(difference, actual) =>
+                    s"TTLValidityStartGapError(difference=$difference, actual=$actual)"
             }
         }
 

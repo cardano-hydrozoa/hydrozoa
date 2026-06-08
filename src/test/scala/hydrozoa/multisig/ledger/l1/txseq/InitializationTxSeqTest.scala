@@ -340,7 +340,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.headParameters.fallbackContingency.collectiveContingency.defaultVoteDeposit,
+                        config.headParameters.fallbackContingency.collectiveContingency.defaultVoteDeposit
+                            + config.headParameters.fallbackContingency.collectiveContingency.minAdaForTreasury,
                         MultiAsset(
                           SortedMap(
                             expectedHeadNativeScript.policyId -> SortedMap(

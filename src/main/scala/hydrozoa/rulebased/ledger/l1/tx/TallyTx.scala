@@ -61,6 +61,8 @@ object TallyTxOps {
                         s"removed on is $removed"
                 case BuildError(wrapped: SomeBuildError) =>
                     s"Encountered a build error in the tallying tx: ${wrapped.toString}"
+                case TreasuryParseError(wrapped) =>
+                    s"Failed to parse the rule-based treasury output: $wrapped"
             }
 
     }
@@ -132,11 +134,18 @@ object TallyTxOps {
 //              collateralUtxo.collateralOutput.addrKeyHash
 //            )
 
-            def isVoted(voteUtxo: VoteUtxo[?]): Boolean =
-                voteUtxo.voteOutput.status.isInstanceOf[VoteStatus.Voted]
+            def isDecided(voteUtxo: VoteUtxo[?]): Boolean =
+                voteUtxo.voteOutput.status match
+                    case _: VoteStatus.Voted        => true
+                    case VoteStatus.Abstain         => true
+                    case _: VoteStatus.AwaitingVote => false
 
+            // The dispute script only requires the voting deadline to have elapsed when at least
+            // one tally input is still AwaitingVote. Voted and Abstain are both terminal/decided
+            // (see DisputeResolutionValidator.Tally's `isAwaiting` guard), so we can omit the
+            // ValidityStartSlot when both inputs are decided.
             val validityStart =
-                if isVoted(continuingVoteUtxo) && isVoted(removedVoteUtxo)
+                if isDecided(continuingVoteUtxo) && isDecided(removedVoteUtxo)
                 then List.empty
                 else List(ValidityStartSlot(votingDeadline.slot))
 

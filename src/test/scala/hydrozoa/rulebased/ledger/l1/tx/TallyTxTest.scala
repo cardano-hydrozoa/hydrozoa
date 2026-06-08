@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
-import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
@@ -71,7 +70,6 @@ def genTallyVoteUtxo(
     config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
 ): Gen[VoteUtxo[VoteStatus]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
-    val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
     val voteOutput = VoteOutput(
       key = voteDatum.key,
@@ -142,7 +140,7 @@ object TallyTxTest extends Properties("Tally Tx Test") {
               given MultiNodeConfig = env
               for {
                   builder <- pick(genTallyTxBuilder)
-                  tx <- failLeft(builder.result)
+                  _ <- failLeft(builder.result)
               } yield ()
           }
       } yield true

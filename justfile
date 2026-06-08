@@ -2,66 +2,91 @@
 
 # This justfile is configured to send notifications when commands complete.
 # To enable this, add a `./.just/notify` file.
+#
+# Each recipe uses a bash shebang + `trap '... EXIT'` so that `just notify`
+# fires whether the command succeeds or fails, while still propagating the
+# original exit status to just (so CI and pre-push hooks see failures).
 
 fmt:
-  - sbt fmtAll
-  just notify "fmt"
+  #!/usr/bin/env bash
+  trap 'just notify "fmt"' EXIT
+  sbt fmtAll
 
 fmt-check:
-  - sbt fmtCheckAll
-  just notify "fmt-check"
+  #!/usr/bin/env bash
+  trap 'just notify "fmt-check"' EXIT
+  sbt fmtCheckAll
 
 lint:
-  - sbt lintAll
-  just notify "lint"
+  #!/usr/bin/env bash
+  trap 'just notify "lint"' EXIT
+  sbt lintAll
 
 lint-check:
-  - sbt lintCheckAll
-  just notify "lint-check"
+  #!/usr/bin/env bash
+  trap 'just notify "lint-check"' EXIT
+  sbt lintCheckAll
 
 nixfmt:
-  - nixfmt flake.nix
-  just notify "nixfmt"
+  #!/usr/bin/env bash
+  trap 'just notify "nixfmt"' EXIT
+  nixfmt flake.nix
 
 nixfmt-check:
-  - nixfmt flake.nix --check
-  just notify "nixfmt-check"
+  #!/usr/bin/env bash
+  trap 'just notify "nixfmt-check"' EXIT
+  nixfmt flake.nix --check
 
 test:
-  - sbt test
-  just notify "test"
+  #!/usr/bin/env bash
+  trap 'just notify "test"' EXIT
+  sbt test
+
+# Compile all sources (main + test) with -Werror, mirroring CI.
+build-werror:
+  #!/usr/bin/env bash
+  trap 'just notify "build-werror"' EXIT
+  CI=true sbt Test/compile integration/Test/compile
 
 keygen:
-  - sbt "runMain hydrozoa.app.GenerateKeyPair"
-  just notify "keygen"
+  #!/usr/bin/env bash
+  trap 'just notify "keygen"' EXIT
+  sbt "runMain hydrozoa.app.GenerateKeyPair"
 
 token-recovery:
-  - sbt "runMain hydrozoa.app.TokenRecovery"
-  just notify "token-recovery"
+  #!/usr/bin/env bash
+  trap 'just notify "token-recovery"' EXIT
+  sbt "runMain hydrozoa.app.TokenRecovery"
 
 export:
-  - sbt "runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export"
-  just notify "export"
+  #!/usr/bin/env bash
+  trap 'just notify "export"' EXIT
+  sbt "runMain hydrozoa.rulebased.ledger.l1.script.plutus.Export"
 
 export-test:
-  - sbt "testOnly *ExportTest*"
-  just notify "export-test"
+  #!/usr/bin/env bash
+  trap 'just notify "export-test"' EXIT
+  sbt "testOnly *ExportTest*"
 
 migrate ADDRESS:
-  - sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
-  just notify "migrate"
+  #!/usr/bin/env bash
+  trap 'just notify "migrate"' EXIT
+  sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
 
 integration-fast:
-  - sbt "integration/testOnly * -- -s 10"
-  just notify "integration-fast"
+  #!/usr/bin/env bash
+  trap 'just notify "integration-fast"' EXIT
+  sbt "integration/testOnly * -- -s 10"
 
 integration:
-  - sbt "integration/test"
-  just notify "integration"
+  #!/usr/bin/env bash
+  trap 'just notify "integration"' EXIT
+  sbt "integration/test"
 
 integration-yaci:
-  - sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
-  just notify "integration-yaci"
+  #!/usr/bin/env bash
+  trap 'just notify "integration-yaci"' EXIT
+  sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
 [parallel]
 precommit: lint-check fmt-check nixfmt-check

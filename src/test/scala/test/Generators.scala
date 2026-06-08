@@ -363,30 +363,31 @@ object Generators {
 
                     val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
 
-                    val newTx: L2Tx = {
-                        val underlyingOriginal = transaction.tx
-                        val underlyingModified = underlyingOriginal
-                            |>
-                                // First focus on the inputs of the transaction
-                                Focus[Transaction](_.body)
-                                    .andThen(KeepRaw.lens[TransactionBody]())
-                                    .refocus(_.inputs)
-                                    // then modify those inputs: the goal is to replace the txId of one input with
-                                    // our bogusInputId
-                                    .modify(x =>
-                                        TaggedSortedSet.from(
-                                          // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
-                                          // so we convert to and from List
-                                          x.toSet.toList
-                                              // Focus on the first element of the list, and...
-                                              .focus(_.index(0))
-                                              // replace its transactionId with our bogus txId
-                                              .replace(bogusTxIn)
-                                        )
-                                    )
-
-                        ??? // L2Tx(underlyingModified)
-                    }
+                    val newTx: L2Tx = ???
+//                    {
+//                        val underlyingOriginal = transaction.tx
+//                        val underlyingModified = underlyingOriginal
+//                            |>
+//                                // First focus on the inputs of the transaction
+//                                Focus[Transaction](_.body)
+//                                    .andThen(KeepRaw.lens[TransactionBody]())
+//                                    .refocus(_.inputs)
+//                                    // then modify those inputs: the goal is to replace the txId of one input with
+//                                    // our bogusInputId
+//                                    .modify(x =>
+//                                        TaggedSortedSet.from(
+//                                          // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
+//                                          // so we convert to and from List
+//                                          x.toSet.toList
+//                                              // Focus on the first element of the list, and...
+//                                              .focus(_.index(0))
+//                                              // replace its transactionId with our bogus txId
+//                                              .replace(bogusTxIn)
+//                                        )
+//                                    )
+//
+//                         L2Tx(underlyingModified)
+//                    }
 
                     val expectedException = new TransactionException.BadAllInputsUTxOException(
                       transactionId = newTx.tx.id,

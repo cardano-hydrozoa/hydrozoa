@@ -51,7 +51,7 @@ final case class InitializationTx(
       MultisigRegimeUtxo.Produced,
       HasTokenNames {
 
-    override def transactionFamily: String = "Initialization"
+    override def transactionFamily: String = "I|nitialization"
 }
 
 object InitializationTx {

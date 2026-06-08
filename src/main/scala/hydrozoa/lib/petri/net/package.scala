@@ -1,4 +1,4 @@
-package hydrozoa.lib.petri.net
+package hydrozoa.lib.petri
 
 /** Package-level documentation for [[hydrozoa.lib.petri.net]].
   *
@@ -39,3 +39,4 @@ package hydrozoa.lib.petri.net
   * themselves a semantic choice encoded in the composed net's [[Semantics]], not inherited
   * automatically from the sub-nets.
   */
+package object net

@@ -62,9 +62,8 @@ object EvacuationActorTestHelpers {
             tracerLocal <- lift(Tracer.makeLocal)
 
         } yield EvacuationActor(
-          thisNodeEvacuates = subset,
+          candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
           cardanoBackend = cardanoBackend,
-          evacuationMapAtFallback = evacMapFull,
           fallbackTxHash = fallbackTxHash,
           tracerLocal = tracerLocal
         )(using
@@ -80,7 +79,7 @@ object EvacuationActorTest extends Properties("Evacuation Actor") {
     val _ = property("dispute actor (no actor system)") = run(
       initializer = PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)()),
       testM = for {
-          env <- ask
+          _ <- ask
       } yield true
     )
 }
