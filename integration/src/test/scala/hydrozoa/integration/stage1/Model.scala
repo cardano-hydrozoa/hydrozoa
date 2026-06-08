@@ -456,37 +456,48 @@ object Model:
 
         def absorb(
             blockCreationEndTime: BlockCreationEndTime
-        ): cats.data.State[State, Queue[Absorbed]] = for {
-            state <- cats.data.State.get[State]
-            settlementValidityEnd <- getNewSettlementValidityEnd
+        ): cats.data.State[State, Queue[Absorbed]] =
+            // The fast cycle does not rotate the treasury, so no deposit ever transitions to
+            // Absorbed. Mature Submitted deposits flow to `refund` instead (see SUT's
+            // `NotInPollResults` compartment in `DepositsMap.partition`).
+            cats.data.State.pure(Queue.empty)
 
-            depositsToAbsorb: Queue[Submitted] = {
-                given TxTiming.Section = state.multiNodeConfig
-                val eligible = state.deposits.depositsSubmitted
-                    .filter { submitted =>
-                        {
-
-                            logger.trace(
-                              s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
-                                  s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
-                                  s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
-                            )
-
-                            // Check all the conditions
-                            // mature
-                            submitted.depositAbsorptionStart.convert <= blockCreationEndTime
-                            // Fits in validity window
-                            && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
-                        }
-                    }
-                val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
-                byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
-            }
-
-            _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
-
-            depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
-        } yield depositsAbsorbed
+        // Previous absorb body (kept for review; restore once the slow cycle rotates the
+        // treasury and absorption can actually happen on the fast/slow split):
+        //
+        // def absorb(
+        //     blockCreationEndTime: BlockCreationEndTime
+        // ): cats.data.State[State, Queue[Absorbed]] = for {
+        //     state <- cats.data.State.get[State]
+        //     settlementValidityEnd <- getNewSettlementValidityEnd
+        //
+        //     depositsToAbsorb: Queue[Submitted] = {
+        //         given TxTiming.Section = state.multiNodeConfig
+        //         val eligible = state.deposits.depositsSubmitted
+        //             .filter { submitted =>
+        //                 {
+        //
+        //                     logger.trace(
+        //                       s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
+        //                           s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
+        //                           s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
+        //                     )
+        //
+        //                     // Check all the conditions
+        //                     // mature
+        //                     submitted.depositAbsorptionStart.convert <= blockCreationEndTime
+        //                     // Fits in validity window
+        //                     && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
+        //                 }
+        //             }
+        //         val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
+        //         byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
+        //     }
+        //
+        //     _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
+        //
+        //     depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
+        // } yield depositsAbsorbed
 
         private def refund(
             isFinal: Boolean,
@@ -509,11 +520,17 @@ object Model:
                               s"settlementValidityEnd=$settlementValidityEnd"
                         )
 
-                        // Doesn't fit validity window
+                        // On the fast-only path nothing is ever absorbed, so any mature deposit
+                        // (Submitted included) refunds as soon as the SUT classifies it
+                        // `NotInPollResults`. The expired clause stays as a belt-and-braces.
                         refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-                        || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
-                            .isInstanceOf[Submitted])
+                        || refundable.depositAbsorptionStart.convert <= blockCreationEndTime
                     )
+                    // Previous predicate (restore when the slow cycle wires absorption back in):
+                    //
+                    // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
+                    // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
+                    //     .isInstanceOf[Submitted])
             _ = logger.trace(s"depositToRefund: $depositsToRefund")
             refunded <- DepositStatus.Refunded.refund(depositsToRefund)
         } yield refunded
