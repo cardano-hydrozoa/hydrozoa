@@ -4,7 +4,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{CommandLabel, CommandProp}
 import scalus.cardano.ledger.{Transaction, TransactionInput}
 import scalus.uplc.builtin.ByteString

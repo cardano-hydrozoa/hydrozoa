@@ -3,7 +3,7 @@ package test
 import cats.*
 import cats.data.*
 import scalus.cardano.ledger.rules.CardanoMutator.{Context, Event, Result, State}
-import scalus.cardano.ledger.rules.{CardanoMutator, OutsideValidityIntervalValidator, STS}
+import scalus.cardano.ledger.rules.{CardanoMutator, DefaultMutators, DefaultValidators, OutsideValidityIntervalValidator, STS}
 
 private type EitherThatOr[Error] = [X] =>> Either[Error, X]
 
@@ -96,9 +96,9 @@ object TransactionChain {
 
         override def transit(context: Context, state: State, event: Event): Result = {
             STS.Mutator.transit[Error](
-              CardanoMutator.allValidators.values
+              DefaultValidators.all
                   .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type]),
-              CardanoMutator.allMutators.values,
+              DefaultMutators.all,
               context,
               state,
               event

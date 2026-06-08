@@ -289,8 +289,8 @@ object PropertyMTest extends Properties("PropertyM") {
     val _ = property("labelled generators work with `pick`") = {
         monadicIO(
           for {
-              int <- pick[IO, Int](Arbitrary.arbitrary[Int].label("Int"))
-              string <- pick[IO, String](Arbitrary.arbitrary[String].label("String"))
+              _ <- pick[IO, Int](Arbitrary.arbitrary[Int].label("Int"))
+              _ <- pick[IO, String](Arbitrary.arbitrary[String].label("String"))
           } yield true
         ).map(res => {
             val labels = res.args.map(_.label)

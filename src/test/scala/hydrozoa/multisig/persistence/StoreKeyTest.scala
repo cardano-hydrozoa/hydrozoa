@@ -59,13 +59,13 @@ class StoreKeyTest extends AnyFunSuite:
         val b = StoreKey.BlockResult(BlockNumber(2)).encode
         val c = StoreKey.SoftConfirmation(BlockNumber(0)).encode
         val d = StoreKey.SoftConfirmation(BlockNumber(Int.MaxValue)).encode
-        assert(java.util.Arrays.compareUnsigned(a, b) < 0)
+        val _ = assert(java.util.Arrays.compareUnsigned(a, b) < 0)
         assert(java.util.Arrays.compareUnsigned(c, d) < 0)
     }
 
     test("LaneKey is a StoreKey — accepted by APIs typed over StoreKey") {
         // Mirror what WriteBatch / Persistence do — accept a LaneKey wherever a StoreKey is expected.
         def takesAnyStoreKey(k: StoreKey): Cf = k.cf
-        assert(takesAnyStoreKey(LaneKey.Block(BlockNumber(42))) == Cf.Block)
+        val _ = assert(takesAnyStoreKey(LaneKey.Block(BlockNumber(42))) == Cf.Block)
         assert(takesAnyStoreKey(StoreKey.DepositMap) == Cf.DepositMap)
     }

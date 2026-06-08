@@ -42,6 +42,12 @@ test:
   trap 'just notify "test"' EXIT
   sbt test
 
+# Compile all sources (main + test) with -Werror, mirroring CI.
+build-werror:
+  #!/usr/bin/env bash
+  trap 'just notify "build-werror"' EXIT
+  CI=true sbt Test/compile integration/Test/compile
+
 keygen:
   #!/usr/bin/env bash
   trap 'just notify "keygen"' EXIT

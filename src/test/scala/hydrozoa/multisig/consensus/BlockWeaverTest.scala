@@ -241,7 +241,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         // Brief for block 1
         val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
         p.runIO(weaverActor ! brief)
-        p.runIO(system.waitForIdle())
+        val _ = p.runIO(system.waitForIdle())
 
         def aroundNow(other: Instant): Boolean = {
             val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
@@ -324,7 +324,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         // Brief for block 1
         val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
-        p.runIO((weaverActor ! brief) >> system.waitForIdle())
+        val _ = p.runIO((weaverActor ! brief) >> system.waitForIdle())
 
         // Should NOT have sent StartBlock for block 2 (only brief, no request)
         val startBlockCounter = jointLedgerMock.startBlocksCounter.get

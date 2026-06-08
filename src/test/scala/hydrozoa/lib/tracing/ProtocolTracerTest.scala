@@ -59,8 +59,9 @@ class ProtocolTracerTest extends AnyFunSuite {
             }
         } yield (lines, traceFile)).unsafeRunSync()
 
-        assert(lines.nonEmpty, "Should have collected trace events")
-        assert(lines.forall(_.startsWith("HTRACE|{")), "All lines should have HTRACE| prefix")
+        val _ = assert(lines.nonEmpty, "Should have collected trace events")
+        val _ =
+            assert(lines.forall(_.startsWith("HTRACE|{")), "All lines should have HTRACE| prefix")
         println(s"\n=== Synthetic trace: ${lines.size} events → ${traceFile.getAbsolutePath} ===")
     }
 }
