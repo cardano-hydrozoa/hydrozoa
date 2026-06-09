@@ -124,9 +124,10 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
             // .withPropFilter(Some("Two-peers head works"))
             // .withPropFilter(Some("Three-peers head works"))
             // .withPropFilter(Some("Twenty-peers head works"))
-            .withPropFilter(Some("Two-peers head works WS"))
+            // .withPropFilter(Some("Two-peers head works WS"))
             // .withPropFilter(Some("Ten-peers head works WS"))
-            // .withInitialSeed(SOk,.eed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
+            .withPropFilter(Some("Two-peers head works WS (quick)"))
+            // .withInitialSeed(Seed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
             // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
             // .withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
             // .withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
@@ -136,8 +137,14 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
+    val _ = property("Two-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-two-peers", nPeers = 2, nCommands = 10).property()
+
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
+
+    val _ = property("Three-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-three-peers", nPeers = 3, nCommands = 10).property()
 
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
@@ -150,6 +157,14 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works WS") = Stage4Suite(
       label = "stage4-ws-two-peers",
       nPeers = 2,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+    val _ = property("Two-peers head works WS (quick)") = Stage4Suite(
+      label = "stage4-ws-quick-two-peers",
+      nPeers = 2,
+      nCommands = 10,
       transportMode = TransportMode.WebSocket(),
       backendMode = BackendMode.RocksDb()
     ).property()

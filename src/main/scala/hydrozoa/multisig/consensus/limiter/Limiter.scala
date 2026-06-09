@@ -1,10 +1,10 @@
 package hydrozoa.multisig.consensus.limiter
 
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.node.operation.multisig.RateLimits
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Logging
 import scala.concurrent.duration.DurationLong
 
 /** Stateless FIFO rate-limiter actor sitting between two actors on one lane.
@@ -30,14 +30,14 @@ import scala.concurrent.duration.DurationLong
 final case class Limiter[Msg](
     downstream: ActorRef[IO, Msg],
     config: RateLimits.Section,
-    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Msg] {
 
     given RateLimits.Section = config
-    given IOLocal[Tracer] = tracerLocal
+
+    private val logger = Logging.loggerIO("Limiter")
 
     override def preStart: IO[Unit] =
-        Tracer.routeLocal("Limiter") *> Tracer.debug("Limiter started.")
+        logger.debug("Limiter started.")
 
     override def receive: Receive[IO, Msg] = PartialFunction.fromFunction { msg =>
         msg match {
@@ -48,9 +48,9 @@ final case class Limiter[Msg](
                     waitMs = gate.toEpochMilli - now.toEpochMilli
                     _ <-
                         if waitMs > 0 then
-                            Tracer.debug(
+                            logger.debug(
                               s"Limiter holding ${msg.getClass.getSimpleName} for ${waitMs}ms"
-                            ) *> IO.sleep(waitMs.millis)
+                            ) >> IO.sleep(waitMs.millis)
                         else IO.unit
                     _ <- downstream ! msg
                 } yield ()

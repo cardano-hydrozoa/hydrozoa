@@ -96,7 +96,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val config = multiNodeConfig.nodeConfigs(peerNumber)
         val connections = BlockWeaver.ConnectionsPartial(jointLedgerMockActor)
         val tracerLocal = p.runIO(Tracer.makeLocal)
-        p.runIO(system.actorOf(BlockWeaver(config, connections, tracerLocal)))
+        p.runIO(system.actorOf(BlockWeaver(config, connections)))
     }
 
     // Empty block brief for block 1, so Carol starts working on block 2

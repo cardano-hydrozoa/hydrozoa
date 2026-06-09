@@ -24,7 +24,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, Mo
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, PeerLiaison, SlowConsensusActor, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, PeerLiaison, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -67,6 +67,7 @@ enum BackendMode:
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
+    nCommands: Int = 500,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
 ) extends ModelBasedSuite:
@@ -88,7 +89,7 @@ case class Stage4Suite(
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] =>
-        (g: Gen[A]) => Gen.resize(500, g)
+        (g: Gen[A]) => Gen.resize(nCommands, g)
 
     override def onTestCaseGenerated(
         initialState: ModelState,
@@ -203,17 +204,24 @@ case class Stage4Suite(
         def buildPeerStack(
             peerNum: HeadPeerNumber,
             system: ActorSystem[IO],
-            tracerLocal: IOLocal[Tracer],
             cardanoBackend: CardanoBackend[IO],
             pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
         ): Resource[IO, PeerStack] = {
-            given IOLocal[Tracer] = tracerLocal
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val pending = pendingConnsMap(peerNum)
             val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
                 Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
                     |+| Tracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(peerNum))
+            val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+                Tracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
+                    |+| Tracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(peerNum))
+            val scTracer: ContraTracer[IO, StackComposerEvent] =
+                Tracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
+                    |+| Tracer.sink.traceMaybe(StackComposerEventFormat.jsonlFormat(peerNum))
+            val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
+                Tracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
+                    |+| Tracer.sink.traceMaybe(SlowConsensusActorEventFormat.jsonlFormat(peerNum))
             // Capture sink: only briefs go into the per-peer Ref.
             val captureSink: ContraTracer[IO, JointLedgerEvent] =
                 ContraTracer.emit[IO, JointLedgerEvent] {
@@ -230,44 +238,42 @@ case class Stage4Suite(
             // every producer (EventSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
             // one per-peer store; `analyzePersistence` reads it back.
             openPeerBackend(peerNum).evalMap { backendStore =>
-                Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
-                    for
-                        persistence <- {
-                            given CardanoNetwork.Section = nodeConfig
-                            Persistence.fromBackend(backendStore)
-                        }
-                        blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, tracerLocal))
-                        cardanoLiaison <- system.actorOf(
-                          CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
-                        )
-                        eventSequencer <- system.actorOf(
-                          EventSequencer(nodeConfig, pending, persistence)
-                        )
-                        l2Ledger <- EutxoL2Ledger(nodeConfig)
-                        jointLedger <- system.actorOf(
-                          JointLedger(nodeConfig, pending, l2Ledger, jlTracer, persistence)
-                        )
-                        consensusActor <- system.actorOf(
-                          FastConsensusActor(nodeConfig, pending, fcaTracer, persistence)
-                        )
-                        stackComposer <- system.actorOf(
-                          StackComposer(nodeConfig, pending, tracerLocal, persistence)
-                        )
-                        slowConsensusActor <- system.actorOf(
-                          SlowConsensusActor(nodeConfig, pending, tracerLocal, persistence)
-                        )
-                    yield PeerStack(
-                      blockWeaver,
-                      cardanoLiaison,
-                      eventSequencer,
-                      jointLedger,
-                      consensusActor,
-                      stackComposer,
-                      slowConsensusActor,
-                      backendStore,
-                      persistence
+                for
+                    persistence <- {
+                        given CardanoNetwork.Section = nodeConfig
+                        Persistence.fromBackend(backendStore)
+                    }
+                    blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending))
+                    cardanoLiaison <- system.actorOf(
+                      CardanoLiaison(nodeConfig, cardanoBackend, pending, clTracer)
                     )
-                }
+                    eventSequencer <- system.actorOf(
+                      EventSequencer(nodeConfig, pending, persistence)
+                    )
+                    l2Ledger <- EutxoL2Ledger(nodeConfig)
+                    jointLedger <- system.actorOf(
+                      JointLedger(nodeConfig, pending, l2Ledger, jlTracer, persistence)
+                    )
+                    consensusActor <- system.actorOf(
+                      FastConsensusActor(nodeConfig, pending, fcaTracer, persistence)
+                    )
+                    stackComposer <- system.actorOf(
+                      StackComposer(nodeConfig, pending, scTracer, persistence)
+                    )
+                    slowConsensusActor <- system.actorOf(
+                      SlowConsensusActor(nodeConfig, pending, scaTracer, persistence)
+                    )
+                yield PeerStack(
+                  blockWeaver,
+                  cardanoLiaison,
+                  eventSequencer,
+                  jointLedger,
+                  consensusActor,
+                  stackComposer,
+                  slowConsensusActor,
+                  backendStore,
+                  persistence
+                )
             }
         }
 
@@ -391,14 +397,10 @@ case class Stage4Suite(
                     // default RateLimits config (zero periods) these are no-ops; non-zero
                     // periods enable throttling for the corresponding lane.
                     blockWeaverLimiter <- system.actorOf(
-                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig, tracerLocal)
+                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig)
                     )
                     stackComposerLimiter <- system.actorOf(
-                      Limiter[StackComposer.Request](
-                        stack.stackComposer,
-                        nodeConfig,
-                        tracerLocal
-                      )
+                      Limiter[StackComposer.Request](stack.stackComposer, nodeConfig)
                     )
                     _ <- pendingConnsMap(peerNum)
                         .complete(
@@ -474,7 +476,6 @@ case class Stage4Suite(
                     buildPeerStack(
                       peerNum,
                       system,
-                      tracerLocal,
                       cardanoBackend,
                       pendingConnsMap,
                       blockBriefsMap,

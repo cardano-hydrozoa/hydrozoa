@@ -1,6 +1,6 @@
 package hydrozoa.app
 
-import cats.effect.{ExitCode, IO, IOApp, IOLocal, Resource}
+import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
@@ -212,10 +212,7 @@ object Main extends IOApp {
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
             tracerLocal <- Resource.eval(Tracer.makeLocal)
-            persistence <- Resource.eval {
-                given IOLocal[Tracer] = tracerLocal
-                Persistence.fromBackend(backendStore)
-            }
+            persistence <- Resource.eval(Persistence.fromBackend(backendStore))
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(

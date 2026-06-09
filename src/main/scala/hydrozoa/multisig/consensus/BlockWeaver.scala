@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -10,7 +10,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
@@ -24,12 +24,10 @@ import org.typelevel.log4cats.Logger
 final case class BlockWeaver(
     config: BlockWeaver.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial,
-    tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
 
     private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
-    given IOLocal[Tracer] = tracerLocal
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -52,7 +50,6 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"BlockWeaver.${config.ownHeadPeerNum}")
                 connections <- initializeConnections
                 startingState <- State.start(config, connections, logger)
                 _ <- become(startingState)

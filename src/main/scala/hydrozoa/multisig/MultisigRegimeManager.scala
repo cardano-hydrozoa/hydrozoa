@@ -38,6 +38,12 @@ trait MultisigRegimeManager(
         tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
     private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
         tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
+    private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.CL.apply)
+    private val scTracer: ContraTracer[IO, StackComposerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
+    private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -96,19 +102,19 @@ trait MultisigRegimeManager(
 
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaison, …) keep direct refs.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](blockWeaver, config, tracerLocal)
+              Limiter[BlockWeaver.Request](blockWeaver, config)
             )
 
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer)
                 )
 
             consensusActor <- context.actorOf(
@@ -124,16 +130,16 @@ trait MultisigRegimeManager(
             )
 
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal, persistence)
+              StackComposer(config, pendingConnections, scTracer, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
             stackComposerLimiter <- context.actorOf(
-              Limiter[StackComposer.Request](stackComposer, config, tracerLocal)
+              Limiter[StackComposer.Request](stackComposer, config)
             )
 
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              SlowConsensusActor(config, pendingConnections, scaTracer, persistence)
             )
 
             localPeerLiaisons <-

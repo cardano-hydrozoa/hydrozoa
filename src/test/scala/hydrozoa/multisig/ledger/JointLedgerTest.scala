@@ -17,7 +17,6 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
-import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -155,10 +154,9 @@ object JointLedgerTestHelpers {
             stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
-            tracerLocal <- PropertyM.run(Tracer.makeLocal)
             persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
             persistence <- PropertyM.run(
-              Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+              Persistence.fromBackend(persistenceBackend)(using config)
             )
             jointLedger <- PropertyM.run(
               system.actorOf(

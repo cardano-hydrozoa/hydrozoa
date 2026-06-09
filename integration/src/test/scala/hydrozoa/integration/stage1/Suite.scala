@@ -26,7 +26,7 @@ import hydrozoa.lib.logging.{ContraTracer, Logging, Tracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -494,9 +494,12 @@ case class Suite(
             }
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
 
-            fcaTracer : ContraTracer[IO, FastConsensusActorEvent] =
-                Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)) 
+            fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+                Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
                     |+| Tracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
+            clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+                Tracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
+                    |+| Tracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
 
             // Weaver stub — emits leader_started for tracing
             blockWeaver <- system.actorOf(
@@ -513,7 +516,7 @@ case class Suite(
                 nodeConfig,
                 cardanoBackend,
                 CardanoLiaison.Connections(blockWeaver),
-                tracerLocal
+                clTracer
               )
             )
 

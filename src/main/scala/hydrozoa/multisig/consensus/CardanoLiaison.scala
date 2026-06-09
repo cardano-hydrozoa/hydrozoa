@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{IO, IOLocal, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -11,7 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.{ContraTracer, Logging}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -54,9 +54,9 @@ object CardanoLiaison:
         config: Config,
         cardanoBackend: CardanoBackend[IO],
         pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
-        tracerLocal: IOLocal[Tracer]
+        tracer: ContraTracer[IO, CardanoLiaisonEvent]
     ): IO[CardanoLiaison] =
-        IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal) {})
+        IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer) {})
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
         NodeOperationMultisigConfig.Section & OwnHeadPeerPublic.Section
@@ -195,11 +195,11 @@ trait CardanoLiaison(
     config: CardanoLiaison.Config,
     cardanoBackend: CardanoBackend[IO],
     pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
-    tracerLocal: IOLocal[Tracer],
+    tracer: ContraTracer[IO, CardanoLiaisonEvent],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
-    given IOLocal[Tracer] = tracerLocal
+    private val logger = Logging.loggerIO(s"CardanoLiaison.${config.ownHeadPeerNum}")
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
@@ -234,40 +234,31 @@ trait CardanoLiaison(
             case CardanoLiaison.PreStart =>
                 preStartLocal
             case CardanoLiaison.Timeout =>
-                Tracer.scopedCtx("cardanoLiaisonMode" -> "Timeout") {
-                    Tracer.info("received Timeout, run effects...") >>
-                        runEffects
-                }
+                logger.info("received Timeout, run effects...") >> runEffects
             case stack: Stack.HardConfirmed =>
-                Tracer.scopedCtx(
-                  "cardanoLiaisonMode" -> "Stack.HardConfirmed",
-                  "stackNum" -> s"${stack.brief.stackNum: Int}"
-                ) {
-                    // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
-                    // peer's hard-ack signature into VKeyWitnesses and attached them onto
-                    // these tx bodies, so they are L1-submittable as is (NOT
-                    // `unsigned.effects`, which are the unwitnessed bodies).
-                    val effects = stack.effects
-                    Tracer.info(
-                      "received Stack.HardConfirmed for stack " +
-                          s"${stack.brief.stackNum}"
-                    ) >> (effects match {
-                        case ini: StackEffects.HardConfirmed.Initial =>
-                            // Stack 0 (initial). We MUST submit the initialization tx from the
-                            // hard-confirmed initial stack — NOT `config.initializationTx`,
-                            // which is the UNSIGNED body from head config.
-                            handleInitialStackL1Effects(ini) >> runEffects
-                        case reg: StackEffects.HardConfirmed.Regular =>
-                            // Learn the stack's effects, then run the submission state
-                            // machine immediately.
-                            handleStackL1Effects(reg) >> runEffects
-                    })
-                }
+                // The MULTISIGNED effects: SlowConsensusActor has aggregated every head
+                // peer's hard-ack signature into VKeyWitnesses and attached them onto
+                // these tx bodies, so they are L1-submittable as is (NOT
+                // `unsigned.effects`, which are the unwitnessed bodies).
+                val effects = stack.effects
+                logger.info(
+                  "received Stack.HardConfirmed for stack " +
+                      s"${stack.brief.stackNum}"
+                ) >> (effects match {
+                    case ini: StackEffects.HardConfirmed.Initial =>
+                        // Stack 0 (initial). We MUST submit the initialization tx from the
+                        // hard-confirmed initial stack — NOT `config.initializationTx`,
+                        // which is the UNSIGNED body from head config.
+                        handleInitialStackL1Effects(ini) >> runEffects
+                    case reg: StackEffects.HardConfirmed.Regular =>
+                        // Learn the stack's effects, then run the submission state
+                        // machine immediately.
+                        handleStackL1Effects(reg) >> runEffects
+                })
         }
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.routeLocal(s"CardanoLiaison.${config.ownHeadPeerNum}")
             _ <- initializeConnections
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
@@ -299,10 +290,7 @@ trait CardanoLiaison(
       */
     private def handleInitialStackL1Effects(eff: StackEffects.HardConfirmed.Initial): IO[Unit] =
         for {
-            _ <- Tracer.info(
-              "entering handleInitialStackL1Effects: overriding the config-seeded UNSIGNED " +
-                  "init tx + fallback with the hard-confirmed initial stack's"
-            )
+            _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsLearned)
             newState <- stateRef.updateAndGet { s =>
                 s.copy(
                   targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
@@ -312,7 +300,7 @@ trait CardanoLiaison(
                       s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
                 )
             }
-            _ <- Tracer.trace(s"state after initial-stack effects: ${newState.prettyDump}")
+            _ <- logger.trace(s"state after initial-stack effects: ${newState.prettyDump}")
         } yield ()
 
     /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
@@ -356,7 +344,7 @@ trait CardanoLiaison(
             case _: PartitionEffects.Minor[?] => false
         }
         if !hasBackbone then
-            Tracer.info("minor-only stack: no backbone L1 effects to submit; nothing to do")
+            logger.info("minor-only stack: no backbone L1 effects to submit; nothing to do")
         else {
             // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
             // finalization) the submission state machine consumes. Each Major partition carries
@@ -397,10 +385,13 @@ trait CardanoLiaison(
             }
 
             for {
-                _ <- Tracer.info(
-                  s"entering handleStackL1Effects: ${settlements.size} settlement(s), " +
-                      s"${fallbacks.size} fallback(s), ${allRollouts.size} rollout(s), " +
-                      s"finalization=${finalization.isDefined}"
+                _ <- tracer.traceWith(
+                  CardanoLiaisonEvent.StackEffectsLearned(
+                    settlements.size,
+                    fallbacks.size,
+                    allRollouts.size,
+                    finalization.isDefined
+                  )
                 )
                 newState <- stateRef.updateAndGet { s =>
                     s.copy(
@@ -410,7 +401,7 @@ trait CardanoLiaison(
                       targetState = newTarget.getOrElse(s.targetState)
                     )
                 }
-                _ <- Tracer.trace(s"state after stack effects: ${newState.prettyDump}")
+                _ <- logger.trace(s"state after stack effects: ${newState.prettyDump}")
             } yield ()
         }
     }
@@ -476,7 +467,7 @@ trait CardanoLiaison(
       *   - by receiving timeout
       */
     private def runEffects: IO[Unit] = for {
-        _ <- Tracer.trace("entering `runEffects`")
+        _ <- logger.trace("entering `runEffects`")
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
         resp <- cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
 
@@ -486,7 +477,7 @@ trait CardanoLiaison(
                 // This may happen if L1 API is temporarily unavailable or misconfigured
                 // TODO: we need to address time when we work on autonomous mode
                 //   but for now we can just ignore it and skip till the next event/timeout
-                Tracer.error(s"error when getting Cardano L1 state: $err")
+                logger.error(s"error when getting Cardano L1 state: $err")
 
             case Right(l1State) =>
                 for {
@@ -502,9 +493,9 @@ trait CardanoLiaison(
 
                     currentTime <- IO.realTime.map(_.toEpochQuantizedInstant(config.slotConfig))
 
-                    _ <- Tracer.trace(s"current time is $currentTime")
-                    _ <- Tracer.trace(s"utxoIds are $utxoIds")
-                    _ <- Tracer.trace(s"state is ${state.prettyDump}")
+                    _ <- logger.trace(s"current time is $currentTime")
+                    _ <- logger.trace(s"utxoIds are $utxoIds")
+                    _ <- logger.trace(s"state is ${state.prettyDump}")
 
                     // (i.e. those that are directly caused by effect inputs in L1 response).
                     dueActions: Seq[DirectAction] <- mkDirectActions(
@@ -513,7 +504,7 @@ trait CardanoLiaison(
                       currentTime
                     ).fold(
                       e =>
-                          Tracer.error(s"Critical error: ${e.msg}") >>
+                          logger.error(s"Critical error: ${e.msg}") >>
                               IO.raiseError(RuntimeException(e.msg)),
                       IO.pure
                     )
@@ -525,7 +516,7 @@ trait CardanoLiaison(
                         else
                             for {
 
-                                _ <- Tracer.trace("due actions is empty")
+                                _ <- logger.trace("due actions is empty")
 
                                 // Empty direct actions indicate another actions should be considered:
                                 //  - the last fallback tx might have become valid
@@ -563,12 +554,12 @@ trait CardanoLiaison(
                                                 if utxoIds.contains(targetTreasuryUtxoId)
                                                 then {
                                                     // everything is up-to-date on L1
-                                                    Tracer.trace(
+                                                    logger.trace(
                                                       s"target ${targetTreasuryUtxoId} found, do nothing"
                                                     ) >>
                                                         IO.pure(List.empty)
                                                 } else
-                                                    Tracer.trace(
+                                                    logger.trace(
                                                       s"no target ${targetTreasuryUtxoId} found, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
                                                     ) >>
                                                         IO.pure(initAction)
@@ -578,24 +569,24 @@ trait CardanoLiaison(
                                                     txResp <- cardanoBackend.isTxKnown(
                                                       finalizationTxHash
                                                     )
-                                                    _ <- Tracer.debug(
+                                                    _ <- logger.debug(
                                                       s"finalizationTx: hash: $finalizationTxHash txResp: $txResp"
                                                     )
                                                     mbInitAction <- txResp match {
                                                         case Left(err) =>
                                                             for {
-                                                                _ <- Tracer.error(
+                                                                _ <- logger.error(
                                                                   s"error when getting finalization tx info: ${err}"
                                                                 )
                                                             } yield Seq.empty
                                                         case Right(isKnown) =>
                                                             if isKnown
                                                             then
-                                                                Tracer.trace(
+                                                                logger.trace(
                                                                   "finalization tx is known, do nothing"
                                                                 ) >> IO.pure(Seq.empty)
                                                             else
-                                                                Tracer.trace(
+                                                                logger.trace(
                                                                   s"finalization tx is NOT known, submitting initAction: ${initAction.headOption.map(_.txs.map(_.id))}"
                                                                 ) >> IO.pure(initAction)
                                                     }
@@ -616,15 +607,15 @@ trait CardanoLiaison(
                             .map(a => s"\n\t- ${a.msg}")
                             .mkString
                         if hasFallback
-                        then Tracer.warn(msg)
-                        else Tracer.info(msg)
+                        then logger.warn(msg)
+                        else logger.info(msg)
                     }
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
                                 for {
-                                    _ <- Tracer.trace(
+                                    _ <- logger.trace(
                                       s"Submitting tx hash: ${tx.id}\n\t" +
                                           s"Pretty: ${summon[Pretty[Transaction]].pretty(tx).render(100)}" +
                                           s"\n\tcbor: ${HexUtil.encodeHexString(tx.toCbor)}"
@@ -637,7 +628,7 @@ trait CardanoLiaison(
                     // Submission errors are ignored, but dumped here
                     submissionErrors = submitRet.filter(_._2.isLeft)
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
-                      Tracer.debug(
+                      logger.debug(
                         "Submission errors (generally ignored):" + submissionErrors
                             .map(a =>
                                 s"\n\t- ${a._2.left},\n\t " +
