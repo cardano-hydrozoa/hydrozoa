@@ -93,7 +93,7 @@ precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 
 [parallel]
-prepush: precommit test integration-fast
+prepush: precommit test integration-fast build-werror
   just notify "prepush"
 
 notify name:

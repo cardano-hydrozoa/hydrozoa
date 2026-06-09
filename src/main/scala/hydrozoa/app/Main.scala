@@ -9,13 +9,12 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{Logging, Tracer}
-import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
-import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.server.HydrozoaServer
+import hydrozoa.multisig.{MultisigRegimeManager, MultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -233,11 +232,13 @@ object Main extends IOApp {
 
         resource.use {
             case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
-                val peerNum: Int = nodeConfig.ownHeadPeerNum
-                val nodeId = s"head:$peerNum"
-                val jlTracer =
-                    Tracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum)) |+|
-                        Tracer.sink.traceMaybe(JointLedgerEventFormat.jsonlFormat(nodeId))
+                val mrmTracer =
+                    Tracer.sink.contramap(
+                      MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
+                    ) |+|
+                        Tracer.sink.traceMaybe(
+                          MultisigRegimeManagerEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum)
+                        )
                 for {
                     mrm <- MultisigRegimeManager.apply(
                       nodeConfig,
@@ -245,7 +246,7 @@ object Main extends IOApp {
                       remoteL2Ledger,
                       persistence,
                       tracerLocal,
-                      jlTracer
+                      mrmTracer
                     )
                     _ <- system.actorOf(mrm, "MultisigRegimeManager")
                     _ <- logger.info("Hydrozoa node started successfully")

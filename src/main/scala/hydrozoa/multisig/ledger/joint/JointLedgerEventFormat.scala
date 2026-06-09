@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.joint
 
 import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent.*
@@ -124,7 +125,7 @@ object JointLedgerEventFormat:
     /** Routes only protocol-trace-worthy events to the `hydrozoa.trace` JSONL logger; returns
       * `None` for everything else (passed to `traceMaybe`).
       */
-    def jsonlFormat(nodeId: String)(e: JointLedgerEvent): Option[LogEvent] = {
+    def jsonlFormat(peerNum: HeadPeerNumber)(e: JointLedgerEvent): Option[LogEvent] = {
         val ts = System.currentTimeMillis()
         val rk = Some("hydrozoa.trace")
         e match {
@@ -133,25 +134,25 @@ object JointLedgerEventFormat:
                 Some(
                   LogEvent(
                     Level.Info,
-                    s"""HTRACE|{"ts":$ts,"node":"$nodeId","event":"brief_produced","block_num":${b.blockNum: Int},"block_type":"${briefTypeName(
+                    s"""HTRACE|{"ts":$ts,"node":"$peerNum","event":"brief_produced","block_num":${b.blockNum: Int},"block_type":"${briefTypeName(
                           b
                         )}","v_major":${v.major: Int},"v_minor":${v.minor: Int},"event_count":${b.body.events.size}}""",
                     routingKey = rk
                   )
                 )
             case DepositRegistrationCompleted(rid, bn) =>
-                Some(eventProcessedLine(ts, nodeId, rid, bn, valid = true, rk))
+                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = true, rk))
             case TransactionApplicationCompleted(rid, bn) =>
-                Some(eventProcessedLine(ts, nodeId, rid, bn, valid = true, rk))
+                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = true, rk))
             case RequestRejected(rid, bn, _) =>
-                Some(eventProcessedLine(ts, nodeId, rid, bn, valid = false, rk))
+                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = false, rk))
             case _ => None
         }
     }
 
     private def eventProcessedLine(
         ts: Long,
-        nodeId: String,
+        nodeId: HeadPeerNumber,
         rid: RequestId,
         bn: BlockNumberInt,
         valid: Boolean,

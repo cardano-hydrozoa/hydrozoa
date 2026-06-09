@@ -10,7 +10,6 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.block.BlockBrief
-import hydrozoa.multisig.ledger.block.BlockBrief.{Major as BMajor, Minor as BMinor}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -112,10 +111,6 @@ case class Stage4Sut(
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
-    // Cleanup hooks for resources allocated outside the actor system (currently the
-    // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
-    // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
-    transportCleanup: IO[Unit] = IO.unit,
 )
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.

@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage1
 
-import cats.effect.IO
+import cats.syntax.all.*
+import cats.effect.{IO, Resource}
 import cats.effect.unsafe.implicits.global
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -22,11 +23,10 @@ import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Logging, Tracer}
-import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -56,23 +56,26 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
   */
 
 // TODO: copied from Cardano Liaison test suite, which is temporarily disabled
-// used for tracing only, so it's only role is to call tracer.leaderStarted
+// used for tracing only, so it's only role is to emit FastConsensusActorEvent.LeaderStarted
 class BlockWeaverMock(
-    tracer: ProtocolTracer,
-    ownPeerNum: Int,
+    tracer: ContraTracer[IO, FastConsensusActorEvent],
+    ownPeerNum: HeadPeerNumber,
     numPeers: Int
 ) extends Actor[IO, BlockWeaver.Request] {
+    private def emitLeader(blockNum: BlockNumber): IO[Unit] =
+        tracer.traceWith(FastConsensusActorEvent.LeaderStarted(blockNum, ownPeerNum))
+
     override def preStart: IO[Unit] =
-        if 1 % numPeers == ownPeerNum then tracer.leaderStarted(1, ownPeerNum)
-        else IO.pure(())
+        if 1 % numPeers == (ownPeerNum: Int) then emitLeader(BlockNumber(1))
+        else IO.unit
 
     override def receive: Receive[IO, BlockWeaver.Request] = {
         case b: Block.SoftConfirmed =>
             val nextBlockNum = (b.blockNum: Int) + 1
-            if nextBlockNum % numPeers == ownPeerNum then
-                tracer.leaderStarted(nextBlockNum, ownPeerNum)
-            else IO.pure(())
-        case _ => IO.pure(())
+            if nextBlockNum % numPeers == (ownPeerNum: Int) then
+                emitLeader(BlockNumber(nextBlockNum))
+            else IO.unit
+        case _ => IO.unit
     }
 }
 
@@ -402,7 +405,7 @@ case class Suite(
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: Model.State): IO[Sut] = {
+    override def startupSut(state: Model.State): Resource[IO, Sut] = Resource.eval {
 
         val multiNodeConfig = state.multiNodeConfig
 
@@ -491,17 +494,15 @@ case class Suite(
             }
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
 
-            // Protocol tracer — runId in node field lets us detect interleaved traces
-            tracerResult <- ProtocolTracer.collecting(
-              s"head:${nodeConfig.ownHeadPeerNum: Int}/${runId}"
-            )
-            (tracer, traceRef) = tracerResult
+            fcaTracer : ContraTracer[IO, FastConsensusActorEvent] =
+                Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)) 
+                    |+| Tracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
 
             // Weaver stub — emits leader_started for tracing
             blockWeaver <- system.actorOf(
               new BlockWeaverMock(
-                tracer,
-                nodeConfig.ownHeadPeerNum: Int,
+                fcaTracer,
+                nodeConfig.ownHeadPeerNum,
                 nodeConfig.headPeers.nHeadPeers: Int
               )
             )
@@ -566,11 +567,10 @@ case class Suite(
               peerLiaisons = List.empty,
               jointLedger = jointLedger,
               stackComposer = stackComposerStub,
-              tracer = tracer
             )
 
             consensusActor <- system.actorOf(
-              FastConsensusActor(nodeConfig, consensusConnections, tracerLocal, persistence)
+              FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
             )
 
             _ <- consensusActorD.complete(consensusActor)
@@ -582,7 +582,6 @@ case class Suite(
           agent = agent,
           tracerLocal = tracerLocal,
           runId = runId,
-          traceRef = traceRef
         )
     }
 
@@ -656,24 +655,6 @@ case class Suite(
     override def shutdownSut(lastState: State, sut: Sut): IO[Prop] = for {
 
         _ <- loggerIO.info("shutdownSut")
-
-        // Dump protocol trace
-        traceLines <- sut.traceRef.get
-        _ <- IO.whenA(traceLines.nonEmpty) {
-            val traceDir = new java.io.File("target/traces")
-            IO(traceDir.mkdirs()) >>
-                IO {
-                    val safeLabel = label.replaceAll("[^a-zA-Z0-9_-]", "_")
-                    val traceFile =
-                        new java.io.File(traceDir, s"stage1-${safeLabel}-${sut.runId}.jsonl")
-                    val pw = new java.io.PrintWriter(traceFile)
-                    traceLines.foreach(pw.println)
-                    pw.close()
-                    logger.info(
-                      s"Protocol trace: ${traceLines.size} events → ${traceFile.getAbsolutePath}"
-                    )
-                }
-        }
 
         /** Important: this action should ensure that the actor system was not terminated.
           *

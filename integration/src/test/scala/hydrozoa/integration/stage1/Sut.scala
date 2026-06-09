@@ -45,7 +45,6 @@ case class Stage1Sut(
     agent: AgentActor.Handle,
     tracerLocal: IOLocal[Tracer],
     runId: String = "",
-    traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )
 
 // ===================================

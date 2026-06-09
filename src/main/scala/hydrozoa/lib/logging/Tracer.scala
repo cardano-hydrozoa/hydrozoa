@@ -45,8 +45,6 @@ object LogEvent {
   * per-component level config. [[LogEvent.ctx]] carries ambient key-value context.
   *
   * Both are set via [[scoped]] / [[scopedCtx]]; the ambient instance lives in [[IOLocal]].
-  *
-  * Note: [[hydrozoa.lib.tracing.ProtocolTracer]] is a future merge candidate.
   */
 type Tracer = ContraTracer[IO, LogEvent]
 

@@ -7,9 +7,9 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.L2LedgerError
 
-/** Typed events emitted by [[JointLedger]]. Pure data: every former `Tracer.xxx` / `ProtocolTracer`
-  * call in JL maps to one variant here. Formatters (see [[JointLedgerEventFormat]]) decide how each
-  * variant is rendered to a particular sink (SLF4J text, JSONL protocol trace, in-memory capture).
+/** Typed events emitted by [[JointLedger]]. Pure data; formatters in [[JointLedgerEventFormat]]
+  * decide how each variant is rendered to a particular sink (SLF4J text, JSONL protocol trace,
+  * in-memory capture).
   */
 sealed trait JointLedgerEvent
 

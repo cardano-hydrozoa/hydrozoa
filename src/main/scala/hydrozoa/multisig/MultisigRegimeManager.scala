@@ -9,7 +9,6 @@ import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Tracer}
-import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
@@ -26,10 +25,19 @@ trait MultisigRegimeManager(
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
     tracerLocal: IOLocal[Tracer],
-    jlTracer: ContraTracer[IO, JointLedgerEvent]
+    tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
 ) extends Actor[IO, Request] {
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
+      * producer's narrow event type up into [[MultisigRegimeManagerEvent]] so it can reach the
+      * single sink composition the wiring layer assembled.
+      */
+    private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
+    private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -86,10 +94,6 @@ trait MultisigRegimeManager(
             _ <- Tracer.updateLocalCtx("peer" -> s"${config.ownHeadPeerNum: Int}")
             _ <- Tracer.info("Starting multisig actors...")
 
-            // TODO: should be _peer/peerId_
-            nodeId = s"head:${config.ownHeadPeerNum: Int}"
-            tracer <- ProtocolTracer.jsonLines(nodeId)
-
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
@@ -108,7 +112,7 @@ trait MultisigRegimeManager(
                 )
 
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              FastConsensusActor(config, pendingConnections, fcaTracer, persistence)
             )
 
             eventSequencer <- context.actorOf(
@@ -156,7 +160,6 @@ trait MultisigRegimeManager(
               slowConsensusActor = slowConsensusActor,
               peerLiaisons = localPeerLiaisons,
               remotePeerLiaisons = Map.empty,
-              tracer = tracer,
             )
 
             _ <- pendingConnections.complete(connections)
@@ -206,7 +209,6 @@ object MultisigRegimeManager {
         slowConsensusActor: SlowConsensusActor.Handle,
         peerLiaisons: List[PeerLiaison.Handle],
         remotePeerLiaisons: Map[HeadPeerId, PeerLiaison.Handle],
-        tracer: ProtocolTracer = ProtocolTracer.noop,
     )
 
     type PendingConnections = Deferred[IO, Connections]
@@ -217,7 +219,7 @@ object MultisigRegimeManager {
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
         tracerLocal: IOLocal[Tracer],
-        jlTracer: ContraTracer[IO, JointLedgerEvent]
+        tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
     ): IO[MultisigRegimeManager] =
         IO(
           new MultisigRegimeManager(
@@ -226,7 +228,7 @@ object MultisigRegimeManager {
             virtualLedger,
             persistence,
             tracerLocal,
-            jlTracer
+            tracer
           ) {}
         )
 
