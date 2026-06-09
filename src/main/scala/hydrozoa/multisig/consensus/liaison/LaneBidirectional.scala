@@ -3,13 +3,18 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.IO
 
 /** A full-duplex lane — a [[LaneOutbound]] (our production) paired with a [[LaneInbound]] (the
-  * remote's), over the **same** lane number space. Only the symmetric head-peer mesh
-  * ([[PeerLiaisonHeadToHead]]) produces *and* receives on a given lane; the asymmetric hub↔coil
-  * links use a standalone [[LaneOutbound]] or [[LaneInbound]] per lane, so no lane carries a dead
-  * direction.
+  * remote's), numbered the **same** way (both key on the item number `N`). Only the symmetric
+  * head-peer mesh ([[PeerLiaisonHeadToHead]]) produces *and* receives on a given lane; the
+  * asymmetric hub↔coil links use a standalone [[LaneOutbound]] or [[LaneInbound]] per lane, so no
+  * lane carries a dead direction.
   *
   * The two lanes hold independent state (our outbox + high-water vs the remote's cursor); this is
   * just the pairing, delegating each call to the relevant one.
+  *
+  * @tparam T
+  *   the item type carried on the lane (a brief, ack, request, …).
+  * @tparam N
+  *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   */
 final class LaneBidirectional[T, N] private (
     out: LaneOutbound[T, N],

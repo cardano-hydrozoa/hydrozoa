@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.liaison.LaneInbound.*
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the inbound half ([[LaneInbound]]) — cursor + verify + advance. Items are plain
-  * `Int`s that are their own lane number (`numberOf = identity`).
+  * `Int`s that are their own item number (`numberOf = identity`).
   */
 class LaneInboundTest extends AnyFunSuite {
 

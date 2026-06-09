@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.liaison.LaneOutbound.*
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the outbound half ([[LaneOutbound]]) — append + reply. Items are plain `Int`s
-  * that are their own lane number (`numberOf = identity`), so the sequencing logic is exercised in
+  * that are their own item number (`numberOf = identity`), so the sequencing logic is exercised in
   * isolation.
   */
 class LaneOutboundTest extends AnyFunSuite {

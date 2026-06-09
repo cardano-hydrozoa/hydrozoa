@@ -18,8 +18,12 @@ import cats.effect.{IO, Ref}
   *   - '''Sparse''' (block / stack briefs on the head mesh): successor is the remote's leader
   *     schedule.
   *
+  * @tparam T
+  *   the item type carried on the lane (a brief, ack, request, …).
+  * @tparam N
+  *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   * @param numberOf
-  *   the lane number of an item.
+  *   the number of an item.
   * @param nextInbound
   *   the successor of the inbound cursor after receiving a given number (`None` = no successor; the
   *   cursor then stays put — a sparse lane with no further remote-led item).

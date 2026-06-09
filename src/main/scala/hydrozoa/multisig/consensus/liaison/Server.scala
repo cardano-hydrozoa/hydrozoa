@@ -13,6 +13,10 @@ import hydrozoa.multisig.consensus.liaison.Server.Served
   * *extend* them. The two halves are independent — for the asymmetric hub↔coil link they carry
   * entirely different lane sets — and share only the actor's send path.
   *
+  * @tparam G
+  *   the pull-request type (a `GetMsgBatch` of next-expected cursors).
+  * @tparam N
+  *   the reply type (a `NewMsgBatch` of payload slices).
   * @param serve
   *   build a reply for a request from the current outbox lanes (echoing its batch number), or
   *   report [[Served.Empty]] / [[Served.OutOfBounds]].

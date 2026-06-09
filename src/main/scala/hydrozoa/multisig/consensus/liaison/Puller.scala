@@ -12,6 +12,10 @@ import org.typelevel.log4cats.Logger
   * *extend* them. The lane primitives do the per-lane heavy lifting; the actor's glue closures fix
   * the batch types for its link; this engine owns only the pull-side state machine.
   *
+  * @tparam G
+  *   the pull-request type (a `GetMsgBatch` of next-expected cursors).
+  * @tparam N
+  *   the reply type (a `NewMsgBatch` of payload slices).
   * @param initialGet
   *   the first request (batch 0, initial cursors).
   * @param buildGet

@@ -20,8 +20,12 @@ import scala.collection.immutable.Queue
   *   - '''Sparse''' (block / stack briefs on the head mesh): successor is this side's leader
   *     schedule.
   *
+  * @tparam T
+  *   the item type carried on the lane (a brief, ack, request, …).
+  * @tparam N
+  *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   * @param numberOf
-  *   the lane number of an item.
+  *   the number of an item.
   * @param nextOutbound
   *   the next number this side may append, given the last appended (`None` = nothing yet). A `None`
   *   result means no further item is legal on this lane. Drives the append gap-check and the
