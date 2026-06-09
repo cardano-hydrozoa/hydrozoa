@@ -62,7 +62,7 @@ abstract class PeerLiaisonCoilToHub(
         }
 
     private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${hubHead.peerNum.convert}")
+        Logging.loggerIO(s"PeerLiaisonCoilToHub.${config.ownPeerLabel}->${hubHead.peerNum.convert}")
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers

@@ -2,6 +2,8 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.IO
 
+// TODO: T and N might be restricted to pull in things like numberOf, increment and so on.
+
 /** A full-duplex lane — a [[LaneOutbound]] (our production) paired with a [[LaneInbound]] (the
   * remote's), numbered the **same** way (both key on the item number `N`). Only the symmetric
   * head-peer mesh ([[PeerLiaisonHeadToHead]]) produces *and* receives on a given lane; the
@@ -38,12 +40,12 @@ object LaneBidirectional {
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
-        incr: N => N,
+        increment: N => N,
         maxPerReply: Int = 1
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(numberOf, first, incr, maxPerReply),
-          LaneInbound.contiguous(numberOf, first, incr)
+          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply),
+          LaneInbound.contiguous(numberOf, first, increment)
         )
 
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),

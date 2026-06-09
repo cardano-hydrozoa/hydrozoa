@@ -14,7 +14,7 @@ class LaneOutboundTest extends AnyFunSuite {
         LaneOutbound.contiguous[Int, Int](
           numberOf = identity,
           first = first,
-          incr = _ + 1,
+          increment = _ + 1,
           maxPerReply
         )
 

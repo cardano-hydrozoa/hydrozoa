@@ -10,7 +10,7 @@ import org.scalatest.funsuite.AnyFunSuite
 class LaneInboundTest extends AnyFunSuite {
 
     private def contiguousFrom(first: Int): LaneInbound[Int, Int] =
-        LaneInbound.contiguous[Int, Int](numberOf = identity, first = first, incr = _ + 1)
+        LaneInbound.contiguous[Int, Int](numberOf = identity, first = first, increment = _ + 1)
 
     // Sparse remote-led schedule: zero (0) is the bootstrap sentinel; the remote leads the odd
     // numbers >= 1.

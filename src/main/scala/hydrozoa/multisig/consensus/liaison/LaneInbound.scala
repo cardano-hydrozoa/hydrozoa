@@ -3,12 +3,10 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 
 /** An **inbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only receive on.
-  * It owns an [[inboundCursor]] naming the next number we expect from the remote. We [[verify]] a
-  * received slice against it (pure) and [[advanceTo]] its successor on accept.
-  *
-  * A standalone, single-direction lane — a link that also produces on this number space pairs it
-  * with a [[LaneOutbound]] (see [[LaneBidirectional]]); a link that only receives uses it on its
-  * own.
+  * Wraps an [[inboundCursor]] naming the next number we expect from the remote; we [[verify]] a
+  * received slice against it (pure) and [[advanceTo]] its successor on accept. On a link that
+  * produces *and* receives on this number space it is paired with a [[LaneOutbound]] (see
+  * [[LaneBidirectional]]); on a receive-only link it stands alone.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneInbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.
@@ -72,16 +70,16 @@ object LaneInbound {
     final case class Mismatch[N](expected: N, received: N)
 
     /** A contiguous inbound lane whose first expected number is `first` and whose successor is
-      * `+1`. `incr` supplies the `+1`.
+      * `+1`. `increment` supplies the `+1`.
       */
     def contiguous[T, N](
         numberOf: T => N,
         first: N,
-        incr: N => N
+        increment: N => N
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
           numberOf = numberOf,
-          next = n => Some(incr(n)),
+          next = n => Some(increment(n)),
           initialCursor = first
         )
 

@@ -1,16 +1,15 @@
 package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
+
 import scala.collection.immutable.Queue
 
 /** An **outbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only produce on.
-  * It owns an [[outbox]] queue of items we append plus the high-water number ever appended. The
-  * remote pulls with a cursor; we prune what it has already seen and hand back the head
-  * ([[reply]]).
-  *
-  * A standalone, single-direction lane — a link that also receives on this number space pairs it
-  * with a [[LaneInbound]] (see [[LaneBidirectional]]); a link that only produces uses it on its
-  * own.
+  * It owns an [[outbox]] queue of items we append plus the high-water number ever appended; the
+  * remote pulls with its [[LaneInbound]] counterpart's cursor, we prune what it has already seen,
+  * and we hand back the head ([[reply]]). On a link that produces *and* receives on this number
+  * space it is paired with that [[LaneInbound]] (see [[LaneBidirectional]]); on a produce-only link
+  * it stands alone.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneOutbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.
@@ -93,17 +92,17 @@ object LaneOutbound {
         )
 
     /** A contiguous outbound lane whose first number is `first` and whose successor is `+1` (acks,
-      * requests, re-sequenced relay lanes). `incr` supplies the `+1`.
+      * requests, re-sequenced relay lanes). `increment` supplies the `+1`.
       */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
-        incr: N => N,
+        increment: N => N,
         maxPerReply: Int = 1
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
-          next = _.fold(Some(first))(last => Some(incr(last))),
+          next = _.fold(Some(first))(last => Some(increment(last))),
           maxPerReply = maxPerReply
         )
 
