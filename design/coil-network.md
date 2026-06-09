@@ -693,10 +693,20 @@ The liaison layer lives in `consensus.liaison`, by **composition** (no base clas
 `Connections` is the wiring seam. `ActorRef` is **contravariant** in its message
 type, so each producer broadcasts its **own** artifact to whichever liaison shape
 accepts it: `headPeerLiaisons` (mesh, empty on a coil), `coilUplink` (Some on a
-coil), `coilRelay` (Some on a hub). Core actors never relay *received* traffic —
-the mesh liaisons forward only **satellites** to `CoilRelay`, never briefs, since
-the hub's own `JointLedger` / `StackComposer` re-produce every block / stack (so
-forwarding mesh briefs too would double-feed the contiguous spine).
+coil), `coilRelay` (Some on a hub). **Core actors never relay *received* traffic
+to `CoilRelay`** — they send only their *own* production. So the spine briefs are
+split by leadership: the hub's mesh `PeerLiaisonHeadToHead`s forward the
+**remote-led** block/stack briefs (and that head's satellites), while the hub's
+own `JointLedger` / `StackComposer` relay only the **own-led** briefs. Each brief
+is therefore relayed exactly once.
+
+`CoilRelay` needs **no reordering** for the contiguous block/stack lanes: the hub
+is a head peer, and a leader can't produce artifact N+1 until N is confirmed by
+**all** head peers (soft-confirm `acks.keySet == headPeerVKeys`; hard-confirm
+`AllOf(head)`), so the hub always holds brief N before N+1 exists and relays them
+in spine order. The contiguous `LaneOutbound.append` is the loud backstop if that
+invariant is ever weakened. (See `CoilRelay`'s doc for the full proof + the three
+load-bearing invariants.)
 
 **Transport (§8.10):** one shared `NodeWsServer` per peer mounts `/peer` (head
 mesh) and, on a hub, `/coil`; `CoilHubTransport` / `CoilUplinkTransport` /
