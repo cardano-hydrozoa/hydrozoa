@@ -22,6 +22,9 @@
         <appender-ref ref="LOG_FILE"/>
     </root>
     <logger name="CardanoLiaison" level="trace"/>
+    <logger name="PeerLiaisonHeadToHead" level="trace"/>
+    <logger name="PeerLiaisonHubToCoil" level="trace"/>
+    <logger name="PeerLiaisonCoilToHub" level="trace"/>
     <logger name="JointLedger" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>

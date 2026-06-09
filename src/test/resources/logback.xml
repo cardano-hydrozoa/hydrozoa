@@ -11,6 +11,9 @@
     <logger name="BlockWeaver" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
+    <logger name="PeerLiaisonHeadToHead" level="warn"/>
+    <logger name="PeerLiaisonHubToCoil" level="warn"/>
+    <logger name="PeerLiaisonCoilToHub" level="warn"/>
     <logger name="InitializationTxSeq" level="warn"/>
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>

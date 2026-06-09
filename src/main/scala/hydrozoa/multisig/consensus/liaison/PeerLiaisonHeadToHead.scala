@@ -53,7 +53,7 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
+        Logging.loggerIO(s"PeerLiaisonHeadToHead.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
