@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
 /** Top-level formatters delegating to each producer's per-event formatter. Build the prod or test
   * tracer at the wiring layer with
-  * `Tracer.sink.contramap(humanFormat(peer)) |+| Tracer.sink.traceMaybe(jsonlFormat(nodeId))`.
+  * `Slf4jTracer.sink.contramap(humanFormat(peer)) |+| Slf4jTracer.sink.traceMaybe(jsonlFormat(nodeId))`.
   */
 object MultisigRegimeManagerEventFormat:
 

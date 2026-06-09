@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
   *
   * **Logging.** Every op (get / put / delete / write) is traced at INFO with explicit
   * `routingKey = "Persistence"`, so log lines route to the `"Persistence"` logger in `logback.xml`
-  * regardless of the ambient actor's [[Tracer.routeLocal]].
+  * regardless of the ambient actor's [[Slf4jTracer.routeLocal]].
   *
   * See `design/persistence-and-crash-recovery.md` §7.
   */

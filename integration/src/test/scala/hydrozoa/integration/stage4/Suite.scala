@@ -17,7 +17,7 @@ import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import cats.effect.IOLocal
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -123,7 +123,7 @@ case class Stage4Suite(
         val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
         // ------ Pre-system IO: clock alignment + tracer local. ------
-        val preSystem: IO[IOLocal[Tracer]] = for {
+        val preSystem: IO[IOLocal[Slf4jTracer]] = for {
             // TestControl branch: jump the virtual clock from 0 to the head's start epoch.
             // Without TestControl this would be a literal multi-decade real sleep, so it must
             // be gated on `useTestControl`. The non-TestControl analogue is the
@@ -153,7 +153,7 @@ case class Stage4Suite(
                             IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
                     }
             }
-            tracerLocal <- Tracer.makeLocal
+            tracerLocal <- Slf4jTracer.makeLocal
         } yield tracerLocal
 
         // ------ Post-system, pre-stack IO: backend + per-peer Deferred/Ref maps. ------
@@ -211,17 +211,17 @@ case class Stage4Suite(
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val pending = pendingConnsMap(peerNum)
             val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
-                    |+| Tracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(peerNum))
+                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(peerNum))
             val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                Tracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
-                    |+| Tracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(peerNum))
+                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(peerNum))
             val scTracer: ContraTracer[IO, StackComposerEvent] =
-                Tracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
-                    |+| Tracer.sink.traceMaybe(StackComposerEventFormat.jsonlFormat(peerNum))
+                Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(StackComposerEventFormat.jsonlFormat(peerNum))
             val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-                Tracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
-                    |+| Tracer.sink.traceMaybe(SlowConsensusActorEventFormat.jsonlFormat(peerNum))
+                Slf4jTracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(SlowConsensusActorEventFormat.jsonlFormat(peerNum))
             // Capture sink: only briefs go into the per-peer Ref.
             val captureSink: ContraTracer[IO, JointLedgerEvent] =
                 ContraTracer.emit[IO, JointLedgerEvent] {
@@ -231,7 +231,7 @@ case class Stage4Suite(
                 }
             // SLF4J sink: all JL events get a human-readable line so test runs are debuggable.
             val textSink: ContraTracer[IO, JointLedgerEvent] =
-                Tracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum))
+                Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum))
             val jlTracer: ContraTracer[IO, JointLedgerEvent] = captureSink |+| textSink
             // Per-peer persistence backend — InMemory by default; RocksDb when the
             // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
@@ -376,7 +376,7 @@ case class Stage4Suite(
         // ------ Post-transport IO: wire each peer's Connections, start the error drainer and
         // ------ per-peer CardanoLiaison-tick fibers, then assemble the Stage4Sut.
         def finalizeSut(
-            tracerLocal: IOLocal[Tracer],
+            tracerLocal: IOLocal[Slf4jTracer],
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
@@ -652,7 +652,7 @@ case class Stage4Suite(
             else analysisProp
 
     private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
-        given IOLocal[Tracer] = sut.tracerLocal
+        given IOLocal[Slf4jTracer] = sut.tracerLocal
         for
             briefsByPeer <- sut.blockBriefs.toList
                 .traverse { case (p, ref) => ref.get.map(p -> _) }
@@ -974,7 +974,7 @@ case class Stage4Suite(
         nPeers: Int,
         submittedIds: Vector[RequestId],
         lastState: ModelState,
-    )(using IOLocal[Tracer]): IO[Unit] = {
+    )(using IOLocal[Slf4jTracer]): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Block".padTo(colWidth, ' ')} |"
@@ -1029,7 +1029,7 @@ case class Stage4Suite(
         val text = (divider :: header :: divider :: rows.toList ++
             (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
             .mkString("\n", "\n", "")
-        Tracer.info(text)
+        Slf4jTracer.info(text)
     }
 
     /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
@@ -1043,7 +1043,7 @@ case class Stage4Suite(
         sortedPeers: Seq[HeadPeerNumber],
         stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
         nPeers: Int,
-    )(using IOLocal[Tracer]): IO[Unit] = {
+    )(using IOLocal[Slf4jTracer]): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
@@ -1087,7 +1087,7 @@ case class Stage4Suite(
         val text = (divider :: header :: divider :: rows.toList ++
             (divider :: peersLine :: legend :: Nil))
             .mkString("\n", "\n", "")
-        Tracer.info(text)
+        Slf4jTracer.info(text)
     }
 
 // ===================================

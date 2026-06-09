@@ -12,7 +12,7 @@ import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.classification.Histogram
-import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
+import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -197,7 +197,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                     then evacuatedSignal.complete(()).void
                     else IO.unit
                 }
-                Tracer.makeLocal.flatMap(local => local.update(_ |+| signalTracer).as(local))
+                Slf4jTracer.makeLocal.flatMap(local => local.update(_ |+| signalTracer).as(local))
             }
 
             terminalUtxos <- lift {
@@ -223,9 +223,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 // the "silent retry" case where actors never die and never signal.
                 IO.race(
                   evacuatedSignal.get
-                      >> Tracer.info("!!! EVACUATION FINISHED !!!")(using tracer)
+                      >> Slf4jTracer.info("!!! EVACUATION FINISHED !!!")(using tracer)
                       >> IO.sleep(postCompletionBuffer)
-                      >> Tracer.info(
+                      >> Slf4jTracer.info(
                         s"!!! POST-COMPLETION BUFFER ($postCompletionBuffer) ELAPSED !!!"
                       )(using tracer),
                   peerBots.parSequence
@@ -280,7 +280,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         sharedBackend: CardanoBackend[IO],
         candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
         fallbackTxHash: TransactionHash,
-        tracer: IOLocal[Tracer],
+        tracer: IOLocal[Slf4jTracer],
     )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
         ActorSystem[IO](s"RBR actors for peer $peerId").use { system =>
             for {

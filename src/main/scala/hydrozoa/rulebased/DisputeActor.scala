@@ -13,7 +13,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
@@ -57,11 +57,11 @@ extension (tx: Transaction) {
 final case class DisputeActor(
     action: RuleBasedRegimeManager.DisputeAction,
     cardanoBackend: CardanoBackend[IO],
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Slf4jTracer]
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
 
-    given IOLocal[Tracer] = tracerLocal
+    given IOLocal[Slf4jTracer] = tracerLocal
 
     private def handleCardanoBackendError[A](
         action: IO[Either[CardanoBackend.Error, A]]
@@ -74,7 +74,7 @@ final case class DisputeActor(
                 // mismatches (e.g. tally attempted before deadline), and rollbacks.
                 case Left(e) =>
                     EitherT.left(for {
-                        _ <- Tracer.warn(
+                        _ <- Slf4jTracer.warn(
                           "Cardano backend error encountered. This may be due to " +
                               "timeout, utxo contention, rollbacks, or timing skew, but it may also be a genuine error." +
                               s"\n\tError: \n$e"
@@ -94,12 +94,12 @@ final case class DisputeActor(
         wrapError: E => Throwable,
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
         for {
-            _ <- EitherT.liftF(Tracer.info(s"Building $label Tx"))
+            _ <- EitherT.liftF(Slf4jTracer.info(s"Building $label Tx"))
             tx <- result match {
                 case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
                 case Right(tx) => EitherT.right(IO.pure(tx))
             }
-            _ <- EitherT.liftF(Tracer.info(s"Submitting $label Tx"))
+            _ <- EitherT.liftF(Slf4jTracer.info(s"Submitting $label Tx"))
             _ <- signAndSubmitTx[T](tx)
         } yield ()
 
@@ -108,17 +108,17 @@ final case class DisputeActor(
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
         for {
             _ <- EitherT.right(
-              Tracer.info(s"Submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+              Slf4jTracer.info(s"Submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
             )
             _ <- EitherT.right(
-              Tracer.debug(
+              Slf4jTracer.debug(
                 s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx.tx).render(100)}" +
                     s"\n\tcbor: ${HexUtil.encodeHexString(tx.tx.toCbor)}"
               )
             )
             res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
             _ <- EitherT.right(
-              Tracer.info(s"SUCCESS submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+              Slf4jTracer.info(s"SUCCESS submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
             )
         } yield res
     }
@@ -127,7 +127,9 @@ final case class DisputeActor(
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] = {
         val peerAddr = config.ownHeadWallet.exportVerificationKey.shelleyAddress()
         for {
-            _ <- EitherT.liftF(Tracer.debug(s"Looking for collateral utxos at address ${peerAddr}"))
+            _ <- EitherT.liftF(
+              Slf4jTracer.debug(s"Looking for collateral utxos at address ${peerAddr}")
+            )
             collateralCandidates <- handleCardanoBackendError(
               cardanoBackend.utxosAt(peerAddr)
             )
@@ -158,13 +160,13 @@ final case class DisputeActor(
                     )
                 case _ =>
                     EitherT.liftF(for {
-                        _ <- Tracer.error(
+                        _ <- Slf4jTracer.error(
                           s"Could not find a collateral utxo for peer ${config.ownHeadPeerNum}"
                         )
                         res <- IO.raiseError(NoSuitableCollateralUtxosFound)
                     } yield res)
             }
-            _ <- EitherT.liftF(Tracer.debug("Found collateral utxo"))
+            _ <- EitherT.liftF(Slf4jTracer.debug("Found collateral utxo"))
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
     }
 
@@ -226,7 +228,7 @@ final case class DisputeActor(
                     val keySorted = otherUtxos.sortBy(_.voteOutput.key)
                     val continuing = keySorted.head
                     for {
-                        _ <- EitherT.liftF(Tracer.info("Tallying..."))
+                        _ <- EitherT.liftF(Slf4jTracer.info("Tallying..."))
 
                         removed <- keySorted.tail.find(voteUtxo =>
                             voteUtxo.voteOutput.key == continuing.voteOutput.link
@@ -289,7 +291,7 @@ final case class DisputeActor(
         for {
             _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, HandleDisputeRes)
 
-            _ <- Tracer.routeLocal(s"DisputeActor.${config.ownHeadPeerNum}")
+            _ <- Slf4jTracer.routeLocal(s"DisputeActor.${config.ownHeadPeerNum}")
         } yield ()
 
     override def receive: Receive[IO, Requests.Request] = {
@@ -475,11 +477,11 @@ object DisputeActor {
         utxos: Utxos
     )(using
         config: Config,
-        tracer: IOLocal[Tracer]
+        tracer: IOLocal[Slf4jTracer]
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         import RuleBasedTreasuryUtxo.LookupError
         for {
-            _ <- EitherT.liftF(Tracer.debug("parsing RuleBased Treasury"))
+            _ <- EitherT.liftF(Slf4jTracer.debug("parsing RuleBased Treasury"))
             treasuryUtxo <- EitherT(
               IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
                   case Right(u) => Right(u)
@@ -491,11 +493,11 @@ object DisputeActor {
             _ <- treasuryUtxo.treasuryOutput.datum match {
                 case _: RuleBasedTreasuryDatum.Unresolved =>
                     EitherT.liftF[IO, Error.RecoverableErrors, Unit](
-                      Tracer.info(LogMessages.TreasuryIsUnresolved)
+                      Slf4jTracer.info(LogMessages.TreasuryIsUnresolved)
                     )
                 case _: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.left[Unit](
-                      Tracer
+                      Slf4jTracer
                           .info(LogMessages.TreasuryIsResolved)
                           .as(
                             TreasuryResolved: Error.RecoverableErrors
@@ -504,7 +506,7 @@ object DisputeActor {
             }
 
             _ <- EitherT.liftF(
-              Tracer.debug(s"Found treasury utxo with ${treasuryUtxo.treasuryOutput.value}")
+              Slf4jTracer.debug(s"Found treasury utxo with ${treasuryUtxo.treasuryOutput.value}")
             )
         } yield treasuryUtxo
 }

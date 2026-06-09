@@ -7,7 +7,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[FastConsensusActorEvent]] to [[LogEvent]] for various back-end sinks. Lives
   * separately from the event ADT so the type itself stays pure data, and callers (Main / harness)
   * compose
-  * `Tracer.sink.contramap(humanFormat(peer)) |+| Tracer.sink.traceMaybe(jsonlFormat(nodeId))`.
+  * `Slf4jTracer.sink.contramap(humanFormat(peer)) |+| Slf4jTracer.sink.traceMaybe(jsonlFormat(nodeId))`.
   */
 object FastConsensusActorEventFormat:
 

@@ -8,7 +8,7 @@ import com.comcast.ip4s.{host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.Persistence
@@ -211,7 +211,7 @@ object Main extends IOApp {
             backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
-            tracerLocal <- Resource.eval(Tracer.makeLocal)
+            tracerLocal <- Resource.eval(Slf4jTracer.makeLocal)
             persistence <- Resource.eval(Persistence.fromBackend(backendStore))
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
@@ -230,10 +230,10 @@ object Main extends IOApp {
         resource.use {
             case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
                 val mrmTracer =
-                    Tracer.sink.contramap(
+                    Slf4jTracer.sink.contramap(
                       MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
                     ) |+|
-                        Tracer.sink.traceMaybe(
+                        Slf4jTracer.sink.traceMaybe(
                           MultisigRegimeManagerEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum)
                         )
                 for {

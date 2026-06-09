@@ -6,7 +6,7 @@ import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
@@ -31,7 +31,7 @@ case class RuleBasedRegimeManager(
     persistence: Persistence[IO],
     backend: BackendStore[IO],
     votingDeadline: QuantizedInstant,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Slf4jTracer]
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 

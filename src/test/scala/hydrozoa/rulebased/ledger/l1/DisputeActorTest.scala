@@ -8,7 +8,7 @@ import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -177,7 +177,7 @@ object DisputeActorTestHelpers {
                     )
               )
             )
-            tracer <- lift(Tracer.makeLocal)
+            tracer <- lift(Slf4jTracer.makeLocal)
 
             disputeActor = DisputeActor(
               action = RuleBasedRegimeManager.DisputeAction.Vote(

@@ -22,7 +22,7 @@ import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.{ContraTracer, Logging, Tracer}
+import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -412,13 +412,13 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            tracerLocal <- Tracer.makeLocal
-            given cats.effect.IOLocal[Tracer] = tracerLocal
-            _ <- Tracer.info(s"Creating new SUT [${label}/${runId}]")
+            tracerLocal <- Slf4jTracer.makeLocal
+            given cats.effect.IOLocal[Slf4jTracer] = tracerLocal
+            _ <- Slf4jTracer.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
-                _ <- Tracer.debug("Fast-forward to the current time...")
+                _ <- Slf4jTracer.debug("Fast-forward to the current time...")
 
                 // Before creating the actor system, if we are in the TestControl we need
                 // to fast-forward to the zero block creation time.
@@ -430,7 +430,7 @@ case class Suite(
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- Tracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
+                _ <- Slf4jTracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
 
             // For real-blockchain modes: sleep until takeoff time so the model clock and the
@@ -448,12 +448,12 @@ case class Suite(
                             )
                         else
                             val sleepMs = t.toEpochMilli - now.toEpochMilli
-                            Tracer.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
+                            Slf4jTracer.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
                                 IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
                     }
             }
 
-            _ <- Tracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            _ <- Slf4jTracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
             nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
@@ -495,11 +495,11 @@ case class Suite(
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
 
             fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                Tracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
-                    |+| Tracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
+                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
             clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                Tracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
-                    |+| Tracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
+                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
 
             // Weaver stub — emits leader_started for tracing
             blockWeaver <- system.actorOf(
@@ -544,7 +544,7 @@ case class Suite(
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
             // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-            // need a handle. `given IOLocal[Tracer]` is already in scope above.
+            // need a handle. `given IOLocal[Slf4jTracer]` is already in scope above.
             persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
             persistence <- {
                 given CardanoNetwork.Section = nodeConfig

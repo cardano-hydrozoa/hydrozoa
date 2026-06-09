@@ -13,7 +13,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
@@ -48,11 +48,11 @@ case class EvacuationActor(
     candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
     cardanoBackend: CardanoBackend[IO],
     fallbackTxHash: TransactionHash,
-    tracerLocal: IOLocal[Tracer],
+    tracerLocal: IOLocal[Slf4jTracer],
 )(using config: Config)
     extends Actor[IO, Requests.Request] {
 
-    given IOLocal[Tracer] = tracerLocal
+    given IOLocal[Slf4jTracer] = tracerLocal
 
     override def preStart: IO[Unit] =
         context.self ! Requests.PreStart
@@ -60,7 +60,7 @@ case class EvacuationActor(
     private def preStartLocal: IO[Unit] =
         for {
             _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, Evacuate)
-            _ <- Tracer.routeLocal(s"EvacuationActor.${config.ownHeadPeerNum}")
+            _ <- Slf4jTracer.routeLocal(s"EvacuationActor.${config.ownHeadPeerNum}")
         } yield ()
 
     override def receive: Receive[IO, Requests.Request] = {
@@ -118,7 +118,7 @@ case class EvacuationActor(
                     after = fallbackTxHash
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(
+                    Slf4jTracer.warn(
                       s"Backend error querying continuing txs. Will retry.\n\tError: $e"
                     )
                 )
@@ -129,7 +129,7 @@ case class EvacuationActor(
                         // Treasury not resolved, can't evacuate, return left and retry
                         case 0 =>
                             EitherT.left(
-                              Tracer.debug("Treasury not yet resolved, retrying") >>
+                              Slf4jTracer.debug("Treasury not yet resolved, retrying") >>
                                   IO.pure(Error.QueryError.NoTreasuryFound)
                             )
                         // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
@@ -200,7 +200,9 @@ case class EvacuationActor(
                     )
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error querying treasury UTxOs. Will retry.\n\tError: $e")
+                    Slf4jTracer.warn(
+                      s"Backend error querying treasury UTxOs. Will retry.\n\tError: $e"
+                    )
                 )
 
                 treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
@@ -226,12 +228,15 @@ case class EvacuationActor(
                     if toEvacuate.isEmpty
                     then
                         EitherT.left(
-                          Tracer.info(LogMessages.NoMoreEvacuations) >> IO.sleep(10.seconds) >>
+                          Slf4jTracer.info(LogMessages.NoMoreEvacuations) >> IO.sleep(10.seconds) >>
                               IO.pure(
                                 Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
                               )
                         )
-                    else EitherT.right(Tracer.info(s"${toEvacuate.size} payout obligations left"))
+                    else
+                        EitherT.right(
+                          Slf4jTracer.info(s"${toEvacuate.size} payout obligations left")
+                        )
 
                 walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress()(using
                   config
@@ -243,14 +248,14 @@ case class EvacuationActor(
                     address = walletAddress
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error querying fee UTxOs. Will retry.\n\tError: $e")
+                    Slf4jTracer.warn(s"Backend error querying fee UTxOs. Will retry.\n\tError: $e")
                 )
 
                 // Derive collateral from the fee wallet UTxOs.
                 collateralUtxo <- feeUtxos.headOption match {
                     case None =>
                         EitherT.left(
-                          Tracer.debug(
+                          Slf4jTracer.debug(
                             "No fee/collateral UTxO found at wallet address, retrying"
                           ) >>
                               IO.pure(Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
@@ -274,7 +279,7 @@ case class EvacuationActor(
                     )
 
                 _ <- EitherT.liftF(
-                  Tracer.debug(
+                  Slf4jTracer.debug(
                     "Building EvacuationTx with:" +
                         s"\n treasury value: ${treasuryUtxoAndDatum._1.treasuryOutput.value}" +
                         s"\n # evacuatees: ${toEvacuate.size}" +
@@ -296,17 +301,19 @@ case class EvacuationActor(
 
                 _ <- (for {
                     _ <- EitherT.liftF(
-                      Tracer.debug(
+                      Slf4jTracer.debug(
                         s"submitting evacTx with ${evacTx.evacuatedOutputs.size} evacuated outputs" +
                             s"\n cbor:\n\n${ByteString.fromArray(evacTx.tx.toCbor).toHex}\n\n"
                       )
                     )
                     _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))
                 } yield ()).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error submitting evacuation tx. Will retry.\n\tError: $e")
+                    Slf4jTracer.warn(
+                      s"Backend error submitting evacuation tx. Will retry.\n\tError: $e"
+                    )
                 )
 
-                _ <- EitherT.liftF(Tracer.info("Evacuation tx submitted"))
+                _ <- EitherT.liftF(Slf4jTracer.info("Evacuation tx submitted"))
             } yield ()
         }
         et.value

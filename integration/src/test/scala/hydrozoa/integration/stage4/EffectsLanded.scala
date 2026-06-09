@@ -2,7 +2,7 @@ package hydrozoa.integration.stage4
 
 import cats.effect.{IO, IOLocal}
 import cats.syntax.all.*
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import org.scalacheck.Prop
@@ -312,8 +312,8 @@ object EffectsLanded {
     /** Emit the rendered table to the tracer at INFO level so it lands in the log file
       * alongside the rest of the harness output. Single trace event keeps the table contiguous.
       */
-    def traceEffectsTable(results: List[BlockResult])(using IOLocal[Tracer]): IO[Unit] =
-        Tracer.info(renderEffectsTable(results))
+    def traceEffectsTable(results: List[BlockResult])(using IOLocal[Slf4jTracer]): IO[Unit] =
+        Slf4jTracer.info(renderEffectsTable(results))
 
     /** Build the property directly from observed stacks + backend. Vacuous (true) if the
       * observed stack list is empty — [[Stage4Suite.propStackCoverage]] catches that case, not
@@ -327,7 +327,7 @@ object EffectsLanded {
         backend: CardanoBackend[IO],
         attempts: Int = 10,
         sleep: FiniteDuration = 1.second,
-    )(using IOLocal[Tracer]): IO[Prop] = {
+    )(using IOLocal[Slf4jTracer]): IO[Prop] = {
         val exps = expectations(stacks)
         if exps.isEmpty then IO.pure(Prop.passed)
         else

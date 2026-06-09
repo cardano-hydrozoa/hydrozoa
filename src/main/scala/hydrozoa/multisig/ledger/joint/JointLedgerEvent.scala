@@ -71,7 +71,7 @@ object JointLedgerEvent:
 
     /** Wraps a [[hydrozoa.lib.logging.LogEvent]] emitted by a pure function returning `Traced[A]`
       * (e.g. `BlockHeader.nextHeader*`), so it can flow through JL's typed tracer instead of an
-      * ambient `IOLocal[Tracer]`.
+      * ambient `IOLocal[Slf4jTracer]`.
       */
     final case class HeaderLog(level: Level, msg: String, ctx: Map[String, String])
         extends JointLedgerEvent
