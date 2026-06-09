@@ -70,37 +70,42 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
     private val blockLane =
-        Lane.contiguous[BlockBrief.Next, BlockNumber](_.blockNum, BlockNumber(1), _.increment)
+        LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
+          _.blockNum,
+          BlockNumber(1),
+          _.increment
+        )
     private val stackLane =
-        Lane.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
-    private val requestLanes: Map[HeadPeerNumber, Lane[UserRequestWithId, RequestNumber]] =
+        LaneOutbound.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
+    private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[UserRequestWithId, RequestNumber](
+            h -> LaneOutbound.contiguous[UserRequestWithId, RequestNumber](
               _.requestId.requestNum,
               RequestNumber.zero,
               _.increment,
               config.peerLiaisonMaxRequestsPerBatch
             )
         }.toMap
-    private val softAckLanes: Map[HeadPeerNumber, Lane[SoftAck, SoftAckNumber]] =
+    private val softAckLanes: Map[HeadPeerNumber, LaneOutbound[SoftAck, SoftAckNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[SoftAck, SoftAckNumber](
+            h -> LaneOutbound.contiguous[SoftAck, SoftAckNumber](
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment
             )
         }.toMap
-    private val headHardAckLanes: Map[HeadPeerNumber, Lane[HardAck, HardAckNumber]] =
+    private val headHardAckLanes: Map[HeadPeerNumber, LaneOutbound[HardAck, HardAckNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[HardAck, HardAckNumber](
+            h -> LaneOutbound.contiguous[HardAck, HardAckNumber](
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment
             )
         }.toMap
-    private val coilHardAckLanes: Map[HeadPeerNumber, Lane[HardAckWithId, HubHardAckNumber]] =
+    private val coilHardAckLanes
+        : Map[HeadPeerNumber, LaneOutbound[HardAckWithId, HubHardAckNumber]] =
         hubNums.map { h =>
-            h -> Lane.contiguous[HardAckWithId, HubHardAckNumber](
+            h -> LaneOutbound.contiguous[HardAckWithId, HubHardAckNumber](
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment
@@ -109,7 +114,11 @@ abstract class PeerLiaisonHubToCoil(
 
     // ---- Inbound lane (the coil peer's own hard-ack we pull) ------------------------------------
     private val ownHardAckLane =
-        Lane.contiguous[HardAck, HardAckNumber](_.hardAckNum, HardAckNumber.zero, _.increment)
+        LaneInbound.contiguous[HardAck, HardAckNumber](
+          _.hardAckNum,
+          HardAckNumber.zero,
+          _.increment
+        )
 
     // ---- Connections ----------------------------------------------------------------------------
     private val connections = Ref.unsafe[IO, Option[PeerLiaisonHubToCoil.Connections]](None)
@@ -140,11 +149,11 @@ abstract class PeerLiaisonHubToCoil(
             }
         } yield {
             val all = blockR :: stackR :: (reqR ::: saR ::: hhR ::: chR).map(_._2)
-            if all.contains(Lane.OutOfBounds) then Server.Served.OutOfBounds
+            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
             else {
-                def items[T](r: Lane.Reply[T]): List[T] = r match
-                    case Lane.Items(xs)   => xs
-                    case Lane.OutOfBounds => Nil
+                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                    case LaneOutbound.Items(xs)   => xs
+                    case LaneOutbound.OutOfBounds => Nil
                 val block = items(blockR).headOption
                 val stack = items(stackR).headOption
                 val requests = reqR.map { case (h, r) => h -> items(r) }.toMap

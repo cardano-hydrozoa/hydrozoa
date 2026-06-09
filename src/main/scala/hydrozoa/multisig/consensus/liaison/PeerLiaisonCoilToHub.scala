@@ -72,37 +72,41 @@ abstract class PeerLiaisonCoilToHub(
     // every item in order; block 0 / stack 0 are out-of-band bootstrap so the first is 1). The
     // per-author / per-hub families are one contiguous Lane each.
     private val blockLane =
-        Lane.contiguous[BlockBrief.Next, BlockNumber](_.blockNum, BlockNumber(1), _.increment)
+        LaneInbound.contiguous[BlockBrief.Next, BlockNumber](
+          _.blockNum,
+          BlockNumber(1),
+          _.increment
+        )
     private val stackLane =
-        Lane.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
-    private val requestLanes: Map[HeadPeerNumber, Lane[UserRequestWithId, RequestNumber]] =
+        LaneInbound.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
+    private val requestLanes: Map[HeadPeerNumber, LaneInbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[UserRequestWithId, RequestNumber](
+            h -> LaneInbound.contiguous[UserRequestWithId, RequestNumber](
               _.requestId.requestNum,
               RequestNumber.zero,
-              _.increment,
-              config.peerLiaisonMaxRequestsPerBatch
+              _.increment
             )
         }.toMap
-    private val softAckLanes: Map[HeadPeerNumber, Lane[SoftAck, SoftAckNumber]] =
+    private val softAckLanes: Map[HeadPeerNumber, LaneInbound[SoftAck, SoftAckNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[SoftAck, SoftAckNumber](
+            h -> LaneInbound.contiguous[SoftAck, SoftAckNumber](
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment
             )
         }.toMap
-    private val headHardAckLanes: Map[HeadPeerNumber, Lane[HardAck, HardAckNumber]] =
+    private val headHardAckLanes: Map[HeadPeerNumber, LaneInbound[HardAck, HardAckNumber]] =
         headPeerNums.map { h =>
-            h -> Lane.contiguous[HardAck, HardAckNumber](
+            h -> LaneInbound.contiguous[HardAck, HardAckNumber](
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment
             )
         }.toMap
-    private val coilHardAckLanes: Map[HeadPeerNumber, Lane[HardAckWithId, HubHardAckNumber]] =
+    private val coilHardAckLanes
+        : Map[HeadPeerNumber, LaneInbound[HardAckWithId, HubHardAckNumber]] =
         hubNums.map { h =>
-            h -> Lane.contiguous[HardAckWithId, HubHardAckNumber](
+            h -> LaneInbound.contiguous[HardAckWithId, HubHardAckNumber](
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment
@@ -111,7 +115,11 @@ abstract class PeerLiaisonCoilToHub(
 
     // Outbound: this coil peer's own hard-ack, served to the hub.
     private val ownHardAckLane =
-        Lane.contiguous[HardAck, HardAckNumber](_.hardAckNum, HardAckNumber.zero, _.increment)
+        LaneOutbound.contiguous[HardAck, HardAckNumber](
+          _.hardAckNum,
+          HardAckNumber.zero,
+          _.increment
+        )
 
     // ---- Connections ----------------------------------------------------------------------------
     private val connections =
@@ -151,7 +159,7 @@ abstract class PeerLiaisonCoilToHub(
 
     /** Verify every lane against its cursor; iff all match, advance them all (atomic). */
     private def accept(pop: Population.New): IO[Either[String, Unit]] = {
-        def check[T, N](lane: Lane[T, N], items: List[T]): IO[Either[String, IO[Unit]]] =
+        def check[T, N](lane: LaneInbound[T, N], items: List[T]): IO[Either[String, IO[Unit]]] =
             lane.cursor.map(c =>
                 lane.verify(items, c) match {
                     case Right(next) => Right(lane.advanceTo(next))
@@ -209,9 +217,9 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Serve half (own hard-ack) --------------------------------------------------------------
     private def serve(get: OwnHardAck.Get): IO[Server.Served[OwnHardAck.New]] =
         ownHardAckLane.reply(get.hardAck).map {
-            case Lane.OutOfBounds => Server.Served.OutOfBounds
-            case Lane.Items(Nil)  => Server.Served.Empty
-            case Lane.Items(items) =>
+            case LaneOutbound.OutOfBounds => Server.Served.OutOfBounds
+            case LaneOutbound.Items(Nil)  => Server.Served.Empty
+            case LaneOutbound.Items(items) =>
                 Server.Served.Reply(OwnHardAck.New(get.batchNum, items.headOption))
         }
 

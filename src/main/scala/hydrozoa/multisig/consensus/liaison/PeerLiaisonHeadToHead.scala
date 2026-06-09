@@ -22,10 +22,10 @@ import org.typelevel.log4cats.Logger
 /** A head peer's mesh liaison toward one other head peer (§8 of `design/coil-network.md`).
   *
   * Symmetric and full-duplex: each side serves its **own** production and pulls the remote head
-  * peer's. Six bidirectional [[Lane]]s — block + stack briefs are **sparse** (only the round-robin
-  * leader emits, so the successor is the leader schedule), the request / soft-ack / head-hard-ack /
-  * `HubHardAck` lanes are contiguous. Built by composition (a [[Puller]] over the inbound side of
-  * the lanes + a [[Server]] over their outboxes), with no fat base.
+  * peer's. Six bidirectional [[LaneBidirectional]] lanes — block + stack briefs are **sparse**
+  * (only the round-robin leader emits, so the successor is the leader schedule), the request /
+  * soft-ack / head-hard-ack / `HubHardAck` lanes are contiguous. Built by composition (a [[Puller]]
+  * over the inbound side of the lanes + a [[Server]] over their outboxes), with no fat base.
   */
 abstract class PeerLiaisonHeadToHead(
     config: PeerLiaisonHeadToHead.Config,
@@ -56,30 +56,38 @@ abstract class PeerLiaisonHeadToHead(
         Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
-    private val blockLane = Lane.sparse[BlockBrief.Next, BlockNumber](
+    private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       extract = _.blockNum,
       zero = BlockNumber.zero,
       ownNext = config.nextOwnLeaderBlock,
       remoteNext = after => Some(remoteHead.nextLeaderBlock(after))
     )
-    private val stackLane = Lane.sparse[StackBrief, StackNumber](
+    private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       extract = _.stackNum,
       zero = StackNumber.zero,
       ownNext = config.nextOwnSlowLeaderStack,
       remoteNext = after => Some(remoteHead.nextSlowLeaderStack(after))
     )
-    private val requestLane = Lane.contiguous[UserRequestWithId, RequestNumber](
+    private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
       RequestNumber.zero,
       _.increment,
       config.peerLiaisonMaxRequestsPerBatch
     )
     private val softAckLane =
-        Lane.contiguous[SoftAck, SoftAckNumber](_.ackNum, SoftAckNumber.zero.increment, _.increment)
+        LaneBidirectional.contiguous[SoftAck, SoftAckNumber](
+          _.ackNum,
+          SoftAckNumber.zero.increment,
+          _.increment
+        )
     private val hardAckLane =
-        Lane.contiguous[HardAck, HardAckNumber](_.hardAckNum, HardAckNumber.zero, _.increment)
+        LaneBidirectional.contiguous[HardAck, HardAckNumber](
+          _.hardAckNum,
+          HardAckNumber.zero,
+          _.increment
+        )
     private val hubHardAckLane =
-        Lane.contiguous[HardAckWithId, HubHardAckNumber](
+        LaneBidirectional.contiguous[HardAckWithId, HubHardAckNumber](
           _.seqNum,
           HubHardAckNumber.zero,
           _.increment
@@ -122,7 +130,10 @@ abstract class PeerLiaisonHeadToHead(
         } yield Mesh.Get(batchNum, b, s, r, sa, hh, hub)
 
     private def accept(m: Mesh.New): IO[Either[String, Unit]] = {
-        def check[T, N](lane: Lane[T, N], items: List[T]): IO[Either[String, IO[Unit]]] =
+        def check[T, N](
+            lane: LaneBidirectional[T, N],
+            items: List[T]
+        ): IO[Either[String, IO[Unit]]] =
             lane.cursor.map(c =>
                 lane.verify(items, c) match {
                     case Right(next) => Right(lane.advanceTo(next))
@@ -188,11 +199,11 @@ abstract class PeerLiaisonHeadToHead(
             hubR <- hubHardAckLane.reply(get.hubHardAck)
         } yield {
             val all = List(blockR, stackR, reqR, saR, hhR, hubR)
-            if all.contains(Lane.OutOfBounds) then Server.Served.OutOfBounds
+            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
             else {
-                def items[T](r: Lane.Reply[T]): List[T] = r match
-                    case Lane.Items(xs)   => xs
-                    case Lane.OutOfBounds => Nil
+                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                    case LaneOutbound.Items(xs)   => xs
+                    case LaneOutbound.OutOfBounds => Nil
                 if all.forall(items(_).isEmpty) then Server.Served.Empty
                 else
                     Server.Served.Reply(

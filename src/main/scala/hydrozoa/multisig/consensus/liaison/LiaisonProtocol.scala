@@ -29,7 +29,7 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   * A liaison receives, besides the control ticks: the **batch messages** of its two link halves
   * (one pull, one serve), and the **artifacts** local actors hand it to append to an outbox lane.
   * The appended artifact carries its own author, so the actor routes it to the right per-author
-  * [[Lane]] by inspecting the payload — no separate author argument.
+  * lane by inspecting the payload — no separate author argument.
   */
 object LiaisonProtocol {
 
