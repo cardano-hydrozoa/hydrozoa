@@ -702,19 +702,19 @@ final case class JointLedger(
             )
             // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
-            // A hub sends EVERY brief (own-led and follower-reproduced) to CoilRelay, in block order,
-            // so its coil peers follow the whole contiguous block spine (§8.3). This is the spine
-            // source: the mesh liaisons forward satellites only, never briefs, so the spine is not
-            // double-fed. No-op off a hub.
-            _ <- conn.coilRelay.traverse_(_ ! brief)
             // Only a head peer emits on the fast cycle — it broadcasts the brief when it leads the
             // block, and authors a soft-ack for every block. A coil peer never leads and authors
             // none.
             _ <- config.ownPeerId match {
                 case PeerId.Head(peerNum) =>
                     for {
+                        // Broadcast our OWN-led brief to the head mesh and (on a hub) to CoilRelay,
+                        // so coil peers get the blocks WE lead. Blocks led by OTHER heads reach
+                        // CoilRelay through the mesh liaisons instead, so each block is relayed
+                        // exactly once and arrives in spine order (see CoilRelay for the proof).
                         _ <- IO.whenA(config.canLeadFast(brief.blockNum))(
-                          (conn.headPeerLiaisons ! brief).parallel
+                          (conn.headPeerLiaisons ! brief).parallel >>
+                              conn.coilRelay.traverse_(_ ! brief)
                         )
                         softAck = SoftAck(
                           peerNum = peerNum,

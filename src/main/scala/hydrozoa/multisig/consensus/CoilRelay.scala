@@ -13,16 +13,52 @@ import hydrozoa.multisig.ledger.stack.StackBrief
 /** The hub-side fan-out that distributes the whole population stream down to a hub's coil peers
   * (§8.3 of `design/coil-network.md`).
   *
-  * **Stateless.** It holds no buffer and no cursors — it just forwards each artifact it is handed
-  * to **every** [[PeerLiaisonHubToCoil]] the hub runs, each of which appends it to its own per-lane
-  * outbox (D-coil-5: per-liaison outboxes). It exists so the core consensus actors are not relay
-  * taps: an actor's job ends when its cell saturates, but a relay must keep forwarding, so relaying
-  * lives here instead. It is fed by:
-  *   - the hub's own producers (`JointLedger` / `StackComposer` / `RequestSequencer` /
-  *     `FastConsensusActor` / `SlowConsensusActor` / `CoilAckSequencer`), each sending only its
-  *     **own** output — one extra recipient, no received-traffic relay; and
-  *   - the hub's mesh [[PeerLiaisonHeadToHead]]s, forwarding **other** head peers' inbound
-  *     artifacts.
+  * '''Stateless — no buffer, no cursors, no reordering.''' It forwards each artifact it is handed
+  * to '''every''' [[PeerLiaisonHubToCoil]] the hub runs; each liaison appends it to its own
+  * per-lane outbox (D-coil-5: per-liaison outboxes). It exists so the core consensus actors are not
+  * relay taps: an actor's job ends when its cell saturates, but a relay must keep forwarding, so
+  * relaying lives here.
+  *
+  * ==Who feeds it==
+  *
+  * Every population artifact reaches this relay '''exactly once''', from whichever side owns it:
+  *   - '''Own production''' — the hub's own producers (`JointLedger` / `StackComposer` /
+  *     `FastConsensusActor` / `SlowConsensusActor` / `RequestSequencer` / `CoilAckSequencer`) each
+  *     send only their '''own''' output (own-led briefs, own acks/requests). Not a received-traffic
+  *     relay — just one extra broadcast target alongside the head mesh.
+  *   - '''Other heads' output''' — the hub's mesh [[PeerLiaisonHeadToHead]]s forward what they
+  *     receive from other head peers, including the block/stack briefs those heads lead.
+  *
+  * So a block/stack brief is relayed by the mesh liaison of the head that led it, or by the hub's
+  * own JL/SC if the hub led it — never both.
+  *
+  * ==Why no reordering is needed==
+  *
+  * The block/stack lanes on each [[PeerLiaisonHubToCoil]] are '''contiguous''', so they must be fed
+  * in ascending spine order. They are — not because this relay sorts anything, but because of an
+  * end-to-end consensus invariant. The hub is a head peer, and a leader cannot produce artifact N+1
+  * until artifact N is confirmed by '''all''' head peers:
+  *   - Blocks: a leader seals block K only on `Block.SoftConfirmed(K-1)` ([[BlockWeaver]]
+  *     `Leader.AwaitingConfirmation`), and soft-confirmation requires every head peer's ack
+  *     ([[FastConsensusActor]]: a cell saturates iff `acks.keySet == headPeerVKeys`).
+  *   - Stacks: a leader closes stack N+1 only once stack N is hard-confirmed ([[StackComposer]]
+  *     `tryProgress` gates on `previousStackHardConfirmed`), and hard-confirmation requires every
+  *     head peer ([[SlowConsensusActor]]: `AllOf(head)` ∧ a coil quorum).
+  *
+  * Since the hub is in every all-head quorum, it must have received (and acked) brief N before
+  * brief N+1 can be produced anywhere — so it always holds brief N before brief N+1 exists, and
+  * relays them in that order. This relay's FIFO mailbox and the contiguous outbox preserve it. The
+  * contiguous `LaneOutbound.append` is the backstop: if the invariant were ever violated it raises
+  * `AppendOutOfOrder` (a loud crash, never silent corruption) rather than appending out of order.
+  *
+  * '''Three invariants keep this true — don't break them:'''
+  *   1. Confirmation is '''all-head''' (soft: `acks.keySet == headPeerVKeys`; hard: `AllOf(head)`).
+  *      A `< nHead` threshold would let a hub be skipped and receive N+1 before N — then a reorder
+  *      buffer here would be required.
+  *   2. A leader gates the next artifact on the prior's confirmation (no pipelining past one).
+  *   3. Every brief fed here is one the hub itself received or produced (mesh liaison for
+  *      remote-led, own JL/SC for own-led) — don't add a feeder that forwards a brief the hub
+  *      hasn't itself seen.
   */
 abstract class CoilRelay(
     pendingConnections: MultisigRegimeManager.PendingConnections | CoilRelay.Connections

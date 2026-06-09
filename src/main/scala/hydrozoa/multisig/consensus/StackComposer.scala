@@ -126,11 +126,9 @@ final case class StackComposer(
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
         _ <- Tracer.debug(s"StackBrief received for stack ${brief.stackNum}")
         _ <- state.update(_.withInboundLeaderBrief(brief))
-        // A hub relays every received stack brief (other head peers' partitions) to CoilRelay, so its
-        // coil peers follow the whole stack spine — followers don't re-produce stack briefs (unlike
-        // blocks), so received ones are relayed here. No-op off a hub.
-        conn <- getConnections
-        _ <- conn.coilRelay.traverse_(_ ! brief)
+        // Stack briefs led by OTHER heads are relayed to CoilRelay by the hub's mesh liaisons, not
+        // here — so this actor relays only its OWN-led briefs (in tryCloseAsLeader). That keeps each
+        // brief relayed exactly once, in spine order.
         _ <- tryProgress
     } yield ()
 
@@ -177,7 +175,9 @@ final case class StackComposer(
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.headPeerLiaisons ! brief).parallel
-                    // A hub also relays its own stack brief to CoilRelay (§8.3). No-op off a hub.
+                    // A hub relays its OWN-led stack brief to CoilRelay (§8.3); briefs led by other
+                    // heads are relayed by the hub's mesh liaisons, so each is relayed once, in spine
+                    // order. No-op off a hub.
                     _ <- conn.coilRelay.traverse_(_ ! brief)
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2

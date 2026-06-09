@@ -165,13 +165,16 @@ abstract class PeerLiaisonHeadToHead(
                 _ <- m.softAck.traverse_(conn.consensusActor ! _)
                 _ <- m.headHardAck.traverse_(conn.slowConsensusActor ! _)
                 _ <- m.hubHardAck.traverse_(hc => conn.slowConsensusActor ! hc.ack)
-                // On a hub, forward this remote head peer's SATELLITES to CoilRelay so its coil peers
-                // hear the whole population. Briefs (the contiguous block/stack spines) are NOT
-                // forwarded — the hub's own JointLedger / StackComposer re-produce every block/stack
-                // and feed those to CoilRelay directly, so forwarding mesh briefs too would
-                // double-feed the spine.
+                // On a hub, forward this remote head peer's whole production to CoilRelay so its
+                // coil peers hear the full population — including the block/stack briefs this remote
+                // leads. The mesh liaisons relay remote-led briefs; the hub's own JointLedger /
+                // StackComposer relay only their own-led briefs (see those sites), so every brief
+                // reaches CoilRelay exactly once. They arrive in spine order — CoilRelay needs no
+                // reordering; see its doc for the proof.
                 _ <- conn.coilRelay.traverse_ { cr =>
-                    m.requests.traverse_(cr ! _) >>
+                    m.block.traverse_(cr ! _) >>
+                        m.stack.traverse_(cr ! _) >>
+                        m.requests.traverse_(cr ! _) >>
                         m.softAck.traverse_(cr ! _) >>
                         m.headHardAck.traverse_(cr ! _) >>
                         m.hubHardAck.traverse_(cr ! _)
