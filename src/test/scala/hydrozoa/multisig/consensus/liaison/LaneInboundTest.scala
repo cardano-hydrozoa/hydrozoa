@@ -18,7 +18,7 @@ class LaneInboundTest extends AnyFunSuite {
         LaneInbound.sparse[Int, Int](
           numberOf = identity,
           zero = 0,
-          remoteNext = after => Some(if after % 2 == 1 then after + 2 else after + 1)
+          next = after => Some(if after % 2 == 1 then after + 2 else after + 1)
         )
 
     test("verify matches the cursor and reports the next; mismatch is reported") {

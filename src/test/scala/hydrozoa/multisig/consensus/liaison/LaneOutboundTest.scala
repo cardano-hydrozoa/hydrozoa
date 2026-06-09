@@ -24,7 +24,7 @@ class LaneOutboundTest extends AnyFunSuite {
         LaneOutbound.sparse[Int, Int](
           numberOf = identity,
           zero = 0,
-          ownNext = after => Some(if after % 2 == 0 then after + 2 else after + 1)
+          next = after => Some(if after % 2 == 0 then after + 2 else after + 1)
         )
 
     test("contiguous append enforces gap-free order from the first number") {

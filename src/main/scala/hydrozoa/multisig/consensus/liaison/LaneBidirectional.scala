@@ -46,17 +46,17 @@ object LaneBidirectional {
           LaneInbound.contiguous(numberOf, first, incr)
         )
 
-    /** A sparse bidirectional lane: outbound follows this side's leader schedule (`ownNext`),
-      * inbound the remote's (`remoteNext`). `zero` is "before the first" for both.
+    /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
+      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
-        ownNext: N => Option[N],
-        remoteNext: N => Option[N]
+        outboundNext: N => Option[N],
+        inboundNext: N => Option[N]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(numberOf, zero, ownNext),
-          LaneInbound.sparse(numberOf, zero, remoteNext)
+          LaneOutbound.sparse(numberOf, zero, outboundNext),
+          LaneInbound.sparse(numberOf, zero, inboundNext)
         )
 }

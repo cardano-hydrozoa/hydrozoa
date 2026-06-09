@@ -24,7 +24,7 @@ import cats.effect.{IO, Ref}
   *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   * @param numberOf
   *   the number of an item.
-  * @param nextInbound
+  * @param next
   *   the successor of the inbound cursor after receiving a given number (`None` = no successor; the
   *   cursor then stays put — a sparse lane with no further remote-led item).
   * @param initialCursor
@@ -32,7 +32,7 @@ import cats.effect.{IO, Ref}
   */
 final class LaneInbound[T, N] private (
     numberOf: T => N,
-    nextInbound: N => Option[N],
+    next: N => Option[N],
     initialCursor: N
 ) {
     import LaneInbound.*
@@ -43,10 +43,10 @@ final class LaneInbound[T, N] private (
     def cursor: IO[N] = inboundCursor.get
 
     /** Verify a received inbound slice against the current cursor — **pure**, no mutation. The
-      * first item must equal the cursor; any following items must be consecutive (each the
-      * [[nextInbound]] of its predecessor). On success returns the cursor to advance to; on failure
-      * the first offending `(expected, received)` pair. An empty slice trivially succeeds and
-      * leaves the cursor unchanged.
+      * first item must equal the cursor; any following items must be consecutive (each the [[next]]
+      * of its predecessor). On success returns the cursor to advance to; on failure the first
+      * offending `(expected, received)` pair. An empty slice trivially succeeds and leaves the
+      * cursor unchanged.
       */
     def verify(items: List[T], current: N): Either[Mismatch[N], N] =
         items match {
@@ -54,12 +54,12 @@ final class LaneInbound[T, N] private (
             case head :: _ if numberOf(head) != current =>
                 Left(Mismatch(current, numberOf(head)))
             case _ =>
-                // Walk the slice: each successor must match nextInbound of its predecessor.
+                // Walk the slice: each successor must match next of its predecessor.
                 val numbers = items.map(numberOf)
                 val consecutive = numbers.sliding(2).collectFirst {
-                    case Seq(a, b) if !nextInbound(a).contains(b) => Mismatch(a, b)
+                    case Seq(a, b) if !next(a).contains(b) => Mismatch(a, b)
                 }
-                consecutive.toLeft(nextInbound(numbers.last).getOrElse(current))
+                consecutive.toLeft(next(numbers.last).getOrElse(current))
         }
 
     /** Commit a verified cursor. Call only with the `Right` value from [[verify]]. */
@@ -81,22 +81,22 @@ object LaneInbound {
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
           numberOf = numberOf,
-          nextInbound = n => Some(incr(n)),
+          next = n => Some(incr(n)),
           initialCursor = first
         )
 
     /** A sparse inbound lane: only the round-robin leader emits, so the successor is the remote's
-      * leader schedule. `remoteNext(after)` is the remote's next-led number after `after`; `zero`
-      * is "before the first". `initialCursor = remoteNext(zero)`.
+      * leader schedule. `next(after)` is the remote's next-led number after `after`; `zero` is
+      * "before the first". `initialCursor = next(zero)`.
       */
     def sparse[T, N](
         numberOf: T => N,
         zero: N,
-        remoteNext: N => Option[N]
+        next: N => Option[N]
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
           numberOf = numberOf,
-          nextInbound = remoteNext,
-          initialCursor = remoteNext(zero).getOrElse(zero)
+          next = next,
+          initialCursor = next(zero).getOrElse(zero)
         )
 }

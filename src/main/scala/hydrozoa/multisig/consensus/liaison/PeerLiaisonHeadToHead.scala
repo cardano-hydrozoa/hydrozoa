@@ -59,14 +59,14 @@ abstract class PeerLiaisonHeadToHead(
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
-      ownNext = config.nextOwnLeaderBlock,
-      remoteNext = after => Some(remoteHead.nextLeaderBlock(after))
+      outboundNext = config.nextOwnLeaderBlock,
+      inboundNext = after => Some(remoteHead.nextLeaderBlock(after))
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       numberOf = _.stackNum,
       zero = StackNumber.zero,
-      ownNext = config.nextOwnSlowLeaderStack,
-      remoteNext = after => Some(remoteHead.nextSlowLeaderStack(after))
+      outboundNext = config.nextOwnSlowLeaderStack,
+      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after))
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,

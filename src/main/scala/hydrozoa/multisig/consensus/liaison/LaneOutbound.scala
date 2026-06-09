@@ -26,7 +26,7 @@ import scala.collection.immutable.Queue
   *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   * @param numberOf
   *   the number of an item.
-  * @param nextOutbound
+  * @param next
   *   the next number this side may append, given the last appended (`None` = nothing yet). A `None`
   *   result means no further item is legal on this lane. Drives the append gap-check and the
   *   out-of-bounds guard.
@@ -36,7 +36,7 @@ import scala.collection.immutable.Queue
   */
 final class LaneOutbound[T, N] private (
     numberOf: T => N,
-    nextOutbound: Option[N] => Option[N],
+    next: Option[N] => Option[N],
     maxPerReply: Int
 )(using ord: Ordering[N]) {
     import LaneOutbound.*
@@ -46,12 +46,12 @@ final class LaneOutbound[T, N] private (
     private val outbox = Ref.unsafe[IO, Queue[T]](Queue.empty)
 
     /** Append an item we produce to the outbox, enforcing gap-free monotonic numbering. Raises if
-      * the item's number is not the expected next ([[nextOutbound]] of the last appended).
+      * the item's number is not the expected next ([[next]] of the last appended).
       */
     def append(item: T): IO[Unit] =
         lastAppended.get.flatMap { last =>
             val n = numberOf(item)
-            val expected = nextOutbound(last)
+            val expected = next(last)
             IO.raiseUnless(expected.contains(n))(
               AppendOutOfOrder(last.toString, n.toString, expected.toString)
             ) >> lastAppended.set(Some(n)) >> outbox.update(_ :+ item)
@@ -65,7 +65,7 @@ final class LaneOutbound[T, N] private (
     def reply(remoteCursor: N): IO[Reply[T]] =
         lastAppended.get.flatMap { last =>
             // The remote may never legitimately ask past our next-producible number.
-            val bound = nextOutbound(last)
+            val bound = next(last)
             if bound.exists(_ < remoteCursor) then IO.pure(OutOfBounds)
             else
                 outbox.modify { q =>
@@ -103,22 +103,22 @@ object LaneOutbound {
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
-          nextOutbound = _.fold(Some(first))(last => Some(incr(last))),
+          next = _.fold(Some(first))(last => Some(incr(last))),
           maxPerReply = maxPerReply
         )
 
     /** A sparse outbound lane: only the round-robin leader emits, so the successor is this side's
-      * leader schedule. `ownNext(after)` is this side's next-led number after `after`; `zero` is
+      * leader schedule. `next(after)` is this side's next-led number after `after`; `zero` is
       * "before the first".
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
-        ownNext: N => Option[N]
+        next: N => Option[N]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
-          nextOutbound = last => ownNext(last.getOrElse(zero)),
+          next = last => next(last.getOrElse(zero)),
           maxPerReply = 1
         )
 }
