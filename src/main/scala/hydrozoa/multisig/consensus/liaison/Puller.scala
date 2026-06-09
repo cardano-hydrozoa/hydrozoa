@@ -9,8 +9,8 @@ import org.typelevel.log4cats.Logger
   * and advances.
   *
   * Composition, not inheritance: a liaison actor *has* a `Puller` (and a [[Server]]), it does not
-  * *extend* them. The per-lane heavy lifting lives in the lane primitives; the per-shape batch
-  * typing lives in the actor's glue closures; this engine owns only the pull-side state machine.
+  * *extend* them. The lane primitives do the per-lane heavy lifting; the actor's glue closures fix
+  * the batch types for its link; this engine owns only the pull-side state machine.
   *
   * @param initialGet
   *   the first request (batch 0, initial cursors).

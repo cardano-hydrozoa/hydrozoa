@@ -15,7 +15,7 @@ actors. **That design is being replaced** by the one this doc now specs:
   core consensus actors are no longer relay taps (they only ever send their *own*
   production).
 - **Composition, not inheritance, for the liaisons** — three independent actors
-  over a shared per-lane protocol, with separate per-shape batch message types.
+  over a shared per-lane protocol, each with its own batch messages.
 
 So the code currently reflects the multiplexed Pc4; this doc is the target.
 Open items unchanged: coil persistence / crash-recovery (lands on
@@ -658,15 +658,15 @@ single-hub liaison spine + `CoilAckSequencer` (Pc3) are built on `feature/coil`.
 **Relay/lane rework done (Pc4).** The multiplexed `relayedMsg` relay is gone. The
 coil link is the §8 architecture: separate per-author lanes (no multiplexing), the
 stateless `CoilRelay` fan-out actor (core actors send only their own production),
-and three composition liaisons (`PeerLiaison{HeadToHead, HubToCoil, CoilToHub}`)
-with per-shape batch types. The hub↔coil WebSocket transport is built (§8.10).
+and three composition liaisons (`PeerLiaison{HeadToHead, HubToCoil, CoilToHub}`),
+each with its own batch messages. The hub↔coil WebSocket transport is built (§8.10).
 
 | Step | Deliverable |
 |---|---|
 | Pc1 — **DONE** | `PeerId` tagged sum + `CoilPeerNumber` + one-bit wire tag through `HardAckId` / verifier / aggregator; threshold `HeadMultisigScript` with the mandatory-head / fixed-count-coil signer split (D-coil-1) |
 | Pc2 — **DONE** | `CoilMultisigRegimeManager` + `OwnCoilPeerPrivate` identity seam (reuse `HeadConfig`); role-gated actor wiring; fixed-count aggregator; `headMultisigScript` moved to `Bootstrap.Section`; `CardanoLiaison` + `RuleBasedRegimeManager` shared (D-coil-2, D-coil-6) |
 | Pc3 — **DONE** (spine) | The single-hub liaison spine + `CoilAckSequencer` / `HubHardAckLane`; 1h/1c stage4 reaches stack hard-confirmation at `coilQuorum = 1`. **Carve-out open:** the app-level coil bootstrap entry point (`Main` dispatch + config loader) |
-| Pc4 — **DONE** | §8 relay/lane rework: `CoilRelay` fan-out + separate per-author lanes (no `relayedMsg`); three composition liaisons with per-shape `Mesh`/`Population`/`OwnHardAck` batches; reshaped `Connections` (contravariant `ActorRef` lets each producer broadcast its own artifact); hub↔coil WS transport (§8.10) |
+| Pc4 — **DONE** | §8 relay/lane rework: `CoilRelay` fan-out + separate per-author lanes (no `relayedMsg`); three composition liaisons, each with its own `Mesh`/`Population`/`OwnHardAck` batches; reshaped `Connections` (contravariant `ActorRef` lets each producer broadcast its own artifact); hub↔coil WS transport (§8.10) |
 | Pc5 | Stage-4 multi-peer model-based test with coil follower(s). **Partial:** Direct + WS 2h1c coil runs exist as opt-in props (coil follows + co-signs), but are not in the green set — blocked on harness settling, not correctness |
 | Pc6 | Skip-stack policy plumbing (D-coil-4) |
 | Pc7 | Coil peer submits happy-path + fallback alongside head (R8/R9) verified |
@@ -679,9 +679,11 @@ peer (spawning `DisputeActor` + `EvacuationActor`) is a **separate task**.
 
 The liaison layer lives in `consensus.liaison`, by **composition** (no base class):
 
-- **Lane primitives** — `Lane[T, N]`, the per-lane next-expected unit (append /
-  reply / verify / advanceTo; contiguous + sparse constructors); `BatchNumber`; and
-  the per-shape batch types `BatchMessages.{Mesh, Population, OwnHardAck}.{Get, New}`.
+- **Lane primitives** — `LaneOutbound` / `LaneInbound`, the next-expected lane split
+  by direction (append / reply on the outbound, cursor / verify / advanceTo on the
+  inbound; contiguous + sparse constructors), and `LaneBidirectional` pairing the two
+  for the symmetric mesh; `BatchNumber`; and the batch messages
+  `BatchMessages.{Mesh, Population, OwnHardAck}.{Get, New}`, one set per link.
 - **Composition engines** — `Puller` (pull half) + `Server` (serve half, with the
   `Served` outcome in its companion). The pull/serve split covers the asymmetric
   hub↔coil link, where each half carries a different lane set.
