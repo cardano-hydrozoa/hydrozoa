@@ -2,24 +2,25 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.IO
 
-/** A full-duplex lane — a [[LaneOutbound]] (our production) plus a [[LaneInbound]] (the remote's),
-  * for the **same** lane number space. Only the symmetric head-peer mesh
-  * ([[PeerLiaisonHeadToHead]]) needs both halves of a lane; the asymmetric hub↔coil links use a
-  * bare [[LaneOutbound]] or [[LaneInbound]] per lane, so neither carries a dead half.
+/** A full-duplex lane — a [[LaneOutbound]] (our production) paired with a [[LaneInbound]] (the
+  * remote's), over the **same** lane number space. Only the symmetric head-peer mesh
+  * ([[PeerLiaisonHeadToHead]]) produces *and* receives on a given lane; the asymmetric hub↔coil
+  * links use a standalone [[LaneOutbound]] or [[LaneInbound]] per lane, so no lane carries a dead
+  * direction.
   *
-  * The two halves hold independent state (our outbox + high-water vs the remote's cursor); this is
-  * just the pairing, delegating each call to the relevant half.
+  * The two lanes hold independent state (our outbox + high-water vs the remote's cursor); this is
+  * just the pairing, delegating each call to the relevant one.
   */
 final class LaneBidirectional[T, N] private (
     out: LaneOutbound[T, N],
     in: LaneInbound[T, N]
 ) {
-    // ---- Outbound half ----
+    // ---- Outbound ----
     def append(item: T): IO[Unit] = out.append(item)
     def reply(remoteCursor: N): IO[LaneOutbound.Reply[T]] = out.reply(remoteCursor)
     def outboxIsEmpty: IO[Boolean] = out.outboxIsEmpty
 
-    // ---- Inbound half ----
+    // ---- Inbound ----
     def cursor: IO[N] = in.cursor
     def verify(items: List[T], current: N): Either[LaneInbound.Mismatch[N], N] =
         in.verify(items, current)

@@ -2,9 +2,13 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
 
-/** The **inbound** half of one next-expected lane (§8 of `design/coil-network.md`): a
-  * [[inboundCursor]] naming the next number we expect from the remote. We [[verify]] a received
-  * slice against it (pure) and [[advanceTo]] its successor on accept.
+/** An **inbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only receive on.
+  * It owns an [[inboundCursor]] naming the next number we expect from the remote. We [[verify]] a
+  * received slice against it (pure) and [[advanceTo]] its successor on accept.
+  *
+  * A standalone, single-direction lane — a link that also produces on this number space pairs it
+  * with a [[LaneOutbound]] (see [[LaneBidirectional]]); a link that only receives uses it on its
+  * own.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneInbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.

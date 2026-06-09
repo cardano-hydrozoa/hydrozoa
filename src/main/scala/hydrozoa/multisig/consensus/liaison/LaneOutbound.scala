@@ -3,9 +3,14 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 import scala.collection.immutable.Queue
 
-/** The **outbound** half of one next-expected lane (§8 of `design/coil-network.md`): an [[outbox]]
-  * queue of items we produce plus the high-water number ever appended. The remote pulls with a
-  * cursor; we prune what it has already seen and hand back the head ([[reply]]).
+/** An **outbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only produce on.
+  * It owns an [[outbox]] queue of items we append plus the high-water number ever appended. The
+  * remote pulls with a cursor; we prune what it has already seen and hand back the head
+  * ([[reply]]).
+  *
+  * A standalone, single-direction lane — a link that also receives on this number space pairs it
+  * with a [[LaneInbound]] (see [[LaneBidirectional]]); a link that only produces uses it on its
+  * own.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneOutbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.
