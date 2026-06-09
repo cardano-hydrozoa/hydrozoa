@@ -48,7 +48,7 @@ private[stage4] case class PeerStack(
 /** Proxy actor wrapping CardanoLiaison. Intercepts every `Stack.HardConfirmed` the peer's
   * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence of
   * hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
-  * CardanoLiaison still drives L1 submission. Parallels [[BlockBriefObserver]] on the slow side.
+  * CardanoLiaison still drives L1 submission. Parallels the brief-capture ContraTracer on the fast side.
   */
 private[stage4] class StackObserver(
     peerNum: HeadPeerNumber,

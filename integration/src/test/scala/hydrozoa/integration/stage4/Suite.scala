@@ -285,8 +285,8 @@ case class Stage4Suite(
         ] = for {
             // Create stack-collecting observers wrapping each peer's CardanoLiaison.
             // Injected via Connections so SlowConsensusActor is unaware; captures every
-            // hard-confirmed stack the slow cycle emits (parallel to BlockBriefObserver
-            // on the fast side).
+            // hard-confirmed stack the slow cycle emits (parallel to the brief-capture
+            // ContraTracer on the fast side).
             stacksMap <- peers
                 .traverse { peerNum =>
                     Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
@@ -938,8 +938,8 @@ case class Stage4Suite(
     }
 
     /** Property: the slow cycle made progress and kept up — it hard-confirmed at least one stack
-      * and, by shutdown idle, every block the fast cycle produced (observed via
-      * [[BlockBriefObserver]]) is contained in some hard-confirmed stack (observed via
+      * and, by shutdown idle, every block the fast cycle produced (captured via the brief
+      * ContraTracer in `buildPeerStack`) is contained in some hard-confirmed stack (observed via
       * [[StackObserver]]). Catches a slow side that stalls, never closes a stack, or fails to
       * aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
       */
