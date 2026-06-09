@@ -5,14 +5,14 @@ import hydrozoa.multisig.consensus.liaison.LaneOutbound.*
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the outbound half ([[LaneOutbound]]) — append + reply. Items are plain `Int`s
-  * that are their own lane number (`extract = identity`), so the sequencing logic is exercised in
+  * that are their own lane number (`numberOf = identity`), so the sequencing logic is exercised in
   * isolation.
   */
 class LaneOutboundTest extends AnyFunSuite {
 
     private def contiguousFrom(first: Int, maxPerReply: Int = 1): LaneOutbound[Int, Int] =
         LaneOutbound.contiguous[Int, Int](
-          extract = identity,
+          numberOf = identity,
           first = first,
           incr = _ + 1,
           maxPerReply
@@ -22,7 +22,7 @@ class LaneOutboundTest extends AnyFunSuite {
     // leads the even numbers >= 2.
     private def sparseOwn: LaneOutbound[Int, Int] =
         LaneOutbound.sparse[Int, Int](
-          extract = identity,
+          numberOf = identity,
           zero = 0,
           ownNext = after => Some(if after % 2 == 0 then after + 2 else after + 1)
         )

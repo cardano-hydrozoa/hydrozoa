@@ -57,13 +57,13 @@ abstract class PeerLiaisonHeadToHead(
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
-      extract = _.blockNum,
+      numberOf = _.blockNum,
       zero = BlockNumber.zero,
       ownNext = config.nextOwnLeaderBlock,
       remoteNext = after => Some(remoteHead.nextLeaderBlock(after))
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
-      extract = _.stackNum,
+      numberOf = _.stackNum,
       zero = StackNumber.zero,
       ownNext = config.nextOwnSlowLeaderStack,
       remoteNext = after => Some(remoteHead.nextSlowLeaderStack(after))

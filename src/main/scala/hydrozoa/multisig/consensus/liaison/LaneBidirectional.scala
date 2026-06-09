@@ -29,29 +29,29 @@ final class LaneBidirectional[T, N] private (
 
 object LaneBidirectional {
 
-    /** A contiguous bidirectional lane: both halves start at `first`, successor `+1`. */
+    /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`. */
     def contiguous[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         first: N,
         incr: N => N,
         maxPerReply: Int = 1
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(extract, first, incr, maxPerReply),
-          LaneInbound.contiguous(extract, first, incr)
+          LaneOutbound.contiguous(numberOf, first, incr, maxPerReply),
+          LaneInbound.contiguous(numberOf, first, incr)
         )
 
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`ownNext`),
       * inbound the remote's (`remoteNext`). `zero` is "before the first" for both.
       */
     def sparse[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         zero: N,
         ownNext: N => Option[N],
         remoteNext: N => Option[N]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(extract, zero, ownNext),
-          LaneInbound.sparse(extract, zero, remoteNext)
+          LaneOutbound.sparse(numberOf, zero, ownNext),
+          LaneInbound.sparse(numberOf, zero, remoteNext)
         )
 }

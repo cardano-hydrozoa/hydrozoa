@@ -18,7 +18,7 @@ import cats.effect.{IO, Ref}
   *   - '''Sparse''' (block / stack briefs on the head mesh): successor is the remote's leader
   *     schedule.
   *
-  * @param extract
+  * @param numberOf
   *   the lane number of an item.
   * @param nextInbound
   *   the successor of the inbound cursor after receiving a given number (`None` = no successor; the
@@ -27,7 +27,7 @@ import cats.effect.{IO, Ref}
   *   the first number we expect inbound (the remote's first wire-eligible item).
   */
 final class LaneInbound[T, N] private (
-    extract: T => N,
+    numberOf: T => N,
     nextInbound: N => Option[N],
     initialCursor: N
 ) {
@@ -47,11 +47,11 @@ final class LaneInbound[T, N] private (
     def verify(items: List[T], current: N): Either[Mismatch[N], N] =
         items match {
             case Nil => Right(current)
-            case head :: _ if extract(head) != current =>
-                Left(Mismatch(current, extract(head)))
+            case head :: _ if numberOf(head) != current =>
+                Left(Mismatch(current, numberOf(head)))
             case _ =>
                 // Walk the slice: each successor must match nextInbound of its predecessor.
-                val numbers = items.map(extract)
+                val numbers = items.map(numberOf)
                 val consecutive = numbers.sliding(2).collectFirst {
                     case Seq(a, b) if !nextInbound(a).contains(b) => Mismatch(a, b)
                 }
@@ -71,12 +71,12 @@ object LaneInbound {
       * `+1`. `incr` supplies the `+1`.
       */
     def contiguous[T, N](
-        extract: T => N,
+        numberOf: T => N,
         first: N,
         incr: N => N
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
-          extract = extract,
+          numberOf = numberOf,
           nextInbound = n => Some(incr(n)),
           initialCursor = first
         )
@@ -86,12 +86,12 @@ object LaneInbound {
       * is "before the first". `initialCursor = remoteNext(zero)`.
       */
     def sparse[T, N](
-        extract: T => N,
+        numberOf: T => N,
         zero: N,
         remoteNext: N => Option[N]
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
-          extract = extract,
+          numberOf = numberOf,
           nextInbound = remoteNext,
           initialCursor = remoteNext(zero).getOrElse(zero)
         )

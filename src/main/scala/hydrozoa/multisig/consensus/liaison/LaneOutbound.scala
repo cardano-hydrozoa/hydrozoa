@@ -20,7 +20,7 @@ import scala.collection.immutable.Queue
   *   - '''Sparse''' (block / stack briefs on the head mesh): successor is this side's leader
   *     schedule.
   *
-  * @param extract
+  * @param numberOf
   *   the lane number of an item.
   * @param nextOutbound
   *   the next number this side may append, given the last appended (`None` = nothing yet). A `None`
@@ -31,7 +31,7 @@ import scala.collection.immutable.Queue
   *   batches).
   */
 final class LaneOutbound[T, N] private (
-    extract: T => N,
+    numberOf: T => N,
     nextOutbound: Option[N] => Option[N],
     maxPerReply: Int
 )(using ord: Ordering[N]) {
@@ -46,7 +46,7 @@ final class LaneOutbound[T, N] private (
       */
     def append(item: T): IO[Unit] =
         lastAppended.get.flatMap { last =>
-            val n = extract(item)
+            val n = numberOf(item)
             val expected = nextOutbound(last)
             IO.raiseUnless(expected.contains(n))(
               AppendOutOfOrder(last.toString, n.toString, expected.toString)
@@ -65,7 +65,7 @@ final class LaneOutbound[T, N] private (
             if bound.exists(_ < remoteCursor) then IO.pure(OutOfBounds)
             else
                 outbox.modify { q =>
-                    val pruned = q.dropWhile(item => extract(item) < remoteCursor)
+                    val pruned = q.dropWhile(item => numberOf(item) < remoteCursor)
                     (pruned, Items(pruned.take(maxPerReply).toList))
                 }
         }
@@ -92,13 +92,13 @@ object LaneOutbound {
       * requests, re-sequenced relay lanes). `incr` supplies the `+1`.
       */
     def contiguous[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         first: N,
         incr: N => N,
         maxPerReply: Int = 1
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
-          extract = extract,
+          numberOf = numberOf,
           nextOutbound = _.fold(Some(first))(last => Some(incr(last))),
           maxPerReply = maxPerReply
         )
@@ -108,12 +108,12 @@ object LaneOutbound {
       * "before the first".
       */
     def sparse[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         zero: N,
         ownNext: N => Option[N]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
-          extract = extract,
+          numberOf = numberOf,
           nextOutbound = last => ownNext(last.getOrElse(zero)),
           maxPerReply = 1
         )
