@@ -19,7 +19,8 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import org.typelevel.log4cats.Logger
 
-/** A head peer's mesh liaison toward one other head peer (§8 of `design/coil-network.md`).
+/** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
+  * [doc-ref].
   *
   * Symmetric and full-duplex: each side serves its **own** production and pulls the remote head
   * peer's. Six bidirectional [[LaneBidirectional]] lanes — block + stack briefs are **sparse**
@@ -53,7 +54,9 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaisonHeadToHead.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
+        Logging.loggerIO(
+          s"PeerLiaisonHeadToHead.${config.ownPeerLabel}->${remoteHead.peerNum.convert}"
+        )
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](

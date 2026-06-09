@@ -3,12 +3,12 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 import scala.collection.immutable.Queue
 
-/** An **outbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only produce on.
-  * It owns an [[outbox]] queue of items we append plus the high-water number ever appended; the
-  * remote pulls with its [[LaneInbound]] counterpart's cursor, we prune what it has already seen,
-  * and we hand back the head ([[reply]]). On a link that produces *and* receives on this number
-  * space it is paired with that [[LaneInbound]] (see [[LaneBidirectional]]); on a produce-only link
-  * it stands alone.
+/** An **outbound** next-expected lane (§4.2 of `design/coil-network.md`) [doc-ref]: a lane we only
+  * produce on. It owns an [[outbox]] queue of items we append plus the high-water number ever
+  * appended; the remote pulls with its [[LaneInbound]] counterpart's cursor, we prune what it has
+  * already seen, and we hand back the head ([[reply]]). On a link that produces *and* receives on
+  * this number space it is paired with that [[LaneInbound]] (see [[LaneBidirectional]]); on a
+  * produce-only link it stands alone.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneOutbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.

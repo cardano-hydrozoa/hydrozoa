@@ -19,8 +19,8 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import org.typelevel.log4cats.Logger
 
-/** A hub head peer's liaison toward one coil peer it serves (§8 of `design/coil-network.md`) — the
-  * mirror of [[PeerLiaisonCoilToHub]].
+/** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
+  * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
   *
   * Asymmetric: it **serves the full population** down to the coil peer (block + stack spines,
   * per-head-peer request / soft-ack / head-hard-ack lanes, per-hub coil-hard-ack lanes — all outbox

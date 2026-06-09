@@ -13,7 +13,7 @@ import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import scala.concurrent.duration.*
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
-  * `/coil` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
+  * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
   * [[CoilFrame.Hello]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the

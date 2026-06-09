@@ -19,8 +19,8 @@ import scala.concurrent.duration.DurationInt
 /** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
   * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
-  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§8), instead of
-  *     the head mesh;
+  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§5.5)
+  *     [doc-ref], instead of the head mesh;
   *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
@@ -90,9 +90,12 @@ trait CoilMultisigRegimeManager(
             consensusActor <- context.actorOf(
               FastConsensusActor(config, pendingConnections, tracerLocal)
             )
-            // Inert on a coil: no HTTP server routes user requests here, and a coil peer authors none.
-            // Present only to fill the shared Connections slot the reused actors resolve.
-            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
+
+            // No-op placeholder: a coil peer authors no user requests, but the reused actors resolve
+            // the whole `Connections`, so the slot must still hold a valid handle.
+            // TODO: restructure `Connections` (a coil-specific subset, or make request-only slots
+            // optional) so a coil peer doesn't carry this inert slot at all — rule of least knowledge.
+            requestSequencer <- context.actorOf(NoopActor[RequestSequencer.Request])
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
             )
@@ -103,7 +106,7 @@ trait CoilMultisigRegimeManager(
               SlowConsensusActor(config, pendingConnections, tracerLocal)
             )
 
-            // Exactly one liaison, toward the hub head peer (§8). It projects its connections from
+            // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. It projects its connections from
             // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) stays empty in
             // this production placeholder (in-process wiring fills it).
             hubLiaison <- context.actorOf(

@@ -16,7 +16,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
   * server at all (it only dials its hub).
   *
   * Each contributor is a `WebSocketBuilder2 => HttpRoutes`; they are combined with `<+>` so the
-  * paths (`/peer`, `/coil`) coexist on one Ember server.
+  * paths (`/head`, `/hub`) coexist on one Ember server.
   */
 object NodeWsServer {
 

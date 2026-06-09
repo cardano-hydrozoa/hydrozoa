@@ -10,8 +10,8 @@ import scala.collection.immutable.SortedMap
 import scalus.crypto.ed25519.VerificationKey
 
 /** One coil peer's static data: its verification key and the [[HeadPeerNumber]] of the head peer
-  * that hubs it (§8 of `design/coil-network.md`). A coil peer is never dialed — it dials its hub —
-  * so it carries no connection address (the hub's address lives in [[HeadPeers]]).
+  * that hubs it (§4.1 of `design/coil-network.md`) [doc-ref]. A coil peer is never dialed — it
+  * dials its hub — so it carries no connection address (the hub's address lives in [[HeadPeers]]).
   */
 final case class CoilPeerData(
     verificationKey: VerificationKey,

@@ -149,7 +149,7 @@ trait MultisigRegimeManager(
             hubbedCoilPeers = config.hubbedCoilPeerNums(ownHeadNum)
 
             // If this head peer is a hub, spawn the relay sequencer for its coil peers' hard-acks
-            // (§8.4) + the CoilRelay fan-out (§8.3) + one hub→coil liaison per coil peer it hubs.
+            // (§5.3) [doc-ref] + the CoilRelay fan-out (§5.4) [doc-ref] + one hub→coil liaison per coil peer it hubs.
             // Non-hub head peers spawn none.
             coilAckSequencer <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
@@ -231,7 +231,7 @@ object MultisigRegimeManager {
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
         stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        // ---- Producer broadcast targets (§8) ----
+        // ---- Producer broadcast targets (§5.2) [doc-ref] ----
         /** Head-peer-mesh liaisons (one per other head peer); empty on a coil peer. Producers
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
           * a handle is usable as `ActorRef[IO, <any artifact in its Request>]`.
@@ -241,8 +241,8 @@ object MultisigRegimeManager {
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
         coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
-        /** Present only on a hub head peer (§8.3): the fan-out that relays the population to its
-          * coil peers. Producers send only their own production here. `None` elsewhere.
+        /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
+          * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
         coilRelay: Option[CoilRelay.Handle] = None,
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
@@ -251,8 +251,8 @@ object MultisigRegimeManager {
         remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
         remoteCoilLiaisons: Map[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle] = Map.empty,
         remoteHubLiaison: Option[liaison.PeerLiaisonHubToCoil.Handle] = None,
-        /** Present only on a hub head peer (§8): re-sequences its coil peers' hard-acks onto the
-          * `HubHardAckLane`. `None` elsewhere.
+        /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
+          * onto the `HubHardAckLane`. `None` elsewhere.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */

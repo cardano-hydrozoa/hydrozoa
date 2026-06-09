@@ -599,9 +599,9 @@ case class Stage4Suite(
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
     /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub) the
-      * [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/peer`
-      * and `/coil`), and starts the mesh dialers. For each coil peer it builds a
-      * [[CoilPeerWsTransport]] dialing the hub's `/coil`. Returns the head-mesh remote-proxy map plus
+      * [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/head`
+      * and `/hub`), and starts the mesh dialers. For each coil peer it builds a
+      * [[CoilPeerWsTransport]] dialing the hub's `/hub`. Returns the head-mesh remote-proxy map plus
       * the coil transports and the [[RemoteCoilProxy]] / [[RemoteHubProxy]] handles, and a cleanup IO
       * that releases every server/dialer/client.
       *
@@ -624,7 +624,7 @@ case class Stage4Suite(
 
         def uriFor(peerNum: HeadPeerNumber): Uri = {
             val (h, p) = addrFor(peerNum)
-            Uri.unsafeFromString(s"ws://$h:$p/peer")
+            Uri.unsafeFromString(s"ws://$h:$p/head")
         }
 
         val coilNums: List[CoilPeerNumber] = coilConfigs.map(_.ownPeerId match {
@@ -632,7 +632,7 @@ case class Stage4Suite(
             case PeerId.Head(_) => throw new IllegalStateException("coil config carries a head id")
         })
         val (hubHost, hubPort) = addrFor(hubNum)
-        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/coil")
+        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/hub")
 
         for {
             // Per-head mesh transports (no server yet) + the hub's coil-serving transport.
@@ -653,7 +653,7 @@ case class Stage4Suite(
             // One shared WS client for every dialer on this SUT.
             client <- JdkWSClient.simple[IO]
 
-            // One shared server per peer: mesh `/peer` for every head, plus the hub's `/coil`.
+            // One shared server per peer: mesh `/head` for every head, plus the hub's `/hub`.
             serverReleases <- peers.toList.traverse { ownPeerNum =>
                 val (bindH, bindP) = addrFor(ownPeerNum)
                 val meshRoute = (wsb: WebSocketBuilder2[IO]) => meshTransports(ownPeerNum).routes(wsb)

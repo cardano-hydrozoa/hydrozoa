@@ -154,8 +154,8 @@ case class Stage4Sut(
   *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
   *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
   *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
-  *     on a distinct port, mounting `/peer` for the head mesh and (on a hub) `/coil` for its coil
-  *     peers; each coil dials its hub's `/coil`. Cross-peer communication happens over real
+  *     on a distinct port, mounting `/head` for the head mesh and (on a hub) `/hub` for its coil
+  *     peers; each coil dials its hub's `/hub`. Cross-peer communication happens over real
   *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
   *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
   */

@@ -4,7 +4,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
 /** A coil peer's hard-ack relayed by a hub head peer, stamped with a hub-local [[HubHardAckNumber]]
   * so it travels the head-peer mesh and the hub→coil links on a contiguous per-hub lane (the
-  * `HubHardAckLane`, §8 of `design/coil-network.md`).
+  * `HubHardAckLane`, §5.3 of `design/coil-network.md`) [doc-ref].
   *
   * [[hubPeer]] is the head peer that re-sequenced this ack — the entry is intrinsically scoped to
   * one hub, so the per-hub `HubHardAck` lane it belongs to is self-described (a coil peer learns

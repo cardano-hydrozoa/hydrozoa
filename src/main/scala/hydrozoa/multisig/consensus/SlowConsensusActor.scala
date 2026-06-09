@@ -479,8 +479,8 @@ object SlowConsensusActor {
           * on a head peer.
           */
         coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
-        /** A hub's coil relay (§8.3): this actor's **own** hard-ack is sent here so the hub's coil
-          * peers receive it. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** hard-ack is sent here so the
+          * hub's coil peers receive it. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )

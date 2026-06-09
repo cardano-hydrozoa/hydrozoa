@@ -12,18 +12,18 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.{MultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import test.{SeedPhrase, TestPeers, genMonad}
 
-/** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§8 of `design/coil-network.md`), one
-  * hub head peer serving N coil peers. A coil peer's hard-ack travels up its
+/** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§5 of `design/coil-network.md`)
+  * [doc-ref], one hub head peer serving N coil peers. A coil peer's hard-ack travels up its
   * [[PeerLiaisonCoilToHub]] to the hub's [[PeerLiaisonHubToCoil]], which routes it to BOTH the
   * hub's slow-consensus actor and the [[CoilAckSequencer]]; the sequencer stamps it and hands the
   * resulting `HardAckWithId` to the [[CoilRelay]], which fans it down EVERY hub→coil liaison, so
@@ -83,9 +83,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
 
     /** A no-op actor for the Connections slots the liaisons never read in this scenario. */
     private def noop[R](system: ActorSystem[IO]): IO[ActorRef[IO, R]] =
-        system.actorOf(new Actor[IO, R] {
-            override def receive: Receive[IO, R] = PartialFunction.fromFunction((_: R) => IO.unit)
-        })
+        system.actorOf(NoopActor[R])
 
     /** Records every hard-ack handed to a slow-consensus slot. */
     private class HardAckRecorder(seen: Ref[IO, Vector[HardAck]])

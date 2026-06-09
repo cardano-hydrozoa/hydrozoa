@@ -125,8 +125,8 @@ object RequestSequencer {
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
-        /** A hub's coil relay (§8.3): this peer's own requests are sent here so its coil peers get
-          * the request content. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: this peer's own requests are sent here so its coil
+          * peers get the request content. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )

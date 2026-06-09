@@ -771,8 +771,8 @@ object JointLedger {
         stackComposer: StackComposer.Handle,
         /** Head-peer-mesh liaisons; this peer broadcasts its own-led brief here when it leads. */
         headPeerLiaisons: List[PeerLiaisonHeadToHead.Handle],
-        /** A hub's coil relay (§8.3): EVERY (re)produced brief is sent here so the hub's coil peers
-          * follow the whole contiguous block spine. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: EVERY (re)produced brief is sent here so the hub's
+          * coil peers follow the whole contiguous block spine. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )

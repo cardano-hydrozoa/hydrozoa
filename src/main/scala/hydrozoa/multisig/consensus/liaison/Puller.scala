@@ -3,10 +3,10 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 import org.typelevel.log4cats.Logger
 
-/** The pull half of one liaison link (§8.5 of `design/coil-network.md`): send `GetMsgBatch`es,
-  * consume the remote's `NewMsgBatch` replies, and advance our inbound lane cursors. A
-  * single-outstanding-request chain — each reply triggers the next request only after it verifies
-  * and advances.
+/** The pull half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: send
+  * `GetMsgBatch`es, consume the remote's `NewMsgBatch` replies, and advance our inbound lane
+  * cursors. A single-outstanding-request chain — each reply triggers the next request only after it
+  * verifies and advances.
   *
   * Composition, not inheritance: a liaison actor *has* a `Puller` (and a [[Server]]), it does not
   * *extend* them. The lane primitives do the per-lane heavy lifting; the actor's glue closures fix

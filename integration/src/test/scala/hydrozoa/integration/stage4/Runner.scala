@@ -176,7 +176,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
         ).property()
 
     // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
-    // shared per-peer WS server (`/coil` route) instead of in-process handles, exercising the
+    // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
     // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end. Same status as the Direct
     // 2h1c run — opt-in, NOT in the default green set: the blocker is harness settling, not the
     // transport. Point the propFilter here to watch the coil follow + co-sign over real WS.

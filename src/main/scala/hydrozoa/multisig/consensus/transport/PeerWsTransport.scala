@@ -16,7 +16,7 @@ import org.http4s.websocket.WebSocketFrame
 import org.http4s.{HttpRoutes, Uri}
 import scala.concurrent.duration.*
 
-/** The head-peer mesh WS link for one peer: contributes the `/peer` route to the peer's shared
+/** The head-peer mesh WS link for one peer: contributes the `/head` route to the peer's shared
   * [[NodeWsServer]], dials peers with higher peerNum, accepts inbound from peers with lower
   * peerNum, and exposes a [[send]] / [[register]] API.
   *
@@ -165,9 +165,9 @@ final class PeerWsTransport private (
             response <- wsb.build(sendStream, receivePipe)
         } yield response
 
-    /** The `/peer` route to mount on the peer's shared [[NodeWsServer]]. */
+    /** The `/head` route to mount on the peer's shared [[NodeWsServer]]. */
     def routes(wsb: WebSocketBuilder2[IO]): HttpRoutes[IO] =
-        HttpRoutes.of[IO] { case GET -> Root / "peer" =>
+        HttpRoutes.of[IO] { case GET -> Root / "head" =>
             serverHandler(wsb)
         }
 

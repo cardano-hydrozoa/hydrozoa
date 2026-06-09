@@ -14,7 +14,7 @@ import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 
-/** The hub side of the hub→coil WS links: contributes the `/coil` route to the hub's shared
+/** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
   * [[NodeWsServer]] and serves every coil peer the hub hubs. The hub runs no dialer — each coil
   * dials in and identifies itself with [[CoilFrame.Hello]]; the hub binds that socket to the coil's
   * [[CoilPeerNumber]], routes inbound batches to that coil's [[PeerLiaisonHubToCoil]], and drains
@@ -102,9 +102,9 @@ final class HubWsTransport private (
             response <- wsb.build(sendStream, receivePipe)
         } yield response
 
-    /** The `/coil` route to mount on the hub's shared [[NodeWsServer]]. */
+    /** The `/hub` route to mount on the hub's shared [[NodeWsServer]]. */
     def routes(wsb: WebSocketBuilder2[IO]): HttpRoutes[IO] =
-        HttpRoutes.of[IO] { case GET -> Root / "coil" =>
+        HttpRoutes.of[IO] { case GET -> Root / "hub" =>
             serverHandler(wsb)
         }
 }

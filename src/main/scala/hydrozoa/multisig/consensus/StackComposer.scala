@@ -175,7 +175,7 @@ final case class StackComposer(
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.headPeerLiaisons ! brief).parallel
-                    // A hub relays its OWN-led stack brief to CoilRelay (§8.3); briefs led by other
+                    // A hub relays its OWN-led stack brief to CoilRelay (§5.4) [doc-ref]; briefs led by other
                     // heads are relayed by the hub's mesh liaisons, so each is relayed once, in spine
                     // order. No-op off a hub.
                     _ <- conn.coilRelay.traverse_(_ ! brief)
@@ -573,8 +573,8 @@ object StackComposer {
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
-        /** A hub's coil relay (§8.3): every stack brief (own-led and received) is sent here so the
-          * hub's coil peers get the whole stack spine. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: every stack brief (own-led and received) is sent
+          * here so the hub's coil peers get the whole stack spine. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )

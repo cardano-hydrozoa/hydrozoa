@@ -14,8 +14,8 @@ import io.circe.syntax.*
   *     is on the other end.
   *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
-  * This is the `/peer` (head-mesh) envelope only. The hub↔coil link has its own envelope
-  * ([[CoilFrame]], on the `/coil` route), so `Population` / `OwnHardAck` batches never reach here.
+  * This is the `/head` (head-mesh) envelope only. The hub↔coil link has its own envelope
+  * ([[CoilFrame]], on the `/hub` route), so `Population` / `OwnHardAck` batches never reach here.
   */
 sealed trait HeadFrame
 object HeadFrame {
