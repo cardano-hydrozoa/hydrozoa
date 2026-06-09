@@ -1,15 +1,17 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO, IOLocal}
+import cats.effect.{Deferred, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
+import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
+import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
@@ -24,11 +26,8 @@ trait MultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracerLocal: IOLocal[Slf4jTracer],
     tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
 ) extends Actor[IO, Request] {
-
-    given IOLocal[Slf4jTracer] = tracerLocal
 
     /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
       * producer's narrow event type up into [[MultisigRegimeManagerEvent]] so it can reach the
@@ -66,39 +65,15 @@ trait MultisigRegimeManager(
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case PreStart => preStartLocal
         case TerminatedChild(childType, _) =>
-            childType match {
-                case Actors.BlockWeaver =>
-                    Slf4jTracer.warn("Terminated block weaver actor")
-                case Actors.CardanoLiaison =>
-                    Slf4jTracer.warn("Terminated Cardano liaison actor")
-                case Actors.Consensus =>
-                    Slf4jTracer.warn("Terminated consensus actor")
-                case Actors.JointLedger =>
-                    Slf4jTracer.warn("Terminated joint ledger actor")
-                case Actors.PeerLiaison =>
-                    Slf4jTracer.warn("Terminated peer liaison actor")
-                case Actors.EventSequencer =>
-                    Slf4jTracer.warn("Terminated event sequencer actor")
-                case Actors.StackComposer =>
-                    Slf4jTracer.warn("Terminated stack composer actor")
-                case Actors.SlowConsensus =>
-                    Slf4jTracer.warn("Terminated slow consensus actor")
-            }
+            tracer.traceWith(TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
-            dependencyType match {
-                case Dependencies.CardanoBackend =>
-                    Slf4jTracer.warn("Terminated cardano backend")
-                case Dependencies.Persistence =>
-                    Slf4jTracer.warn("Terminated persistence")
-            }
+            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
     def preStartLocal: IO[Unit] =
         for {
-            _ <- Slf4jTracer.routeLocal("MultisigRegimeManager")
-            _ <- Slf4jTracer.updateLocalCtx("peer" -> s"${config.ownHeadPeerNum: Int}")
-            _ <- Slf4jTracer.info("Starting multisig actors...")
+            _ <- tracer.traceWith(StartingActors)
 
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
@@ -171,7 +146,7 @@ trait MultisigRegimeManager(
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
-            _ <- Slf4jTracer.info("Watching multisig actors...")
+            _ <- tracer.traceWith(WatchingActors)
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- localPeerLiaisons.traverse(r =>
@@ -224,7 +199,6 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracerLocal: IOLocal[Slf4jTracer],
         tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
     ): IO[MultisigRegimeManager] =
         IO(
@@ -233,7 +207,6 @@ object MultisigRegimeManager {
             cardanoBackend,
             virtualLedger,
             persistence,
-            tracerLocal,
             tracer
           ) {}
         )

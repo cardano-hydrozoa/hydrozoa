@@ -3,14 +3,15 @@ package hydrozoa.rulebased.ledger.l1
 import cats.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.rulebased.EvacuationActor
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import hydrozoa.rulebased.{EvacuationActor, EvacuationActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
@@ -59,13 +60,15 @@ object EvacuationActorTestHelpers {
               )
             )
 
-            tracerLocal <- lift(Slf4jTracer.makeLocal)
+            tracer = Slf4jTracer.sink.contramap(
+              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._2.ownHeadPeerNum)
+            )
 
         } yield EvacuationActor(
           candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
           cardanoBackend = cardanoBackend,
           fallbackTxHash = fallbackTxHash,
-          tracerLocal = tracerLocal
+          tracer = tracer
         )(using
           env.nodeConfigs.head._2
         )

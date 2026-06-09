@@ -211,7 +211,6 @@ object Main extends IOApp {
             backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
             )
-            tracerLocal <- Resource.eval(Slf4jTracer.makeLocal)
             persistence <- Resource.eval(Persistence.fromBackend(backendStore))
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
@@ -225,51 +224,49 @@ object Main extends IOApp {
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal)
+        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system)
 
-        resource.use {
-            case (env, backend, nodeConfig, remoteL2Ledger, persistence, system, tracerLocal) =>
-                val mrmTracer =
-                    Slf4jTracer.sink.contramap(
-                      MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
-                    ) |+|
-                        Slf4jTracer.sink.traceMaybe(
-                          MultisigRegimeManagerEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum)
-                        )
-                for {
-                    mrm <- MultisigRegimeManager.apply(
-                      nodeConfig,
-                      backend,
-                      remoteL2Ledger,
-                      persistence,
-                      tracerLocal,
-                      mrmTracer
+        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system) =>
+            val mrmTracer =
+                Slf4jTracer.sink.contramap(
+                  MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
+                ) |+|
+                    Slf4jTracer.sink.traceMaybe(
+                      MultisigRegimeManagerEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum)
                     )
-                    _ <- system.actorOf(mrm, "MultisigRegimeManager")
-                    _ <- logger.info("Hydrozoa node started successfully")
+            for {
+                mrm <- MultisigRegimeManager.apply(
+                  nodeConfig,
+                  backend,
+                  remoteL2Ledger,
+                  persistence,
+                  mrmTracer
+                )
+                _ <- system.actorOf(mrm, "MultisigRegimeManager")
+                _ <- logger.info("Hydrozoa node started successfully")
 
-                    // Start HTTP server once EventSequencer is available
-                    _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                        val serverConfig = HydrozoaServer.Config(
-                          host = host"0.0.0.0",
-                          port = port"8080",
-                          adminUsername = env.adminUsername,
-                          adminPassword = env.adminPassword
-                        )
-                        logger.info("Starting HTTP server...") *>
-                            HydrozoaServer
-                                .create(
-                                  connections.eventSequencer,
-                                  connections.blockWeaver,
-                                  nodeConfig.headConfig,
-                                  serverConfig
-                                )
-                                .use(_ => IO.never)
-                                .start // Run in background
-                                .void
-                    }
+                // Start HTTP server once EventSequencer is available
+                _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                    val serverConfig = HydrozoaServer.Config(
+                      host = host"0.0.0.0",
+                      port = port"8080",
+                      adminUsername = env.adminUsername,
+                      adminPassword = env.adminPassword
+                    )
+                    logger.info("Starting HTTP server...") *>
+                        HydrozoaServer
+                            .create(
+                              connections.eventSequencer,
+                              connections.blockWeaver,
+                              nodeConfig.headConfig,
+                              serverConfig
+                            )
+                            .use(_ => IO.never)
+                            .start // Run in background
+                            .void
+                }
 
-                    _ <- system.waitForTermination
-                } yield ExitCode.Success
+                _ <- system.waitForTermination
+            } yield ExitCode.Success
         }
 }

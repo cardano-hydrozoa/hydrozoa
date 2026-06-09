@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
-import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.MultisigRegimeManagerEvent.{CL, FCA, JL, SC, SCA}
+import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.multisig.MultisigRegimeManagerEvent.{CL, FCA, JL, SC, SCA, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{CardanoLiaisonEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
@@ -12,12 +12,44 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
   */
 object MultisigRegimeManagerEventFormat:
 
+    private def routingKey(peerNum: HeadPeerNumber): String = s"MultisigRegimeManager.$peerNum"
+    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
+        Map("peer" -> peerNum.toString)
+
     def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = e match
         case JL(jl)   => JointLedgerEventFormat.humanFormat(peerNum)(jl)
         case FCA(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
         case CL(cl)   => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
         case SC(sc)   => StackComposerEventFormat.humanFormat(peerNum)(sc)
         case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
+        case StartingActors =>
+            LogEvent(
+              Level.Info,
+              "Starting multisig actors...",
+              baseCtx(peerNum),
+              routingKey = Some(routingKey(peerNum))
+            )
+        case WatchingActors =>
+            LogEvent(
+              Level.Info,
+              "Watching multisig actors...",
+              baseCtx(peerNum),
+              routingKey = Some(routingKey(peerNum))
+            )
+        case TerminatedActor(actor) =>
+            LogEvent(
+              Level.Warn,
+              s"Terminated $actor actor",
+              baseCtx(peerNum),
+              routingKey = Some(routingKey(peerNum))
+            )
+        case TerminatedDependency(dep) =>
+            LogEvent(
+              Level.Warn,
+              s"Terminated dependency $dep",
+              baseCtx(peerNum),
+              routingKey = Some(routingKey(peerNum))
+            )
 
     def jsonlFormat(peerNumber: HeadPeerNumber)(e: MultisigRegimeManagerEvent): Option[LogEvent] =
         e match
@@ -26,3 +58,5 @@ object MultisigRegimeManagerEventFormat:
             case CL(cl)   => CardanoLiaisonEventFormat.jsonlFormat(peerNumber)(cl)
             case SC(sc)   => StackComposerEventFormat.jsonlFormat(peerNumber)(sc)
             case SCA(sca) => SlowConsensusActorEventFormat.jsonlFormat(peerNumber)(sca)
+            case StartingActors | WatchingActors | TerminatedActor(_) | TerminatedDependency(_) =>
+                None

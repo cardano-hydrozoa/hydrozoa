@@ -3,12 +3,13 @@ package hydrozoa.rulebased.ledger.l1
 import cats.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -21,9 +22,8 @@ import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
-import hydrozoa.rulebased.{DisputeActor, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
-import scalus.builtin.Data.{fromData, toData}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
 import scalus.cardano.ledger.DatumOption.Inline
@@ -31,6 +31,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v3.PosixTime
+import scalus.uplc.builtin.Data.{fromData, toData}
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
@@ -177,7 +178,9 @@ object DisputeActorTestHelpers {
                     )
               )
             )
-            tracer <- lift(Slf4jTracer.makeLocal)
+            tracer = Slf4jTracer.sink.contramap(
+              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._2.ownHeadPeerNum)
+            )
 
             disputeActor = DisputeActor(
               action = RuleBasedRegimeManager.DisputeAction.Vote(
@@ -185,7 +188,7 @@ object DisputeActorTestHelpers {
                 signatures = env.multisignHeader(blockHeader).toList
               ),
               cardanoBackend = cardanoBackend,
-              tracerLocal = tracer
+              tracer = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }

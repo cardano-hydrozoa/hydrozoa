@@ -126,7 +126,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
             // .withPropFilter(Some("Twenty-peers head works"))
             // .withPropFilter(Some("Two-peers head works WS"))
             // .withPropFilter(Some("Ten-peers head works WS"))
-            .withPropFilter(Some("Two-peers head works WS (quick)"))
+            .withPropFilter(Some("Two-peers head works WS .quick."))
             // .withInitialSeed(Seed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
             // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
             // .withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)

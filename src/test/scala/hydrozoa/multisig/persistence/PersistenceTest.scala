@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -123,7 +123,6 @@ class PersistenceTest extends AnyFunSuite:
             (for
                 tracerLocal <- Slf4jTracer.makeLocal
                 result <- {
-                    given IOLocal[Slf4jTracer] = tracerLocal
                     RocksDbBackendStore
                         .open(tempDir)
                         .use(backend => Persistence.fromBackend(backend).flatMap(prog))
