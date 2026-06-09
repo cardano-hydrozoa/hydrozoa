@@ -45,7 +45,7 @@ abstract class PeerLiaisonHeadToHead(
                       consensusActor = s.consensusActor,
                       stackComposer = s.stackComposer,
                       slowConsensusActor = s.slowConsensusActor,
-                      remoteHead = s.remoteHeadLiaisons(remoteHead.peerNum),
+                      remote = s.remoteHeadLiaisons(remoteHead.peerNum),
                       coilRelay = s.coilRelay
                     )
                 )
@@ -187,9 +187,9 @@ abstract class PeerLiaisonHeadToHead(
       buildGet = buildGet,
       accept = accept,
       dispatch = dispatch,
-      getBatchNum = _.batchNum,
-      newBatchNum = _.batchNum
-    )(g => getConnections.flatMap(_.remoteHead ! g))
+      numberOfBatchRequest = _.batchNum,
+      numberOfBatch = _.batchNum
+    )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------
     private def serve(get: Mesh.Get): IO[Server.Served[Mesh.New]] =
@@ -224,7 +224,7 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     private val server =
-        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remoteHead ! n))
+        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Append our own production (single-author = us) onto the matching outbox lane. */
     private def appendArtifact(
@@ -288,7 +288,7 @@ object PeerLiaisonHeadToHead {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remoteHead: LiaisonProtocol.HeadToHeadHandle,
+        remote: LiaisonProtocol.HeadToHeadHandle,
         /** Present only on a hub head peer: this remote head peer's satellites are forwarded here
           * so the hub's coil peers hear the whole population. `None` on non-hub head peers.
           */

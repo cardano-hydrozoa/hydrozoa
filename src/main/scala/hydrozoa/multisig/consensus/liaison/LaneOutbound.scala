@@ -1,7 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
-
 import scala.collection.immutable.Queue
 
 /** An **outbound** next-expected lane (§8 of `design/coil-network.md`): a lane we only produce on.

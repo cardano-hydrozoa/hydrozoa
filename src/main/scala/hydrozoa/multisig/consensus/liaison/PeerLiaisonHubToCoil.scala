@@ -54,7 +54,7 @@ abstract class PeerLiaisonHubToCoil(
                           PeerLiaisonHubToCoil.Connections(
                             slowConsensusActor = s.slowConsensusActor,
                             coilAckSequencer = seq,
-                            remoteCoil = s.remoteCoilLiaisons(coil)
+                            remote = s.remoteCoilLiaisons(coil)
                           )
                         )
                     )
@@ -182,9 +182,8 @@ abstract class PeerLiaisonHubToCoil(
             }
         }
 
-    private val server = new Server[Population.Get, Population.New](serve)(n =>
-        getConnections.flatMap(_.remoteCoil ! n)
-    )
+    private val server =
+        new Server[Population.Get, Population.New](serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
@@ -243,9 +242,9 @@ abstract class PeerLiaisonHubToCoil(
       buildGet = buildGet,
       accept = accept,
       dispatch = dispatch,
-      getBatchNum = _.batchNum,
-      newBatchNum = _.batchNum
-    )(g => getConnections.flatMap(_.remoteCoil ! g))
+      numberOfBatchRequest = _.batchNum,
+      numberOfBatch = _.batchNum
+    )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -297,6 +296,6 @@ object PeerLiaisonHubToCoil {
     final case class Connections(
         slowConsensusActor: SlowConsensusActor.Handle,
         coilAckSequencer: CoilAckSequencer.Handle,
-        remoteCoil: LiaisonProtocol.CoilToHubHandle
+        remote: LiaisonProtocol.CoilToHubHandle
     )
 }

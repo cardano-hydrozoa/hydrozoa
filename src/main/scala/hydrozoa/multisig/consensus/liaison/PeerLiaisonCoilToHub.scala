@@ -53,7 +53,7 @@ abstract class PeerLiaisonCoilToHub(
                             consensusActor = s.consensusActor,
                             stackComposer = s.stackComposer,
                             slowConsensusActor = s.slowConsensusActor,
-                            remoteHub = hub
+                            remote = hub
                           )
                         )
                     )
@@ -210,9 +210,9 @@ abstract class PeerLiaisonCoilToHub(
       buildGet = buildGet,
       accept = accept,
       dispatch = dispatch,
-      getBatchNum = _.batchNum,
-      newBatchNum = _.batchNum
-    )(g => getConnections.flatMap(_.remoteHub ! g))
+      numberOfBatchRequest = _.batchNum,
+      numberOfBatch = _.batchNum
+    )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (own hard-ack) --------------------------------------------------------------
     private def serve(get: OwnHardAck.Get): IO[Server.Served[OwnHardAck.New]] =
@@ -223,9 +223,8 @@ abstract class PeerLiaisonCoilToHub(
                 Server.Served.Reply(OwnHardAck.New(get.batchNum, items.headOption))
         }
 
-    private val server = new Server[OwnHardAck.Get, OwnHardAck.New](serve)(n =>
-        getConnections.flatMap(_.remoteHub ! n)
-    )
+    private val server =
+        new Server[OwnHardAck.Get, OwnHardAck.New](serve)(n => getConnections.flatMap(_.remote ! n))
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -277,6 +276,6 @@ object PeerLiaisonCoilToHub {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remoteHub: LiaisonProtocol.HubToCoilHandle
+        remote: LiaisonProtocol.HubToCoilHandle
     )
 }
