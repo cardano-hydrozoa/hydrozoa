@@ -12,7 +12,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 
 /** The single WebSocket server a peer binds, shared by every WS link the peer runs. A pure head
   * peer mounts only the head-mesh route ([[PeerWsTransport.routes]]); a hub head peer mounts that
-  * **plus** the hub→coil route ([[CoilHubTransport.routes]]) on the same port; a coil peer runs no
+  * **plus** the hub→coil route ([[HubWsTransport.routes]]) on the same port; a coil peer runs no
   * server at all (it only dials its hub).
   *
   * Each contributor is a `WebSocketBuilder2 => HttpRoutes`; they are combined with `<+>` so the

@@ -138,7 +138,7 @@ to pace.
 - `HardAckAggregator`, `HardAckSignatureVerifier`, `EffectSigner`.
 - `CardanoLiaison` — same target-state / `happyPathEffects` / `fallbackEffects`
   maps and submission FSM (R8/R9), over an independent `CardanoBackend`.
-- The head-mesh transport (`PeerWsTransport`, `Frame`, `Codecs`) — the link logic
+- The head-mesh transport (`PeerWsTransport`, `HeadFrame`, `Codecs`) — the link logic
   is unchanged, though server ownership was lifted out into `NodeWsServer` so a hub
   shares one server across the mesh and the coil link (§8.10).
 - `L2Ledger` black box — a coil peer instantiates its own deterministic copy.
@@ -502,13 +502,13 @@ WebSocket transport, not only the in-process wiring used by tests. **Each peer
 binds exactly one WS server** (`NodeWsServer`) — a hub does **not** run a second
 server. That one server mounts two routes:
 
-- **`/peer`** — the head mesh (`PeerWsTransport`, `Frame` envelope, `Mesh.Get` /
+- **`/peer`** — the head mesh (`PeerWsTransport`, `HeadFrame` envelope, `Mesh.Get` /
   `Mesh.New`). Topology: lower-numbered head peer dials higher.
-- **`/coil`** — the hub→coil links (`CoilHubTransport`, `CoilFrame` envelope,
+- **`/coil`** — the hub→coil links (`HubWsTransport`, `CoilFrame` envelope,
   `Population.Get/New` + `OwnHardAck.Get/New`). Mounted only on a hub.
 
 The hub↔coil link is a **star**: each coil peer dials its single hub's `/coil`
-(`CoilUplinkTransport`) and identifies itself with `CoilFrame.Hello(coilNum)`; the
+(`CoilPeerWsTransport`) and identifies itself with `CoilFrame.Hello(coilNum)`; the
 hub binds that socket to the coil's `CoilPeerNumber`, routes inbound batches to
 that coil's `PeerLiaisonHubToCoil`, and drains that coil's outbox for outbound
 batches. A coil runs **no server** — only the uplink dialer.
@@ -711,7 +711,7 @@ invariant is ever weakened. (See `CoilRelay`'s doc for the full proof + the thre
 load-bearing invariants.)
 
 **Transport (§8.10):** one shared `NodeWsServer` per peer mounts `/peer` (head
-mesh) and, on a hub, `/coil`; `CoilHubTransport` / `CoilUplinkTransport` /
+mesh) and, on a hub, `/coil`; `HubWsTransport` / `CoilPeerWsTransport` /
 `CoilFrame` carry the hub↔coil link, with `RemoteCoilProxy` / `RemoteHubProxy`
 standing in for the remote handles. stage4 WebSocket mode wires coils over WS.
 

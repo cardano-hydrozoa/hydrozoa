@@ -24,7 +24,7 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{CoilHubTransport, CoilUplinkTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
+import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, RequestSequencer, SlowConsensusActor, StackComposer}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
@@ -77,8 +77,8 @@ private case class CoilWiring(
   */
 private case class WsNetwork(
     remoteHeadByPeer: Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]],
-    coilHubTransport: Option[CoilHubTransport],
-    coilUplinks: Map[CoilPeerNumber, CoilUplinkTransport],
+    coilHubTransport: Option[HubWsTransport],
+    coilUplinks: Map[CoilPeerNumber, CoilPeerWsTransport],
     remoteCoilProxies: Map[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle],
     remoteHubProxies: Map[CoilPeerNumber, LiaisonProtocol.HubToCoilHandle],
     cleanup: IO[Unit],
@@ -599,9 +599,9 @@ case class Stage4Suite(
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
     /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub) the
-      * [[CoilHubTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/peer`
+      * [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/peer`
       * and `/coil`), and starts the mesh dialers. For each coil peer it builds a
-      * [[CoilUplinkTransport]] dialing the hub's `/coil`. Returns the head-mesh remote-proxy map plus
+      * [[CoilPeerWsTransport]] dialing the hub's `/coil`. Returns the head-mesh remote-proxy map plus
       * the coil transports and the [[RemoteCoilProxy]] / [[RemoteHubProxy]] handles, and a cleanup IO
       * that releases every server/dialer/client.
       *
@@ -647,8 +647,8 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
             coilHubTransportOpt <-
-                if coilNums.isEmpty then IO.none[CoilHubTransport]
-                else CoilHubTransport.create(coilNums).map(Some(_))
+                if coilNums.isEmpty then IO.none[HubWsTransport]
+                else HubWsTransport.create(coilNums).map(Some(_))
 
             // One shared WS client for every dialer on this SUT.
             client <- JdkWSClient.simple[IO]
@@ -697,7 +697,7 @@ case class Stage4Suite(
 
             // Coil uplinks (coil dials hub) + their dialers.
             uplinkEntries <- coilNums.traverse { coilNum =>
-                CoilUplinkTransport
+                CoilPeerWsTransport
                     .create(coilNum, hubCoilUri)
                     .flatMap(up =>
                         up.startDialer(client).allocated.map(_._2).map(rel => (coilNum, up, rel))

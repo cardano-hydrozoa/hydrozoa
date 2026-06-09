@@ -20,14 +20,14 @@ import scala.concurrent.duration.*
   * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
   * [[PeerLiaisonCoilToHub]].
   */
-final class CoilUplinkTransport private (
+final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
     private val hubUri: Uri,
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
 )(using CardanoNetwork.Section) {
 
-    private val logger = Logging.loggerIO(s"CoilUplinkTransport.c${ownCoilNum.convert}")
+    private val logger = Logging.loggerIO(s"CoilPeerWsTransport.c${ownCoilNum.convert}")
 
     /** Wire the local PeerLiaisonCoilToHub as the inbound dispatch target. Must be called before
       * the link starts receiving traffic.
@@ -83,14 +83,14 @@ final class CoilUplinkTransport private (
         Resource.make(dialerLoop(client).start)(_.cancel).void
 }
 
-object CoilUplinkTransport {
+object CoilPeerWsTransport {
 
     def create(
         ownCoilNum: CoilPeerNumber,
         hubUri: Uri,
-    )(using CardanoNetwork.Section): IO[CoilUplinkTransport] =
+    )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilUplinkTransport(ownCoilNum, hubUri, outbox, inboundRef)
+        } yield new CoilPeerWsTransport(ownCoilNum, hubUri, outbox, inboundRef)
 }

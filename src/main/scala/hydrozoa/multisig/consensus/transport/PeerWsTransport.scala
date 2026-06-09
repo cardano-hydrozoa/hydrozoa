@@ -51,9 +51,9 @@ final class PeerWsTransport private (
       * the per-remote outbox queue until the WS link drains it.
       */
     def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
-        Frame.fromWire(request) match {
+        HeadFrame.fromWire(request) match {
             case Some(wire) =>
-                val line = Frame.encode(Frame.Msg(wire))
+                val line = HeadFrame.encode(HeadFrame.Msg(wire))
                 outboxes.get(remote) match {
                     case Some(q) => q.offer(line)
                     case None =>
@@ -81,11 +81,12 @@ final class PeerWsTransport private (
             }
         }
 
-    /** Parse one inbound text line on an established link and dispatch a [[Frame.Msg]] payload. */
+    /** Parse one inbound text line on an established link and dispatch a [[HeadFrame.Msg]] payload.
+      */
     private def onLine(remote: HeadPeerId)(s: String): IO[Unit] =
-        Frame.parse(s) match {
-            case Right(Frame.Msg(payload)) => dispatchInbound(remote, payload)
-            case Right(Frame.Hello(_))     =>
+        HeadFrame.parse(s) match {
+            case Right(HeadFrame.Msg(payload)) => dispatchInbound(remote, payload)
+            case Right(HeadFrame.Hello(_))     =>
                 // Hello is only valid on the first frame; subsequent ones ignored.
                 IO.unit
             case Left(err) =>
@@ -106,7 +107,7 @@ final class PeerWsTransport private (
 
         def once: IO[Unit] =
             client.connectHighLevel(request).use { conn =>
-                val helloLine = Frame.encode(Frame.Hello(ownPeerId.peerNum))
+                val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
                 logger.info(s"dialer: connected to remote=${remote.peerNum: Int} at $uri") >>
                     conn.send(WSFrame.Text(helloLine)) >>
                     WsDuplex.run(conn, outboxes(remote), onLine(remote))
@@ -119,8 +120,9 @@ final class PeerWsTransport private (
         (attempt >> IO.sleep(1.second)).foreverM
     }
 
-    /** Server-side handler for an incoming WS connection. The first frame must be [[Frame.Hello]]
-      * carrying the connecting peer's number; subsequent frames are dispatched as [[Frame.Msg]].
+    /** Server-side handler for an incoming WS connection. The first frame must be
+      * [[HeadFrame.Hello]] carrying the connecting peer's number; subsequent frames are dispatched
+      * as [[HeadFrame.Msg]].
       */
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
@@ -135,8 +137,8 @@ final class PeerWsTransport private (
                     }
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
-                    Frame.parse(s) match {
-                        case Right(Frame.Hello(peerNum)) =>
+                    HeadFrame.parse(s) match {
+                        case Right(HeadFrame.Hello(peerNum)) =>
                             // Topology: the server only accepts inbound from lower-numbered peers.
                             val pn: Int = peerNum
                             val ownPn: Int = ownPeerId.peerNum
@@ -150,7 +152,7 @@ final class PeerWsTransport private (
                                       s"(own=$ownPn, must be lower)"
                                 )
                             }
-                        case Right(Frame.Msg(payload)) =>
+                        case Right(HeadFrame.Msg(payload)) =>
                             peerD.tryGet.flatMap {
                                 case Some(remote) => dispatchInbound(remote, payload)
                                 case None => logger.warn("server: msg before hello, dropping")

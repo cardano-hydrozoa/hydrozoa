@@ -45,25 +45,25 @@ class CodecsTest extends AnyFunSuite {
       hubHardAck = None
     )
 
-    private def roundTrip(frame: Frame): Frame = {
-        val text = Frame.encode(frame)
-        Frame.parse(text) match {
+    private def roundTrip(frame: HeadFrame): HeadFrame = {
+        val text = HeadFrame.encode(frame)
+        HeadFrame.parse(text) match {
             case Right(decoded) => decoded
-            case Left(err)      => fail(s"Frame.parse failed: $err\nText: $text")
+            case Left(err)      => fail(s"HeadFrame.parse failed: $err\nText: $text")
         }
     }
 
     test("Hello frame round-trips") {
-        val frame = Frame.Hello(peerNum = 7)
+        val frame = HeadFrame.Hello(peerNum = 7)
         assert(roundTrip(frame) == frame)
     }
 
-    test("Frame.Msg(Mesh.Get initial cursors) round-trips") {
-        val frame = Frame.Msg(testMeshGet)
+    test("HeadFrame.Msg(Mesh.Get initial cursors) round-trips") {
+        val frame = HeadFrame.Msg(testMeshGet)
         assert(roundTrip(frame) == frame)
     }
 
-    test("Frame.Msg(Mesh.Get with non-zero fields) round-trips") {
+    test("HeadFrame.Msg(Mesh.Get with non-zero fields) round-trips") {
         val get = Mesh.Get(
           batchNum = BatchNumber(42),
           block = BlockNumber(99),
@@ -73,9 +73,9 @@ class CodecsTest extends AnyFunSuite {
           headHardAck = HardAckNumber(8),
           hubHardAck = HubHardAckNumber(5)
         )
-        val frame = Frame.Msg(get)
+        val frame = HeadFrame.Msg(get)
         roundTrip(frame) match {
-            case Frame.Msg(decoded: Mesh.Get) =>
+            case HeadFrame.Msg(decoded: Mesh.Get) =>
                 assert(decoded.batchNum == get.batchNum)
                 assert(decoded.block == get.block)
                 assert(decoded.stack == get.stack)
@@ -87,11 +87,11 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Frame.Msg(empty Mesh.New) round-trips") {
+    test("HeadFrame.Msg(empty Mesh.New) round-trips") {
         val nmb = emptyNew(BatchNumber(1))
-        val frame = Frame.Msg(nmb)
+        val frame = HeadFrame.Msg(nmb)
         roundTrip(frame) match {
-            case Frame.Msg(decoded: Mesh.New) =>
+            case HeadFrame.Msg(decoded: Mesh.New) =>
                 assert(decoded.batchNum == nmb.batchNum)
                 assert(decoded.softAck.isEmpty)
                 assert(decoded.block.isEmpty)
@@ -103,7 +103,7 @@ class CodecsTest extends AnyFunSuite {
         }
     }
 
-    test("Frame.Msg(Mesh.New with SoftAck) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with SoftAck) round-trips") {
         val ack = SoftAck(
           ackId = SoftAckId(HeadPeerNumber(2), SoftAckNumber(5)),
           blockNum = BlockNumber(11),
@@ -113,9 +113,9 @@ class CodecsTest extends AnyFunSuite {
           finalizationRequested = true,
         )
         val nmb = emptyNew(BatchNumber(3)).copy(softAck = Some(ack))
-        val frame = Frame.Msg(nmb)
+        val frame = HeadFrame.Msg(nmb)
         roundTrip(frame) match {
-            case Frame.Msg(decoded: Mesh.New) =>
+            case HeadFrame.Msg(decoded: Mesh.New) =>
                 assert(decoded.batchNum == nmb.batchNum)
                 decoded.softAck match {
                     case Some(decodedAck: SoftAck) =>
@@ -135,15 +135,15 @@ class CodecsTest extends AnyFunSuite {
     // HardAck payloads carry opaque `TxSignature` (IArray-backed) so structural `==` is
     // reference-sensitive; assert JSON stability instead — encode, parse, re-encode, compare.
     // This catches "encodes but decodes to a different value" without IArray equality pitfalls.
-    private def assertJsonStable(frame: Frame): Unit = {
-        val text = Frame.encode(frame)
-        Frame.parse(text) match {
+    private def assertJsonStable(frame: HeadFrame): Unit = {
+        val text = HeadFrame.encode(frame)
+        HeadFrame.parse(text) match {
             case Right(decoded) =>
                 assert(
-                  Frame.encode(decoded) == text,
-                  s"re-encode differs:\n  first: $text\n  again: ${Frame.encode(decoded)}"
+                  HeadFrame.encode(decoded) == text,
+                  s"re-encode differs:\n  first: $text\n  again: ${HeadFrame.encode(decoded)}"
                 )
-            case Left(err) => fail(s"Frame.parse failed: $err\nText: $text")
+            case Left(err) => fail(s"HeadFrame.parse failed: $err\nText: $text")
         }
     }
 
@@ -156,10 +156,10 @@ class CodecsTest extends AnyFunSuite {
           payload = payload
         )
 
-    private def hardAckFrame(payload: HardAck.Payload): Frame =
-        Frame.Msg(emptyNew(BatchNumber(5)).copy(headHardAck = Some(headHardAck(payload))))
+    private def hardAckFrame(payload: HardAck.Payload): HeadFrame =
+        HeadFrame.Msg(emptyNew(BatchNumber(5)).copy(headHardAck = Some(headHardAck(payload))))
 
-    test("Frame.Msg(Mesh.New with HardAck Round1Regular: OnlyPartial) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Round1Regular: OnlyPartial) round-trips") {
         assertJsonStable(
           hardAckFrame(
             HardAck.Round1Payload.Regular.OnlyPartial(
@@ -169,7 +169,7 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(Mesh.New with HardAck Round1Regular: PartialThenCompletes) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Round1Regular: PartialThenCompletes) round-trips") {
         assertJsonStable(
           hardAckFrame(
             HardAck.Round1Payload.Regular.PartialThenCompletes(
@@ -192,7 +192,7 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(Mesh.New with HardAck Round1Regular: MinorThenPartial) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Round1Regular: MinorThenPartial) round-trips") {
         assertJsonStable(
           hardAckFrame(
             HardAck.Round1Payload.Regular.MinorThenPartial(
@@ -212,7 +212,7 @@ class CodecsTest extends AnyFunSuite {
     }
 
     test(
-      "Frame.Msg(Mesh.New with HardAck Round1Regular: " +
+      "HeadFrame.Msg(Mesh.New with HardAck Round1Regular: " +
           "MinorThenPartialThenCompletes) round-trips"
     ) {
         assertJsonStable(
@@ -239,15 +239,15 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(Mesh.New with HardAck Round2Regular) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Round2Regular) round-trips") {
         assertJsonStable(hardAckFrame(HardAck.Round2Payload.Regular(firstUnlockSig = sig(20, 21))))
     }
 
-    test("Frame.Msg(Mesh.New with HardAck Round1Initial) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Round1Initial) round-trips") {
         assertJsonStable(hardAckFrame(HardAck.Round1Payload.Initial(fallbackSig = sig(30))))
     }
 
-    test("Frame.Msg(Mesh.New with HardAck Sole) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with HardAck Sole) round-trips") {
         assertJsonStable(
           hardAckFrame(
             HardAck.SolePayload(
@@ -258,7 +258,7 @@ class CodecsTest extends AnyFunSuite {
         )
     }
 
-    test("Frame.Msg(Mesh.New with a re-sequenced coil HardAckWithId) round-trips") {
+    test("HeadFrame.Msg(Mesh.New with a re-sequenced coil HardAckWithId) round-trips") {
         val hubAck = HardAckWithId(
           hubPeer = HeadPeerNumber(0),
           seqNum = HubHardAckNumber(3),
@@ -268,15 +268,15 @@ class CodecsTest extends AnyFunSuite {
             payload = HardAck.Round1Payload.Initial(fallbackSig = sig(5, 6))
           )
         )
-        assertJsonStable(Frame.Msg(emptyNew(BatchNumber(7)).copy(hubHardAck = Some(hubAck))))
+        assertJsonStable(HeadFrame.Msg(emptyNew(BatchNumber(7)).copy(hubHardAck = Some(hubAck))))
     }
 
-    test("Frame.fromWire accepts Mesh.Get and Mesh.New, rejects others") {
+    test("HeadFrame.fromWire accepts Mesh.Get and Mesh.New, rejects others") {
         val get = testMeshGet
         val nmb = emptyNew(BatchNumber.zero)
 
-        assert(Frame.fromWire(get).contains(get))
-        assert(Frame.fromWire(nmb).contains(nmb))
-        assert(Frame.fromWire(LiaisonProtocol.PreStart).isEmpty)
+        assert(HeadFrame.fromWire(get).contains(get))
+        assert(HeadFrame.fromWire(nmb).contains(nmb))
+        assert(HeadFrame.fromWire(LiaisonProtocol.PreStart).isEmpty)
     }
 }
