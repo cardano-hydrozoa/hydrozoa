@@ -13,7 +13,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryUtxo}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import org.scalacheck.Gen
 import scalus.cardano.ledger.DatumOption.Inline
@@ -33,9 +33,9 @@ import scala.concurrent.duration.FiniteDuration
 case class InitialDisputeUtxos(
     treasury: RuleBasedTreasuryUtxo,
     // One AwaitingVote UTxO per peer, indexed by HeadPeerNumber
-    peerVoteUtxos: Map[HeadPeerNumber, VoteUtxo[VoteStatus.AwaitingVote]],
+    peerVoteUtxos: Map[HeadPeerNumber, BallotBox[VoteStatus.AwaitingVote]],
     // Pre-voted default vote: key=0, link=1
-    defaultVoteUtxo: VoteUtxo[VoteStatus.Voted],
+    defaultVoteUtxo: BallotBox[VoteStatus.Voted],
     // ADA-only UTxO at each peer's head address, used as plutus script collateral
     collateralUtxos: Map[HeadPeerNumber, CollateralUtxo],
     // Reference script UTxOs from MultiNodeConfig
@@ -44,11 +44,11 @@ case class InitialDisputeUtxos(
     evacuationMap: EvacuationMap,
 ):
     // The KZG commitment all peers should vote for in the happy-path scenario
-    def kzgCommitment: VoteState.KzgCommitment = defaultVoteUtxo.voteOutput.status.commitment
+    def kzgCommitment: VoteState.KzgCommitment = defaultVoteUtxo.ballotBoxOutput.status.commitment
 
     def allUtxos(using env: MultiNodeConfig): Utxos =
-        // Any NodeConfig satisfies VoteOutputConfig; all share the same headConfig for output construction
-        given voteOutputConfig: hydrozoa.rulebased.ledger.l1.utxo.VoteOutputConfig =
+        // Any NodeConfig satisfies BallotBoxConfig; all share the same headConfig for output construction
+        given ballotBoxConfig: hydrozoa.rulebased.ledger.l1.utxo.BallotBoxConfig =
             env.nodeConfigs.values.head
 
         val treasuryEntry =
@@ -117,7 +117,7 @@ object InitialDisputeUtxos:
             peerVoteUtxos = env.headConfig.headPeerVKeys.toList.zipWithIndex.map { (vkey, i) =>
                 val key = BigInt(i + 1)
                 val link = if i < nPeers - 1 then BigInt(i + 2) else BigInt(0)
-                val voteOutput = VoteOutput[VoteStatus.AwaitingVote](
+                val ballotBoxOutput = BallotBoxOutput[VoteStatus.AwaitingVote](
                   key,
                   link,
                   Coin.ada(5),
@@ -125,20 +125,20 @@ object InitialDisputeUtxos:
                   VoteStatus.AwaitingVote(PubKeyHash(blake2b_224(vkey)))
                 )
                 val input = TransactionInput(fallbackTxId, nPeers + 1 + i)
-                HeadPeerNumber(i) -> VoteUtxo(input, voteOutput)
+                HeadPeerNumber(i) -> BallotBox(input, ballotBoxOutput)
             }.toMap
 
             // [SYNTHETIC] Default vote at output index 2*nPeers+1: key=0, link=1, pre-voted
             defaultVoteUtxo =
-                val voteOutput = VoteOutput[VoteStatus.Voted](
+                val ballotBoxOutput = BallotBoxOutput[VoteStatus.Voted](
                   BigInt(0),
                   BigInt(1),
-                  env.headConfig.collectiveContingency.defaultVoteDeposit
+                  env.headConfig.collectiveContingency.publicVoteDeposit
                       + env.headConfig.collectiveContingency.minAdaForTreasury,
                   PositiveInt.unsafeApply(1),
                   VoteStatus.Voted(evacMap.kzgCommitment, BigInt(0))
                 )
-                VoteUtxo(TransactionInput(fallbackTxId, 2 * nPeers + 1), voteOutput)
+                BallotBox(TransactionInput(fallbackTxId, 2 * nPeers + 1), ballotBoxOutput)
 
             // [SYNTHETIC] ADA-only collateral UTxO per peer, at each peer's own head address.
             // Collateral outputs carry a fixed sentinel datum ("collateral") so the abstraction
