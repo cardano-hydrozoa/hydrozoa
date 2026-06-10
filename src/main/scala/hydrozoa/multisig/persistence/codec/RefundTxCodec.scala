@@ -4,7 +4,6 @@ import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{quantizedInstantDecoder, quantizedInstantEncoder}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
-import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.persistence.codec.DestinationCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
@@ -26,11 +25,15 @@ import io.circe.{Decoder, Encoder}
   */
 object RefundTxCodec:
 
-    given postDatedEncoder(using CardanoNetwork.Section): Encoder[RefundTx.PostDated] =
+    given postDatedEncoder(using CardanoNetwork.Section): Encoder[RefundTx.PostDated] = {
+        import hydrozoa.multisig.server.JsonCodecs.requestIdEncoder
         deriveEncoder[RefundTx.PostDated]
+    }
 
-    given postDatedDecoder(using CardanoNetwork.Section): Decoder[RefundTx.PostDated] =
+    given postDatedDecoder(using CardanoNetwork.Section): Decoder[RefundTx.PostDated] = {
+        import hydrozoa.multisig.server.JsonCodecs.requestIdDecoder
         deriveDecoder[RefundTx.PostDated]
+    }
 
     given refundTxEncoder(using CardanoNetwork.Section): Encoder[RefundTx] = Encoder.instance {
         case pd: RefundTx.PostDated => postDatedEncoder(using summon).apply(pd)
