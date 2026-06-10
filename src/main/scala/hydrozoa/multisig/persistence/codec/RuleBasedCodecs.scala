@@ -33,7 +33,7 @@ object RuleBasedCodecs:
             Json.obj(
               "deadlineVoting" -> u.deadlineVoting.asJson,
               "versionMajor" -> u.versionMajor.asJson,
-              "setup" -> plistToScala(u.setupG2).asJson
+              "setupG2" -> plistToScala(u.setupG2).asJson
             )
         }
 
@@ -42,8 +42,8 @@ object RuleBasedCodecs:
             for
                 dv <- c.downField("deadlineVoting").as[BigInt]
                 vm <- c.downField("versionMajor").as[BigInt]
-                setup <- c.downField("setup").as[List[ByteString]]
-            yield RuleBasedTreasuryDatum.Unresolved(dv, vm, PList.from(setup))
+                setupG2 <- c.downField("setupG2").as[List[ByteString]]
+            yield RuleBasedTreasuryDatum.Unresolved(dv, vm, PList.from(setupG2))
         }
 
     private given resolvedEncoder: Encoder[RuleBasedTreasuryDatum.Resolved] = Encoder.instance {
@@ -51,7 +51,7 @@ object RuleBasedCodecs:
             Json.obj(
               "evacuationActive" -> (r.evacuationActive: ByteString).asJson,
               "version" -> Json.arr(r.version._1.asJson, r.version._2.asJson),
-              "setup" -> plistToScala(r.setupG2).asJson
+              "setupG2" -> plistToScala(r.setupG2).asJson
             )
     }
 
@@ -60,8 +60,8 @@ object RuleBasedCodecs:
             for
                 ea <- c.downField("evacuationActive").as[ByteString]
                 v <- c.downField("version").as[(BigInt, BigInt)]
-                setup <- c.downField("setup").as[List[ByteString]]
-            yield RuleBasedTreasuryDatum.Resolved(ea, v, PList.from(setup))
+                setupG2 <- c.downField("setupG2").as[List[ByteString]]
+            yield RuleBasedTreasuryDatum.Resolved(ea, v, PList.from(setupG2))
     }
 
     given ruleBasedTreasuryDatumEncoder: Encoder[RuleBasedTreasuryDatum] = Encoder.instance {

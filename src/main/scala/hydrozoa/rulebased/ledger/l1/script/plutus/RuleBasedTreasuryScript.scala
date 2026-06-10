@@ -406,11 +406,11 @@ object RuleBasedTreasuryValidator extends Validator {
     }
 
     def getG2Commitment(
-        setup: List[G2Element],
+        setupG2: List[G2Element],
         subset: List[ScalusScalar]
     ): G2Element = {
         val subsetInGroup =
-            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
+            List.map2(getFinalPolyScalus(subset), setupG2): (sb, st) =>
                 st.scale(sb.toInt)
 
         subsetInGroup.foldLeft(G2.zero): (a, b) =>
@@ -420,24 +420,26 @@ object RuleBasedTreasuryValidator extends Validator {
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
       * `acc`.
       *
-      * @param setup
-      *   The setup of the accumulator.
+      * @param setupG2
+      *   The uncompressed G2 prefix of the KZG trusted setup, sized to `subset.length + 1`.
       * @param acc
-      *   The accumulator to check.
+      *   The accumulator to check (a G1 commitment over the full set).
       * @param subset
-      *   The subset of the setup.
+      *   The subset of evacuation-key scalars being proven.
+      * @param proof
+      *   The membership proof — a G1 commitment over the set's complement of `subset`.
       * @return
       *   True if the accumulator is valid, false otherwise.
       */
     def checkMembership(
-        setup: List[G2Element],
+        setupG2: List[G2Element],
         acc: G1Element,
         subset: List[ScalusScalar],
         proof: G1Element
     ): Boolean = {
-        val g2 = setup !! 0
+        val g2 = setupG2 !! 0
         val lhs = bls12_381_millerLoop(acc, g2)
-        val rhs = bls12_381_millerLoop(proof, getG2Commitment(setup, subset))
+        val rhs = bls12_381_millerLoop(proof, getG2Commitment(setupG2, subset))
         bls12_381_finalVerify(lhs, rhs)
     }
 }

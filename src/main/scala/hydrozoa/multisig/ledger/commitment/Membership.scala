@@ -52,7 +52,7 @@ object Membership {
 
             membershipCheck =
                 RuleBasedTreasuryValidator.checkMembership(
-                  setup = crsG2,
+                  setupG2 = crsG2,
                   acc = commitmentG1,
                   subset = subsetScalars,
                   proof = proofG1
