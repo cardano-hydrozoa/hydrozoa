@@ -141,8 +141,7 @@ object DisputeActorTestHelpers {
             currentSlot = now.toSlot
 
             blockHeader = StandaloneEvacuationCommitment.Onchain(
-              blockNum = 1,
-              startTime = now.toPosixTime,
+              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = versionMinor,
               commitment = initialCommitment

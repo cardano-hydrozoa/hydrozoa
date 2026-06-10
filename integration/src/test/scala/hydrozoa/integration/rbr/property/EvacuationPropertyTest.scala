@@ -149,8 +149,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
             // block header: all peers vote for the same commitment (happy path).
             blockHeader = StandaloneEvacuationCommitment.Onchain(
-              blockNum = BigInt(1),
-              startTime = now.toPosixTime,
+              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = BigInt(1),
               versionMinor = BigInt(1),
               commitment = initialUtxos.kzgCommitment

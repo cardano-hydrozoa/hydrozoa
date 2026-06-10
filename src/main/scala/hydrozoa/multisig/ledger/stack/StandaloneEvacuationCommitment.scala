@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.stack
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.rulebased.ledger.l1.state.VoteState
-import scalus.cardano.onchain.plutus.v3.PosixTime
+import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.Builtins.serialiseData
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, FromData, ToData}
@@ -21,11 +21,13 @@ import scalus.uplc.builtin.{ByteString, FromData, ToData}
   * initial/major blocks the evacuation commitment is implicit in the initialization/settlement
   * effect and goes to L1 immediately on execution; only minor blocks have a *standalone* one.)
   *
-  * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`. `headId` is constant per
-  * head and supplied at dispute-presentation time (the storage/dispute layer is future work), so it
-  * is not carried in this in-memory effect. `blockNum` is kept so the slow side can key the
-  * hard-ack header signature (the consensus artifact paired with this record at dispute time) by
-  * block number.
+  * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`. `headId` is fixed per head
+  * (the `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution script's
+  * cross-head-contamination check. It is supplied at SEC construction time from the head's
+  * `headTokenNames.treasuryTokenName`. `blockNum` is kept on the *offchain* effect (below) so the
+  * slow side can key the hard-ack header signature (the consensus artifact paired with this record
+  * at dispute time) by block number, but it is NOT carried on-chain — the SEC's identity to the
+  * dispute script is `(headId, versionMajor, versionMinor, commitment)`.
   *
   * `header` carries the committed minor block's serialized header — the exact bytes the SEC
   * hard-ack signs over. Keeping it here makes the SEC effect **self-contained for signing**: the
@@ -67,22 +69,19 @@ object StandaloneEvacuationCommitment {
     )
 
     /** The PlutusData shape the rule-based dispute-resolution script consumes as the vote
-      * redeemer's `blockHeader` field. This is the off-chain ⇄ on-chain interface for the SEC: an
-      * SEC effect produced off-chain is serialized into [[Onchain.Serialized]] for signing, and on
+      * redeemer's `sec` field. This is the off-chain ⇄ on-chain interface for the SEC: an SEC
+      * effect produced off-chain is serialized into [[Onchain.Serialized]] for signing, and on
       * dispute presentation the same shape (with the multisig) is fed to
       * [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator]] as a
-      * `VoteRedeemer.blockHeader`.
+      * `VoteRedeemer.sec`.
       *
-      * @param blockNum
-      *   committed minor block's number
-      * @param startTime
-      *   committed minor block's start time. Currently NOT read by the dispute script — kept here
-      *   because it is part of the committed minor block's identity and may be useful for future
-      *   script extensions (e.g. time-window-bounded disputes). Drop only after spec confirms it is
-      *   no longer load-bearing.
+      * @param headId
+      *   this head's `HYDR` token asset name. Pins the SEC to this head; the dispute script rejects
+      *   any SEC whose `headId` does not match the treasury reference input's `HYDR` token name
+      *   (foundation I5 — no cross-head contamination).
       * @param versionMajor
-      *   committed minor block's major version (dispute script reads via `versionMinor` neighbor
-      *   for treasury matching)
+      *   committed minor block's major version (dispute script matches against the treasury's
+      *   pinned major version)
       * @param versionMinor
       *   committed minor block's minor version — read by the dispute script to check the
       *   per-version vote tally.
@@ -91,8 +90,7 @@ object StandaloneEvacuationCommitment {
       *   on.
       */
     final case class Onchain(
-        blockNum: BigInt,
-        startTime: PosixTime,
+        headId: TokenName,
         versionMajor: BigInt,
         versionMinor: BigInt,
         commitment: VoteState.KzgCommitment
@@ -101,15 +99,19 @@ object StandaloneEvacuationCommitment {
 
     object Onchain {
 
-        /** Build the on-chain SEC datum from a minor block header + the KZG commitment of the
-          * evacuation map at that block. KZG is passed explicitly (not read from the header)
-          * because as of step 4 it's a slow-cycle concern, computed in [[StackEffectsBuilder]] from
-          * the cumulative evacuation map state — the header itself no longer carries it.
+        /** Build the on-chain SEC datum from this head's `headId`, the offchain block header, and
+          * the KZG commitment of the evacuation map at that block. KZG is passed explicitly (not
+          * read from the header) because as of step 4 it's a slow-cycle concern, computed in
+          * [[StackEffectsBuilder]] from the cumulative evacuation map state — the header itself no
+          * longer carries it.
           */
-        def apply(offchainHeader: BlockHeader.Section, kzgCommitment: KzgCommitment): Onchain =
+        def apply(
+            headId: TokenName,
+            offchainHeader: BlockHeader.Section,
+            kzgCommitment: KzgCommitment
+        ): Onchain =
             new Onchain(
-              blockNum = BigInt(offchainHeader.blockNum.convert),
-              startTime = offchainHeader.startTime.instant.toEpochMilli,
+              headId = headId,
               versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
               versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
               commitment = kzgCommitment
