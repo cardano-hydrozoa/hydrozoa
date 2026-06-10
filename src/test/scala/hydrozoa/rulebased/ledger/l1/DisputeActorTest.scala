@@ -182,7 +182,7 @@ object DisputeActorTestHelpers {
               action = RuleBasedRegimeManager.DisputeAction.Vote(
                 sec = blockHeader,
                 signatures = env.multisignHeader(blockHeader).toList,
-                coilSignatures = ???
+                coilSignatures = env.multisignHeaderCoil(blockHeader)
               ),
               cardanoBackend = cardanoBackend,
               tracerLocal = tracer
