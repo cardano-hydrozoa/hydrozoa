@@ -22,9 +22,8 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyBuilder, Test}
-import scala.collection.mutable
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
@@ -42,6 +41,16 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     // TODO: move to PropertyBuilder
     def handleBoolean(comp: IO[Unit]): IO[Boolean] =
         (comp >> IO.pure(true)).handleErrorWith(e => IO.println(s"exception: $e") >> IO.pure(false))
+
+    /** Poll until the condition holds, giving up silently after a timeout. `waitForIdle` observes
+      * each actor's idle state independently and can return while a message is still in flight to
+      * the joint ledger mock (likewise, `expectMsgPF` matches on the tracked message buffer before
+      * the mock processes the messages that follow), so a one-shot read of the mock's state right
+      * after either of them can be stale. The caller asserts the condition, with a readable
+      * message, after settling.
+      */
+    def settleOn(p: PropertyBuilder[?])(condition: => Boolean): Unit =
+        p.runIO(awaitCond(IO(condition), 5.seconds, 50.millis).attempt.void)
 
     val multiNodeConfig: MultiNodeConfig = {
         println("Generating multi peer node config (3 peers)...")
@@ -143,46 +152,64 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                 _ <- system.waitForIdle()
             } yield ())
 
-            val startBlockCounter = jointLedgerMock.startBlocksCounter.get
+            val startBlockNums = jointLedgerMock.startBlockNums.get
             p.assert(
-              startBlockCounter == 0,
-              s"No StartBlock is expected, but ${startBlockCounter} found"
+              startBlockNums.isEmpty,
+              s"No StartBlock is expected, but $startBlockNums found"
             )
+
+            p.runIO(system.terminate())
 
             true
         }
 
     // ===================================
-    // Carol doesn't start block 2 until an event is received
+    // Carol (2) doesn't start block 2 until the first request after the block 1 brief
     // ===================================
 
-    val _ = property("Carol doesn't start block 2 until an event is received") =
-        PropertyBuilder.property { p =>
+    val _ = property(
+      "Carol (2) doesn't start block 2 until the first request after the block 1 brief"
+    ) = PropertyBuilder.property { p =>
 
-            val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
+        val TestSetup(system, jointLedgerMock, jointLedgerMockActor) = setupTestEnvironment(p)
 
-            val blockWeaver =
-                createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
-            val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+        val blockWeaver =
+            createBlockWeaverActor(p, system, jointLedgerMockActor, Carol.headPeerNumber)
+        val config = multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
 
-            val anyEvent = p.pick(Arbitrary.arbitrary[UserRequestWithId])
+        // Block 1 brief alone: Carol reproduces block 1 but must not start block 2.
+        p.runIO(for {
+            brief <- mkDummyBlockBrief1(config.headConfig)
+            _ <- blockWeaver ! brief
+            _ <- system.waitForIdle()
+        } yield ())
 
-            // Block 1 brief
-            p.runIO(for {
-                _ <- blockWeaver ! anyEvent
-                brief <- mkDummyBlockBrief1(config.headConfig)
-                _ <- blockWeaver ! brief
-                _ <- system.waitForIdle()
-            } yield ())
+        settleOn(p)(jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+        val startBlockNumsBeforeRequest = jointLedgerMock.startBlockNums.get
+        p.assert(
+          startBlockNumsBeforeRequest == Vector(BlockNumber(1)),
+          "Only the block 1 StartBlock is expected before any request," +
+              s" but $startBlockNumsBeforeRequest found"
+        )
 
-            val startBlockCounter = jointLedgerMock.startBlocksCounter.get
-            p.assert(
-              startBlockCounter == 1,
-              s"Only block 1 StartBlock is expected, but ${startBlockCounter} found"
-            )
+        // The first request after the brief makes Carol start block 2.
+        val anyRequest = p.pick(Arbitrary.arbitrary[UserRequestWithId])
+        p.runIO((blockWeaver ! anyRequest) >> system.waitForIdle())
 
-            true
-        }
+        settleOn(p)(
+          jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1), BlockNumber(2))
+        )
+        val startBlockNumsAfterRequest = jointLedgerMock.startBlockNums.get
+        p.assert(
+          startBlockNumsAfterRequest == Vector(BlockNumber(1), BlockNumber(2)),
+          "Block 2 StartBlock is expected after the first request," +
+              s" but $startBlockNumsAfterRequest found"
+        )
+
+        p.runIO(system.terminate())
+
+        true
+    }
 
     // ===================================
     // Bob finishes first block after receiving any event
@@ -214,6 +241,8 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
               )
             )
 
+            p.runIO(system.terminate())
+
             true
         }
 
@@ -243,25 +272,29 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         p.runIO(weaverActor ! brief)
         val _ = p.runIO(system.waitForIdle())
 
-        def aroundNow(other: Instant): Boolean = {
-            val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
-            // println(now)
-            // println(other)
+        val now = p.runIO(realTimeQuantizedInstant(slotConfig = config.slotConfig))
+
+        def isAroundNow(other: Instant): Boolean =
             now.instant.toEpochMilli - 10.second.toMillis < other.toEpochMilli &&
-            now.instant.toEpochMilli + 10.second.toMillis > other.toEpochMilli
-        }
+                now.instant.toEpochMilli + 10.second.toMillis > other.toEpochMilli
 
         // then ...
         p.assert(
           p.runIO(handleBoolean(expectMsgPF(jointLedgerMockActor, 5.second) {
-              case s: StartBlock if aroundNow(s.blockCreationStartTime.instant) => ()
+              case s: StartBlock
+                  if s.blockNum == BlockNumber(2) &&
+                      isAroundNow(s.blockCreationStartTime.instant) =>
+                  ()
           })),
-          "weaver should start the block with sensible creation time."
+          "weaver should start block 2 with sensible creation time."
         )
 
+        settleOn(p)(jointLedgerMock.events.get == requests)
+        val fedRequests = jointLedgerMock.events.get
         p.assert(
-          jointLedgerMock.events.toSeq == requests,
-          s"feed all residual/recovered mempool requests: expected ${requests.size}, got: ${jointLedgerMock.events.size}"
+          fedRequests == requests,
+          "feed all residual/recovered mempool requests in order: " +
+              s"expected ${requests.map(_.requestId)}, got ${fedRequests.map(_.requestId)}"
         )
 
         p.runIO(system.terminate())
@@ -287,24 +320,24 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             p.runIO(weaverActor ! brief)
 
             // Any random events
-            val events: Seq[UserRequestWithId] =
-                p.pick(Gen.nonEmptyListOf(Arbitrary.arbitrary[UserRequestWithId]))
+            val events: Seq[UserRequestWithId] = p.pick(
+              Gen.nonEmptyListOf(Arbitrary.arbitrary[UserRequestWithId])
+                  .map(_.distinctBy(_.requestId))
+            )
 
             // Should be passed through with no delay
             p.assert(
               events
                   .map { e =>
-                      p.runIO(
-                        handleBoolean(for {
-                            _ <- weaverActor ! e
-                            _ <- system.waitForIdle()
-                        } yield ())
-                      ) &&
-                      (jointLedgerMock.events.last == e)
+                      p.runIO(weaverActor ! e)
+                      settleOn(p)(jointLedgerMock.events.get.lastOption.contains(e))
+                      jointLedgerMock.events.get.lastOption.contains(e)
                   }
                   .forall(identity),
               "events are passed through with no delay"
             )
+
+            p.runIO(system.terminate())
 
             true
         }
@@ -326,16 +359,19 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
         val brief = p.runIO(mkDummyBlockBrief1(config.headConfig))
         val _ = p.runIO((weaverActor ! brief) >> system.waitForIdle())
 
-        // Should NOT have sent StartBlock for block 2 (only brief, no request)
-        val startBlockCounter = jointLedgerMock.startBlocksCounter.get
+        // Reproducing block 1 sends its StartBlock, but block 2 must not be started
+        // (only brief, no request)
+        settleOn(p)(jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+        val startBlockNums = jointLedgerMock.startBlockNums.get
         p.assert(
-          startBlockCounter == 0,
-          s"No StartBlock is expected when only brief received, but ${startBlockCounter} found"
+          startBlockNums == Vector(BlockNumber(1)),
+          "Only the block 1 StartBlock is expected when only brief received," +
+              s" but $startBlockNums found"
         )
 
         // Check that no events were fed (since we didn't send any user requests)
         p.assert(
-          jointLedgerMock.events.isEmpty,
+          jointLedgerMock.events.get.isEmpty,
           "No events should be fed when only brief is received"
         )
 
@@ -373,17 +409,18 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             handleBoolean(for {
                 _ <- weaverActor ! anyLedgerEvent
                 _ <- system.waitForIdle()
-                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) { case s: StartBlock =>
-                    ()
+                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
+                    case s: StartBlock if s.blockNum == BlockNumber(2) => ()
                 }
             } yield ())
           ),
-          "StartBlock should be sent after both brief and request are received"
+          "Block 2 StartBlock should be sent after both brief and request are received"
         )
 
         // Verify the event was fed through
+        settleOn(p)(jointLedgerMock.events.get.contains(anyLedgerEvent))
         p.assert(
-          jointLedgerMock.events.contains(anyLedgerEvent),
+          jointLedgerMock.events.get.contains(anyLedgerEvent),
           "Event should be fed through to joint ledger"
         )
 
@@ -421,17 +458,18 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             handleBoolean(for {
                 _ <- weaverActor ! brief
                 _ <- system.waitForIdle()
-                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) { case s: StartBlock =>
-                    ()
+                _ <- expectMsgPF(jointLedgerMockActor, 5.seconds) {
+                    case s: StartBlock if s.blockNum == BlockNumber(2) => ()
                 }
             } yield ())
           ),
-          "StartBlock should be sent after both request and brief are received (reverse order)"
+          "Block 2 StartBlock should be sent after request then brief (reverse order)"
         )
 
         // Verify the event was fed through
+        settleOn(p)(jointLedgerMock.events.get.contains(anyLedgerEvent))
         p.assert(
-          jointLedgerMock.events.contains(anyLedgerEvent),
+          jointLedgerMock.events.get.contains(anyLedgerEvent),
           "Event should be fed through to joint ledger"
         )
 
@@ -587,16 +625,16 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
     class JointLedgerMock extends Actor[IO, JointLedger.Requests.Request]:
 
-        val events: mutable.Buffer[UserRequestWithId] = mutable.Buffer.empty
-        val startBlocksCounter = AtomicInteger(0)
+        val events: AtomicReference[Vector[UserRequestWithId]] = AtomicReference(Vector.empty)
+        val startBlockNums: AtomicReference[Vector[BlockNumber]] = AtomicReference(Vector.empty)
 
         override def receive: Receive[IO, JointLedger.Requests.Request] = {
             case e: UserRequestWithId =>
                 // IO.println(s"mock: LedgerEvent: $e") >>
-                IO { events.append(e) }
+                IO { events.updateAndGet(_ :+ e) }
             case s: StartBlock =>
                 // IO.println(s"mock: StartBlock: $s") >>
-                IO.pure(startBlocksCounter.incrementAndGet())
+                IO { startBlockNums.updateAndGet(_ :+ s.blockNum) }
             case c: CompleteBlockRegular =>
                 // IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}") >>
                 IO.pure(())
