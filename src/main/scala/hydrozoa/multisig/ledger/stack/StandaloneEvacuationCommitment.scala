@@ -21,13 +21,14 @@ import scalus.uplc.builtin.{ByteString, FromData, ToData}
   * initial/major blocks the evacuation commitment is implicit in the initialization/settlement
   * effect and goes to L1 immediately on execution; only minor blocks have a *standalone* one.)
   *
-  * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`. `headId` is fixed per head
-  * (the `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution script's
+  * Per spec the on-L1 record is `(headId, blockVersion, kzgCommitment)`, with `blockVersion`
+  * flattened to `(versionMajor, versionMinor)` in the datum encoding — so [[Onchain]] below carries
+  * four fields: `(headId, versionMajor, versionMinor, commitment)`. `headId` is fixed per head (the
+  * `HYDR` token asset name) and pins the SEC to this head for the dispute-resolution script's
   * cross-head-contamination check. It is supplied at SEC construction time from the head's
   * `headTokenNames.treasuryTokenName`. `blockNum` is kept on the *offchain* effect (below) so the
   * slow side can key the hard-ack header signature (the consensus artifact paired with this record
-  * at dispute time) by block number, but it is NOT carried on-chain — the SEC's identity to the
-  * dispute script is `(headId, versionMajor, versionMinor, commitment)`.
+  * at dispute time) by block number, but it is NOT carried on-chain.
   *
   * `header` carries the committed minor block's serialized header — the exact bytes the SEC
   * hard-ack signs over. Keeping it here makes the SEC effect **self-contained for signing**: the

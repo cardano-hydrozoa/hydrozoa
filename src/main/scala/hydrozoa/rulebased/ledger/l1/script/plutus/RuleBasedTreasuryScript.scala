@@ -80,8 +80,8 @@ object RuleBasedTreasuryValidator extends Validator {
         "The activeUtxo in resolved treasury must match voting results"
     private inline val ResolveTreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
-    private inline val ResolveTreasuryInputOutputSetup =
-        "setup in treasuryInput and treasuryOutput must match"
+    private inline val ResolveTreasuryInputOutputSetupG2 =
+        "setupG2 in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedAwaitingVote =
@@ -227,7 +227,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 require(
                   unresolvedDatum.setupG2 === treasuryOutputDatum.setupG2,
-                  ResolveTreasuryInputOutputSetup
+                  ResolveTreasuryInputOutputSetupG2
                 )
 
             // ===================================
@@ -314,8 +314,9 @@ object RuleBasedTreasuryValidator extends Validator {
                   EvacuateSetupIsNotBigEnough
                 )
 
-                // Extract setup of needed length
-                val setup = resolvedDatum.setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
+                // Extract the G2 setup prefix of needed length and decompress for pairing.
+                val uncompressedSetup =
+                    resolvedDatum.setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
                 // evacuatednUtxos.foreach( s =>
@@ -323,7 +324,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // )
 
                 require(
-                  checkMembership(setup, acc, evacuatedUtxos, proof_),
+                  checkMembership(uncompressedSetup, acc, evacuatedUtxos, proof_),
                   EvacuateMembershipValidationFailed
                 )
 

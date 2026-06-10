@@ -89,6 +89,8 @@ object DisputeResolutionValidator extends Validator {
         "Redeemer should contain all valid signatures for the block voted"
     private inline val VoteCoilQuorumCheck =
         "coilMultisig must contain at least coilQuorum valid signatures"
+    private inline val VoteCoilSigInvalid =
+        "Invalid coil-peer signature in coilMultisig"
     private inline val VoteMajorVersionCheck =
         "The versionMajor field must match between treasury and voteRedeemer"
     private inline val VoteVoteOutputExists =
@@ -276,9 +278,17 @@ object DisputeResolutionValidator extends Validator {
 
                 verifySignatures(treasuryDatum.headPeers, voteRedeemer.headMultisig)
 
+                // The coilMultisig field is sparse and position-aligned to coilPeers. It does NOT
+                // need to contain the exact length of entries; no more than coilQuorum signatures
+                // are verified, even if more are provided. Each Some(sig) must be a valid
+                // signature — an invalid signature in any Some slot aborts the transaction.
+                //
+                // TODO (Scalus team): the List[Option[Signature]] encoding bloats wire size when
+                // many coil peers abstain. A sparser encoding like List[(CoilPeerId, Signature)]
+                // ascending in CoilPeerId would be cheaper on wire — at some UPLC cost for the
+                // ascending-order check and the index lookup. Worth evaluating once cost
+                // benchmarks are in place.
                 @tailrec
-                // The coilMultisig field is be sparse. It does NOT need to contain the exact length of entires;
-                // no more than coilQuorum signatures are verified, even if more are provided.
                 def verifyCoilSignatures(
                     keys: List[ByteString],
                     sigs: List[Option[ByteString]],
@@ -296,7 +306,10 @@ object DisputeResolutionValidator extends Validator {
                                         s match
                                             case scalus.cardano.onchain.plutus.prelude.Option
                                                     .Some(sig) =>
-                                                require(verifyEd25519Signature(k, msg, sig))
+                                                require(
+                                                  verifyEd25519Signature(k, msg, sig),
+                                                  VoteCoilSigInvalid
+                                                )
                                                 verifyCoilSignatures(ks, ss, count + 1)
                                             case scalus.cardano.onchain.plutus.prelude.Option.None =>
                                                 verifyCoilSignatures(ks, ss, count)
