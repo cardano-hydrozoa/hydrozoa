@@ -71,7 +71,7 @@ object DisputeResolutionValidator extends Validator {
 
     // Vote redeemer
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
-    private inline val VoteAlreadyCast = "Vote is already has been cast"
+    private inline val VoteAlreadyCast = "Vote already cast in exclusive ballot box"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
     private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
@@ -160,13 +160,12 @@ object DisputeResolutionValidator extends Validator {
                     // Unreachable
                     case _ => fail()
 
-                // Check vote status and conditionally verify peer signature.
-                // Public ballot box (key == 0) can be voted by anyone; peer check is skipped.
                 voteDatum.voteStatus match {
                     case AwaitingVote(pkh) =>
-                        if voteDatum.key != BigInt(0) then
-                            require(tx.signatories.contains(pkh), VoteMustBeSignedByPeer)
-                    case _ => fail(VoteAlreadyCast)
+                        require(tx.signatories.contains(pkh), VoteMustBeSignedByPeer)
+                    case _ =>
+                        // Public ballot box (key == 0) starts as Voted and may be re-voted by anyone.
+                        if voteDatum.key != BigInt(0) then fail(VoteAlreadyCast)
                 }
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
