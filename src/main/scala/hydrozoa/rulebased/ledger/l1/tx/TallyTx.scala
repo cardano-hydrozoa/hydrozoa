@@ -131,6 +131,21 @@ object TallyTxOps {
 //              collateralUtxo.collateralOutput.addrKeyHash
 //            )
 
+            def isDecided(ballotBox: BallotBox[?]): Boolean =
+                ballotBox.ballotBoxOutput.status match
+                    case _: VoteStatus.Voted        => true
+                    case VoteStatus.Abstain         => true
+                    case _: VoteStatus.AwaitingVote => false
+
+            // The dispute script only requires the voting deadline to have elapsed when at least
+            // one tally input is still AwaitingVote. Voted and Abstain are both terminal/decided
+            // (see DisputeResolutionValidator.Tally's `isAwaiting` guard), so we can omit the
+            // ValidityStartSlot when both inputs are decided.
+            val validityStart =
+                if isDecided(continuingBallotBox) && isDecided(removedBallotBox)
+                then List.empty
+                else List(ValidityStartSlot(votingDeadline.slot))
+
             for {
                 context <- contextualscalus.TransactionBuilder
                     .build(
@@ -143,9 +158,8 @@ object TallyTxOps {
                         // Send back the continuing vote utxo (the removed one is consumed)
                         tallied.send,
                         treasuryUtxo.referenceOutput,
-                        collateralUtxo.add,
-                        ValidityStartSlot(votingDeadline.slot)
-                      )
+                        collateralUtxo.add
+                      ) ++ validityStart
                     )
 
                 finalized <- context

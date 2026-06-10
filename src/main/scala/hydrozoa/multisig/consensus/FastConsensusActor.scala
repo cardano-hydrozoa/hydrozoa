@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.*
@@ -13,6 +14,7 @@ import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 import scala.util.control.NonFatal
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, platform}
@@ -46,7 +48,10 @@ import scalus.uplc.builtin.{ByteString, platform}
   * soft-confirmed.
   */
 object FastConsensusActor:
-    type Config = OwnPeerPublic.Section & HeadPeers.Section
+    // `& CardanoNetwork.Section`: the SoftConfirmation codec (Block.SoftConfirmed) is
+    // `Section`-dependent; the full configs passed in already satisfy it (same ones that feed
+    // JointLedger's `HeadConfig.Section`).
+    type Config = OwnPeerPublic.Section & HeadPeers.Section & CardanoNetwork.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
@@ -55,8 +60,8 @@ object FastConsensusActor:
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
-        /** A hub's coil relay (§8.3): this actor's **own** soft-ack is sent here so the hub's coil
-          * peers receive it. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** soft-ack is sent here so the
+          * hub's coil peers receive it. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None,
         tracer: hydrozoa.lib.tracing.ProtocolTracer = hydrozoa.lib.tracing.ProtocolTracer.noop,
@@ -109,7 +114,8 @@ object FastConsensusActor:
         config: Config,
         pendingConnections: MultisigRegimeManager.PendingConnections |
             FastConsensusActor.Connections,
-        tracerLocal: IOLocal[Tracer]
+        tracerLocal: IOLocal[Tracer],
+        persistence: Persistence[IO]
     ): IO[FastConsensusActor] =
         for {
             stateRef <- Ref[IO].of(State.initial)
@@ -117,7 +123,8 @@ object FastConsensusActor:
           config = config,
           pendingConnections = pendingConnections,
           stateRef = stateRef,
-          tracerLocal = tracerLocal
+          tracerLocal = tracerLocal,
+          persistence = persistence
         )
 
     enum Error extends Throwable:
@@ -147,11 +154,17 @@ class FastConsensusActor(
     config: FastConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | FastConsensusActor.Connections,
     stateRef: Ref[IO, FastConsensusActor.State],
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, FastConsensusActor.Request]:
     import FastConsensusActor.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` (see [[FastConsensusActor.Config]]); expose it as a
+      * given so the typed `SoftConfirmation` `WriteBatch.put` in [[completeCell]] picks it up.
+      */
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[FastConsensusActor.Connections]](None)
 
@@ -297,6 +310,13 @@ class FastConsensusActor(
           confirmedBlockType,
           confirmed.blockBrief.blockVersion.major: Int,
           confirmed.blockBrief.blockVersion.minor: Int
+        )
+
+        // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
+        // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
+        // the subsumed soft-acks (no compaction on confirmation).
+        _ <- persistence.write(
+          WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(confirmed)
         )
 
         // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the

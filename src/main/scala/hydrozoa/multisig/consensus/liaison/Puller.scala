@@ -3,15 +3,19 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.{IO, Ref}
 import org.typelevel.log4cats.Logger
 
-/** The pull half of one liaison link (§8.5 of `design/coil-network.md`): send `GetMsgBatch`es,
-  * consume the remote's `NewMsgBatch` replies, and advance our inbound lane cursors. A
-  * single-outstanding-request chain — each reply triggers the next request only after it verifies
-  * and advances.
+/** The pull half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: send
+  * `GetMsgBatch`es, consume the remote's `NewMsgBatch` replies, and advance our inbound lane
+  * cursors. A single-outstanding-request chain — each reply triggers the next request only after it
+  * verifies and advances.
   *
   * Composition, not inheritance: a liaison actor *has* a `Puller` (and a [[Server]]), it does not
-  * *extend* them. The per-lane heavy lifting lives in the lane primitives; the per-shape batch
-  * typing lives in the actor's glue closures; this engine owns only the pull-side state machine.
+  * *extend* them. The lane primitives do the per-lane heavy lifting; the actor's glue closures fix
+  * the batch types for its link; this engine owns only the pull-side state machine.
   *
+  * @tparam G
+  *   the type of batch request (a `GetMsgBatch` of next-expected cursors).
+  * @tparam N
+  *   the type of batch (a `NewMsgBatch` of payload slices).
   * @param initialGet
   *   the first request (batch 0, initial cursors).
   * @param buildGet
@@ -21,8 +25,10 @@ import org.typelevel.log4cats.Logger
   *   `Left(reason)` leaves all cursors untouched).
   * @param dispatch
   *   route a verified reply's payloads to the local actors.
-  * @param getBatchNum
-  *   / [[newBatchNum]] — read the batch number off a request / reply.
+  * @param numberOfBatchRequest
+  *   read the batch number off a batch request
+  * @param numberOfBatch
+  *   read the batch number off a batch
   * @param send
   *   send a request to the counterpart liaison.
   */
@@ -31,8 +37,8 @@ final class Puller[G, N](
     buildGet: BatchNumber => IO[G],
     accept: N => IO[Either[String, Unit]],
     dispatch: N => IO[Unit],
-    getBatchNum: G => BatchNumber,
-    newBatchNum: N => BatchNumber
+    numberOfBatchRequest: G => BatchNumber,
+    numberOfBatch: N => BatchNumber
 )(send: G => IO[Unit])(using logger: Logger[IO]) {
     private val currentlyRequesting = Ref.unsafe[IO, G](initialGet)
 
@@ -49,18 +55,18 @@ final class Puller[G, N](
       */
     def handleReply(received: N): IO[Unit] =
         currentlyRequesting.get.flatMap { outstanding =>
-            if newBatchNum(received) != getBatchNum(outstanding) then
+            if numberOfBatch(received) != numberOfBatchRequest(outstanding) then
                 logger.debug(
-                  s"dropping stale reply batch=${newBatchNum(received)} " +
-                      s"(outstanding=${getBatchNum(outstanding)})"
+                  s"dropping stale reply batch=${numberOfBatch(received)} " +
+                      s"(outstanding=${numberOfBatchRequest(outstanding)})"
                 )
             else
                 accept(received).flatMap {
                     case Left(reason) =>
-                        logger.warn(s"rejecting reply batch=${newBatchNum(received)}: $reason")
+                        logger.warn(s"rejecting reply batch=${numberOfBatch(received)}: $reason")
                     case Right(()) =>
                         for {
-                            next <- buildGet(getBatchNum(outstanding).increment)
+                            next <- buildGet(numberOfBatchRequest(outstanding).increment)
                             _ <- currentlyRequesting.set(next)
                             _ <- dispatch(received)
                             _ <- send(next)

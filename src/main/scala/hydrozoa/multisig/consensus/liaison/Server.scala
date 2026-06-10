@@ -4,15 +4,19 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import hydrozoa.multisig.consensus.liaison.Server.Served
 
-/** The serve half of one liaison link (§8.5 of `design/coil-network.md`): answer the remote's
-  * `GetMsgBatch` pulls from our outbox lanes. When a pull finds nothing new, the request is stashed
-  * and re-answered the moment fresh content is appended ([[afterAppend]]) — so a quiet link doesn't
-  * spin.
+/** The serve half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: answer the
+  * remote's `GetMsgBatch` pulls from our outbox lanes. When a pull finds nothing new, the request
+  * is stashed and re-answered the moment fresh content is appended ([[afterAppend]]) — so a quiet
+  * link doesn't spin.
   *
   * Composition, not inheritance: a liaison actor *has* a `Server` (and a [[Puller]]), it does not
   * *extend* them. The two halves are independent — for the asymmetric hub↔coil link they carry
   * entirely different lane sets — and share only the actor's send path.
   *
+  * @tparam G
+  *   the pull-request type (a `GetMsgBatch` of next-expected cursors).
+  * @tparam N
+  *   the reply type (a `NewMsgBatch` of payload slices).
   * @param serve
   *   build a reply for a request from the current outbox lanes (echoing its batch number), or
   *   report [[Served.Empty]] / [[Served.OutOfBounds]].

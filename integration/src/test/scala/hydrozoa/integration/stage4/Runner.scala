@@ -3,7 +3,6 @@ package hydrozoa.integration.stage4
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.commands.{AnyCommand, LoggingControl}
-import org.scalacheck.rng.Seed
 import org.scalacheck.{Test, YetAnotherProperties}
 
 import scala.concurrent.duration.DurationInt
@@ -122,10 +121,11 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
-            //.withPropFilter(Some("Two-peers head works"))
+            // .withPropFilter(Some("Two-peers head works"))
             // .withPropFilter(Some("Three-peers head works"))
             // .withPropFilter(Some("Twenty-peers head works"))
-             .withPropFilter(Some("Two-peers head works WS"))
+            // .withPropFilter(Some("Two-peers head works WS"))
+             .withPropFilter(Some("Two-heads-one-coil works WS"))
             //.withPropFilter(Some("Ten-peers head works WS"))
             // .withInitialSeed(SOk,.eed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
             // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
@@ -160,23 +160,23 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     // `useTestControl = false`, and `startupSut` sleeps the wall clock until that anchor, so
     // model time and wall clock coincide at command 1. Inter-arrival delays from the
     // superposition generator now elapse in real time.
-    val _ = property("Two-peers head works WS") =
-        Stage4Suite(
-          label = "stage4-ws-two-peers",
-          nPeers = 2,
-          transportMode = TransportMode.WebSocket(),
-        ).property()
+    val _ = property("Two-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-two-peers",
+      nPeers = 2,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
 
-    val _ = property("Ten-peers head works WS") =
-        Stage4Suite(
-          label = "stage4-ws-ten-peers",
-          nPeers = 10,
-          transportMode = TransportMode.WebSocket(),
-        ).property()
+    val _ = property("Ten-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-ten-peers",
+      nPeers = 10,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
 
     // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
-    // shared per-peer WS server (`/coil` route) instead of in-process handles, exercising the
-    // CoilHubTransport / CoilUplinkTransport / CoilFrame path end-to-end. Same status as the Direct
+    // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
+    // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end. Same status as the Direct
     // 2h1c run — opt-in, NOT in the default green set: the blocker is harness settling, not the
     // transport. Point the propFilter here to watch the coil follow + co-sign over real WS.
     val _ = property("Two-heads-one-coil works WS") =

@@ -17,12 +17,14 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
+    persistence: Persistence[IO],
     tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Request] {
 
@@ -104,17 +106,19 @@ trait MultisigRegimeManager(
                 )
 
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal)
+              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
-            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
+            requestSequencer <- context.actorOf(
+              RequestSequencer(config, pendingConnections, persistence)
+            )
 
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
             )
 
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal)
+              StackComposer(config, pendingConnections, tracerLocal, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
@@ -123,7 +127,7 @@ trait MultisigRegimeManager(
             )
 
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal)
+              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
             // One peer liaison toward every other head peer (the head mesh). The liaisons project
@@ -134,7 +138,8 @@ trait MultisigRegimeManager(
                     .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
                         context.actorOf(
-                          liaison.PeerLiaisonHeadToHead(config, pid, pendingConnections)
+                          liaison
+                              .PeerLiaisonHeadToHead(config, pid, pendingConnections, persistence)
                         )
                     )
 
@@ -149,7 +154,7 @@ trait MultisigRegimeManager(
             hubbedCoilPeers = config.hubbedCoilPeerNums(ownHeadNum)
 
             // If this head peer is a hub, spawn the relay sequencer for its coil peers' hard-acks
-            // (§8.4) + the CoilRelay fan-out (§8.3) + one hub→coil liaison per coil peer it hubs.
+            // (§5.3) [doc-ref] + the CoilRelay fan-out (§5.4) [doc-ref] + one hub→coil liaison per coil peer it hubs.
             // Non-hub head peers spawn none.
             coilAckSequencer <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
@@ -162,7 +167,7 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
-                      liaison.PeerLiaisonHubToCoil(config, coilNum, pendingConnections)
+                      liaison.PeerLiaisonHubToCoil(config, coilNum, pendingConnections, persistence)
                     )
                 )
 
@@ -231,7 +236,7 @@ object MultisigRegimeManager {
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
         stackComposerLimiter: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        // ---- Producer broadcast targets (§8) ----
+        // ---- Producer broadcast targets (§5.2) [doc-ref] ----
         /** Head-peer-mesh liaisons (one per other head peer); empty on a coil peer. Producers
           * broadcast their own artifacts here. `ActorRef` is contravariant in its message type, so
           * a handle is usable as `ActorRef[IO, <any artifact in its Request>]`.
@@ -241,8 +246,8 @@ object MultisigRegimeManager {
           * broadcasts its own hard-ack to `headPeerLiaisons ++ coilUplink`.
           */
         coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
-        /** Present only on a hub head peer (§8.3): the fan-out that relays the population to its
-          * coil peers. Producers send only their own production here. `None` elsewhere.
+        /** Present only on a hub head peer (§5.4) [doc-ref]: the fan-out that relays the population
+          * to its coil peers. Producers send only their own production here. `None` elsewhere.
           */
         coilRelay: Option[CoilRelay.Handle] = None,
         // ---- Remote-handle resolution for spawned liaisons (in-process only) ----
@@ -251,8 +256,8 @@ object MultisigRegimeManager {
         remoteHeadLiaisons: Map[HeadPeerNumber, liaison.PeerLiaisonHeadToHead.Handle] = Map.empty,
         remoteCoilLiaisons: Map[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle] = Map.empty,
         remoteHubLiaison: Option[liaison.PeerLiaisonHubToCoil.Handle] = None,
-        /** Present only on a hub head peer (§8): re-sequences its coil peers' hard-acks onto the
-          * `HubHardAckLane`. `None` elsewhere.
+        /** Present only on a hub head peer (§5.3) [doc-ref]: re-sequences its coil peers' hard-acks
+          * onto the `HubHardAckLane`. `None` elsewhere.
           */
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */
@@ -266,9 +271,18 @@ object MultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
+        persistence: Persistence[IO],
         tracerLocal: IOLocal[Tracer]
     ): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger, tracerLocal) {})
+        IO(
+          new MultisigRegimeManager(
+            config,
+            cardanoBackend,
+            virtualLedger,
+            persistence,
+            tracerLocal
+          ) {}
+        )
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]

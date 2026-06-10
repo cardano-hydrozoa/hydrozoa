@@ -13,21 +13,21 @@ import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import scala.concurrent.duration.*
 
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
-  * `/coil` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
+  * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
   * [[CoilFrame.Hello]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
   *
   * Outbound is the coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]); inbound is the
   * hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]), routed to the local
   * [[PeerLiaisonCoilToHub]].
   */
-final class CoilUplinkTransport private (
+final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
     private val hubUri: Uri,
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
 )(using CardanoNetwork.Section) {
 
-    private val logger = Logging.loggerIO(s"CoilUplinkTransport.c${ownCoilNum.convert}")
+    private val logger = Logging.loggerIO(s"CoilPeerWsTransport.c${ownCoilNum.convert}")
 
     /** Wire the local PeerLiaisonCoilToHub as the inbound dispatch target. Must be called before
       * the link starts receiving traffic.
@@ -83,14 +83,14 @@ final class CoilUplinkTransport private (
         Resource.make(dialerLoop(client).start)(_.cancel).void
 }
 
-object CoilUplinkTransport {
+object CoilPeerWsTransport {
 
     def create(
         ownCoilNum: CoilPeerNumber,
         hubUri: Uri,
-    )(using CardanoNetwork.Section): IO[CoilUplinkTransport] =
+    )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilUplinkTransport(ownCoilNum, hubUri, outbox, inboundRef)
+        } yield new CoilPeerWsTransport(ownCoilNum, hubUri, outbox, inboundRef)
 }

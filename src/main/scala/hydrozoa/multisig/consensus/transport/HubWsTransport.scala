@@ -14,7 +14,7 @@ import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 
-/** The hub side of the hub→coil WS links: contributes the `/coil` route to the hub's shared
+/** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
   * [[NodeWsServer]] and serves every coil peer the hub hubs. The hub runs no dialer — each coil
   * dials in and identifies itself with [[CoilFrame.Hello]]; the hub binds that socket to the coil's
   * [[CoilPeerNumber]], routes inbound batches to that coil's [[PeerLiaisonHubToCoil]], and drains
@@ -23,12 +23,12 @@ import org.http4s.websocket.WebSocketFrame
   * Outbound is the hub-emitted subset ([[Population.New]] / [[OwnHardAck.Get]]); inbound is the
   * coil-emitted subset ([[Population.Get]] / [[OwnHardAck.New]]).
   */
-final class CoilHubTransport private (
+final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
 )(using CardanoNetwork.Section) {
 
-    private val logger = Logging.loggerIO("CoilHubTransport")
+    private val logger = Logging.loggerIO("HubWsTransport")
 
     /** Wire a local PeerLiaisonHubToCoil handle as the inbound dispatch target for the given coil
       * peer. Must be called before that coil's link starts receiving traffic.
@@ -102,14 +102,14 @@ final class CoilHubTransport private (
             response <- wsb.build(sendStream, receivePipe)
         } yield response
 
-    /** The `/coil` route to mount on the hub's shared [[NodeWsServer]]. */
+    /** The `/hub` route to mount on the hub's shared [[NodeWsServer]]. */
     def routes(wsb: WebSocketBuilder2[IO]): HttpRoutes[IO] =
-        HttpRoutes.of[IO] { case GET -> Root / "coil" =>
+        HttpRoutes.of[IO] { case GET -> Root / "hub" =>
             serverHandler(wsb)
         }
 }
 
-object CoilHubTransport {
+object HubWsTransport {
 
     /** Allocate the hub-side coil transport: one outbox per hubbed coil peer + an empty inbound
       * map. The caller mounts [[routes]] on the hub's [[NodeWsServer]] and [[register]]s each
@@ -117,11 +117,11 @@ object CoilHubTransport {
       */
     def create(
         coils: List[CoilPeerNumber]
-    )(using CardanoNetwork.Section): IO[CoilHubTransport] =
+    )(using CardanoNetwork.Section): IO[HubWsTransport] =
         for {
             outboxes <- coils
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, PeerLiaisonHubToCoil.Handle])
-        } yield new CoilHubTransport(outboxes, inboundRef)
+        } yield new HubWsTransport(outboxes, inboundRef)
 }

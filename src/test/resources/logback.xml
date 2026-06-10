@@ -11,11 +11,15 @@
     <logger name="BlockWeaver" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
+    <logger name="PeerLiaisonHeadToHead" level="warn"/>
+    <logger name="PeerLiaisonHubToCoil" level="warn"/>
+    <logger name="PeerLiaisonCoilToHub" level="warn"/>
     <logger name="InitializationTxSeq" level="warn"/>
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
     <logger name="Limiter" level="warn"/>
+    <logger name="Persistence" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>

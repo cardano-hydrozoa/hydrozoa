@@ -35,8 +35,8 @@ object VoteDatum {
                 val i = x._2
                 val pkh = x._1
                 VoteState.VoteDatum(
-                  key = i,
-                  link = if i < numPeers then i + 1 else 0,
+                  key = i + 1,
+                  link = if i < numPeers - 1 then i + 2 else 0,
                   voteStatus = AwaitingVote(pkh)
                 )
             }
@@ -60,9 +60,22 @@ object VoteState:
     given FromData[VoteDatum] = FromData.derived
     given ToData[VoteDatum] = ToData.derived
 
+    /** Status of a single vote utxo at the dispute resolution address.
+      *
+      *   - [[AwaitingVote]] — peer has not yet acted; can transition to [[Voted]] (cast vote) or
+      *     [[Abstain]] (peer publicly declines to vote, e.g. when no SEC is available because the
+      *     latest hard-confirmed stack is Initial or a Major with no trailing minors — introduced
+      *     to close the gap left by the KZG-out-of-BlockHeader refactor).
+      *   - [[Voted]] — peer has cast a vote on a specific KZG commitment + minor block version.
+      *   - [[Abstain]] — peer has publicly abandoned this ballot box. Tallies the same as
+      *     [[AwaitingVote]] in [[Eq]]/precedence terms (any [[Voted]] supersedes it), but is
+      *     terminal: the script lets the peer's own utxo be tallied immediately rather than waiting
+      *     for `deadlineVoting`.
+      */
     enum VoteStatus:
         case AwaitingVote(peer: PubKeyHash)
         case Voted(commitment: KzgCommitment, versionMinor: BigInt)
+        case Abstain
 
     given FromData[VoteStatus] = FromData.derived
     given ToData[VoteStatus] = ToData.derived
@@ -72,14 +85,16 @@ object VoteState:
             case VoteStatus.AwaitingVote(peerA) =>
                 b match
                     case VoteStatus.AwaitingVote(peerB) => peerA === peerB
-                    case VoteStatus.Voted(_, _)         => false
+                    case _                              => false
             case VoteStatus.Voted(commitmentA, versionMinorA) =>
-                a match {
-                    case VoteStatus.AwaitingVote(_) => false
+                b match
                     case VoteStatus.Voted(commitmentB, versionMinorB) =>
-                        commitmentA === commitmentB
-                        && versionMinorA === versionMinorB
-                }
+                        commitmentA === commitmentB && versionMinorA === versionMinorB
+                    case _ => false
+            case VoteStatus.Abstain =>
+                b match
+                    case VoteStatus.Abstain => true
+                    case _                  => false
 
     type Key = BigInt
 

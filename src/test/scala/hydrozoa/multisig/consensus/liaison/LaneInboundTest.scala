@@ -5,20 +5,20 @@ import hydrozoa.multisig.consensus.liaison.LaneInbound.*
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the inbound half ([[LaneInbound]]) — cursor + verify + advance. Items are plain
-  * `Int`s that are their own lane number (`extract = identity`).
+  * `Int`s that are their own item number (`numberOf = identity`).
   */
 class LaneInboundTest extends AnyFunSuite {
 
     private def contiguousFrom(first: Int): LaneInbound[Int, Int] =
-        LaneInbound.contiguous[Int, Int](extract = identity, first = first, incr = _ + 1)
+        LaneInbound.contiguous[Int, Int](numberOf = identity, first = first, increment = _ + 1)
 
     // Sparse remote-led schedule: zero (0) is the bootstrap sentinel; the remote leads the odd
     // numbers >= 1.
     private def sparseRemote: LaneInbound[Int, Int] =
         LaneInbound.sparse[Int, Int](
-          extract = identity,
+          numberOf = identity,
           zero = 0,
-          remoteNext = after => Some(if after % 2 == 1 then after + 2 else after + 1)
+          next = after => Some(if after % 2 == 1 then after + 2 else after + 1)
         )
 
     test("verify matches the cursor and reports the next; mismatch is reported") {

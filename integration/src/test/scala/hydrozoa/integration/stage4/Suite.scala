@@ -1,7 +1,7 @@
 package hydrozoa.integration.stage4
 
 import cats.data.ReaderT
-import cats.effect.{Deferred, IO, Ref}
+import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
@@ -24,7 +24,7 @@ import hydrozoa.lib.tracing.ProtocolTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{CoilHubTransport, CoilUplinkTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
+import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
 import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CoilAckSequencer, CoilRelay, FastConsensusActor, RequestSequencer, SlowConsensusActor, StackComposer}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
@@ -38,6 +38,8 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
 import scalus.cardano.address.ShelleyAddress
@@ -45,6 +47,7 @@ import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
 import test.{SeedPhrase, TestPeers, given}
 
+import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
@@ -77,18 +80,32 @@ private case class CoilWiring(
   */
 private case class WsNetwork(
     remoteHeadByPeer: Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]],
-    coilHubTransport: Option[CoilHubTransport],
-    coilUplinks: Map[CoilPeerNumber, CoilUplinkTransport],
+    coilHubTransport: Option[HubWsTransport],
+    coilUplinks: Map[CoilPeerNumber, CoilPeerWsTransport],
     remoteCoilProxies: Map[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle],
     remoteHubProxies: Map[CoilPeerNumber, LiaisonProtocol.HubToCoilHandle],
     cleanup: IO[Unit],
 )
+
+/** Selects the persistence backend for stage4 peers.
+  *
+  *   - [[InMemory]] (default) — per-peer [[InMemoryBackendStore]]. No disk I/O; test isolation is
+  *     automatic.
+  *   - [[RocksDb]] — per-peer RocksDB directory under `root`. Each peer gets `root/peer-N/`. The
+  *     default `root` is a fresh tempdir per `RocksDb()` invocation so concurrent runs don't
+  *     collide; pass an explicit path to keep the store around (e.g. for inspection). Use this
+  *     when reproducing on-disk compaction / batching behavior.
+  */
+enum BackendMode:
+    case InMemory
+    case RocksDb(root: Path = Files.createTempDirectory("stage4-rocksdb-"))
 
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
     nCoilPeers: Int = 0,
     transportMode: TransportMode = TransportMode.Direct,
+    backendMode: BackendMode = BackendMode.InMemory,
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -186,7 +203,7 @@ case class Stage4Suite(
             }
 
             tracerLocal <- Tracer.makeLocal
-            given cats.effect.IOLocal[Tracer] = tracerLocal
+            given IOLocal[Tracer] = tracerLocal
 
             system <- ActorSystem[IO](label).allocated.map(_._1)
 
@@ -222,13 +239,24 @@ case class Stage4Suite(
                     val pending = pendingConnsMap(peerNum)
                     Tracer.scopedCtx("peer" -> s"${peerNum: Int}") {
                         for
+                            // Per-peer persistence backend — InMemory by default; RocksDb when the
+                            // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
+                            // every producer (EventSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
+                            // one per-peer store; `analyzePersistence` reads it back.
+                            backendStore <- openPeerBackend(peerNum).allocated.map(_._1)
+                            persistence <- {
+                                given CardanoNetwork.Section = nodeConfig
+                                Persistence.fromBackend(backendStore)
+                            }
                             blockWeaver <- system.actorOf(
                               BlockWeaver(nodeConfig, pending, tracerLocal)
                             )
                             cardanoLiaison <- system.actorOf(
                               CardanoLiaison(nodeConfig, cardanoBackend, pending, tracerLocal)
                             )
-                            requestSequencer <- system.actorOf(RequestSequencer(nodeConfig, pending))
+                            requestSequencer <- system.actorOf(
+                              RequestSequencer(nodeConfig, pending, persistence)
+                            )
                             l2Ledger <- EutxoL2Ledger(nodeConfig)
                             jointLedger <- system.actorOf(
                               JointLedger(
@@ -236,17 +264,18 @@ case class Stage4Suite(
                                 pending,
                                 l2Ledger,
                                 ProtocolTracer.noop,
-                                tracerLocal
+                                tracerLocal,
+                                persistence
                               )
                             )
                             consensusActor <- system.actorOf(
-                              FastConsensusActor(nodeConfig, pending, tracerLocal)
+                              FastConsensusActor(nodeConfig, pending, tracerLocal, persistence)
                             )
                             stackComposer <- system.actorOf(
-                              StackComposer(nodeConfig, pending, tracerLocal)
+                              StackComposer(nodeConfig, pending, tracerLocal, persistence)
                             )
                             slowConsensusActor <- system.actorOf(
-                              SlowConsensusActor(nodeConfig, pending, tracerLocal)
+                              SlowConsensusActor(nodeConfig, pending, tracerLocal, persistence)
                             )
                         yield peerNum -> PeerStack(
                           blockWeaver,
@@ -255,7 +284,9 @@ case class Stage4Suite(
                           jointLedger,
                           consensusActor,
                           stackComposer,
-                          slowConsensusActor
+                          slowConsensusActor,
+                          backendStore,
+                          persistence
                         )
                     }
                 }
@@ -314,13 +345,17 @@ case class Stage4Suite(
                 .traverse { peerNum =>
                     val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                     val pending = pendingConnsMap(peerNum)
+                    // Reuse this peer's persistence (same store + arrival-stamp generation) for its
+                    // PeerLiaisons' CR8 inbound writes — do NOT build a second one (that would
+                    // double-bump the generation).
+                    val persistence = peerStackMap(peerNum).persistence
                     peers
                         .filterNot(_ == peerNum)
                         .traverse { remotePeerNum =>
                             val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
                             system
                                 .actorOf(
-                                  PeerLiaisonHeadToHead(nodeConfig, remotePeerId, pending)
+                                  PeerLiaisonHeadToHead(nodeConfig, remotePeerId, pending, persistence)
                                 )
                                 .map(remotePeerId -> _)
                         }
@@ -388,35 +423,55 @@ case class Stage4Suite(
                 Tracer.scopedCtx("peer" -> s"c${coilNum.convert}") {
                     for
                         coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                        // The coil peer gets its own per-peer store (in-memory for the test).
+                        coilBackendStore <- InMemoryBackendStore.open.allocated.map(_._1)
+                        coilPersistence <- {
+                            given CardanoNetwork.Section = coilConfig
+                            Persistence.fromBackend(coilBackendStore)
+                        }
                         blockWeaver <- system.actorOf(
                           BlockWeaver(coilConfig, coilPending, tracerLocal)
                         )
                         cardanoLiaison <- system.actorOf(
                           CardanoLiaison(coilConfig, cardanoBackend, coilPending, tracerLocal)
                         )
-                        requestSequencer <- system.actorOf(RequestSequencer(coilConfig, coilPending))
+                        requestSequencer <- system.actorOf(
+                          RequestSequencer(coilConfig, coilPending, coilPersistence)
+                        )
                         l2Ledger <- EutxoL2Ledger(coilConfig)
                         jointLedger <- system.actorOf(
-                          JointLedger(coilConfig, coilPending, l2Ledger, ProtocolTracer.noop, tracerLocal)
+                          JointLedger(
+                            coilConfig,
+                            coilPending,
+                            l2Ledger,
+                            ProtocolTracer.noop,
+                            tracerLocal,
+                            coilPersistence
+                          )
                         )
                         consensusActor <- system.actorOf(
-                          FastConsensusActor(coilConfig, coilPending, tracerLocal)
+                          FastConsensusActor(coilConfig, coilPending, tracerLocal, coilPersistence)
                         )
                         stackComposer <- system.actorOf(
-                          StackComposer(coilConfig, coilPending, tracerLocal)
+                          StackComposer(coilConfig, coilPending, tracerLocal, coilPersistence)
                         )
                         slowConsensusActor <- system.actorOf(
-                          SlowConsensusActor(coilConfig, coilPending, tracerLocal)
+                          SlowConsensusActor(coilConfig, coilPending, tracerLocal, coilPersistence)
                         )
                         stacksRef <- Ref[IO].of(Vector.empty[Stack.HardConfirmed])
                         stackObserver <- system.actorOf(
                           StackObserver(hubNum, cardanoLiaison, stacksRef)
                         )
                         coilLiaison <- system.actorOf(
-                          PeerLiaisonCoilToHub(coilConfig, hubHeadId, coilPending)
+                          PeerLiaisonCoilToHub(coilConfig, hubHeadId, coilPending, coilPersistence)
                         )
                         headLiaison <- system.actorOf(
-                          PeerLiaisonHubToCoil(hubConfig, coilNum, hubPending)
+                          PeerLiaisonHubToCoil(
+                            hubConfig,
+                            coilNum,
+                            hubPending,
+                            peerStackMap(hubNum).persistence
+                          )
                         )
                     yield CoilWiring(
                       coilNum = coilNum,
@@ -429,7 +484,9 @@ case class Stage4Suite(
                         jointLedger,
                         consensusActor,
                         stackComposer,
-                        slowConsensusActor
+                        slowConsensusActor,
+                        coilBackendStore,
+                        coilPersistence
                       ),
                       stackObserver = stackObserver,
                       stacksRef = stacksRef,
@@ -583,6 +640,9 @@ case class Stage4Suite(
           blockBriefs = blockBriefsMap,
           stacks = stacksMap,
           coilStacks = coilWirings.map(c => c.coilNum -> c.stacksRef).toMap,
+          backendStores = peerStackMap.map { case (peerNum, stack) =>
+              peerNum -> stack.backendStore
+          },
           submittedRequestIds = submittedRequestIds,
           tracerLocal = tracerLocal,
           transportCleanup = ws.cleanup,
@@ -599,9 +659,9 @@ case class Stage4Suite(
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
     /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub) the
-      * [[CoilHubTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/peer`
-      * and `/coil`), and starts the mesh dialers. For each coil peer it builds a
-      * [[CoilUplinkTransport]] dialing the hub's `/coil`. Returns the head-mesh remote-proxy map plus
+      * [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes `/head`
+      * and `/hub`), and starts the mesh dialers. For each coil peer it builds a
+      * [[CoilPeerWsTransport]] dialing the hub's `/hub`. Returns the head-mesh remote-proxy map plus
       * the coil transports and the [[RemoteCoilProxy]] / [[RemoteHubProxy]] handles, and a cleanup IO
       * that releases every server/dialer/client.
       *
@@ -624,7 +684,7 @@ case class Stage4Suite(
 
         def uriFor(peerNum: HeadPeerNumber): Uri = {
             val (h, p) = addrFor(peerNum)
-            Uri.unsafeFromString(s"ws://$h:$p/peer")
+            Uri.unsafeFromString(s"ws://$h:$p/head")
         }
 
         val coilNums: List[CoilPeerNumber] = coilConfigs.map(_.ownPeerId match {
@@ -632,7 +692,7 @@ case class Stage4Suite(
             case PeerId.Head(_) => throw new IllegalStateException("coil config carries a head id")
         })
         val (hubHost, hubPort) = addrFor(hubNum)
-        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/coil")
+        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/hub")
 
         for {
             // Per-head mesh transports (no server yet) + the hub's coil-serving transport.
@@ -647,13 +707,13 @@ case class Stage4Suite(
                 }
                 .map(_.toMap)
             coilHubTransportOpt <-
-                if coilNums.isEmpty then IO.none[CoilHubTransport]
-                else CoilHubTransport.create(coilNums).map(Some(_))
+                if coilNums.isEmpty then IO.none[HubWsTransport]
+                else HubWsTransport.create(coilNums).map(Some(_))
 
             // One shared WS client for every dialer on this SUT.
             client <- JdkWSClient.simple[IO]
 
-            // One shared server per peer: mesh `/peer` for every head, plus the hub's `/coil`.
+            // One shared server per peer: mesh `/head` for every head, plus the hub's `/hub`.
             serverReleases <- peers.toList.traverse { ownPeerNum =>
                 val (bindH, bindP) = addrFor(ownPeerNum)
                 val meshRoute = (wsb: WebSocketBuilder2[IO]) => meshTransports(ownPeerNum).routes(wsb)
@@ -697,7 +757,7 @@ case class Stage4Suite(
 
             // Coil uplinks (coil dials hub) + their dialers.
             uplinkEntries <- coilNums.traverse { coilNum =>
-                CoilUplinkTransport
+                CoilPeerWsTransport
                     .create(coilNum, hubCoilUri)
                     .flatMap(up =>
                         up.startDialer(client).allocated.map(_._2).map(rel => (coilNum, up, rel))
@@ -868,13 +928,156 @@ case class Stage4Suite(
               attempts = 1,
               sleep = 0.seconds,
             )
+            persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
             propStackCoverage(canonicalBriefs, canonicalStacks) &&
             propCoilParticipation(coilStacksByCoil, canonicalStacks) &&
-            effectsLandedProp
+            effectsLandedProp &&
+            persistenceProp
     }
+
+    /** Post-scenario verification of the §6 producer-side persistence writes:
+      *   - **SC** (`StackComposer`) writes `Treasury` once and one `EvacuationMap` per **committed**
+      *     block (each major + each last-of-partition SEC minor) at every own hard-ack stack-close
+      *     (#21).
+      *   - **SCA** (`SlowConsensusActor`) writes `HardConfirmation` at every hard-confirmation
+      *     (#22).
+      *   - **JL** (`JointLedger`) writes `BlockResult` + the `DepositMap` snapshot + its own
+      *     `Block` (leader) / `SoftAck` lane entries at each own soft ack; **FCA**
+      *     (`FastConsensusActor`) writes `SoftConfirmation` at each soft-confirmation; **SC** also
+      *     writes its own `Stack` (leader) / `HardAck` lane entries at stack-close.
+      *   - **EventSequencer** writes the assigned request to the `Request` lane (CR1);
+      *     **PeerLiaison** writes each inbound *remote* lane entry it receives (CR8).
+      *
+      * For each peer that observed at least one `Stack.HardConfirmed` during the scenario, this
+      * property asserts:
+      *   1. `Cf.HardConfirmation` holds an entry per hard-confirmed stack (= the captured stacks
+      *      count, since both the observer and the persistence write happen on hard-confirmation).
+      *   2. `Cf.Treasury` holds its single snapshot blob (always exactly 1 — overwritten per close).
+      *   3. `Cf.EvacuationMap` holds one entry per committed block (major / SEC minor) of every
+      *      Regular stack the peer hard-confirmed — the only maps that back an on-chain commitment,
+      *      counted from each stack's partitions (mirroring `StackComposer.committedBlockNums`).
+      *      `Initial` (stack 0) contributes nothing since `bootstrapInitialStack` doesn't go through
+      *      the close paths.
+      *   4. The fast side wrote: `Cf.BlockResult` / `Cf.SoftConfirmation` non-empty and
+      *      `Cf.DepositMap` a singleton — a peer that hard-confirmed necessarily produced and
+      *      soft-confirmed blocks first (sanity lower bounds, not exact counts).
+      *   5. The satellite lanes are non-empty: `Cf.SoftAck` (every block) and `Cf.HardAck` (every
+      *      confirmed stack), and `Cf.Request` (own assignments + inbound). The `Block` / `Stack`
+      *      spine lanes get both own (leader) and inbound (follower) writes but are per-peer
+      *      variable, so they are logged but not asserted.
+      *
+      * Skip a peer entirely if it never reached a hard-confirmation (the typical `nPeers < 3`
+      * cold-start scenarios). The property only fires once at least one hard-confirmation actually
+      * happened, which is exactly where the writes should have landed.
+      */
+    private def analyzePersistence(
+        sut: Stage4Sut,
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        sortedPeers: Seq[HeadPeerNumber]
+    ): IO[Prop] = {
+        sortedPeers
+            .traverse { peerNum =>
+                val backend = sut.backendStores(peerNum)
+                val captured = stacksByPeer.getOrElse(peerNum, Vector.empty)
+                val expectedStacks = captured.size
+                // Only the blocks that back an on-chain KZG commitment get an `EvacuationMap`
+                // entry — each major (the settlement's `nextKzg`) and each last-of-partition SEC
+                // minor — mirroring `StackComposer.committedBlockNums` /
+                // `StackEffectsBuilder.mkEffectsRegular`. So per Regular stack the count is, over
+                // its partitions: Major → 1 (the major) + 1 iff it carries a trailing-minor SEC;
+                // Minor → 1 (its mandatory SEC minor); Final → 0 (drains the map, commits nothing).
+                // `Initial` (stack 0) goes through `bootstrapInitialStack`, never the close paths,
+                // so it contributes nothing.
+                val expectedEvac = captured.map { s =>
+                    s.effects match {
+                        case _: StackEffects.HardConfirmed.Initial => 0
+                        case r: StackEffects.HardConfirmed.Regular =>
+                            r.partitions.toList.map {
+                                case m: PartitionEffects.Major[?] =>
+                                    if m.sec.isDefined then 2 else 1
+                                case _: PartitionEffects.Minor[?] => 1
+                                case _: PartitionEffects.Final     => 0
+                            }.sum
+                    }
+                }.sum
+                for {
+                    hardConfirmations <- countEntries(backend, Cf.HardConfirmation)
+                    treasuries <- countEntries(backend, Cf.Treasury)
+                    evacuationMaps <- countEntries(backend, Cf.EvacuationMap)
+                    blockResults <- countEntries(backend, Cf.BlockResult)
+                    softConfirmations <- countEntries(backend, Cf.SoftConfirmation)
+                    depositMaps <- countEntries(backend, Cf.DepositMap)
+                    softAcks <- countEntries(backend, Cf.SoftAck)
+                    hardAcks <- countEntries(backend, Cf.HardAck)
+                    requests <- countEntries(backend, Cf.Request)
+                    _ <- logger.info(
+                      s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
+                          s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
+                          s"evacuationMaps=$evacuationMaps (expected=$expectedEvac) " +
+                          s"blockResults=$blockResults softConfirmations=$softConfirmations " +
+                          s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
+                          s"requests=$requests"
+                    )
+                } yield {
+                    if expectedStacks == 0 then Prop.passed
+                    else {
+                        val hardOk = hardConfirmations == expectedStacks
+                        val treasuryOk = treasuries == 1
+                        val evacOk = evacuationMaps == expectedEvac
+                        // Fast-side producer writes: a peer that hard-confirmed has necessarily
+                        // produced blocks (JL's `BlockResult`) and soft-confirmed them (FCA's
+                        // `SoftConfirmation`), and the deposits snapshot is a singleton.
+                        val fastOk =
+                            blockResults >= 1 && softConfirmations >= 1 && depositMaps == 1
+                        // Lane writes (own + inbound): every peer soft-acks every block (JL) and
+                        // hard-acks each stack it confirmed (SC); requests flow into the Request
+                        // lane (EventSequencer own + PeerLiaison inbound, CR1/CR8). All non-empty.
+                        val laneOk = softAcks >= 1 && hardAcks >= 1 && requests >= 1
+                        Prop(hardOk && treasuryOk && evacOk && fastOk && laneOk).label(
+                          s"peer${peerNum: Int}: " +
+                              s"hardConfirmations=$hardConfirmations expected=$expectedStacks, " +
+                              s"treasuries=$treasuries (expected 1), " +
+                              s"evacuationMaps=$evacuationMaps (expected $expectedEvac), " +
+                              s"blockResults=$blockResults softConfirmations=$softConfirmations " +
+                              s"depositMaps=$depositMaps softAcks=$softAcks hardAcks=$hardAcks " +
+                              s"requests=$requests (fast >=1/>=1/==1, lanes >=1/>=1/>=1)"
+                        )
+                    }
+                }
+            }
+            .map(_.foldLeft(Prop.passed)(_ && _))
+    }
+
+    /** Per-peer backend allocator chosen by [[backendMode]].
+      *
+      * `BackendMode.InMemory` returns a fresh `InMemoryBackendStore`. `BackendMode.RocksDb(root)`
+      * opens `root/peer-N/`, creating parent directories on demand. The returned `Resource`
+      * is allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until
+      * a stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
+      */
+    private def openPeerBackend(peerNum: HeadPeerNumber): Resource[IO, BackendStore[IO]] =
+        backendMode match
+            case BackendMode.InMemory => InMemoryBackendStore.open
+            case BackendMode.RocksDb(root) =>
+                val dir = root.resolve(s"peer-${peerNum: Int}")
+                Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
+                    RocksDbBackendStore.open(dir)
+
+    private def countEntries(
+        backend: BackendStore[IO],
+        cf: Cf
+    ): IO[Int] =
+        backend.cursor(cf, Array.emptyByteArray).use { c =>
+            def loop(n: Int): IO[Int] =
+                c.next.flatMap {
+                    case None    => IO.pure(n)
+                    case Some(_) => loop(n + 1)
+                }
+            loop(0)
+        }
 
     /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coil peers' acks, so
       * [[propStackCoverage]] already proves coil participation on the head side. This additionally

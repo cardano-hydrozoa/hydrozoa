@@ -14,13 +14,13 @@ import io.circe.syntax.*
   *     is on the other end.
   *   - [[Msg]] carries a wire-eligible head↔head batch message ([[Mesh.Get]] or [[Mesh.New]]).
   *
-  * This is the `/peer` (head-mesh) envelope only. The hub↔coil link has its own envelope
-  * ([[CoilFrame]], on the `/coil` route), so `Population` / `OwnHardAck` batches never reach here.
+  * This is the `/head` (head-mesh) envelope only. The hub↔coil link has its own envelope
+  * ([[CoilFrame]], on the `/hub` route), so `Population` / `OwnHardAck` batches never reach here.
   */
-sealed trait Frame
-object Frame {
-    final case class Hello(peerNum: Int) extends Frame
-    final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends Frame
+sealed trait HeadFrame
+object HeadFrame {
+    final case class Hello(peerNum: Int) extends HeadFrame
+    final case class Msg(payload: LiaisonProtocol.HeadToHeadRequest) extends HeadFrame
 
     /** The wire-eligible subset of a head↔head liaison's `Request`. The proxy actor only forwards
       * these over the transport; everything else is local-only and gets dropped with a log line.
@@ -34,7 +34,7 @@ object Frame {
             case _           => None
         }
 
-    given (using CardanoNetwork.Section): Encoder[Frame] = Encoder.instance {
+    given (using CardanoNetwork.Section): Encoder[HeadFrame] = Encoder.instance {
         case Hello(peerNum) =>
             Json.obj("t" -> "hello".asJson, "peerNum" -> peerNum.asJson)
         case Msg(payload) =>
@@ -53,7 +53,7 @@ object Frame {
             }
     }
 
-    given (using CardanoNetwork.Section): Decoder[Frame] = Decoder.instance(c =>
+    given (using CardanoNetwork.Section): Decoder[HeadFrame] = Decoder.instance(c =>
         c.downField("t").as[String].flatMap {
             case "hello" =>
                 c.downField("peerNum").as[Int].map(Hello(_))
@@ -71,8 +71,8 @@ object Frame {
         }
     )
 
-    def encode(frame: Frame)(using CardanoNetwork.Section): String = frame.asJson.noSpaces
+    def encode(frame: HeadFrame)(using CardanoNetwork.Section): String = frame.asJson.noSpaces
 
-    def parse(text: String)(using CardanoNetwork.Section): Either[Error, Frame] =
-        decode[Frame](text)
+    def parse(text: String)(using CardanoNetwork.Section): Either[Error, HeadFrame] =
+        decode[HeadFrame](text)
 }

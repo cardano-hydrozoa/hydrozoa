@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
@@ -12,14 +13,16 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
-import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, PeerId}
 import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 import org.typelevel.log4cats.Logger
 
-/** A head peer's mesh liaison toward one other head peer (§8 of `design/coil-network.md`).
+/** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
+  * [doc-ref].
   *
   * Symmetric and full-duplex: each side serves its **own** production and pulls the remote head
   * peer's. Six bidirectional [[LaneBidirectional]] lanes — block + stack briefs are **sparse**
@@ -30,8 +33,14 @@ import org.typelevel.log4cats.Logger
 abstract class PeerLiaisonHeadToHead(
     config: PeerLiaisonHeadToHead.Config,
     remoteHead: HeadPeerId,
-    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHeadToHead.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections |
+        PeerLiaisonHeadToHead.Connections,
+    persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+
+    // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
+    // codecs in `persistInbound` pick it up.
+    private given CardanoNetwork.Section = config
 
     /** Resolve this liaison's connections — either projected from the shared regime `Connections`
       * (the remote handle from the in-process `remoteHeadLiaisons` map) or supplied directly.
@@ -45,7 +54,7 @@ abstract class PeerLiaisonHeadToHead(
                       consensusActor = s.consensusActor,
                       stackComposer = s.stackComposer,
                       slowConsensusActor = s.slowConsensusActor,
-                      remoteHead = s.remoteHeadLiaisons(remoteHead.peerNum),
+                      remote = s.remoteHeadLiaisons(remoteHead.peerNum),
                       coilRelay = s.coilRelay
                     )
                 )
@@ -53,20 +62,22 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->${remoteHead.peerNum.convert}")
+        Logging.loggerIO(
+          s"PeerLiaisonHeadToHead.${config.ownPeerLabel}->${remoteHead.peerNum.convert}"
+        )
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
-      extract = _.blockNum,
+      numberOf = _.blockNum,
       zero = BlockNumber.zero,
-      ownNext = config.nextOwnLeaderBlock,
-      remoteNext = after => Some(remoteHead.nextLeaderBlock(after))
+      outboundNext = config.nextOwnLeaderBlock,
+      inboundNext = after => Some(remoteHead.nextLeaderBlock(after))
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
-      extract = _.stackNum,
+      numberOf = _.stackNum,
       zero = StackNumber.zero,
-      ownNext = config.nextOwnSlowLeaderStack,
-      remoteNext = after => Some(remoteHead.nextSlowLeaderStack(after))
+      outboundNext = config.nextOwnSlowLeaderStack,
+      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after))
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
@@ -151,10 +162,46 @@ abstract class PeerLiaisonHeadToHead(
             val (lefts, advances) = results.partitionMap(identity)
             lefts.headOption match {
                 case Some(reason) => IO.pure(Left(reason))
-                case None         => advances.sequence_.as(Right(()))
+                // CR8: persist the inbound remote lane entries BEFORE advancing the receive cursors
+                // past them (write-before-advance, §4).
+                case None => persistInbound(m) >> advances.sequence_.as(Right(()))
             }
         }
     }
+
+    /** Persist the inbound remote lane entries carried by a [[Mesh.New]] before the receive cursor
+      * advances past them (CR8 write-before-advance). Each entry is receipt-stamped and keyed by
+      * its author. An empty batch is a no-op.
+      */
+    private def persistInbound(m: Mesh.New): IO[Unit] =
+        persistence.arrivalStamp.flatMap { stamp =>
+            def lv[P](payload: P): LaneValue[P] = LaneValue(stamp, payload)
+            val puts: List[WriteBatch => WriteBatch] =
+                List(
+                  m.block.map(b => (wb: WriteBatch) => wb.put(LaneKey.Block(b.blockNum))(lv(b))),
+                  m.stack.map(s => (wb: WriteBatch) => wb.put(LaneKey.Stack(s.stackNum))(lv(s))),
+                  m.softAck.map(a =>
+                      (wb: WriteBatch) => wb.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                  ),
+                  m.headHardAck.flatMap(a =>
+                      a.peerId match {
+                          case PeerId.Head(n) =>
+                              Some((wb: WriteBatch) =>
+                                  wb.put(LaneKey.HardAck(n, a.hardAckNum))(lv(a))
+                              )
+                          case PeerId.Coil(_) => None
+                      }
+                  ),
+                  m.hubHardAck.map(h =>
+                      (wb: WriteBatch) => wb.put(LaneKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                  )
+                ).flatten ++ m.requests.map(r =>
+                    (wb: WriteBatch) =>
+                        wb.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(lv(r))
+                )
+            val full = puts.foldLeft(WriteBatch.start)((wb, put) => put(wb))
+            IO.whenA(full.size > 0)(persistence.write(full))
+        }
 
     private def dispatch(m: Mesh.New): IO[Unit] =
         getConnections.flatMap { conn =>
@@ -187,9 +234,9 @@ abstract class PeerLiaisonHeadToHead(
       buildGet = buildGet,
       accept = accept,
       dispatch = dispatch,
-      getBatchNum = _.batchNum,
-      newBatchNum = _.batchNum
-    )(g => getConnections.flatMap(_.remoteHead ! g))
+      numberOfBatchRequest = _.batchNum,
+      numberOfBatch = _.batchNum
+    )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------
     private def serve(get: Mesh.Get): IO[Server.Served[Mesh.New]] =
@@ -224,7 +271,7 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     private val server =
-        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remoteHead ! n))
+        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Append our own production (single-author = us) onto the matching outbox lane. */
     private def appendArtifact(
@@ -274,9 +321,10 @@ object PeerLiaisonHeadToHead {
     def apply(
         config: Config,
         remoteHead: HeadPeerId,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
+        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        persistence: Persistence[IO]
     ): IO[PeerLiaisonHeadToHead] =
-        IO(new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections) {})
+        IO(new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections, persistence) {})
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
@@ -288,7 +336,7 @@ object PeerLiaisonHeadToHead {
         consensusActor: FastConsensusActor.Handle,
         stackComposer: StackComposer.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        remoteHead: LiaisonProtocol.HeadToHeadHandle,
+        remote: LiaisonProtocol.HeadToHeadHandle,
         /** Present only on a hub head peer: this remote head peer's satellites are forwarded here
           * so the hub's coil peers hear the whole population. `None` on non-hub head peers.
           */

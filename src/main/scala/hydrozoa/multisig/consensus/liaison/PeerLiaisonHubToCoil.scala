@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
@@ -17,10 +18,11 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 import org.typelevel.log4cats.Logger
 
-/** A hub head peer's liaison toward one coil peer it serves (§8 of `design/coil-network.md`) — the
-  * mirror of [[PeerLiaisonCoilToHub]].
+/** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
+  * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
   *
   * Asymmetric: it **serves the full population** down to the coil peer (block + stack spines,
   * per-head-peer request / soft-ack / head-hard-ack lanes, per-hub coil-hard-ack lanes — all outbox
@@ -35,8 +37,13 @@ import org.typelevel.log4cats.Logger
 abstract class PeerLiaisonHubToCoil(
     config: PeerLiaisonHubToCoil.Config,
     coil: CoilPeerNumber,
-    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections,
+    persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
+
+    // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
+    // codec in `persistInbound` picks it up.
+    private given CardanoNetwork.Section = config
 
     /** Resolve connections — projected from the shared regime `Connections` (remote coil handle
       * from the in-process `remoteCoilLiaisons` map) or supplied directly.
@@ -54,7 +61,7 @@ abstract class PeerLiaisonHubToCoil(
                           PeerLiaisonHubToCoil.Connections(
                             slowConsensusActor = s.slowConsensusActor,
                             coilAckSequencer = seq,
-                            remoteCoil = s.remoteCoilLiaisons(coil)
+                            remote = s.remoteCoilLiaisons(coil)
                           )
                         )
                     )
@@ -63,7 +70,7 @@ abstract class PeerLiaisonHubToCoil(
         }
 
     private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaison.${config.ownPeerLabel}->c${coil.convert}")
+        Logging.loggerIO(s"PeerLiaisonHubToCoil.${config.ownPeerLabel}->c${coil.convert}")
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
@@ -182,9 +189,8 @@ abstract class PeerLiaisonHubToCoil(
             }
         }
 
-    private val server = new Server[Population.Get, Population.New](serve)(n =>
-        getConnections.flatMap(_.remoteCoil ! n)
-    )
+    private val server =
+        new Server[Population.Get, Population.New](serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
@@ -216,17 +222,28 @@ abstract class PeerLiaisonHubToCoil(
         ownHardAckLane.cursor.map(OwnHardAck.Get(batchNum, _))
 
     private def accept(own: OwnHardAck.New): IO[Either[String, Unit]] =
-        ownHardAckLane.cursor
-            .map(c =>
-                ownHardAckLane.verify(own.hardAck.toList, c) match {
-                    case Right(next) => Right(ownHardAckLane.advanceTo(next))
-                    case Left(m)     => Left(m.toString)
-                }
-            )
-            .flatMap {
-                case Right(advance) => advance.as(Right(()))
-                case Left(reason)   => IO.pure(Left(reason))
+        ownHardAckLane.cursor.flatMap { c =>
+            ownHardAckLane.verify(own.hardAck.toList, c) match {
+                // CR8: persist the coil peer's inbound hard-ack BEFORE advancing the cursor — we
+                // can't lose it if the hub crashes before CoilAckSequencer re-sequences it.
+                case Right(next) =>
+                    persistInbound(own) >> ownHardAckLane.advanceTo(next).as(Right(()))
+                case Left(m) => IO.pure(Left(m.toString))
             }
+        }
+
+    /** Persist the coil peer's inbound hard-ack to its [[LaneKey.CoilHardAck]] receive lane,
+      * receipt- stamped, before the cursor advances. A missing ack is a no-op.
+      */
+    private def persistInbound(own: OwnHardAck.New): IO[Unit] =
+        own.hardAck.traverse_ { ack =>
+            persistence.arrivalStamp.flatMap { stamp =>
+                persistence.write(
+                  WriteBatch.start
+                      .put(LaneKey.CoilHardAck(coil, ack.hardAckNum))(LaneValue(stamp, ack))
+                )
+            }
+        }
 
     /** The coil peer's own hard-ack → the hub's quorum (`SlowConsensusActor`) and
       * `CoilAckSequencer` (which re-sequences it onto this hub's `HubHardAckLane`).
@@ -243,9 +260,9 @@ abstract class PeerLiaisonHubToCoil(
       buildGet = buildGet,
       accept = accept,
       dispatch = dispatch,
-      getBatchNum = _.batchNum,
-      newBatchNum = _.batchNum
-    )(g => getConnections.flatMap(_.remoteCoil ! g))
+      numberOfBatchRequest = _.batchNum,
+      numberOfBatch = _.batchNum
+    )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -282,9 +299,10 @@ object PeerLiaisonHubToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
+        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        persistence: Persistence[IO]
     ): IO[PeerLiaisonHubToCoil] =
-        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections) {})
+        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections, persistence) {})
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
@@ -297,6 +315,6 @@ object PeerLiaisonHubToCoil {
     final case class Connections(
         slowConsensusActor: SlowConsensusActor.Handle,
         coilAckSequencer: CoilAckSequencer.Handle,
-        remoteCoil: LiaisonProtocol.CoilToHubHandle
+        remote: LiaisonProtocol.CoilToHubHandle
     )
 }

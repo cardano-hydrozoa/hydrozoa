@@ -51,11 +51,12 @@ trait CardanoBackend[F[_]]:
       * @param after
       *   the lower bound of the list, usually the fallback tx.
       * @return
+      *   On success, a tuple of (txHash, redeemer, continuedOutputDatum)
       */
     def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]]
+    ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]]
 
     /** Submits a transaction.
       * @return
@@ -80,6 +81,8 @@ object CardanoBackend:
             extends Error(s"The redeemer for input with index $ix was not found for tx $txId")
         case ErrorDecodingRedeemerCbor(hex: String)
             extends Error(s"Error decoding redeemer Data from hex: $hex")
+        case ErrorDecodingDatumCbor(hex: String)
+            extends Error(s"Error decoding datum Data from hex: $hex")
         case ErrorResolving(ti: TransactionInput, msg: String)
             extends Error(
               s"Error resolving transaction input $ti: $msg"

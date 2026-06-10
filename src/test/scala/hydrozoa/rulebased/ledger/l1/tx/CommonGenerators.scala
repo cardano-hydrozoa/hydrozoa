@@ -23,6 +23,7 @@ import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
 
@@ -76,7 +77,7 @@ object CommonGenerators {
                 .map(BigInt(_))
                 .map(System.currentTimeMillis() + _.abs)
             setup = TrustedSetup
-                .takeSrsG2(10)
+                .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                 .map(p2 => G2Element(p2).toCompressedByteString)
         } yield Unresolved(
           deadlineVoting = deadlineVoting,
@@ -86,15 +87,13 @@ object CommonGenerators {
 
     def genRuleBasedTreasuryUtxo(
         fallbackTxId: TransactionHash,
-        unresolvedDatum: Unresolved
+        unresolvedDatum: Unresolved,
+        genNonBecaonValue: Gen[Value] // must be coherent with evac map
     )(using
         config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
     ): Gen[RuleBasedTreasuryUtxo] =
         for {
-            adaAmount <- Arbitrary
-                .arbitrary[Coin]
-                .map(c => Coin(math.abs(c.value) + 1000000L)) // Ensure minimum ADA
-
+            nonBeaconValue <- genNonBecaonValue
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
             scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
@@ -103,7 +102,7 @@ object CommonGenerators {
             beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)
             output = RuleBasedTreasuryOutput(
               unresolvedDatum,
-              Value(adaAmount) + beaconToken
+              nonBeaconValue + beaconToken
             )
         } yield RuleBasedTreasuryUtxo(
           utxoId = txId,
@@ -115,10 +114,16 @@ object CommonGenerators {
     )(using config: CardanoNetwork.Section & HeadPeers.Section): Gen[CollateralUtxo] =
         for {
             input <- arbitrary[TransactionInput]
-            coin <- arbitrary[Coin].map(_ + Coin.ada(100))
+            coin <- arbitrary[Coin].map(_ + Coin.ada(1000))
         } yield CollateralUtxo(
           input,
-          CollateralOutput(addrKeyHash, ShelleyDelegationPart.Null, coin, None, None)
+          CollateralOutput(
+            addrKeyHash,
+            ShelleyDelegationPart.Null,
+            coin,
+            Some(DatumOption.Inline(toData(ByteString.fromString("collateral")))),
+            None
+          )
         )
 
     def genOnchainBlockHeader(versionMajor: BigInt): Gen[StandaloneEvacuationCommitment.Onchain] =

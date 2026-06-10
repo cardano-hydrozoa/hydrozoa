@@ -14,13 +14,14 @@ import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
 
 /** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
   * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
-  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§8), instead of
-  *     the head mesh;
+  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§5.5)
+  *     [doc-ref], instead of the head mesh;
   *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
@@ -31,7 +32,8 @@ trait CoilMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
 
     given IOLocal[Tracer] = tracerLocal
@@ -88,26 +90,29 @@ trait CoilMultisigRegimeManager(
                   CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
                 )
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal)
-            )
-            // Inert on a coil: no HTTP server routes user requests here, and a coil peer authors none.
-            // Present only to fill the shared Connections slot the reused actors resolve.
-            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
-            jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
-            )
-            stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal)
-            )
-            slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal)
+              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
-            // Exactly one liaison, toward the hub head peer (§8). It projects its connections from
+            // No-op placeholder: a coil peer authors no user requests, but the reused actors resolve
+            // the whole `Connections`, so the slot must still hold a valid handle.
+            // TODO: restructure `Connections` (a coil-specific subset, or make request-only slots
+            // optional) so a coil peer doesn't carry this inert slot at all — rule of least knowledge.
+            requestSequencer <- context.actorOf(NoopActor[RequestSequencer.Request])
+            jointLedger <- context.actorOf(
+              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
+            )
+            stackComposer <- context.actorOf(
+              StackComposer(config, pendingConnections, tracerLocal, persistence)
+            )
+            slowConsensusActor <- context.actorOf(
+              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
+            )
+
+            // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. It projects its connections from
             // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) stays empty in
             // this production placeholder (in-process wiring fills it).
             hubLiaison <- context.actorOf(
-              liaison.PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections)
+              liaison.PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections, persistence)
             )
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
@@ -154,7 +159,16 @@ object CoilMultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
-        tracerLocal: IOLocal[Tracer]
+        tracerLocal: IOLocal[Tracer],
+        persistence: Persistence[IO]
     ): IO[CoilMultisigRegimeManager] =
-        IO(new CoilMultisigRegimeManager(config, cardanoBackend, virtualLedger, tracerLocal) {})
+        IO(
+          new CoilMultisigRegimeManager(
+            config,
+            cardanoBackend,
+            virtualLedger,
+            tracerLocal,
+            persistence
+          ) {}
+        )
 }

@@ -2,24 +2,32 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.IO
 
-/** A full-duplex lane — a [[LaneOutbound]] (our production) plus a [[LaneInbound]] (the remote's),
-  * for the **same** lane number space. Only the symmetric head-peer mesh
-  * ([[PeerLiaisonHeadToHead]]) needs both halves of a lane; the asymmetric hub↔coil links use a
-  * bare [[LaneOutbound]] or [[LaneInbound]] per lane, so neither carries a dead half.
+// TODO: T and N might be restricted to pull in things like numberOf, increment and so on.
+
+/** A full-duplex lane — a [[LaneOutbound]] (our production) paired with a [[LaneInbound]] (the
+  * remote's), numbered the **same** way (both key on the item number `N`). Only the symmetric
+  * head-peer mesh ([[PeerLiaisonHeadToHead]]) produces *and* receives on a given lane; the
+  * asymmetric hub↔coil links use a standalone [[LaneOutbound]] or [[LaneInbound]] per lane, so no
+  * lane carries a dead direction.
   *
-  * The two halves hold independent state (our outbox + high-water vs the remote's cursor); this is
-  * just the pairing, delegating each call to the relevant half.
+  * The two lanes hold independent state (our outbox + high-water vs the remote's cursor); this is
+  * just the pairing, delegating each call to the relevant one.
+  *
+  * @tparam T
+  *   the item type carried on the lane (a brief, ack, request, …).
+  * @tparam N
+  *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
   */
 final class LaneBidirectional[T, N] private (
     out: LaneOutbound[T, N],
     in: LaneInbound[T, N]
 ) {
-    // ---- Outbound half ----
+    // ---- Outbound ----
     def append(item: T): IO[Unit] = out.append(item)
     def reply(remoteCursor: N): IO[LaneOutbound.Reply[T]] = out.reply(remoteCursor)
     def outboxIsEmpty: IO[Boolean] = out.outboxIsEmpty
 
-    // ---- Inbound half ----
+    // ---- Inbound ----
     def cursor: IO[N] = in.cursor
     def verify(items: List[T], current: N): Either[LaneInbound.Mismatch[N], N] =
         in.verify(items, current)
@@ -28,29 +36,29 @@ final class LaneBidirectional[T, N] private (
 
 object LaneBidirectional {
 
-    /** A contiguous bidirectional lane: both halves start at `first`, successor `+1`. */
+    /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`. */
     def contiguous[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         first: N,
-        incr: N => N,
+        increment: N => N,
         maxPerReply: Int = 1
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(extract, first, incr, maxPerReply),
-          LaneInbound.contiguous(extract, first, incr)
+          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply),
+          LaneInbound.contiguous(numberOf, first, increment)
         )
 
-    /** A sparse bidirectional lane: outbound follows this side's leader schedule (`ownNext`),
-      * inbound the remote's (`remoteNext`). `zero` is "before the first" for both.
+    /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
+      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
       */
     def sparse[T, N: Ordering](
-        extract: T => N,
+        numberOf: T => N,
         zero: N,
-        ownNext: N => Option[N],
-        remoteNext: N => Option[N]
+        outboundNext: N => Option[N],
+        inboundNext: N => Option[N]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(extract, zero, ownNext),
-          LaneInbound.sparse(extract, zero, remoteNext)
+          LaneOutbound.sparse(numberOf, zero, outboundNext),
+          LaneInbound.sparse(numberOf, zero, inboundNext)
         )
 }

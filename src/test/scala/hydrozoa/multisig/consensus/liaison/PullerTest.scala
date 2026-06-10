@@ -36,8 +36,8 @@ class PullerTest extends AnyFunSuite {
           buildGet = buildGet,
           accept = accept,
           dispatch = dispatch,
-          getBatchNum = _.batchNum,
-          newBatchNum = _.batchNum
+          numberOfBatchRequest = _.batchNum,
+          numberOfBatch = _.batchNum
         )(g => sent.update(_ :+ g))
 
         puller.start.unsafeRunSync()

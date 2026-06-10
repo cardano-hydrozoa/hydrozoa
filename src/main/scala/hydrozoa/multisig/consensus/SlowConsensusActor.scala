@@ -6,12 +6,14 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 
 /** Slow-consensus actor.
   *
@@ -53,11 +55,18 @@ import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, St
 final case class SlowConsensusActor(
     config: SlowConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | SlowConsensusActor.Connections,
-    tracerLocal: IOLocal[Tracer]
+    tracerLocal: IOLocal[Tracer],
+    persistence: Persistence[IO]
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
 
     given IOLocal[Tracer] = tracerLocal
+
+    /** `config` is a `CardanoNetwork.Section` transitively; expose it as a given so the typed
+      * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it up
+      * implicitly.
+      */
+    private given CardanoNetwork.Section = config
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
     private val stateRef = Ref.unsafe[IO, State](State.initial)
@@ -357,10 +366,28 @@ final case class SlowConsensusActor(
               "effect tx(s); emitting downstream"
         )
         hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
+        _ <- persistHardConfirmation(stackNum, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
     } yield ()
+
+    /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6
+      * SCA contract write, and the **R10 evacuation floor** the rule-based regime later reads on
+      * handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid- confirmation
+      * can be recovered from disk on next boot.
+      *
+      * Hard-ack pruning (per §3.2 / §6) is not yet wired here — the typed `WriteBatch` shape for it
+      * spans peer-multiplexed satellite keys and is deferred until ack-prune semantics land. The
+      * R10 floor is intact regardless.
+      */
+    private def persistHardConfirmation(
+        stackNum: StackNumber,
+        signed: StackEffects.HardConfirmed
+    ): IO[Unit] =
+        persistence.write(
+          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(signed)
+        )
 
     /** Choose the witness set for a saturated cell, treating each round independently. Returns the
       * cell restricted to the chosen per-round signers, the union of all signers (whose vkeys the
@@ -479,8 +506,8 @@ object SlowConsensusActor {
           * on a head peer.
           */
         coilUplink: Option[liaison.PeerLiaisonCoilToHub.Handle] = None,
-        /** A hub's coil relay (§8.3): this actor's **own** hard-ack is sent here so the hub's coil
-          * peers receive it. `None` off a hub.
+        /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** hard-ack is sent here so the
+          * hub's coil peers receive it. `None` off a hub.
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )

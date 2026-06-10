@@ -542,8 +542,9 @@ object Codecs {
     }
 
     // ---- HardAckWithId ----
+    // Non-private: the persistence layer reuses it for the `HubHardAck` lane value codec.
 
-    private given Codec[HardAckWithId] = deriveCodec[HardAckWithId]
+    given Codec[HardAckWithId] = deriveCodec[HardAckWithId]
 
     // ---- Head-mesh batch messages (the only wire-eligible liaison messages) ----
 

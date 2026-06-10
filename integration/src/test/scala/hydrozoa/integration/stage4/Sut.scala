@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.Stack
+import hydrozoa.multisig.persistence.{BackendStore, Persistence}
 import org.scalacheck.commands.SutCommand
 
 // ===================================
@@ -29,6 +30,16 @@ private[stage4] case class PeerStack(
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
     slowConsensusActor: SlowConsensusActor.Handle,
+    /** Per-peer in-memory persistence backend — exposed for post-scenario verification that
+      * SC's stack-close writes (Treasury + EvacuationMap) and SCA's hard-confirmation writes
+      * (HardConfirmation) landed in the store. See `analyzePersistence` in `Suite.scala`.
+      */
+    backendStore: BackendStore[IO],
+    /** Per-peer typed persistence over [[backendStore]] — shared by all of this peer's actors
+      * (the ones here + the peer's `PeerLiaison`s, built later). One per peer so the arrival-stamp
+      * generation is bumped exactly once per peer/process.
+      */
+    persistence: Persistence[IO],
 )
 
 // ===================================
@@ -140,6 +151,10 @@ case class Stage4Sut(
     // Per-coil hard-confirmed stacks, captured by a [[StackObserver]] on each coil peer follower.
     // Empty for a pure-head run. Used to assert the coil peer participates in the slow cycle.
     coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
+      * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
+      */
+    backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Tracer],
     // Cleanup hooks for resources allocated outside the actor system (currently the
@@ -154,8 +169,8 @@ case class Stage4Sut(
   *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
   *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
   *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
-  *     on a distinct port, mounting `/peer` for the head mesh and (on a hub) `/coil` for its coil
-  *     peers; each coil dials its hub's `/coil`. Cross-peer communication happens over real
+  *     on a distinct port, mounting `/head` for the head mesh and (on a hub) `/hub` for its coil
+  *     peers; each coil dials its hub's `/hub`. Cross-peer communication happens over real
   *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
   *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
   */

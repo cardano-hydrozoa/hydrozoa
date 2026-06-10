@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.Dis
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus, given}
+import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AddrKeyHash, Coin, MultiAsset, TransactionInput, TransactionOutput, Utxo, Value}
@@ -19,10 +20,73 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness}
 import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.Data.{fromData, toData}
 
 type BallotBoxConfig = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
     HasTokenNames & OwnPeerPrivate.Section
+
+object BallotBox {
+
+    type ParseConfig = HeadPeers.Section & HasTokenNames
+
+    sealed trait ParseError extends Throwable {}
+
+    object ParseError {
+        case class MissingDatum(utxo: Utxo) extends ParseError {
+            override def getMessage: String = s"BallotBox UTxO ${utxo.input} has no datum"
+        }
+        case class DatumNotInline(utxo: Utxo) extends ParseError {
+            override def getMessage: String = s"BallotBox UTxO ${utxo.input} datum is not inline"
+        }
+        case class DatumDeserializationError(utxo: Utxo, cause: Throwable) extends ParseError {
+            override def getMessage: String =
+                s"Failed to deserialize VoteDatum for UTxO ${utxo.input}: ${cause.getMessage}"
+        }
+        case class MissingVoteToken(utxo: Utxo) extends ParseError {
+            override def getMessage: String =
+                s"BallotBox UTxO ${utxo.input} does not carry a Vote token"
+        }
+        case class InvalidTokenCount(utxo: Utxo, count: Long, msg: String) extends ParseError {
+            override def getMessage: String =
+                s"BallotBox UTxO ${utxo.input} has invalid Vote token count $count: $msg"
+        }
+    }
+
+    def parse(utxo: Utxo)(using config: ParseConfig): Either[ParseError, BallotBox[VoteStatus]] =
+        for {
+            datumOpt <- utxo.output.datumOption.toRight(ParseError.MissingDatum(utxo))
+            inline <- datumOpt match {
+                case i: Inline => Right(i)
+                case _         => Left(ParseError.DatumNotInline(utxo))
+            }
+            voteDatum <- Try(fromData[VoteDatum](inline.data)) match {
+                case Success(d) => Right(d)
+                case Failure(e) => Left(ParseError.DatumDeserializationError(utxo, e))
+            }
+            tokenCount <- utxo.output.value.assets.assets
+                .get(config.headMultisigScript.policyId)
+                .flatMap(_.get(config.headTokenNames.voteTokenName))
+                .toRight(ParseError.MissingVoteToken(utxo))
+            voteTokens <- PositiveInt
+                .apply(tokenCount.toInt)
+                .toRight(
+                  ParseError.InvalidTokenCount(
+                    utxo,
+                    tokenCount.toInt,
+                    "BallotBox had less than 1 vote token"
+                  )
+                )
+        } yield BallotBox(
+          input = utxo.input,
+          ballotBoxOutput = BallotBoxOutput(
+            key = voteDatum.key,
+            link = voteDatum.link,
+            coin = utxo.output.value.coin,
+            voteTokens = voteTokens,
+            status = voteDatum.voteStatus
+          )
+        )
+}
 
 final case class BallotBox[Status <: VoteStatus](
     input: TransactionInput,
@@ -110,6 +174,9 @@ extension (uncastVote: BallotBoxOutput[AwaitingVote]) {
         versionMinor: BigInt
     ): BallotBoxOutput[VoteStatus.Voted] =
         uncastVote.copy(status = VoteStatus.Voted(kzgCommitment, versionMinor))
+
+    def abstain: BallotBoxOutput[VoteStatus.Abstain.type] =
+        uncastVote.copy(status = VoteStatus.Abstain)
 
     def voterAddrKeyHash: AddrKeyHash =
         AddrKeyHash(uncastVote.status.peer.hash)

@@ -191,6 +191,7 @@ private object FallbackTxOps {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
+                                  + config.collectiveContingency.minAdaForTreasury
                             )
                         }
                     }

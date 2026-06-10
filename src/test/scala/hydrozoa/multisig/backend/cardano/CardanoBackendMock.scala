@@ -22,7 +22,7 @@ final case class MockState(
     ledgerState: LedgerState,
     currentSlot: Slot = Slot(0),
     knownTxs: Set[TransactionHash] = Set.empty,
-    submittedTxs: List[Transaction] = List.empty
+    submittedTxs: List[(Utxos, Transaction)] = List.empty
 )
 
 object MockState:
@@ -92,17 +92,17 @@ class CardanoBackendMock private (
     override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): MockStateF[Either[Error, List[(TransactionHash, Data)]]] = {
+    ): MockStateF[Either[Error, List[(TransactionHash, Data, Data)]]] = {
 
         extension (v: Value)
             def contains(asset: (PolicyId, AssetName)): Boolean =
                 v.assets.assets.get(asset._1).flatMap(_.get(asset._2)).isDefined
 
-        def continuingInputRedeemer(
+        def continuingInputRedeemerAndOutputDatum(
             tx: Transaction,
             asset: (PolicyId, AssetName),
             utxos: Utxos
-        ): Option[Data] = {
+        ): Option[(Data, Data)] = {
             // Find the input index that contains the asset
             val inputWithAssetIdx = tx.body.value.inputs.toSeq.zipWithIndex
                 .find { (input, _) =>
@@ -110,18 +110,19 @@ class CardanoBackendMock private (
                 }
                 .map(_._2)
 
-            // Check if there's an output with the asset (continuing pattern)
-            val hasOutputWithAsset = tx.body.value.outputs.exists(_.value.value.contains(asset))
-
             // Extract the redeemer for the spending input
             for {
+                // Check if there's an output with the asset (continuing pattern)
+                outputDatum <- for {
+                    outputWithAsset <- tx.body.value.outputs.find(_.value.value.contains(asset))
+                    datum <- outputWithAsset.value.inlineDatum
+                } yield datum
                 inputIx <- inputWithAssetIdx
-                _ <- if hasOutputWithAsset then Some(()) else None
                 redeemers <- tx.witnessSet.redeemers.map(_.value)
                 redeemer <- redeemers.toSeq.find { r =>
                     r.tag == RedeemerTag.Spend && r.index.toInt == inputIx
                 }
-            } yield redeemer.data
+            } yield (redeemer.data, outputDatum)
         }
 
         for {
@@ -129,13 +130,15 @@ class CardanoBackendMock private (
             // Transactions are stored oldest first, reverse to get newest first
             allTxsReversed = state.submittedTxs.reverse
             // Take transactions after the 'after' transaction (excluding it)
-            txsAfter = allTxsReversed.takeWhile(_.id != after)
-            // Extract transactions with continuing inputs (input + output with asset)
-            result = txsAfter.flatMap(tx =>
-                continuingInputRedeemer(tx, asset, state.ledgerState.utxos).map(redeemer =>
-                    tx.id -> redeemer
+            txsAfter = allTxsReversed.takeWhile(_._2.id != after)
+            // Extract transactions with continuing inputs (input + output with asset).
+            // Use the pre-application UTxO snapshot so historical inputs (already consumed)
+            // can still be found — mirrors the Blockfrost implementation's historical query.
+            result = txsAfter.flatMap { (preUtxos, tx) =>
+                continuingInputRedeemerAndOutputDatum(tx, asset, preUtxos).map((r, d) =>
+                    (tx.id, r, d)
                 )
-            )
+            }
         } yield Right(result)
     }
 
@@ -173,7 +176,7 @@ class CardanoBackendMock private (
                             val newState: MockState = state.copy(
                               ledgerState = newLedgerState,
                               knownTxs = state.knownTxs + tx.id,
-                              submittedTxs = state.submittedTxs :+ tx
+                              submittedTxs = state.submittedTxs :+ (state.ledgerState.utxos, tx)
                             )
                             set[MockState](newState) >> pure(Right(()))
                     }
@@ -201,7 +204,17 @@ object CardanoBackendMock {
         initialState: MockState,
         mutator: Mutator = CardanoMutator,
         mkContext: Long => Context = Context.testMainnet
-    ): IO[CardanoBackend[IO]] = {
+    ): IO[CardanoBackend[IO]] =
+        mockIOWithSnapshot(initialState, mutator, mkContext).map(_._1)
+
+    /** Like [[mockIO]] but also returns an `IO[Utxos]` that reads the current UTxO set from the
+      * shared state ref. Useful for inspecting the terminal ledger state after actors finish.
+      */
+    def mockIOWithSnapshot(
+        initialState: MockState,
+        mutator: Mutator = CardanoMutator,
+        mkContext: Long => Context = Context.testMainnet
+    ): IO[(CardanoBackend[IO], IO[Utxos])] = {
         logger.info("Running Cardano backend mock in IO...")
         logger.debug(s"initial utxo ids: ${initialState.ledgerState.utxos.map(_._1)}")
 
@@ -224,7 +237,7 @@ object CardanoBackendMock {
                     } yield ret
                 }
 
-            new CardanoBackend[IO] {
+            val backend: CardanoBackend[IO] = new CardanoBackend[IO] {
                 override def utxosAt(
                     address: ShelleyAddress
                 ): IO[Either[CardanoBackend.Error, Utxos]] =
@@ -244,7 +257,7 @@ object CardanoBackendMock {
                 override def lastContinuingTxs(
                     asset: (PolicyId, AssetName),
                     after: TransactionHash
-                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data)]]] =
+                ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]] =
                     transformer(mock.lastContinuingTxs(asset, after))
 
                 override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
@@ -256,6 +269,10 @@ object CardanoBackendMock {
                 override def resolve(input: TransactionInput): IO[Either[Error, Option[Utxo]]] =
                     transformer(mock.resolve(input))
             }
+
+            val snapshot: IO[Utxos] = stateRef.get.map(_.ledgerState.utxos)
+
+            (backend, snapshot)
         }
     }
 }

@@ -2,9 +2,11 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
 
-/** The **inbound** half of one next-expected lane (§8 of `design/coil-network.md`): a
-  * [[inboundCursor]] naming the next number we expect from the remote. We [[verify]] a received
-  * slice against it (pure) and [[advanceTo]] its successor on accept.
+/** An **inbound** next-expected lane (§4.2 of `design/coil-network.md`) [doc-ref]: a lane we only
+  * receive on. Wraps an [[inboundCursor]] naming the next number we expect from the remote; we
+  * [[verify]] a received slice against it (pure) and [[advanceTo]] its successor on accept. On a
+  * link that produces *and* receives on this number space it is paired with a [[LaneOutbound]] (see
+  * [[LaneBidirectional]]); on a receive-only link it stands alone.
   *
   * A lane is **author-agnostic**: a per-author lane family is a `Map[author, LaneInbound[T, N]]`,
   * so "this item is from peer P" is encoded by *which* lane it lives in, not by an in-lane check.
@@ -14,17 +16,21 @@ import cats.effect.{IO, Ref}
   *   - '''Sparse''' (block / stack briefs on the head mesh): successor is the remote's leader
   *     schedule.
   *
-  * @param extract
-  *   the lane number of an item.
-  * @param nextInbound
+  * @tparam T
+  *   the item type carried on the lane (a brief, ack, request, …).
+  * @tparam N
+  *   the item number — the value the lane sequences on (block / request / hard-ack number, …).
+  * @param numberOf
+  *   the number of an item.
+  * @param next
   *   the successor of the inbound cursor after receiving a given number (`None` = no successor; the
   *   cursor then stays put — a sparse lane with no further remote-led item).
   * @param initialCursor
   *   the first number we expect inbound (the remote's first wire-eligible item).
   */
 final class LaneInbound[T, N] private (
-    extract: T => N,
-    nextInbound: N => Option[N],
+    numberOf: T => N,
+    next: N => Option[N],
     initialCursor: N
 ) {
     import LaneInbound.*
@@ -35,23 +41,23 @@ final class LaneInbound[T, N] private (
     def cursor: IO[N] = inboundCursor.get
 
     /** Verify a received inbound slice against the current cursor — **pure**, no mutation. The
-      * first item must equal the cursor; any following items must be consecutive (each the
-      * [[nextInbound]] of its predecessor). On success returns the cursor to advance to; on failure
-      * the first offending `(expected, received)` pair. An empty slice trivially succeeds and
-      * leaves the cursor unchanged.
+      * first item must equal the cursor; any following items must be consecutive (each the [[next]]
+      * of its predecessor). On success returns the cursor to advance to; on failure the first
+      * offending `(expected, received)` pair. An empty slice trivially succeeds and leaves the
+      * cursor unchanged.
       */
     def verify(items: List[T], current: N): Either[Mismatch[N], N] =
         items match {
             case Nil => Right(current)
-            case head :: _ if extract(head) != current =>
-                Left(Mismatch(current, extract(head)))
+            case head :: _ if numberOf(head) != current =>
+                Left(Mismatch(current, numberOf(head)))
             case _ =>
-                // Walk the slice: each successor must match nextInbound of its predecessor.
-                val numbers = items.map(extract)
+                // Walk the slice: each successor must match next of its predecessor.
+                val numbers = items.map(numberOf)
                 val consecutive = numbers.sliding(2).collectFirst {
-                    case Seq(a, b) if !nextInbound(a).contains(b) => Mismatch(a, b)
+                    case Seq(a, b) if !next(a).contains(b) => Mismatch(a, b)
                 }
-                consecutive.toLeft(nextInbound(numbers.last).getOrElse(current))
+                consecutive.toLeft(next(numbers.last).getOrElse(current))
         }
 
     /** Commit a verified cursor. Call only with the `Right` value from [[verify]]. */
@@ -64,31 +70,31 @@ object LaneInbound {
     final case class Mismatch[N](expected: N, received: N)
 
     /** A contiguous inbound lane whose first expected number is `first` and whose successor is
-      * `+1`. `incr` supplies the `+1`.
+      * `+1`. `increment` supplies the `+1`.
       */
     def contiguous[T, N](
-        extract: T => N,
+        numberOf: T => N,
         first: N,
-        incr: N => N
+        increment: N => N
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
-          extract = extract,
-          nextInbound = n => Some(incr(n)),
+          numberOf = numberOf,
+          next = n => Some(increment(n)),
           initialCursor = first
         )
 
     /** A sparse inbound lane: only the round-robin leader emits, so the successor is the remote's
-      * leader schedule. `remoteNext(after)` is the remote's next-led number after `after`; `zero`
-      * is "before the first". `initialCursor = remoteNext(zero)`.
+      * leader schedule. `next(after)` is the remote's next-led number after `after`; `zero` is
+      * "before the first". `initialCursor = next(zero)`.
       */
     def sparse[T, N](
-        extract: T => N,
+        numberOf: T => N,
         zero: N,
-        remoteNext: N => Option[N]
+        next: N => Option[N]
     ): LaneInbound[T, N] =
         new LaneInbound[T, N](
-          extract = extract,
-          nextInbound = remoteNext,
-          initialCursor = remoteNext(zero).getOrElse(zero)
+          numberOf = numberOf,
+          next = next,
+          initialCursor = next(zero).getOrElse(zero)
         )
 }

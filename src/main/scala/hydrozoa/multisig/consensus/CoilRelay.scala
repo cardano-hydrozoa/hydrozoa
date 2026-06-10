@@ -11,13 +11,13 @@ import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.stack.StackBrief
 
 /** The hub-side fan-out that distributes the whole population stream down to a hub's coil peers
-  * (§8.3 of `design/coil-network.md`).
+  * (§5.4 of `design/coil-network.md`) [doc-ref].
   *
   * '''Stateless — no buffer, no cursors, no reordering.''' It forwards each artifact it is handed
   * to '''every''' [[PeerLiaisonHubToCoil]] the hub runs; each liaison appends it to its own
-  * per-lane outbox (D-coil-5: per-liaison outboxes). It exists so the core consensus actors are not
-  * relay taps: an actor's job ends when its cell saturates, but a relay must keep forwarding, so
-  * relaying lives here.
+  * per-lane outbox (per-liaison outboxes). It exists so the core consensus actors are not relay
+  * taps: an actor's job ends when its cell saturates, but a relay must keep forwarding, so relaying
+  * lives here.
   *
   * ==Who feeds it==
   *
