@@ -204,7 +204,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
     val _ = property(
       "EvacuationTx builds successfully with valid recipe"
-    ) = runDefault(
+    ) = runWithCoil()(
       for {
           env <- ask
           builder <- pick(genEvacuationTxBuild(using env))
