@@ -156,7 +156,9 @@ private object FallbackTxOps {
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
                           // TODO: pull in N first elements of G2 CRS
                           // KZG setup I think?
-                          setup = SList.empty
+                          setup = SList.empty,
+                          coilPeerVKeys = SList.from(config.coilPeerVKeys),
+                          coilQuorum = config.coilQuorum
                         )
                     }
 

@@ -124,6 +124,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
       collateralUtxo,
       blockHeader,
       signatures.toList,
+      coilSignatures = List.empty,
     )
 }
 

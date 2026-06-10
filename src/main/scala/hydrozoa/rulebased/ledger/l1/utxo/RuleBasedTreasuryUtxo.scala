@@ -32,7 +32,7 @@ final case class RuleBasedTreasuryUtxo(
     // but we'd still have to parse at some point due to type erasure. But we could parse at the boundary instead.
     def parseVotingDeadline(using config: Config): Either[ParseError, Slot] =
         treasuryOutput.datum match {
-            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _) =>
+            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _, _, _) =>
                 Try(Slot(config.slotConfig.timeToSlot(deadlineVoting.toLong))).toEither.left
                     .map(TreasuryDatumContainsInvalidDeadline(_))
             case _ => Left(TreasuryDatumResolved)

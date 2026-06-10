@@ -39,7 +39,8 @@ object DisputeResolutionValidator extends Validator {
 
     case class VoteRedeemer(
         sec: StandaloneEvacuationCommitment.Onchain,
-        multisig: List[Signature]
+        multisig: List[Signature],
+        coilMultisig: List[Option[Signature]]
     )
 
     given FromData[VoteRedeemer] = FromData.derived
@@ -81,6 +82,10 @@ object DisputeResolutionValidator extends Validator {
         "The transaction validity upper bound must not exceed the deadlineVoting"
     private inline val VoteMultisigCheck =
         "Redeemer should contain all valid signatures for the block voted"
+    private inline val VoteCoilMultisigLengthCheck =
+        "coilMultisig length must equal coilPeers length in treasury datum"
+    private inline val VoteCoilQuorumCheck =
+        "coilMultisig must contain exactly coilQuorum valid signatures"
     private inline val VoteMajorVersionCheck =
         "The versionMajor field must match between treasury and voteRedeemer"
     private inline val VoteVoteOutputExists =
@@ -214,10 +219,10 @@ object DisputeResolutionValidator extends Validator {
                 }
 
                 // The multisig field of voteRedeemer must have signatures of the blockHeader
-                // field of voteRedeemer for all the public keys in the peers field of treasury.
+                // field of voteRedeemer for all the public keys in the headPeers field of treasury.
                 val msg = voteRedeemer.sec.toData |> serialiseData
                 require(
-                  treasuryDatum.peers.length == voteRedeemer.multisig.length,
+                  treasuryDatum.headPeers.length == voteRedeemer.multisig.length,
                   VoteMultisigCheck
                 )
 
@@ -234,12 +239,45 @@ object DisputeResolutionValidator extends Validator {
                                 case Nil => ()
                         case Nil => ()
 
-                verifySignatures(treasuryDatum.peers, voteRedeemer.multisig)
+                verifySignatures(treasuryDatum.headPeers, voteRedeemer.multisig)
 
-                // @annotation.unused
-                // val unused = List.map2(treasuryDatum.peers, voteRedeemer.multisig)((vk, sig) =>
-                //    //require(verifyEd25519Signature(vk, msg, sig), VoteMultisigCheck)
-                // )
+                require(
+                  treasuryDatum.coilPeers.length == voteRedeemer.coilMultisig.length,
+                  VoteCoilMultisigLengthCheck
+                )
+
+                @tailrec
+                // The coilMultisig field is be sparse. It does NOT need to contain the exact length of entires;
+                // no more than coilQuorum signatures are verified, even if more are provided.
+                def verifyCoilSignatures(
+                    keys: List[ByteString],
+                    sigs: List[Option[ByteString]],
+                    count: BigInt
+                ): BigInt = {
+                    if count == treasuryDatum.coilQuorum
+                    then count
+                    else
+                        keys match
+                            case Nil => count
+                            case Cons(k, ks) =>
+                                sigs match
+                                    case Nil => count
+                                    case Cons(s, ss) =>
+                                        s match
+                                            case scalus.cardano.onchain.plutus.prelude.Option
+                                                    .Some(sig) =>
+                                                require(verifyEd25519Signature(k, msg, sig))
+                                                verifyCoilSignatures(ks, ss, count + 1)
+                                            case scalus.cardano.onchain.plutus.prelude.Option.None =>
+                                                verifyCoilSignatures(ks, ss, count)
+                }
+
+                val coilSigCount = verifyCoilSignatures(
+                  treasuryDatum.coilPeers,
+                  voteRedeemer.coilMultisig,
+                  BigInt(0)
+                )
+                require(coilSigCount == treasuryDatum.coilQuorum, VoteCoilQuorumCheck)
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(

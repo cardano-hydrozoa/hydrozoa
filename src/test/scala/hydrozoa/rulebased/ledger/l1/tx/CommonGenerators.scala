@@ -19,6 +19,7 @@ import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPay
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{BlockHeader as _, Value, *}
+import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
@@ -81,7 +82,9 @@ object CommonGenerators {
         } yield Unresolved(
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
-          setup = setup
+          setup = setup,
+          coilPeerVKeys = SList.empty,
+          coilQuorum = 0
         )
 
     def genRuleBasedTreasuryUtxo(

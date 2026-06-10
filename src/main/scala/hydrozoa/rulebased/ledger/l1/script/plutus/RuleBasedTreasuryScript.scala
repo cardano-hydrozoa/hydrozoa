@@ -151,7 +151,7 @@ object RuleBasedTreasuryValidator extends Validator {
                         e.resolved.value.containsExactlyOneAsset(
                           unresolvedDatum.headMp,
                           unresolvedDatum.disputeId,
-                          unresolvedDatum.peersN + 1
+                          unresolvedDatum.headPeersN + 1
                         )
                     )
                     .getOrFail(ResolveVoteInputNotFound)
@@ -191,13 +191,17 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    case AwaitingVote(_)                 => fail(ResolveUnexpectedNoVote)
+                    case AwaitingVote(_) => fail(ResolveUnexpectedNoVote)
                     case Voted(commitment, versionMinor) =>
+                        val inputMajor = unresolvedDatum.versionMajor
+                        val inputMinor = versionMinor
+                        val outputMajor = treasuryOutputDatum.version._1
+                        val outputMinor = treasuryOutputDatum.version._2
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
                         require(
-                          treasuryOutputDatum.version._1 == unresolvedDatum.versionMajor &&
-                              treasuryOutputDatum.version._2 == versionMinor,
+                          inputMajor == outputMajor &&
+                              inputMinor == outputMinor,
                           ResolveVersionCheck
                         )
                         // (c) voteStatus and treasuryOutput must match on utxosActive.
@@ -213,7 +217,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 require(
-                  unresolvedDatum.setup === treasuryOutputDatum.setup,
+                  unresolvedDatum.setupG2 === treasuryOutputDatum.setup,
                   ResolveTreasuryInputOutputSetup
                 )
 

@@ -148,6 +148,7 @@ final case class DisputeActor(
                       collateralUtxo = collateralUtxo,
                       sec = sec,
                       signatures = signatures,
+                      coilSignatures = List.empty,
                     )
                     for {
                         voteTx <- builder.result match {

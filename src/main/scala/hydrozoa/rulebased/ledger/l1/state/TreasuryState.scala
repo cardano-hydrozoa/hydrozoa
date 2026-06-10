@@ -15,7 +15,13 @@ object TreasuryState:
 
     // Datum
     enum RuleBasedTreasuryDatum:
-        case Unresolved(deadlineVoting: PosixTime, versionMajor: BigInt, setup: List[ByteString])
+        case Unresolved(
+            deadlineVoting: PosixTime,
+            versionMajor: BigInt,
+            setup: List[ByteString],
+            coilPeerVKeys: List[VerificationKey],
+            coilQuorum: Int
+        )
         case Resolved(
             evacuationActive: MembershipProof,
             // FIXME: missing in the refactored version
@@ -26,12 +32,14 @@ object TreasuryState:
         def toOnchain(using
             config: HasTokenNames & HeadPeers.Section
         ): RuleBasedTreasuryDatumOnchain = this match {
-            case Unresolved(deadlineVoting, versionMajor, setup) =>
+            case Unresolved(deadlineVoting, versionMajor, setup, coilPeerVKeys, coilQuorum) =>
                 UnresolvedOnchain(
                   config.headMultisigScript.policyId,
                   config.headTokenNames.voteTokenName.bytes,
                   List.from(config.headPeerVKeys.toList),
                   BigInt(config.nHeadPeers.toInt),
+                  coilPeerVKeys,
+                  BigInt(coilQuorum),
                   deadlineVoting,
                   versionMajor,
                   setup
@@ -49,11 +57,13 @@ object TreasuryState:
         case UnresolvedOnchain(
             headMp: PolicyId,
             disputeId: TokenName,
-            peers: List[VerificationKey],
-            peersN: BigInt,
+            headPeers: List[VerificationKey],
+            headPeersN: BigInt,
+            coilPeers: List[VerificationKey],
+            coilQuorum: BigInt,
             deadlineVoting: PosixTime,
             versionMajor: BigInt,
-            setup: List[ByteString]
+            setupG2: List[ByteString]
         )
         case ResolvedOnchain(
             headMp: PolicyId,
@@ -70,17 +80,22 @@ object TreasuryState:
             case UnresolvedOnchain(
                   headMp,
                   disputeId,
-                  peers,
-                  peersN,
+                  headPeers,
+                  headPeersN,
+                  coilPeers,
+                  coilQuorum,
                   deadlineVoting,
                   versionMajor,
                   setup
                 ) =>
                 if headMp == config.headMultisigScript.policyId
                     && disputeId == config.headTokenNames.voteTokenName.bytes
-                    && peers == List.from(config.headPeerVKeys.toList)
-                    && peersN == BigInt(config.nHeadPeers.toInt)
-                then Some(Unresolved(deadlineVoting, versionMajor, setup))
+                    && headPeers == List.from(config.headPeerVKeys.toList)
+                    && headPeersN == BigInt(config.nHeadPeers.toInt)
+                then
+                    Some(
+                      Unresolved(deadlineVoting, versionMajor, setup, coilPeers, coilQuorum.toInt)
+                    )
                 else None
             case ResolvedOnchain(headMp, evacuationActive, version, setup) =>
                 if headMp == config.headMultisigScript.policyId

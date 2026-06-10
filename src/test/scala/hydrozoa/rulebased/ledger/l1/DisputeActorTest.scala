@@ -29,6 +29,7 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
+import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v3.PosixTime
 import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
@@ -83,7 +84,9 @@ object DisputeActorTestHelpers {
               // this is cribbed from the CommonGenerators.scala test
               setup = TrustedSetup
                   .takeSrsG2(10)
-                  .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
+                  .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString),
+              coilPeerVKeys = SList.empty,
+              coilQuorum = 0
             )
             treasuryUtxo = RuleBasedTreasuryUtxo(
               utxoId = txIn,

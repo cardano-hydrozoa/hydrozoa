@@ -27,7 +27,7 @@ import monocle.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{BlockHeader as _, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -76,6 +76,7 @@ private object VoteTxOps {
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
+        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
     ) {
 
         // TODO relocate to "VoteOutput" companion object?
@@ -132,6 +133,14 @@ private object VoteTxOps {
                 sec,
                 SList.from(
                   signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+                ),
+                SList.from(
+                  coilSignatures.map {
+                      case Some(sig) =>
+                          SOption.Some(ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+                      case None =>
+                          SOption.None
+                  }
                 )
               )
             )
