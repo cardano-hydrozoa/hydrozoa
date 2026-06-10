@@ -40,7 +40,7 @@ object DisputeResolutionValidator extends Validator {
 
     case class VoteRedeemer(
         sec: StandaloneEvacuationCommitment.Onchain,
-        multisig: List[Signature],
+        headMultisig: List[Signature],
         coilMultisig: List[Option[Signature]]
     )
 
@@ -242,7 +242,7 @@ object DisputeResolutionValidator extends Validator {
                 // field of voteRedeemer for all the public keys in the headPeers field of treasury.
                 val msg = voteRedeemer.sec.toData |> serialiseData
                 require(
-                  treasuryDatum.headPeers.length == voteRedeemer.multisig.length,
+                  treasuryDatum.headPeers.length == voteRedeemer.headMultisig.length,
                   VoteMultisigCheck
                 )
 
@@ -259,7 +259,7 @@ object DisputeResolutionValidator extends Validator {
                                 case Nil => ()
                         case Nil => ()
 
-                verifySignatures(treasuryDatum.headPeers, voteRedeemer.multisig)
+                verifySignatures(treasuryDatum.headPeers, voteRedeemer.headMultisig)
 
                 @tailrec
                 // The coilMultisig field is be sparse. It does NOT need to contain the exact length of entires;
