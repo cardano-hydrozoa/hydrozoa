@@ -335,7 +335,7 @@ object DisputeResolutionValidator extends Validator {
                 // continuingInput and removedInput must have non-ADA tokens of only one asset
                 // class, which must match between them
                 val (contCs, contTn, _) = continuingInput.value.onlyNonAdaAsset
-                val (removedCs, removedTn, _) = continuingInput.value.onlyNonAdaAsset
+                val (removedCs, removedTn, _) = removedInput.value.onlyNonAdaAsset
                 require(contCs === removedCs && contTn === removedTn, VotingInputsDoNotMatch)
 
                 // The key field of removedInput must be greater than the key field and equal to the
