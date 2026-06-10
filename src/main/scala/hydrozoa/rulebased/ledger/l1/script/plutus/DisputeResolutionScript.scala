@@ -73,6 +73,8 @@ object DisputeResolutionValidator extends Validator {
     // Vote redeemer
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
     private inline val VoteAlreadyCast = "Vote already cast in exclusive ballot box"
+    private inline val VoteRatchetNotMonotonic =
+        "Public ballot box ratchet must strictly increase versionMinor"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
     private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
@@ -186,9 +188,17 @@ object DisputeResolutionValidator extends Validator {
                 voteDatum.voteStatus match {
                     case AwaitingVote(pkh) =>
                         require(tx.signatories.contains(pkh), VoteMustBeSignedByPeer)
-                    case _ =>
-                        // Public ballot box (key == 0) starts as Voted and may be re-voted by anyone.
-                        if voteDatum.key != BigInt(0) then fail(VoteAlreadyCast)
+                    case VoteStatus.Voted(_, prevVersionMinor) =>
+                        // Public ballot box (key == 0) starts as Voted and may be re-voted by
+                        // anyone, but only with a strictly higher versionMinor (foundation I8).
+                        require(voteDatum.key == BigInt(0), VoteAlreadyCast)
+                        require(
+                          voteRedeemer.sec.versionMinor > prevVersionMinor,
+                          VoteRatchetNotMonotonic
+                        )
+                    case VoteStatus.Abstain =>
+                        // Abstain is terminal; cannot be re-voted on any ballot box.
+                        fail(VoteAlreadyCast)
                 }
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
