@@ -82,8 +82,6 @@ object DisputeResolutionValidator extends Validator {
         "The transaction validity upper bound must not exceed the deadlineVoting"
     private inline val VoteMultisigCheck =
         "Redeemer should contain all valid signatures for the block voted"
-    private inline val VoteCoilMultisigLengthCheck =
-        "coilMultisig length must equal coilPeers length in treasury datum"
     private inline val VoteCoilQuorumCheck =
         "coilMultisig must contain exactly coilQuorum valid signatures"
     private inline val VoteMajorVersionCheck =
@@ -240,11 +238,6 @@ object DisputeResolutionValidator extends Validator {
                         case Nil => ()
 
                 verifySignatures(treasuryDatum.headPeers, voteRedeemer.multisig)
-
-                require(
-                  treasuryDatum.coilPeers.length == voteRedeemer.coilMultisig.length,
-                  VoteCoilMultisigLengthCheck
-                )
 
                 @tailrec
                 // The coilMultisig field is be sparse. It does NOT need to contain the exact length of entires;
