@@ -83,7 +83,7 @@ object DisputeResolutionValidator extends Validator {
     private inline val VoteMultisigCheck =
         "Redeemer should contain all valid signatures for the block voted"
     private inline val VoteCoilQuorumCheck =
-        "coilMultisig must contain exactly coilQuorum valid signatures"
+        "coilMultisig must contain at least coilQuorum valid signatures"
     private inline val VoteMajorVersionCheck =
         "The versionMajor field must match between treasury and voteRedeemer"
     private inline val VoteVoteOutputExists =
