@@ -90,6 +90,7 @@ object L2LedgerCommand {
             import Destination.given
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
+            import hydrozoa.multisig.server.JsonCodecs.requestIdEncoder
             (r: L2LedgerCommand.RegisterDeposit) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
@@ -109,6 +110,7 @@ object L2LedgerCommand {
         given depositRegistrationDecoder: io.circe.Decoder[L2LedgerCommand.RegisterDeposit] = {
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Decoder_Value, given_Decoder_Coin}
+            import hydrozoa.multisig.server.JsonCodecs.requestIdDecoder
             io.circe.generic.semiauto.deriveDecoder
         }
     }
@@ -121,7 +123,11 @@ object L2LedgerCommand {
     ) extends L2LedgerCommand.Real
 
     object ApplyDepositDecisions {
-        given Codec[L2LedgerCommand.ApplyDepositDecisions] = io.circe.generic.semiauto.deriveCodec
+        given Codec[L2LedgerCommand.ApplyDepositDecisions] = {
+            import BlockNumber.given
+            import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
+            io.circe.generic.semiauto.deriveCodec
+        }
     }
 
     /** An L2Event, as forwarded to black-box L2 ledger. It can only be constructed with respect to

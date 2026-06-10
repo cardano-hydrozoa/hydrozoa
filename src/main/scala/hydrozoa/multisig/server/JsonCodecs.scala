@@ -241,6 +241,13 @@ object JsonCodecs {
     given headPeerNumberDecoder: Decoder[HeadPeerNumber] =
         Decoder.decodeInt.map(HeadPeerNumber.apply)
 
+    // RequestId codec
+    given requestIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
+        io.circe.Json.fromLong(requestId.asI64)
+
+    given requestIdDecoder: Decoder[RequestId] =
+        Decoder.decodeLong.map(RequestId.fromI64)
+
     // Response types
     given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]
 

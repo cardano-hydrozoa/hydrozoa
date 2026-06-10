@@ -26,6 +26,8 @@ object RemoteL2LedgerCodecs {
     export L2LedgerCommand.given
     export Destination.given
 
+    import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
+
     // Coin as raw number (sugar-rush-ledger expects u64, not string)
     given Encoder[Coin] = Encoder.encodeLong.contramap(_.value)
     given Decoder[Coin] = Decoder.decodeLong.map(Coin.apply)
