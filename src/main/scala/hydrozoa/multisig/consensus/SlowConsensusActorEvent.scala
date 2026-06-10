@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.ledger.stack.StackNumber
+import hydrozoa.multisig.ledger.stack.{Stack, StackNumber}
 
 /** Typed events emitted by [[SlowConsensusActor]]. Pure data; formatters in
   * [[SlowConsensusActorEventFormat]] decide how each variant is rendered to a particular sink.
@@ -19,4 +19,4 @@ object SlowConsensusActorEvent:
     final case class Round1Confirmed(stackNum: StackNumber) extends SlowConsensusActorEvent
 
     /** All acks collected and aggregated; [[Stack.HardConfirmed]] emitted downstream. */
-    final case class StackHardConfirmed(stackNum: StackNumber) extends SlowConsensusActorEvent
+    final case class StackHardConfirmed(stack: Stack.HardConfirmed) extends SlowConsensusActorEvent

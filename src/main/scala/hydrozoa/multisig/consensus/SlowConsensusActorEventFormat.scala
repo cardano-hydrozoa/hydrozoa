@@ -30,7 +30,8 @@ object SlowConsensusActorEventFormat:
                   ctx0 ++ Map("stackNum" -> s"${sn: Int}"),
                   routingKey = rk
                 )
-            case StackHardConfirmed(sn) =>
+            case StackHardConfirmed(stack) =>
+                val sn = stack.brief.stackNum
                 LogEvent(
                   Level.Info,
                   s"stack $sn HARD-CONFIRMED",
@@ -60,7 +61,8 @@ object SlowConsensusActorEventFormat:
                     routingKey = rk
                   )
                 )
-            case StackHardConfirmed(sn) =>
+            case StackHardConfirmed(stack) =>
+                val sn = stack.brief.stackNum
                 Some(
                   LogEvent(
                     Level.Info,

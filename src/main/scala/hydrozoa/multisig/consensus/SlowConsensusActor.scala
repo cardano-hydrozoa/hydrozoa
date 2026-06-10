@@ -310,8 +310,8 @@ final case class SlowConsensusActor(
         wmap = ackAggregator.aggregateTxSignatures(cell, vkeys)
         evac = ackAggregator.collectSecSignatures(cell)
         signed <- ackAggregator.attachWitnesses(cell.unsigned, wmap, evac)
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(stackNum))
         hardConfirmed = Stack.HardConfirmed(cell.unsigned.brief, signed)
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
         _ <- persistHardConfirmation(stackNum, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed

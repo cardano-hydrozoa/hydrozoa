@@ -1,7 +1,9 @@
 package hydrozoa.multisig
 
 import hydrozoa.multisig.MultisigRegimeManager.{Actors, Dependencies}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
+import hydrozoa.multisig.consensus.limiter.LimiterEvent
+import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, EventSequencerEvent, FastConsensusActorEvent, PeerLiaisonEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 
 /** Roll-up of every typed event flowing through the multisig regime. One `ContraTracer[IO,
@@ -12,11 +14,19 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 sealed trait MultisigRegimeManagerEvent
 
 object MultisigRegimeManagerEvent:
+    final case class BW(event: BlockWeaverEvent) extends MultisigRegimeManagerEvent
     final case class JL(event: JointLedgerEvent) extends MultisigRegimeManagerEvent
     final case class FCA(event: FastConsensusActorEvent) extends MultisigRegimeManagerEvent
     final case class CL(event: CardanoLiaisonEvent) extends MultisigRegimeManagerEvent
     final case class SC(event: StackComposerEvent) extends MultisigRegimeManagerEvent
     final case class SCA(event: SlowConsensusActorEvent) extends MultisigRegimeManagerEvent
+    final case class ES(event: EventSequencerEvent) extends MultisigRegimeManagerEvent
+
+    /** `remotePeerId` identifies which remote peer this liaison is talking to. */
+    final case class PL(remotePeerId: HeadPeerId, event: PeerLiaisonEvent)
+        extends MultisigRegimeManagerEvent
+    final case class BWL(event: LimiterEvent) extends MultisigRegimeManagerEvent
+    final case class SCL(event: LimiterEvent) extends MultisigRegimeManagerEvent
     case object StartingActors extends MultisigRegimeManagerEvent
     case object WatchingActors extends MultisigRegimeManagerEvent
     final case class TerminatedActor(actor: Actors) extends MultisigRegimeManagerEvent

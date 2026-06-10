@@ -1,9 +1,10 @@
 package hydrozoa.multisig
 
 import hydrozoa.lib.logging.{Level, LogEvent}
-import hydrozoa.multisig.MultisigRegimeManagerEvent.{CL, FCA, JL, SC, SCA, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
+import hydrozoa.multisig.MultisigRegimeManagerEvent.{BW, BWL, CL, ES, FCA, JL, PL, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
+import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{CardanoLiaisonEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, PeerLiaisonEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
 /** Top-level formatters delegating to each producer's per-event formatter. Build the prod or test
@@ -17,11 +18,17 @@ object MultisigRegimeManagerEventFormat:
         Map("peer" -> peerNum.toString)
 
     def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = e match
+        case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)
         case JL(jl)   => JointLedgerEventFormat.humanFormat(peerNum)(jl)
         case FCA(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
         case CL(cl)   => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
         case SC(sc)   => StackComposerEventFormat.humanFormat(peerNum)(sc)
         case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
+        case ES(es)   => EventSequencerEventFormat.humanFormat(peerNum)(es)
+        case PL(remotePeerId, pl) =>
+            PeerLiaisonEventFormat.humanFormat(peerNum, remotePeerId.peerNum)(pl)
+        case BWL(bwl) => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
+        case SCL(scl) => LimiterEventFormat.humanFormat("StackComposer")(scl)
         case StartingActors =>
             LogEvent(
               Level.Info,
@@ -53,10 +60,15 @@ object MultisigRegimeManagerEventFormat:
 
     def jsonlFormat(peerNumber: HeadPeerNumber)(e: MultisigRegimeManagerEvent): Option[LogEvent] =
         e match
+            case BW(bw)   => BlockWeaverEventFormat.jsonlFormat(peerNumber)(bw)
             case JL(jl)   => JointLedgerEventFormat.jsonlFormat(peerNumber)(jl)
             case FCA(fca) => FastConsensusActorEventFormat.jsonlFormat(peerNumber)(fca)
             case CL(cl)   => CardanoLiaisonEventFormat.jsonlFormat(peerNumber)(cl)
             case SC(sc)   => StackComposerEventFormat.jsonlFormat(peerNumber)(sc)
             case SCA(sca) => SlowConsensusActorEventFormat.jsonlFormat(peerNumber)(sca)
+            case ES(_)    => None
+            case PL(remotePeerId, pl) =>
+                PeerLiaisonEventFormat.mermaidFormat(peerNumber, remotePeerId.peerNum)(pl)
+            case BWL(_) | SCL(_) => None
             case StartingActors | WatchingActors | TerminatedActor(_) | TerminatedDependency(_) =>
                 None

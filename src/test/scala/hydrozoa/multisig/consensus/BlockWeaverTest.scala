@@ -13,6 +13,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -94,7 +95,11 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     ): BlockWeaver.Handle = {
         val config = multiNodeConfig.nodeConfigs(peerNumber)
         val connections = BlockWeaver.ConnectionsPartial(jointLedgerMockActor)
-        p.runIO(system.actorOf(BlockWeaver(config, connections)))
+        p.runIO(
+          system.actorOf(
+            BlockWeaver(config, connections, ContraTracer.nullTracer[IO, BlockWeaverEvent])
+          )
+        )
     }
 
     // Empty block brief for block 1, so Carol starts working on block 2

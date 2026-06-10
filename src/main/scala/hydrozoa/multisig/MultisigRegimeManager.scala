@@ -14,7 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
 import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.ledger.l2.L2Ledger
@@ -33,6 +33,8 @@ trait MultisigRegimeManager(
       * producer's narrow event type up into [[MultisigRegimeManagerEvent]] so it can reach the
       * single sink composition the wiring layer assembled.
       */
+    private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.BW.apply)
     private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
         tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
     private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
@@ -43,6 +45,14 @@ trait MultisigRegimeManager(
         tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
     private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
         tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
+    private val esTracer: ContraTracer[IO, EventSequencerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.ES.apply)
+    private def plTracer(pid: HeadPeerId): ContraTracer[IO, PeerLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.PL(pid, _))
+    private val bwlTracer: ContraTracer[IO, LimiterEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.BWL.apply)
+    private val sclTracer: ContraTracer[IO, LimiterEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SCL.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -77,14 +87,14 @@ trait MultisigRegimeManager(
 
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections))
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, bwTracer))
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaison, …) keep direct refs.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](blockWeaver, config)
+              Limiter[BlockWeaver.Request](blockWeaver, config, bwlTracer)
             )
 
             cardanoLiaison <-
@@ -97,7 +107,7 @@ trait MultisigRegimeManager(
             )
 
             eventSequencer <- context.actorOf(
-              EventSequencer(config, pendingConnections, persistence)
+              EventSequencer(config, pendingConnections, esTracer, persistence)
             )
 
             jointLedger <- context.actorOf(
@@ -110,7 +120,7 @@ trait MultisigRegimeManager(
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
             stackComposerLimiter <- context.actorOf(
-              Limiter[StackComposer.Request](stackComposer, config)
+              Limiter[StackComposer.Request](stackComposer, config, sclTracer)
             )
 
             slowConsensusActor <- context.actorOf(
@@ -124,7 +134,13 @@ trait MultisigRegimeManager(
                         for {
                             localPeerLiaison <-
                                 context.actorOf(
-                                  PeerLiaison(config, pid, pendingConnections, persistence)
+                                  PeerLiaison(
+                                    config,
+                                    pid,
+                                    pendingConnections,
+                                    plTracer(pid),
+                                    persistence
+                                  )
                                 )
                         } yield localPeerLiaison
                     )

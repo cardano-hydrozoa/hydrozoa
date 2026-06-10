@@ -23,8 +23,8 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.{PeerWsTransport, RemotePeerProxy}
-import hydrozoa.multisig.consensus.limiter.Limiter
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, PeerLiaison, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
+import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, EventSequencer, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, PeerLiaison, PeerLiaisonEvent, PeerLiaisonEventFormat, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
 import org.http4s.Uri
 import com.comcast.ip4s.{Host, Port, host}
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -161,7 +161,8 @@ case class Stage4Suite(
           (
               CardanoBackend[IO],
               Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
-              Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]]
+              Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+              Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]]
           )
         ] = {
             // All peers share one mock L1 backend, starting from the merged pre-init UTxOs.
@@ -196,7 +197,12 @@ case class Stage4Suite(
                     Ref[IO].of(Vector.empty[BlockBrief.Intermediate]).map(peerNum -> _)
                 }
                 .map(_.toMap)
-            } yield (cardanoBackend, pendingConnsMap, blockBriefsMap)
+            stacksMap <- peers
+                .traverse { peerNum =>
+                    Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
+                }
+                .map(_.toMap)
+            } yield (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap)
         }
 
         // ------ Per-peer actor stack. Brackets `openPeerBackend` (RocksDB on disk); the rest
@@ -207,9 +213,13 @@ case class Stage4Suite(
             cardanoBackend: CardanoBackend[IO],
             pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+            stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
         ): Resource[IO, PeerStack] = {
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val pending = pendingConnsMap(peerNum)
+            val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
+                Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNum))
+                    |+| Slf4jTracer.sink.traceMaybe(BlockWeaverEventFormat.jsonlFormat(peerNum))
             val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
                 Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
                     |+| Slf4jTracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(peerNum))
@@ -219,8 +229,15 @@ case class Stage4Suite(
             val scTracer: ContraTracer[IO, StackComposerEvent] =
                 Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
                     |+| Slf4jTracer.sink.traceMaybe(StackComposerEventFormat.jsonlFormat(peerNum))
+            val captureScaSink: ContraTracer[IO, SlowConsensusActorEvent] =
+                ContraTracer.emit[IO, SlowConsensusActorEvent] {
+                    case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
+                        stacksMap(peerNum).update(_ :+ stack)
+                    case _ => IO.unit
+                }
             val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-                Slf4jTracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
+                captureScaSink
+                    |+| Slf4jTracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
                     |+| Slf4jTracer.sink.traceMaybe(SlowConsensusActorEventFormat.jsonlFormat(peerNum))
             // Capture sink: only briefs go into the per-peer Ref.
             val captureSink: ContraTracer[IO, JointLedgerEvent] =
@@ -233,6 +250,8 @@ case class Stage4Suite(
             val textSink: ContraTracer[IO, JointLedgerEvent] =
                 Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum))
             val jlTracer: ContraTracer[IO, JointLedgerEvent] = captureSink |+| textSink
+            val esTracer: ContraTracer[IO, EventSequencerEvent] =
+                Slf4jTracer.sink.contramap(EventSequencerEventFormat.humanFormat(peerNum))
             // Per-peer persistence backend — InMemory by default; RocksDb when the
             // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
             // every producer (EventSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
@@ -243,12 +262,12 @@ case class Stage4Suite(
                         given CardanoNetwork.Section = nodeConfig
                         Persistence.fromBackend(backendStore)
                     }
-                    blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending))
+                    blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, bwTracer))
                     cardanoLiaison <- system.actorOf(
                       CardanoLiaison(nodeConfig, cardanoBackend, pending, clTracer)
                     )
                     eventSequencer <- system.actorOf(
-                      EventSequencer(nodeConfig, pending, persistence)
+                      EventSequencer(nodeConfig, pending, esTracer, persistence)
                     )
                     l2Ledger <- EutxoL2Ledger(nodeConfig)
                     jointLedger <- system.actorOf(
@@ -282,35 +301,17 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
             pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
-        ): IO[
-          (
-              Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-              Map[HeadPeerNumber, CardanoLiaison.Handle],
-              Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]]
-          )
-        ] = for {
-            // Create stack-collecting observers wrapping each peer's CardanoLiaison.
-            // Injected via Connections so SlowConsensusActor is unaware; captures every
-            // hard-confirmed stack the slow cycle emits (parallel to the brief-capture
-            // ContraTracer on the fast side).
-            stacksMap <- peers
-                .traverse { peerNum =>
-                    Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
-                }
-                .map(_.toMap)
-            stackObserverMap <- peers
-                .traverse { peerNum =>
-                    system
-                        .actorOf(
-                          StackObserver(
-                            peerNum,
-                            peerStackMap(peerNum).cardanoLiaison,
-                            stacksMap(peerNum)
-                          )
-                        )
-                        .map(peerNum -> _)
-                }
-                .map(_.toMap)
+        ): IO[Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]]] = {
+            def mkPlTracer(
+                pn: HeadPeerNumber,
+                rpId: HeadPeerId,
+            ): ContraTracer[IO, PeerLiaisonEvent] =
+                Slf4jTracer.sink.contramap(
+                  PeerLiaisonEventFormat.humanFormat(pn, rpId.peerNum)
+                ) |+| Slf4jTracer.sink.traceMaybe(
+                  PeerLiaisonEventFormat.mermaidFormat(pn, rpId.peerNum)
+                )
+            for {
             // Create one local PeerLiaison per (local, remote) pair.
             // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
             peerLiaisonMap <- peers
@@ -328,14 +329,21 @@ case class Stage4Suite(
                                 multiNodeConfig.nodeConfigs(remotePeerNum).ownHeadPeerId
                             system
                                 .actorOf(
-                                  PeerLiaison(nodeConfig, remotePeerId, pending, persistence)
+                                  PeerLiaison(
+                                    nodeConfig,
+                                    remotePeerId,
+                                    pending,
+                                    mkPlTracer(peerNum, remotePeerId),
+                                    persistence
+                                  )
                                 )
                                 .map(remotePeerId -> _)
                         }
                         .map(liaisons => peerNum -> liaisons.toMap)
                 }
                 .map(_.toMap)
-        } yield (stacksMap, stackObserverMap, peerLiaisonMap)
+        } yield peerLiaisonMap
+        }
 
         // ------ Build the per-peer remote-liaison map. In Direct mode this is the actual
         // ------ PeerLiaison handle from the other peer's actor stack. In WebSocket mode it's
@@ -383,7 +391,6 @@ case class Stage4Suite(
             pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-            stackObserverMap: Map[HeadPeerNumber, CardanoLiaison.Handle],
             peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]],
             remoteLiaisonsByPeer: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaison.Handle]],
         ): IO[Stage4Sut] = for {
@@ -392,25 +399,26 @@ case class Stage4Suite(
                 val stack = peerStackMap(peerNum)
                 val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
                 val localLiaisons = peerLiaisonMap(peerNum).values.toList
+                // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
+                // default RateLimits config (zero periods) these are no-ops; non-zero
+                // periods enable throttling for the corresponding lane.
+                val bwlTracer: ContraTracer[IO, LimiterEvent] =
+                    Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("BlockWeaver"))
+                val sclTracer: ContraTracer[IO, LimiterEvent] =
+                    Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("StackComposer"))
                 for {
-                    // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
-                    // default RateLimits config (zero periods) these are no-ops; non-zero
-                    // periods enable throttling for the corresponding lane.
                     blockWeaverLimiter <- system.actorOf(
-                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig)
+                      Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig, bwlTracer)
                     )
                     stackComposerLimiter <- system.actorOf(
-                      Limiter[StackComposer.Request](stack.stackComposer, nodeConfig)
+                      Limiter[StackComposer.Request](stack.stackComposer, nodeConfig, sclTracer)
                     )
                     _ <- pendingConnsMap(peerNum)
                         .complete(
                           MultisigRegimeManager.Connections(
                             blockWeaver = stack.blockWeaver,
                             blockWeaverLimiter = blockWeaverLimiter,
-                            // Route the slow cycle's Stack.HardConfirmed through StackObserver
-                            // (forwards to the real CardanoLiaison) so the test can assert
-                            // coverage.
-                            cardanoLiaison = stackObserverMap(peerNum),
+                            cardanoLiaison = stack.cardanoLiaison,
                             consensusActor = stack.consensusActor,
                             eventSequencer = stack.eventSequencer,
                             jointLedger = stack.jointLedger,
@@ -470,7 +478,7 @@ case class Stage4Suite(
             tracerLocal <- Resource.eval(preSystem)
             system <- ActorSystem[IO](label)
             postSystemState <- Resource.eval(postSystem)
-            (cardanoBackend, pendingConnsMap, blockBriefsMap) = postSystemState
+            (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap) = postSystemState
             peerStackMap <- peers.toList
                 .traverse { peerNum =>
                     buildPeerStack(
@@ -479,13 +487,11 @@ case class Stage4Suite(
                       cardanoBackend,
                       pendingConnsMap,
                       blockBriefsMap,
+                      stacksMap,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
-            postStackState <- Resource.eval(
-              postStack(system, peerStackMap, pendingConnsMap)
-            )
-            (stacksMap, stackObserverMap, peerLiaisonMap) = postStackState
+            peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pendingConnsMap))
             remoteLiaisonsByPeer <- transportSetup(system, peerLiaisonMap)
             sut <- Resource.eval(
               finalizeSut(
@@ -496,7 +502,6 @@ case class Stage4Suite(
                 pendingConnsMap,
                 blockBriefsMap,
                 stacksMap,
-                stackObserverMap,
                 peerLiaisonMap,
                 remoteLiaisonsByPeer,
               )
@@ -625,7 +630,7 @@ case class Stage4Suite(
             // last stack is closed only milliseconds before `waitForIdle` is called, its
             // hard-acks have not yet completed the cross-peer round-trip needed to
             // saturate every peer's `SlowConsensusActor`. `terminate()` immediately after
-            // `waitForIdle` drops the last stack from `StackObserver`'s record, causing a
+            // `waitForIdle` drops the last stack from the SCA capture sink's record, causing a
             // spurious `propStackCoverage` failure on whatever block(s) sit in that final
             // stack. Two effects must be covered: (a) ≥ 2 × `peerLiaisonResendInterval` so a
             // full resend cycle fires across every link and the tail acks land; (b) ≥
@@ -940,9 +945,9 @@ case class Stage4Suite(
 
     /** Property: the slow cycle made progress and kept up — it hard-confirmed at least one stack
       * and, by shutdown idle, every block the fast cycle produced (captured via the brief
-      * ContraTracer in `buildPeerStack`) is contained in some hard-confirmed stack (observed via
-      * [[StackObserver]]). Catches a slow side that stalls, never closes a stack, or fails to
-      * aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
+      * ContraTracer in `buildPeerStack`) is contained in some hard-confirmed stack (captured via
+      * the SCA ContraTracer sink). Catches a slow side that stalls, never closes a stack, or fails
+      * to aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
       */
     private def propStackCoverage(
         canonicalBriefs: Vector[BlockBrief.Intermediate],

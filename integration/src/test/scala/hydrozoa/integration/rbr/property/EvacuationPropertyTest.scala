@@ -190,7 +190,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             evacuatedSignal <- lift(IO.deferred[Unit])
 
             peerNum = env.nodeConfigs.head._2.ownHeadPeerNum
-
+            
             // Signal tracer that fires when any peer finishes evacuating.
             evacuationSignalTap: ContraTracer[IO, EvacuationActorEvent] = ContraTracer.emit {
                 case EvacuationActorEvent.NoMoreEvacuations => evacuatedSignal.complete(()).void

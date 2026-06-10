@@ -153,20 +153,20 @@ object ContraTracer {
         }
     }
 
-    /** -- | Make an emitting tracer from a callback. -- mkTracer :: Applicative m => (a -> m ()) ->
+    /** Make an emitting tracer from a callback. -- mkTracer :: Applicative m => (a -> m ()) ->
       * Tracer m a mkTracer = Tracer . Arrow.emit
       */
     def apply[M[_]: Applicative, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
       TracerA.emit(f)
     )
 
-    /** -- | A tracer which does nothing. nullTracer :: Monad m => Tracer m a nullTracer = Tracer
+    /** A tracer which does nothing. nullTracer :: Monad m => Tracer m a nullTracer = Tracer
       * Arrow.squelch
       */
     def nullTracer[M[_]: Monad, A]: ContraTracer[M, A] = ContraTracer(TracerA.squelch)
 
-    /** def -- | Create a simple contravariant tracer which runs a given side-effect. emit ::
-      * Applicative m => (a -> m ()) -> Tracer m a emit f = Tracer (Arrow.emit f)
+    /** Create a simple contravariant tracer which runs a given side-effect. emit :: Applicative m =>
+      * (a -> m ()) -> Tracer m a emit f = Tracer (Arrow.emit f)
       */
     def emit[M[_]: Applicative, A](f: A => M[Unit]): ContraTracer[M, A] = ContraTracer(
       TracerA.emit(f)
