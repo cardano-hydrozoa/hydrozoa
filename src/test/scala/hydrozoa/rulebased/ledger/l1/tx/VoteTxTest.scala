@@ -13,7 +13,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
@@ -41,12 +41,12 @@ def genPeerVoteDatumAwaitingVote(using config: HeadPeers.Section): Gen[VoteDatum
 }
 
 // TODO: Determine what *Config.Section this should take
-def genVoteUtxo(
+def genBallotBox(
     fallbackTxId: TransactionHash,
     voteDatum: VoteDatum,
 )(using
     config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
-): Gen[VoteUtxo[VoteStatus]] =
+): Gen[BallotBox[VoteStatus]] =
     for {
         outputIx <- Gen.choose(1, config.nHeadPeers.toInt)
         txId = TransactionInput(fallbackTxId, outputIx)
@@ -54,7 +54,7 @@ def genVoteUtxo(
 
         voteTokenAssetName = config.headTokenNames.voteTokenName
 
-        voteOutput = VoteOutput(
+        ballotBoxOutput = BallotBoxOutput(
           key = voteDatum.key,
           link = voteDatum.link,
           coin = Coin.ada(10),
@@ -62,9 +62,9 @@ def genVoteUtxo(
           status = voteDatum.voteStatus
         )
 
-    } yield VoteUtxo(
+    } yield BallotBox(
       input = txId,
-      voteOutput = voteOutput
+      ballotBoxOutput = ballotBoxOutput
     )
 
 def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] = {
@@ -85,12 +85,12 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
           treasuryDatum
         )
 
-        // Generate a vote UTXO with NoVote status (input)
+        // Generate a ballot box with AwaitingVote status (input)
         voteDatum <- genPeerVoteDatumAwaitingVote
-        voteUtxo <- genVoteUtxo(
+        voteUtxo <- genBallotBox(
           fallbackTxId = fallbackTxId,
           voteDatum = voteDatum
-        ).map(_.asInstanceOf[VoteUtxo[AwaitingVote]])
+        ).map(_.asInstanceOf[BallotBox[AwaitingVote]])
 
         // Generate an onchain block header and sign using peers' wallets
         blockHeader <- genOnchainBlockHeader(versionMajor)
@@ -118,11 +118,11 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         )
 
     } yield VoteTx.Build(
-      voteUtxo,
-      treasuryUtxo,
-      collateralUtxo,
-      blockHeader,
-      signatures.toList,
+      uncastBallotBox = voteUtxo,
+      treasuryUtxo = treasuryUtxo,
+      collateralUtxo = collateralUtxo,
+      sec = blockHeader,
+      signatures = signatures.toList,
       coilSignatures = coilSignatures,
     )
 }
@@ -141,12 +141,12 @@ object VoteTxTest extends Properties("Vote Tx Test") {
                   tx <- failLeft(builder.result)
                   // Verify VoteTx structure
                   _ <- assertWith(
-                    tx.voteUtxoSpent == builder.uncastVoteUtxo,
-                    "Spent vote UTXO should match recipe input"
+                    tx.ballotBoxSpent == builder.uncastBallotBox,
+                    "Spent ballot box should match recipe input"
                   )
                   _ <- assertWith(
-                    tx.voteUtxoProduced != null,
-                    "Vote UTXO produced should not be null"
+                    tx.ballotBoxProduced != null,
+                    "Ballot box produced should not be null"
                   )
                   _ <- assertWith(tx.tx != null, "Transaction should not be null")
               } yield ()

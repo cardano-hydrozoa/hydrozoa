@@ -335,7 +335,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             props.append(
               "default vote utxo with default vote deposit and vote token created" |: {
 
-                  val defaultVoteUtxo = Utxo(
+                  val defaultBallotBox = Utxo(
                     TransactionInput(transactionId = fbTx.tx.id, index = 1),
                     Babbage(
                       address = disputeResolutionAddress,
@@ -355,7 +355,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       scriptRef = None
                     ).ensureMinAda(config)
                   )
-                  fbTxBody.outputs.last.value == defaultVoteUtxo.output
+                  fbTxBody.outputs.last.value == defaultBallotBox.output
               }
             )
 
@@ -368,7 +368,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.individualContingency.forVoteUtxo,
+                        config.individualContingency.forBallotBox,
                         MultiAsset(
                           SortedMap(
                             hns.policyId -> SortedMap(config.headTokenNames.voteTokenName -> 1L)
@@ -393,7 +393,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       .toList
                       .map(_.value)
                 )
-                val reportedPeerVoteOutputs = fbTx.peerVoteUtxosProduced.map(_.output)
+                val reportedPeerVoteOutputs = fbTx.peerBallotBoxesProduced.map(_.output)
                 actualPeerVoteOutputs == reportedPeerVoteOutputs
                 && expectedPeerVoteOutputs == reportedPeerVoteOutputs
 

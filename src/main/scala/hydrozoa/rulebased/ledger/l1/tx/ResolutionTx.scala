@@ -17,14 +17,14 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 final case class ResolutionTx(
-    talliedVoteUtxo: VoteUtxo[Voted],
+    talliedBallotBox: BallotBox[Voted],
     treasuryUnresolvedUtxoSpent: RuleBasedTreasuryUtxo,
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
@@ -67,7 +67,7 @@ private object ResolutionTxOps {
     }
 
     final case class Build(
-        talliedVoteUtxo: VoteUtxo[Voted],
+        talliedBallotBox: BallotBox[Voted],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
@@ -76,7 +76,7 @@ private object ResolutionTxOps {
                 treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
                 resolvedTreasuryDatum = mkResolvedTreasuryDatum(
                   treasuryDatum,
-                  talliedVoteUtxo.voteOutput.status
+                  talliedBallotBox.ballotBoxOutput.status
                 )
                 result <- buildResolutionTx(resolvedTreasuryDatum).left.map(
                   Build.Error.BuildError(_)
@@ -115,7 +115,7 @@ private object ResolutionTxOps {
             val treasuryRedeemer = TreasuryRedeemer.Resolve
 
             val newTreasuryValue =
-                treasuryUtxo.treasuryOutput.value + talliedVoteUtxo.voteOutput.toOutput.value
+                treasuryUtxo.treasuryOutput.value + talliedBallotBox.ballotBoxOutput.toOutput.value
 
             // TODO: Partial, we can definitely find a way to make this more type safe
             val newTreasury = RuleBasedTreasuryOutput(resolvedTreasuryDatum, newTreasuryValue)
@@ -126,8 +126,8 @@ private object ResolutionTxOps {
                       List(
                         config.referenceTreasury,
                         config.referenceDispute,
-                        // Spend the tallied vote utxo
-                        talliedVoteUtxo.spend(voteRedeemer),
+                        // Spend the tallied ballot box
+                        talliedBallotBox.spend(voteRedeemer),
                         // Spend the treasury utxo and update its datum to resolved state
                         treasuryUtxo.spendAttached(treasuryRedeemer),
                         // Send resolved treasury back with resolved datum and total value
@@ -151,7 +151,7 @@ private object ResolutionTxOps {
                 )
 
             } yield ResolutionTx(
-              talliedVoteUtxo = talliedVoteUtxo,
+              talliedBallotBox = talliedBallotBox,
               treasuryUnresolvedUtxoSpent = treasuryUtxo,
               treasuryResolvedUtxoProduced = newTreasuryUtxo,
               tx = finalized.transaction

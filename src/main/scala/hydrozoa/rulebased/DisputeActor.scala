@@ -144,7 +144,7 @@ final case class DisputeActor(
                 // Cast Vote
                 case (Some(ownVoteUtxo), _) =>
                     val builder = VoteTx.Build(
-                      uncastVoteUtxo = ownVoteUtxo,
+                      uncastBallotBox = ownVoteUtxo,
                       treasuryUtxo = treasuryUtxo,
                       collateralUtxo = collateralUtxo,
                       sec = sec,
@@ -163,11 +163,11 @@ final case class DisputeActor(
                 case (None, otherUtxos) if otherUtxos.length > 1 =>
                     // We must have that they key of the continuing input is less than the key of the removed input,
                     // so we sort here.
-                    val keySorted = otherUtxos.sortBy(_.voteOutput.key)
+                    val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
-                        removed <- keySorted.tail.find(voteUtxo =>
-                            voteUtxo.voteOutput.key == continuing.voteOutput.link
+                        removed <- keySorted.tail.find(ballotBox =>
+                            ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
                         ) match {
                             case None =>
                                 EitherT.liftF(
@@ -184,8 +184,8 @@ final case class DisputeActor(
                         //   submit non-disjoint tallying transactions
                         // But right now I'm just doing the simplest thing
                         builder = TallyTx.Build(
-                          continuingVoteUtxo = continuing,
-                          removedVoteUtxo = removed,
+                          continuingBallotBox = continuing,
+                          removedBallotBox = removed,
                           treasuryUtxo = treasuryUtxo,
                           collateralUtxo = collateralUtxo
                         )
@@ -202,7 +202,7 @@ final case class DisputeActor(
                         resolutionTx <- ResolutionTx
                             .Build(
                               // FIXME: Partial, just doing this cast during a refactor
-                              talliedVoteUtxo = lastVoteUtxo.head.asInstanceOf[VoteUtxo[Voted]],
+                              talliedBallotBox = lastVoteUtxo.head.asInstanceOf[BallotBox[Voted]],
                               treasuryUtxo = treasuryUtxo,
                               collateralUtxo = collateralUtxo
                             )
@@ -247,36 +247,36 @@ final case class DisputeActor(
       *       - Each utxo has the correct vote token in it and sits at the correct adddress.
       *
       * @return
-      *   A tuple of [[VoteUtxoWithDatum]]. The first element is wrapped in an option, and is only
-      *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
-      *   vote utxos with cast votes.
+      *   A tuple. The first element is wrapped in an option, and is only "Some" if the dispute
+      *   actor still needs to cast a vote. The second element is all other ballot boxes with cast
+      *   votes.
       */
     private def parseDisputeUtxos(utxos: Utxos)(using
         config: Config
     ): IO[
       (
-          Option[VoteUtxo[AwaitingVote]],
-          Seq[VoteUtxo[VoteStatus]]
+          Option[BallotBox[AwaitingVote]],
+          Seq[BallotBox[VoteStatus]]
       )
     ] =
         for {
-            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(Utxo(i, o)))
+            ballotBoxes <- utxos.toList.traverse((i, o) => utxoToBallotBox(Utxo(i, o)))
 
-            votePartition = voteUtxos.partition {
-                case VoteUtxo(_, VoteOutput(_, _, _, _, VoteStatus.AwaitingVote(peerPkh))) =>
+            votePartition = ballotBoxes.partition {
+                case BallotBox(_, BallotBoxOutput(_, _, _, _, VoteStatus.AwaitingVote(peerPkh))) =>
                     val ownPkh: PubKeyHash = config.ownWallet.exportVerificationKey.pubKeyHash
                     peerPkh == ownPkh
                 case _ => false
             }
         } yield (
-          votePartition._1.headOption.map(_.asInstanceOf[VoteUtxo[AwaitingVote]]),
+          votePartition._1.headOption.map(_.asInstanceOf[BallotBox[AwaitingVote]]),
           votePartition._2
         )
 
-    // TODO: Move to `VoteUtxo`
-    private def utxoToVoteUtxo(
+    // TODO: Move to `BallotBox`
+    private def utxoToBallotBox(
         utxo: Utxo
-    )(using config: Config): IO[VoteUtxo[VoteStatus]] = {
+    )(using config: Config): IO[BallotBox[VoteStatus]] = {
         for {
             d1: DatumOption <- utxo._2.datumOption match {
                 case None    => IO.raiseError(DisputeActor.Error.ParseError.Vote.MissingDatum(utxo))
@@ -299,9 +299,9 @@ final case class DisputeActor(
             voteTokens =
                 utxo.output.value.assets
                     .assets(config.headMultisigScript.policyId)(config.headTokenNames.voteTokenName)
-            voteUtxo = VoteUtxo(
+            ballotBox = BallotBox(
               input = utxo.input,
-              voteOutput = VoteOutput(
+              ballotBoxOutput = BallotBoxOutput(
                 d3.key,
                 d3.link,
                 utxo.output.value.coin,
@@ -309,7 +309,7 @@ final case class DisputeActor(
                 d3.voteStatus
               )
             )
-        } yield voteUtxo
+        } yield ballotBox
     }
 
 }
@@ -336,10 +336,10 @@ object DisputeActor {
         type UnrecoverableErrors = Unrecoverable
         sealed trait Unrecoverable extends Throwable
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
-        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[VoteUtxo[VoteStatus]])
+        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[BallotBox[VoteStatus]])
             extends Unrecoverable {
             override def getMessage: String =
-                s"No compatible vote utxo with key ${voteUtxos.head._2.link} found. Datums found: " +
+                s"No compatible ballot box with key ${voteUtxos.head._2.link} found. Datums found: " +
                     s"${voteUtxos.map { _._2 }}"
         }
         case class UnrecoverableCardanoBackendError(

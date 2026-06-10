@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningNonValidityChecksV
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -23,8 +23,8 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 
 final case class TallyTx(
-    continuingVoteUtxo: VoteUtxo[VoteStatus],
-    removedVoteUtxo: VoteUtxo[VoteStatus],
+    continuingBallotBox: BallotBox[VoteStatus],
+    removedBallotBox: BallotBox[VoteStatus],
     treasuryUtxo: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[TallyTx, Transaction] = Focus[TallyTx](_.tx),
@@ -83,34 +83,35 @@ object TallyTxOps {
         }
     }
 
-    private def tallyVoteUtxos(
-        continuing: VoteUtxo[VoteStatus],
-        removed: VoteUtxo[VoteStatus]
-    ): Either[Build.Error, VoteOutput[VoteStatus]] =
+    private def tallyBallotBoxes(
+        continuing: BallotBox[VoteStatus],
+        removed: BallotBox[VoteStatus]
+    ): Either[Build.Error, BallotBoxOutput[VoteStatus]] =
         for {
             talliedDatum <- tallyVoteDatums(
-              continuing.voteOutput.datum,
-              removed = removed.voteOutput.datum
+              continuing.ballotBoxOutput.datum,
+              removed = removed.ballotBoxOutput.datum
             )
-        } yield VoteOutput(
+        } yield BallotBoxOutput(
           key = talliedDatum.key,
           link = talliedDatum.link,
-          coin = continuing.voteOutput.coin + removed.voteOutput.coin,
-          voteTokens =
-              PositiveInt(continuing.voteOutput.voteTokens + removed.voteOutput.voteTokens).get,
+          coin = continuing.ballotBoxOutput.coin + removed.ballotBoxOutput.coin,
+          voteTokens = PositiveInt(
+            continuing.ballotBoxOutput.voteTokens + removed.ballotBoxOutput.voteTokens
+          ).get,
           status = talliedDatum.voteStatus
         )
 
     final case class Build(
-        continuingVoteUtxo: VoteUtxo[VoteStatus],
-        removedVoteUtxo: VoteUtxo[VoteStatus],
+        continuingBallotBox: BallotBox[VoteStatus],
+        removedBallotBox: BallotBox[VoteStatus],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
 
         def result: Either[Build.Error, TallyTx] =
             for {
-                tallied <- tallyVoteUtxos(continuingVoteUtxo, removedVoteUtxo)
+                tallied <- tallyBallotBoxes(continuingBallotBox, removedBallotBox)
                 votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
                   Build.Error.TreasuryParseError(_)
                 )
@@ -118,7 +119,7 @@ object TallyTxOps {
             } yield result
 
         private def buildTallyTx(
-            tallied: VoteOutput[VoteStatus],
+            tallied: BallotBoxOutput[VoteStatus],
             votingDeadline: Slot
         ): Either[SomeBuildError, TallyTx] = {
             val continuingRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Continuing)
@@ -135,10 +136,10 @@ object TallyTxOps {
                     .build(
                       List(
                         config.referenceDispute,
-                        // Spend the continuing vote utxo with tally redeemer
-                        continuingVoteUtxo.spend(continuingRedeemer),
-                        // Spend the removed vote utxo with tally redeemer
-                        removedVoteUtxo.spend(removedRedeemer),
+                        // Spend the continuing ballot box with tally redeemer
+                        continuingBallotBox.spend(continuingRedeemer),
+                        // Spend the removed ballot box with tally redeemer
+                        removedBallotBox.spend(removedRedeemer),
                         // Send back the continuing vote utxo (the removed one is consumed)
                         tallied.send,
                         treasuryUtxo.referenceOutput,
@@ -154,8 +155,8 @@ object TallyTxOps {
                     )
 
             } yield TallyTx(
-              continuingVoteUtxo = continuingVoteUtxo,
-              removedVoteUtxo = removedVoteUtxo,
+              continuingBallotBox = continuingBallotBox,
+              removedBallotBox = removedBallotBox,
               treasuryUtxo = treasuryUtxo,
               tx = finalized.transaction
             )

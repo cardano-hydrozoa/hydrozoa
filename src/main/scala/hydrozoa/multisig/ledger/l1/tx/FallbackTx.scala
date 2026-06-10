@@ -47,7 +47,7 @@ final case class FallbackTx(
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos,
     // TODO type better
-    peerVoteUtxosProduced: NonEmptyList[Utxo]
+    peerBallotBoxesProduced: NonEmptyList[Utxo]
     // TODO
     // val collateralUtxos : Map[HeadPeerNumber, CollateralUtxo]
 ) extends MultisigTreasuryUtxo.Spent,
@@ -173,7 +173,7 @@ private object FallbackTxOps {
                 object Votes {
                     def apply(): NonEmptyList[Send] = Peers() :+ Default()
 
-                    private def mkVoteUtxo(datum: Data, voteDeposit: Coin): TransactionOutput =
+                    private def mkBallotBox(datum: Data, voteDeposit: Coin): TransactionOutput =
                         Babbage(
                           address = config.ruleBasedDisputeResolutionAddress,
                           value = Value(
@@ -187,8 +187,8 @@ private object FallbackTxOps {
                     private object Default {
                         def apply() = Send(utxo)
 
-                        private val utxo = time("defaultVoteUtxo") {
-                            mkVoteUtxo(
+                        private val utxo = time("defaultBallotBox") {
+                            mkBallotBox(
                               VD.default(treasuryUtxoSpent.datum.commit).toData,
                               config.collectiveContingency.defaultVoteDeposit
                             )
@@ -198,15 +198,15 @@ private object FallbackTxOps {
                     object Peers {
                         def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                        private val utxos = time("peerVoteUtxos") {
+                        private val utxos = time("peerBallotBoxes") {
                             val datums = VD(
                               config.headPeerVKeys
                                   .map(x => PubKeyHash(blake2b_224(x)))
                             )
                             datums.map(datum =>
-                                mkVoteUtxo(
+                                mkBallotBox(
                                   datum.toData,
-                                  config.individualContingency.forVoteUtxo
+                                  config.individualContingency.forBallotBox
                                 )
                             )
                         }
@@ -276,7 +276,7 @@ private object FallbackTxOps {
                   // - Collateral  (n)
                   // - Peer votes (n)
                   // - Default vote (1)
-                  peerVoteUtxosProduced = {
+                  peerBallotBoxesProduced = {
                       val inputs = List
                           .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)
                           .map(idx => TransactionInput(txId, idx))

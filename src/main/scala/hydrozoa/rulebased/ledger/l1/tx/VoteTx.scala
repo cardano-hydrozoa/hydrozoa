@@ -33,8 +33,8 @@ import scalus.uplc.builtin.Data.fromData
 import scalus.uplc.builtin.{ByteString, Data}
 
 final case class VoteTx(
-    voteUtxoSpent: VoteUtxo[VoteStatus.AwaitingVote],
-    voteUtxoProduced: VoteUtxo[VoteStatus.Voted],
+    ballotBoxSpent: BallotBox[VoteStatus.AwaitingVote],
+    ballotBoxProduced: BallotBox[VoteStatus.Voted],
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -69,7 +69,7 @@ private object VoteTxOps {
     }
 
     final case class Build(
-        uncastVoteUtxo: VoteUtxo[VoteStatus.AwaitingVote],
+        uncastBallotBox: BallotBox[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
@@ -77,8 +77,10 @@ private object VoteTxOps {
         coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
     ) {
 
-        // TODO relocate to "VoteOutput" companion object?
-        def parseAndVote(unparsedVoteDatum: Option[DatumOption]): Either[Error, VoteOutput[Voted]] =
+        // TODO relocate to "BallotBoxOutput" companion object?
+        def parseAndVote(
+            unparsedVoteDatum: Option[DatumOption]
+        ): Either[Error, BallotBoxOutput[Voted]] =
             unparsedVoteDatum match {
                 case Some(DatumOption.Inline(datumData)) =>
                     Try(fromData[VoteDatum](datumData)) match {
@@ -86,7 +88,7 @@ private object VoteTxOps {
                             voteDatum.voteStatus match {
                                 case AwaitingVote(_) =>
                                     Right(
-                                      uncastVoteUtxo.voteOutput.castVote(
+                                      uncastBallotBox.ballotBoxOutput.castVote(
                                         sec.commitment,
                                         sec.versionMinor
                                       )
@@ -109,10 +111,10 @@ private object VoteTxOps {
             import Build.Error
 
             // Extract current vote datum from the UTXO
-            val uncastVoteOutput = uncastVoteUtxo.toUtxo.output
+            val uncastBallotBoxOutput = uncastBallotBox.toUtxo.output
 
             for {
-                newVoteDatum <- parseAndVote(uncastVoteOutput.datumOption)
+                newVoteDatum <- parseAndVote(uncastBallotBoxOutput.datumOption)
                 votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
                   Error.TreasuryParseError(_)
                 )
@@ -121,7 +123,7 @@ private object VoteTxOps {
         }
 
         private def buildVoteTx(
-            votedOutput: VoteOutput[Voted],
+            votedOutput: BallotBoxOutput[Voted],
             votingDeadline: Slot
         )(using config: Config): Either[SomeBuildError, VoteTx] = {
 
@@ -153,7 +155,7 @@ private object VoteTxOps {
                     collateralUtxo.collateralOutput.send,
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
-                    uncastVoteUtxo.votingSpend(redeemer),
+                    uncastBallotBox.votingSpend(redeemer),
                     // Send back to the vote contract address with updated datum
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
@@ -170,8 +172,8 @@ private object VoteTxOps {
                     )
 
             } yield VoteTx(
-              voteUtxoSpent = uncastVoteUtxo,
-              voteUtxoProduced = VoteUtxo(
+              ballotBoxSpent = uncastBallotBox,
+              ballotBoxProduced = BallotBox(
                 TransactionInput(finalized.transaction.id, 0),
                 votedOutput
               ),

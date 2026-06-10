@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
@@ -62,18 +62,18 @@ def genCompatibleVoteDatums(peersN: Int): Gen[(VoteDatum, VoteDatum)] =
         )
     } yield (continuingDatum, removedDatum)
 
-def genTallyVoteUtxo(
+def genTallyBallotBox(
     fallbackTxId: TransactionHash,
     outputIndex: Int,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
 )(using
     config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
-): Gen[VoteUtxo[VoteStatus]] = {
+): Gen[BallotBox[VoteStatus]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
     val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
-    val voteOutput = VoteOutput(
+    val ballotBoxOutput = BallotBoxOutput(
       key = voteDatum.key,
       link = voteDatum.link,
       coin = Coin.ada(5),
@@ -82,7 +82,7 @@ def genTallyVoteUtxo(
     )
 
     Gen.const(
-      VoteUtxo(txId, voteOutput)
+      BallotBox(txId, ballotBoxOutput)
     )
 }
 
@@ -104,15 +104,15 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
         // Generate compatible vote datums for tallying
         (continuingVoteDatum, removedVoteDatum) <- genCompatibleVoteDatums(config.nHeadPeers.toInt)
 
-        // Generate a vote utxo with cast votes
-        continuingVoteUtxo <- genTallyVoteUtxo(
+        // Generate ballot boxes with cast votes
+        continuingBallotBox <- genTallyBallotBox(
           fallbackTxId,
           1, // Output index 1
           continuingVoteDatum,
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.head)),
         )
 
-        removedVoteUtxo <- genTallyVoteUtxo(
+        removedBallotBox <- genTallyBallotBox(
           fallbackTxId,
           2, // Output index 2
           removedVoteDatum,
@@ -124,8 +124,8 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
         )
 
     } yield TallyTx.Build(
-      continuingVoteUtxo = continuingVoteUtxo,
-      removedVoteUtxo = removedVoteUtxo,
+      continuingBallotBox = continuingBallotBox,
+      removedBallotBox = removedBallotBox,
       treasuryUtxo = treasuryUtxo,
       collateralUtxo = collateralUtxo
     )

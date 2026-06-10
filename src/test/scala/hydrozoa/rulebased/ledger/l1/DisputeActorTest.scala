@@ -38,7 +38,7 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 object DisputeActorTestHelpers {
     import MultiNodeConfig.*
 
-    def mkVoteUtxo(
+    def mkBallotBoxUtxo(
         key: BigInt,
         link: BigInt,
         voteStatus: VoteStatus,
@@ -275,7 +275,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
             env.nodePrivateConfigs.head._2.ownWallet
 
         // One vote awaiting a vote with our pkh
-        ownVoteUtxo <- mkVoteUtxo(
+        ownVoteUtxo <- mkBallotBoxUtxo(
           1,
           2,
           VoteStatus.AwaitingVote(ownWallet.exportVerificationKey.pubKeyHash),
@@ -283,7 +283,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         // One vote awaiting a vote with a different pkh
-        otherVoteUtxo <- mkVoteUtxo(
+        otherVoteUtxo <- mkBallotBoxUtxo(
           2,
           3,
           VoteStatus.AwaitingVote(
@@ -381,7 +381,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         // Keep a running "ResolvedUtxos" in the TestM state to avoid this.
         continuingVoteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         // One vote awaiting a vote with our pkh
-        continuingVoteUtxo <- mkVoteUtxo(
+        continuingVoteUtxo <- mkBallotBoxUtxo(
           0,
           1,
           VoteStatus.Voted(evacMap.kzgCommitment, 2),
@@ -389,7 +389,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         // One vote awaiting a vote with a different pkh
-        otherVoteUtxo <- mkVoteUtxo(
+        otherVoteUtxo <- mkBallotBoxUtxo(
           1,
           0,
           VoteStatus.AwaitingVote(
@@ -438,7 +438,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))
 
         voteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
-        finalVoteUtxo <- mkVoteUtxo(
+        finalVoteUtxo <- mkBallotBoxUtxo(
           0,
           1,
           voteStatus = Voted(evacMap.kzgCommitment, 1),

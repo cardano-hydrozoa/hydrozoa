@@ -20,17 +20,17 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness}
 import scalus.uplc.builtin.Data.toData
 
-type VoteOutputConfig = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
+type BallotBoxConfig = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
     HasTokenNames & OwnPeerPrivate.Section
 
-final case class VoteUtxo[Status <: VoteStatus](
+final case class BallotBox[Status <: VoteStatus](
     input: TransactionInput,
-    voteOutput: VoteOutput[Status]
+    ballotBoxOutput: BallotBoxOutput[Status]
 ) {
-    def toUtxo(using config: VoteOutputConfig): Utxo =
-        Utxo(input, voteOutput.toOutput)
+    def toUtxo(using config: BallotBoxConfig): Utxo =
+        Utxo(input, ballotBoxOutput.toOutput)
 
-    def spend(redeemer: DisputeRedeemer)(using config: VoteOutputConfig): Spend = {
+    def spend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
         val expectedSigner = ExpectedSigner(config.ownWallet.exportVerificationKey.addrKeyHash)
         Spend(
           this.toUtxo,
@@ -44,15 +44,17 @@ final case class VoteUtxo[Status <: VoteStatus](
     }
 }
 
-extension (unvoted: VoteUtxo[AwaitingVote]) {
+extension (unvoted: BallotBox[AwaitingVote]) {
 
     /** If you're spending in order to vote (rather than tally or resolve), we must have the voter's
       * signature. Otherwise the dispute resolution script will fail.
       */
-    def votingSpend(redeemer: DisputeRedeemer)(using config: VoteOutputConfig): Spend = {
+    def votingSpend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
         val expectedSigner =
             ExpectedSigner(
-              AddrKeyHash(unvoted.voteOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash)
+              AddrKeyHash(
+                unvoted.ballotBoxOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash
+              )
             )
         Spend(
           unvoted.toUtxo,
@@ -69,7 +71,7 @@ extension (unvoted: VoteUtxo[AwaitingVote]) {
 // TODO: Coin seems like it must be either the default vote contingency, individual vote contingency, or
 // some leftover amount after combining the two (and possibly paying the fee). Can we/should we restrict the type
 // any more here?
-case class VoteOutput[Status <: VoteStatus](
+case class BallotBoxOutput[Status <: VoteStatus](
     key: VoteState.Key,
     link: VoteState.Link,
     coin: Coin,
@@ -78,9 +80,9 @@ case class VoteOutput[Status <: VoteStatus](
 ) {
     val datum: VoteDatum = VoteDatum(key = key, link = link, voteStatus = status)
 
-    def send(using config: VoteOutputConfig): Send = Send(this.toOutput)
+    def send(using config: BallotBoxConfig): Send = Send(this.toOutput)
 
-    def toOutput(using config: VoteOutputConfig): Babbage =
+    def toOutput(using config: BallotBoxConfig): Babbage =
 
         Babbage(
           address = HydrozoaBlueprint.mkDisputeAddress(config.network),
@@ -98,8 +100,11 @@ case class VoteOutput[Status <: VoteStatus](
         )
 }
 
-extension (uncastVote: VoteOutput[AwaitingVote]) {
-    def castVote(kzgCommitment: KzgCommitment, versionMinor: BigInt): VoteOutput[VoteStatus.Voted] =
+extension (uncastVote: BallotBoxOutput[AwaitingVote]) {
+    def castVote(
+        kzgCommitment: KzgCommitment,
+        versionMinor: BigInt
+    ): BallotBoxOutput[VoteStatus.Voted] =
         uncastVote.copy(status = VoteStatus.Voted(kzgCommitment, versionMinor))
 
     def voterAddrKeyHash: AddrKeyHash =
