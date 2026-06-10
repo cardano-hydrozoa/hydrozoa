@@ -18,6 +18,7 @@ import scalus.cardano.ledger.{AddrKeyHash, Coin, MultiAsset, TransactionInput, T
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness}
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 
 type BallotBoxConfig = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
@@ -46,12 +47,11 @@ final case class BallotBox[Status <: VoteStatus](
 
 extension (unvoted: BallotBox[AwaitingVote]) {
 
-    /** If you're spending in order to vote (rather than tally or resolve), we must have the voter's
-      * signature — unless this is the public ballot box (key == 0), which anyone can vote on.
-      */
     def votingSpend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
         val signers =
-            if unvoted.ballotBoxOutput.key == BigInt(0) then Set.empty[ExpectedSigner]
+            if unvoted.ballotBoxOutput.key == BigInt(0) then
+                // Public ballot box: synthetic all-zeros signer for fee estimation; on-chain check is skipped.
+                Set(ExpectedSigner(AddrKeyHash(ByteString.fromArray(new Array[Byte](28)))))
             else
                 Set(
                   ExpectedSigner(

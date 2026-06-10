@@ -2,7 +2,7 @@ package hydrozoa.rulebased.ledger.l1.state
 
 import cats.data.NonEmptyList
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
@@ -12,14 +12,14 @@ import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 object VoteDatum {
 
     /** The public ballot box (key == 0). Anyone can vote on it; the peer signature is not required.
-      * Uses a zero-byte placeholder as the awaiting-vote peer.
+      * Seeded with the commitment from the treasury at fallback time; versionMinor starts at 0.
       */
-    def public(): VoteDatum = VoteState.VoteDatum(
+    def public(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
       key = 0,
       // N.B.: Version "Branch: (None) @ c28633a • Commit date: 2025-10-16" of the spec says
       // to set link to `0 < peersN ? 1 : 0`. But we have peers as a NonEmptyList, so this is just 1.
       link = 1,
-      voteStatus = VoteStatus.AwaitingVote(PubKeyHash(ByteString.fromArray(new Array[Byte](28))))
+      voteStatus = VoteStatus.Voted(commitment = commitment, versionMinor = 0)
     )
 
     // TODO: This should probably also create the default, and should probably be renamed.

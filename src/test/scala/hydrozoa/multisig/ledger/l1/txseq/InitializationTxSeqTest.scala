@@ -350,7 +350,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                         )
                       ),
                       datumOption = Some(
-                        Inline(VoteDatum.public().toData)
+                        Inline(VoteDatum.public(fbTx.treasurySpent.kzgCommitment).toData)
                       ),
                       scriptRef = None
                     ).ensureMinAda(config)

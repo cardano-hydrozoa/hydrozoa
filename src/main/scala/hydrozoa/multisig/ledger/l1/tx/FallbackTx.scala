@@ -189,7 +189,7 @@ private object FallbackTxOps {
 
                         private val utxo = time("publicBallotBox") {
                             mkBallotBox(
-                              VD.public().toData,
+                              VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
                             )
                         }
