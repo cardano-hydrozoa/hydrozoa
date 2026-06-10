@@ -78,6 +78,8 @@ object DisputeResolutionValidator extends Validator {
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
     private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
+    private inline val VoteHeadIdMismatch =
+        "sec.headId must equal the treasury reference input's HYDR token name"
     private inline val VoteTreasuryDatum = "Treasury datum is missing"
     private inline val VoteTreasuryDatumHeadMp = "Treasury datum headMp mismatch"
     private inline val VoteTreasuryDatumDisputeId = "Treasury datum disputeId mismatch"
@@ -217,7 +219,9 @@ object DisputeResolutionValidator extends Validator {
                         treasuryRefInputs.head
                 }
 
-                // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury.
+                // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury, and
+                // its full asset name must equal voteRedeemer.sec.headId (foundation I5 — no
+                // cross-head contamination).
                 treasuryReference.resolved.value.toSortedMap
                     .get(headMp)
                     .getOrElse(SortedMap.empty)
@@ -228,6 +232,7 @@ object DisputeResolutionValidator extends Validator {
                           none.isEmpty && tokenName.take(4) == cip67BeaconTokenPrefix,
                           VoteTreasuryBeacon
                         )
+                        require(voteRedeemer.sec.headId === tokenName, VoteHeadIdMismatch)
                     case _ => fail(VoteTreasuryBeacon)
 
                 //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
