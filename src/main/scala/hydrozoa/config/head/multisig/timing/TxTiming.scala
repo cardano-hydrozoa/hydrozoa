@@ -356,14 +356,18 @@ object TxTiming {
         private[timing] def InitializationTxEndTime(x: QuantizedInstant): InitializationTxEndTime =
             x
         given Conversion[InitializationTxEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[InitializationTxEndTime] =
+            quantizedInstantCodec
 
         opaque type SettlementTxEndTime = QuantizedInstant
         private[timing] def SettlementTxEndTime(x: QuantizedInstant): SettlementTxEndTime = x
         given Conversion[SettlementTxEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[SettlementTxEndTime] = quantizedInstantCodec
 
         opaque type FinalizationTxEndTime = QuantizedInstant
         private[timing] def FinalizationTxEndTime(x: QuantizedInstant): FinalizationTxEndTime = x
         given Conversion[FinalizationTxEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[FinalizationTxEndTime] = quantizedInstantCodec
 
         opaque type FallbackTxStartTime = QuantizedInstant
         def FallbackTxStartTime(x: QuantizedInstant): FallbackTxStartTime = x
@@ -438,12 +442,16 @@ object TxTiming {
         ): DepositAbsorptionStartTime = x
         given Conversion[DepositAbsorptionStartTime, QuantizedInstant] = identity
         given Ordering[DepositAbsorptionStartTime] = Ordering.fromLessThan(_.instant < _.instant)
+        given (using CardanoNetwork.Section): Codec[DepositAbsorptionStartTime] =
+            quantizedInstantCodec
 
         opaque type DepositAbsorptionEndTime = QuantizedInstant
         private[timing] def DepositAbsorptionEndTime(
             x: QuantizedInstant
         ): DepositAbsorptionEndTime = x
         given Conversion[DepositAbsorptionEndTime, QuantizedInstant] = identity
+        given (using CardanoNetwork.Section): Codec[DepositAbsorptionEndTime] =
+            quantizedInstantCodec
 
         opaque type RefundStartTime = QuantizedInstant
         private[timing] def RefundStartTime(x: QuantizedInstant): RefundStartTime = x

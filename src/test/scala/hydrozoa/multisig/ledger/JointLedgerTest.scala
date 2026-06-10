@@ -35,6 +35,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, 
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -55,7 +56,10 @@ import test.given
 
 // Pretty Printers for more manageable scalacheck logs
 given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
-    Pretty(_ => "MultiNodeConfig (too long to print)")
+    Pretty(_ =>
+        "MultiNodeConfig Summary:" +
+            s"\n\tnPeers: ${nodeConfig.nHeadPeers}"
+    )
 
 // TODO: restore? Do we use it?
 //given ppTestPeers: (TestPeers => Pretty) = testPeers =>
@@ -144,13 +148,18 @@ object JointLedgerTestHelpers {
 
             config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-            system <- PropertyM.run(ActorSystem[IO]("DappLedger").allocated.map(_._1))
+            // We should be using _.use instead...
+            system <- PropertyM.run(ActorSystem[IO]("JointLedger").allocated.map(_._1))
 
             consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
             stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
             tracerLocal <- PropertyM.run(Tracer.makeLocal)
+            persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
+            persistence <- PropertyM.run(
+              Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+            )
             jointLedger <- PropertyM.run(
               system.actorOf(
                 JointLedger(
@@ -162,7 +171,8 @@ object JointLedgerTestHelpers {
                   ),
                   eutxoLedger,
                   hydrozoa.lib.tracing.ProtocolTracer.noop,
-                  tracerLocal
+                  tracerLocal,
+                  persistence
                 )
               )
             )

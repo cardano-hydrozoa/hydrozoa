@@ -1,6 +1,6 @@
 <configuration>
 
-    <root level="error">
+    <root level="debug">
         <appender-ref ref="STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>
@@ -82,6 +82,7 @@
     <logger name="PeerLiaisonCoilToHub" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
     <logger name="PeerWsTransport" level="debug"/>
+    <logger name="Persistence" level="info"/>
     <logger name="TxTiming" level="info"/>
     <logger name="DepositsMap" level="info"/>
 

@@ -23,6 +23,47 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
   *   - Is consumed entirely (no change) if the contract execution fails during phase 2 validation
   *   - Is not consumed if phase 2 validation succeeds
   */
+object CollateralUtxo {
+
+    sealed trait ParseError extends Throwable
+
+    object ParseError {
+        case object NotABabbageOutput extends ParseError {
+            override def getMessage: String = "CollateralUtxo.parse requires a Babbage output"
+        }
+        case object NotAPubKeyAddress extends ParseError {
+            override def getMessage: String =
+                "CollateralUtxo.parse requires a pubkey (non-script) ShelleyAddress"
+        }
+    }
+
+    def parse(utxo: Utxo): Either[ParseError, CollateralUtxo] =
+        utxo.output match {
+            case b: Babbage =>
+                b.address match {
+                    case sa: ShelleyAddress =>
+                        sa.payment match {
+                            case Key(hash) =>
+                                Right(
+                                  CollateralUtxo(
+                                    utxo.input,
+                                    CollateralOutput(
+                                      addrKeyHash = AddrKeyHash(hash),
+                                      delegationPart = sa.delegation,
+                                      coin = b.value.coin,
+                                      datumOption = b.datumOption,
+                                      scriptRef = b.scriptRef
+                                    )
+                                  )
+                                )
+                            case _ => Left(ParseError.NotAPubKeyAddress)
+                        }
+                    case _ => Left(ParseError.NotAPubKeyAddress)
+                }
+            case _ => Left(ParseError.NotABabbageOutput)
+        }
+}
+
 case class CollateralUtxo(input: TransactionInput, collateralOutput: CollateralOutput) {
 
     // TODO: These methods could probably be extracted into a "UtxoLike" trait

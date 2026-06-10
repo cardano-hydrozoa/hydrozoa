@@ -118,10 +118,16 @@ object StandaloneEvacuationCommitment {
         type Serialized = Serialized.Serialized
 
         object Serialized {
+            // TODO: consider using ByteString instead of IArray[Byte]
             opaque type Serialized = IArray[Byte]
 
             def apply(onchainHeader: Onchain): Serialized =
                 IArray.from(serialiseData(onchainHeader.toData).bytes)
+
+            /** Reconstruct a [[Serialized]] from its raw bytes. Used by the persistence codec to
+              * round-trip an already-built SEC; the bytes must be the exact `serialiseData` form.
+              */
+            def fromBytes(bytes: Array[Byte]): Serialized = IArray.from(bytes)
 
             given Conversion[Serialized, IArray[Byte]] = identity
 

@@ -17,12 +17,14 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
 
 trait MultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
+    persistence: Persistence[IO],
     tracerLocal: IOLocal[Tracer]
 ) extends Actor[IO, Request] {
 
@@ -104,17 +106,19 @@ trait MultisigRegimeManager(
                 )
 
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal)
+              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
-            requestSequencer <- context.actorOf(RequestSequencer(config, pendingConnections))
+            requestSequencer <- context.actorOf(
+              RequestSequencer(config, pendingConnections, persistence)
+            )
 
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal)
+              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
             )
 
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal)
+              StackComposer(config, pendingConnections, tracerLocal, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
@@ -123,7 +127,7 @@ trait MultisigRegimeManager(
             )
 
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal)
+              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
             )
 
             // One peer liaison toward every other head peer (the head mesh). The liaisons project
@@ -134,7 +138,8 @@ trait MultisigRegimeManager(
                     .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
                         context.actorOf(
-                          liaison.PeerLiaisonHeadToHead(config, pid, pendingConnections)
+                          liaison
+                              .PeerLiaisonHeadToHead(config, pid, pendingConnections, persistence)
                         )
                     )
 
@@ -162,7 +167,7 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
-                      liaison.PeerLiaisonHubToCoil(config, coilNum, pendingConnections)
+                      liaison.PeerLiaisonHubToCoil(config, coilNum, pendingConnections, persistence)
                     )
                 )
 
@@ -266,9 +271,18 @@ object MultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
+        persistence: Persistence[IO],
         tracerLocal: IOLocal[Tracer]
     ): IO[MultisigRegimeManager] =
-        IO(new MultisigRegimeManager(config, cardanoBackend, virtualLedger, tracerLocal) {})
+        IO(
+          new MultisigRegimeManager(
+            config,
+            cardanoBackend,
+            virtualLedger,
+            persistence,
+            tracerLocal
+          ) {}
+        )
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]

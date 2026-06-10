@@ -191,6 +191,7 @@ private object FallbackTxOps {
                             mkVoteUtxo(
                               VD.default(treasuryUtxoSpent.datum.commit).toData,
                               config.collectiveContingency.defaultVoteDeposit
+                                  + config.collectiveContingency.minAdaForTreasury
                             )
                         }
                     }

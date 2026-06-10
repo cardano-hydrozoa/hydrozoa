@@ -33,6 +33,7 @@ object DisputeResolutionValidator extends Validator {
         case Vote(voteRedeemer: VoteRedeemer)
         case Tally(tallyRedeemer: TallyRedeemer)
         case Resolve
+        case Abstain
 
     given FromData[DisputeRedeemer] = FromData.derived
     given ToData[DisputeRedeemer] = ToData.derived
@@ -89,6 +90,8 @@ object DisputeResolutionValidator extends Validator {
         "voteStatus field of voteOutput must be a correct Vote"
     private inline val VoteOutputDatumAdditionalChecks =
         "other fields of voteOutput must match voteInput"
+    private inline val VoteOutputNoScriptRef =
+        "Vote output must not carry a reference script"
 
     // Tally redeemer
     private inline val VotingInputsNotFound =
@@ -121,6 +124,8 @@ object DisputeResolutionValidator extends Validator {
         "The link field of removedInput and continuingOutput must match"
     private inline val KeyCheck =
         "Key field of continuingInput and continuingOutput must match"
+    private inline val TallyOutputNoScriptRef =
+        "Tally continuing output must not carry a reference script"
 
     // Resolve redeemer
     private inline val ResolveTreasurySpent =
@@ -129,6 +134,24 @@ object DisputeResolutionValidator extends Validator {
         "Treasury input datum should be unresolved"
     private inline val ResolveTreasuryVoteMatch =
         "Treasury datum should match vote datum on (headMp, disputeId)"
+
+    // Abstain redeemer
+    private inline val AbstainOnlyOneVoteUtxoIsSpent =
+        "Only one vote utxo can be spent"
+    private inline val AbstainVoteInputNotFound =
+        "Spent input matching ownRef not found"
+    private inline val AbstainOnlyFromAwaitingVote =
+        "Abstain is only valid from AwaitingVote"
+    private inline val AbstainMustBeSignedByPeer =
+        "Abstain must be signed by the peer whose vote utxo is being abstained"
+    private inline val AbstainVoteOutputExists =
+        "There should exist one continuing vote output with the same value and address"
+    private inline val AbstainVoteOutputNoScriptRef =
+        "Vote output must not carry a reference script"
+    private inline val AbstainOutputDatumCheck =
+        "voteStatus field of voteOutput must be Abstain"
+    private inline val AbstainOutputDatumAdditionalChecks =
+        "other fields of voteOutput must match voteInput"
 
     // Entry point
     override inline def spend(
@@ -257,6 +280,12 @@ object DisputeResolutionValidator extends Validator {
 
                 require(voteOutput.address === voteInput.address, VoteVoteOutputExists)
 
+                // Reject an attached reference script — would bloat the utxo and could push
+                // downstream Tally / Resolve over the tx-size limit (denial of evacuation).
+                voteOutput.referenceScript match
+                    case None    => ()
+                    case Some(_) => fail(VoteOutputNoScriptRef)
+
                 val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
 
                 // voteStatus field of voteOutput must be a Vote matching voteRedeemer
@@ -364,15 +393,11 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is AwaitingVote...
-                if continuingDatum.voteStatus match {
-                        case VoteStatus.AwaitingVote(_) => true
-                        case VoteStatus.Voted(_, _) =>
-                            removedDatum.voteStatus match {
-                                case VoteStatus.AwaitingVote(_) => true
-                                case VoteStatus.Voted(_, _)     => false
-                            }
-                    }
+                // If the voteStatus of either continuingInput or removedInput is AwaitingVote,
+                // the tally tx must wait for the voting deadline. Abstain is a terminal,
+                // peer-acknowledged "no commitment" — same as Voted for tally-timing purposes
+                // (deadline does NOT have to elapse to absorb an Abstain).
+                if isAwaiting(continuingDatum.voteStatus) || isAwaiting(removedDatum.voteStatus)
                 then {
                     // ...all the following must be satisfied
 
@@ -439,6 +464,12 @@ object DisputeResolutionValidator extends Validator {
                     )
                     .getOrFail(AbsentOrWrongContinuingOutput)
 
+                // Reject an attached reference script — would bloat the utxo and could push
+                // downstream Tally / Resolve over the tx-size limit (denial of evacuation).
+                continuingOutput.referenceScript match
+                    case None    => ()
+                    case Some(_) => fail(TallyOutputNoScriptRef)
+
                 // 9. The voteStatus field of continuingOutput must match the highest voteStatus
                 // of continuingInput and removedInput
                 val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
@@ -492,16 +523,71 @@ object DisputeResolutionValidator extends Validator {
                 require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
                 require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
 
-    // Utility to decide which vote is higher
+            case DisputeRedeemer.Abstain =>
+                log("Abstain")
+
+                // 1. Exactly one input spent at this address (this utxo).
+                val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
+                    case List.Cons(o, tail) =>
+                        require(tail.isEmpty, AbstainOnlyOneVoteUtxoIsSpent)
+                        o
+                    case List.Nil => fail(AbstainVoteInputNotFound)
+
+                // 2. Input status must be AwaitingVote(peer).
+                val votePeer = voteDatum.voteStatus match {
+                    case AwaitingVote(pkh) => pkh
+                    case _                 => fail(AbstainOnlyFromAwaitingVote)
+                }
+
+                // 3. The peer whose utxo this is must sign.
+                require(tx.signatories.contains(votePeer), AbstainMustBeSignedByPeer)
+
+                // 4. Continuing output: same address + value (vote token + ada preserved),
+                //    datum flipped to Abstain with key/link unchanged, no reference script.
+                val voteInput = voteOutref.resolved
+                val voteOutput = tx.outputs.find(o => o.value === voteInput.value) match
+                    case Some(o) => o
+                    case None    => fail(AbstainVoteOutputExists)
+                require(voteOutput.address === voteInput.address, AbstainVoteOutputExists)
+
+                // Reject an attached reference script — would bloat the utxo and could push
+                // downstream Tally / Resolve over the tx-size limit (denial of evacuation).
+                voteOutput.referenceScript match
+                    case None    => ()
+                    case Some(_) => fail(AbstainVoteOutputNoScriptRef)
+
+                val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
+                voteOutputDatum.voteStatus match {
+                    case VoteStatus.Abstain => ()
+                    case _                  => fail(AbstainOutputDatumCheck)
+                }
+                require(voteDatum.key === voteOutputDatum.key, AbstainOutputDatumAdditionalChecks)
+                require(voteDatum.link === voteOutputDatum.link, AbstainOutputDatumAdditionalChecks)
+
+    /** True iff `s` is `AwaitingVote`. `Voted` and `Abstain` both count as terminal/decided. */
+    def isAwaiting(s: VoteStatus): Boolean =
+        s match {
+            case VoteStatus.AwaitingVote(_) => true
+            case VoteStatus.Voted(_, _)     => false
+            case VoteStatus.Abstain         => false
+        }
+
+    /** Pick the higher-precedence vote status. Precedence: `Voted` > `AwaitingVote` > `Abstain`.
+      */
     def maxVote(a: VoteStatus, b: VoteStatus): VoteStatus =
-        import VoteStatus.{AwaitingVote, Voted}
+        import VoteStatus.{Abstain, AwaitingVote, Voted}
         a match {
-            case AwaitingVote(_) => b
+            case Abstain => b
+            case AwaitingVote(_) =>
+                b match {
+                    case Abstain => a
+                    case _       => b
+                }
             case Voted(_commitmentA, versionMinorA) =>
                 b match {
-                    case AwaitingVote(_) => a
                     case Voted(_commitmentB, versionMinorB) =>
                         if versionMinorA > versionMinorB then a else b
+                    case _ => a
                 }
         }
 

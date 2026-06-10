@@ -98,7 +98,8 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-          treasuryDatum
+          treasuryDatum,
+          ArbitraryInstances.given_Arbitrary_Value.arbitrary
         )
 
         // Generate compatible vote datums for tallying

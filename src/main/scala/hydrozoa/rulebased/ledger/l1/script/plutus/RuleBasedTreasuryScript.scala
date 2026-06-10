@@ -40,6 +40,7 @@ object RuleBasedTreasuryValidator extends Validator {
 
     given ToData[TreasuryRedeemer] = ToData.derived
 
+    // TODO: inline these fields into TreasuryRedeemer to avoid extra data deconstruction?
     case class EvacuateRedeemer(
         evacuationKeys: List[EvacuationKey],
         // membership proof for evacuation keys and the updated accumulator at the same time
@@ -83,8 +84,10 @@ object RuleBasedTreasuryValidator extends Validator {
         "setup in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =
         "Exactly one treasury output should present"
-    private inline val ResolveUnexpectedNoVote =
-        "Unexpected NoVot when trying to resolve"
+    private inline val ResolveUnexpectedAwaitingVote =
+        "Unexpected AwaitingVote when trying to resolve"
+    private inline val ResolveUnexpectedAbstain =
+        "Unexpected Abstain when trying to resolve"
 
     // Evacuate redeemer
     private inline val EvacuateNeedsResolvedDatum =
@@ -100,7 +103,7 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val EvacuateBeaconTokenShouldBePreserved =
         "Beacon token should be preserved in treasury output"
     private inline val EvacuateValueShouldBePreserved =
-        "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuatealOutput"
+        "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuationOutput"
     private inline val EvacuateOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
 
@@ -191,7 +194,13 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // 7. If voteStatus is Vote...
                 voteDatum.voteStatus match
-                    case AwaitingVote(_)                 => fail(ResolveUnexpectedNoVote)
+                    // Both AwaitingVote and Abstain are "no commitment selected" — they cannot
+                    // close out the dispute. In practice maxVote pushes Abstain below any Voted,
+                    // and the FallbackTx's default vote utxo is always Voted with the implicit
+                    // commitment, so reaching Resolve with a non-Voted status indicates an
+                    // upstream tally bug.
+                    case AwaitingVote(_)                 => fail(ResolveUnexpectedAwaitingVote)
+                    case Abstain                         => fail(ResolveUnexpectedAbstain)
                     case Voted(commitment, versionMinor) =>
                         // (a) Let versionMinor be the corresponding field in voteStatus.
                         // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).

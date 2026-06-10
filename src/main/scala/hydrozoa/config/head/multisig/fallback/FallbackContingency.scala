@@ -50,7 +50,7 @@ object FallbackContingency {
         fallbackTxFee: Coin,
         minAdaForTreasury: Coin
     ) {
-        lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
+        lazy val total: Coin = defaultVoteDeposit + fallbackTxFee + minAdaForTreasury
     }
 
     /** This amount is collected from each peer in the initialization tx.
@@ -175,6 +175,7 @@ object FallbackContingency {
         val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(155)
 
         // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
-        val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(155)
+        // (see TreasuryOutputSizeTest)
+        val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(6960)
     }
 }

@@ -3,7 +3,6 @@ package hydrozoa.integration.stage4
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.commands.{AnyCommand, LoggingControl}
-import org.scalacheck.rng.Seed
 import org.scalacheck.{Test, YetAnotherProperties}
 
 import scala.concurrent.duration.DurationInt
@@ -122,7 +121,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
-            //.withPropFilter(Some("Two-peers head works"))
+            // .withPropFilter(Some("Two-peers head works"))
             // .withPropFilter(Some("Three-peers head works"))
             // .withPropFilter(Some("Twenty-peers head works"))
             // .withPropFilter(Some("Two-peers head works WS"))
@@ -161,19 +160,19 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     // `useTestControl = false`, and `startupSut` sleeps the wall clock until that anchor, so
     // model time and wall clock coincide at command 1. Inter-arrival delays from the
     // superposition generator now elapse in real time.
-    val _ = property("Two-peers head works WS") =
-        Stage4Suite(
-          label = "stage4-ws-two-peers",
-          nPeers = 2,
-          transportMode = TransportMode.WebSocket(),
-        ).property()
+    val _ = property("Two-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-two-peers",
+      nPeers = 2,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
 
-    val _ = property("Ten-peers head works WS") =
-        Stage4Suite(
-          label = "stage4-ws-ten-peers",
-          nPeers = 10,
-          transportMode = TransportMode.WebSocket(),
-        ).property()
+    val _ = property("Ten-peers head works WS") = Stage4Suite(
+      label = "stage4-ws-ten-peers",
+      nPeers = 10,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
 
     // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
     // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the

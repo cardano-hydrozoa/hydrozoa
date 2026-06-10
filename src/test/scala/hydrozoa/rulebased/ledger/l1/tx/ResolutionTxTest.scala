@@ -17,7 +17,7 @@ import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.ledger.*
-import scalus.cardano.ledger.ArbitraryInstances.given_Arbitrary_Hash
+import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.uplc.builtin.Builtins.blake2b_224
 
@@ -80,7 +80,8 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
         )
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId,
-          treasuryDatum
+          treasuryDatum,
+          Arbitrary.arbitrary[Value]
         )
 
         // Generate a tallied vote datum with Vote status (the result of a tally)

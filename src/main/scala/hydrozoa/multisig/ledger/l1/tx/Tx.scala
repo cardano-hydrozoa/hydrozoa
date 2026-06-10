@@ -9,7 +9,7 @@ import scala.Function.const
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionWitnessSet.given
 import scalus.cardano.ledger.rules.STS.Validator
-import scalus.cardano.ledger.rules.{AllInputsMustBeInUtxoValidator, EmptyInputsValidator, FeesOkValidator, InputsAndReferenceInputsDisjointValidator, MissingOrExtraScriptHashesValidator, OutputsHaveNotEnoughCoinsValidator, OutputsHaveTooBigValueStorageSizeValidator, OutsideForecastValidator, OutsideValidityIntervalValidator, TransactionSizeValidator, ValueNotConservedUTxOValidator}
+import scalus.cardano.ledger.rules.{DefaultValidators, MissingKeyHashesValidator, NativeScriptsValidator, OutsideValidityIntervalValidator, VerifiedSignaturesInWitnessesValidator}
 import scalus.cardano.ledger.{TaggedSortedSet, Transaction, TransactionWitnessSet, VKeyWitness}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, keepRawL}
@@ -163,23 +163,12 @@ object Tx {
 
     object Validators {
 
-        val nonSigningValidators: Seq[Validator] =
+        val nonSigningValidators: Seq[Validator] = {
             // These validators are all the ones from the CardanoMutator that could be checked on an unsigned transaction
-            List(
-              EmptyInputsValidator,
-              InputsAndReferenceInputsDisjointValidator,
-              AllInputsMustBeInUtxoValidator,
-              ValueNotConservedUTxOValidator,
-              // VerifiedSignaturesInWitnessesValidator,
-              // MissingKeyHashesValidator
-              MissingOrExtraScriptHashesValidator,
-              TransactionSizeValidator,
-              FeesOkValidator,
-              OutputsHaveNotEnoughCoinsValidator,
-              OutputsHaveTooBigValueStorageSizeValidator,
-              OutsideValidityIntervalValidator,
-              OutsideForecastValidator
-            )
+            (DefaultValidators.all - VerifiedSignaturesInWitnessesValidator
+                - MissingKeyHashesValidator - NativeScriptsValidator).toSeq
+
+        }
 
         val nonSigningNonValidityChecksValidators: Seq[Validator] = nonSigningValidators
             .filterNot(_.isInstanceOf[OutsideValidityIntervalValidator.type])
@@ -231,13 +220,13 @@ object Tx {
 
             /** Like `explain`, but only taking a string */
             def explainConst(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] =
                 either.explain(const(string))
 
         extension [E, A](augmentedEither: Either[(E, String), A])
             def explainReplace(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] = {
                 val oldEither = augmentedEither.left.map(_._1)
                 oldEither.explainConst(string)
@@ -250,7 +239,7 @@ object Tx {
             }
 
             def explainAppendConst(
-                string: String
+                string: => String
             )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] = {
                 augmentedEither.explainModify(
                   _ + s";\n[${file.value}:${line.value} in ${enclosing.value}] $string"
