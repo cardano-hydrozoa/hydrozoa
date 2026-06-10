@@ -2,7 +2,7 @@ package hydrozoa.rulebased.ledger.l1.state
 
 import cats.data.NonEmptyList
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.onchain.plutus.prelude.{===, Eq}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
@@ -10,12 +10,16 @@ import scalus.uplc.builtin.Data.{FromData, ToData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 object VoteDatum {
-    def default(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
+
+    /** The public ballot box (key == 0). Anyone can vote on it; the peer signature is not required.
+      * Uses a zero-byte placeholder as the awaiting-vote peer.
+      */
+    def public(): VoteDatum = VoteState.VoteDatum(
       key = 0,
       // N.B.: Version "Branch: (None) @ c28633a • Commit date: 2025-10-16" of the spec says
       // to set link to `0 < peersN ? 1 : 0`. But we have peers as a NonEmptyList, so this is just 1.
       link = 1,
-      voteStatus = VoteStatus.Voted(commitment = commitment, versionMinor = 0)
+      voteStatus = VoteStatus.AwaitingVote(PubKeyHash(ByteString.fromArray(new Array[Byte](28))))
     )
 
     // TODO: This should probably also create the default, and should probably be renamed.
@@ -45,8 +49,8 @@ object VoteDatum {
 object VoteState:
     // TODO: I'd like to turn this into `VoteDatum[Status <: VoteStatus]`, but then data derivation breaks
     case class VoteDatum(
-        // Uniquely identifies a vote utxo. The default vote utxo has key number 0,
-        // according to the spec draft 2025-11-07
+        // Uniquely identifies a ballot box. The public ballot box has key 0.
+        // Anyone can vote on key 0; peer signature is not required.
         key: Key,
         // Uniquely references another vote utxo by its key
         link: Link,

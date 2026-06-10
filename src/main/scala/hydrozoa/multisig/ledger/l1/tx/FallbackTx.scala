@@ -36,7 +36,7 @@ import scalus.|>
   *   - Treasury Utxo (1)
   *   - Collateral Utxos (n)
   *   - Peer Vote Utxos (n)
-  *   - Default Vote Utxo
+  *   - Public Vote Utxo
   */
 final case class FallbackTx(
     fallbackTxStartTime: FallbackTxStartTime,
@@ -171,7 +171,7 @@ private object FallbackTxOps {
                 }
 
                 object Votes {
-                    def apply(): NonEmptyList[Send] = Peers() :+ Default()
+                    def apply(): NonEmptyList[Send] = Peers() :+ Public()
 
                     private def mkBallotBox(datum: Data, voteDeposit: Coin): TransactionOutput =
                         Babbage(
@@ -184,13 +184,13 @@ private object FallbackTxOps {
                           scriptRef = None
                         )
 
-                    private object Default {
+                    private object Public {
                         def apply() = Send(utxo)
 
-                        private val utxo = time("defaultBallotBox") {
+                        private val utxo = time("publicBallotBox") {
                             mkBallotBox(
-                              VD.default(treasuryUtxoSpent.datum.commit).toData,
-                              config.collectiveContingency.defaultVoteDeposit
+                              VD.public().toData,
+                              config.collectiveContingency.publicVoteDeposit
                             )
                         }
                     }
@@ -275,7 +275,7 @@ private object FallbackTxOps {
                   // - Treasury (1)
                   // - Collateral  (n)
                   // - Peer votes (n)
-                  // - Default vote (1)
+                  // - Public vote (1)
                   peerBallotBoxesProduced = {
                       val inputs = List
                           .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)

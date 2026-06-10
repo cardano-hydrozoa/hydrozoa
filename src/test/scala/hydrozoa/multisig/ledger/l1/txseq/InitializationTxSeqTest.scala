@@ -333,14 +333,14 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             )
 
             props.append(
-              "default vote utxo with default vote deposit and vote token created" |: {
+              "public ballot box with public vote deposit and vote token created" |: {
 
-                  val defaultBallotBox = Utxo(
+                  val publicBallotBox = Utxo(
                     TransactionInput(transactionId = fbTx.tx.id, index = 1),
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.headParameters.fallbackContingency.collectiveContingency.defaultVoteDeposit,
+                        config.headParameters.fallbackContingency.collectiveContingency.publicVoteDeposit,
                         MultiAsset(
                           SortedMap(
                             expectedHeadNativeScript.policyId -> SortedMap(
@@ -350,12 +350,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                         )
                       ),
                       datumOption = Some(
-                        Inline(VoteDatum.default(multisigTreasuryUtxo.datum.commit).toData)
+                        Inline(VoteDatum.public().toData)
                       ),
                       scriptRef = None
                     ).ensureMinAda(config)
                   )
-                  fbTxBody.outputs.last.value == defaultBallotBox.output
+                  fbTxBody.outputs.last.value == publicBallotBox.output
               }
             )
 

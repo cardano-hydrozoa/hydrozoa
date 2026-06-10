@@ -162,14 +162,14 @@ object DisputeResolutionValidator extends Validator {
                     // Unreachable
                     case _ => fail()
 
-                // Check vote status
-                val votePeer = voteDatum.voteStatus match {
-                    case AwaitingVote(pkh) => pkh
-                    case _                 => fail(VoteAlreadyCast)
+                // Check vote status and conditionally verify peer signature.
+                // Public ballot box (key == 0) can be voted by anyone; peer check is skipped.
+                voteDatum.voteStatus match {
+                    case AwaitingVote(pkh) =>
+                        if voteDatum.key != BigInt(0) then
+                            require(tx.signatories.contains(pkh), VoteMustBeSignedByPeer)
+                    case _ => fail(VoteAlreadyCast)
                 }
-
-                // Check signature
-                require(tx.signatories.contains(votePeer), VoteMustBeSignedByPeer)
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.

@@ -46,11 +46,11 @@ object FallbackContingency {
       * necessary.
       */
     final case class Collective(
-        defaultVoteDeposit: Coin,
+        publicVoteDeposit: Coin,
         fallbackTxFee: Coin,
         minAdaForTreasury: Coin
     ) {
-        lazy val total: Coin = defaultVoteDeposit + fallbackTxFee
+        lazy val total: Coin = publicVoteDeposit + fallbackTxFee
     }
 
     /** This amount is collected from each peer in the initialization tx.
@@ -126,7 +126,7 @@ object FallbackContingency {
         )
 
         def mkCollectiveContingencyWithDefaults: Collective = Collective(
-          defaultVoteDeposit = ballotBoxMinLovelace,
+          publicVoteDeposit = ballotBoxMinLovelace,
           minAdaForTreasury = noLiabilitesTreasuryMinLovelace,
           fallbackTxFee = fallbackTxFee
         )

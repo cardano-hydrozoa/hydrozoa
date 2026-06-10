@@ -47,22 +47,26 @@ final case class BallotBox[Status <: VoteStatus](
 extension (unvoted: BallotBox[AwaitingVote]) {
 
     /** If you're spending in order to vote (rather than tally or resolve), we must have the voter's
-      * signature. Otherwise the dispute resolution script will fail.
+      * signature — unless this is the public ballot box (key == 0), which anyone can vote on.
       */
     def votingSpend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
-        val expectedSigner =
-            ExpectedSigner(
-              AddrKeyHash(
-                unvoted.ballotBoxOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash
-              )
-            )
+        val signers =
+            if unvoted.ballotBoxOutput.key == BigInt(0) then Set.empty[ExpectedSigner]
+            else
+                Set(
+                  ExpectedSigner(
+                    AddrKeyHash(
+                      unvoted.ballotBoxOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash
+                    )
+                  )
+                )
         Spend(
           unvoted.toUtxo,
           ThreeArgumentPlutusScriptWitness(
             scriptSource = ScriptSource.PlutusScriptAttached,
             redeemer = redeemer.toData,
             datum = DatumInlined,
-            additionalSigners = Set(expectedSigner)
+            additionalSigners = signers
           )
         )
     }
