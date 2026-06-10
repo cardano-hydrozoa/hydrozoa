@@ -1,8 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, RuleBasedTreasuryDatumOnchain}
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
@@ -32,7 +30,7 @@ final case class RuleBasedTreasuryUtxo(
     // but we'd still have to parse at some point due to type erasure. But we could parse at the boundary instead.
     def parseVotingDeadline(using config: Config): Either[ParseError, Slot] =
         treasuryOutput.datum match {
-            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _, _, _) =>
+            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _) =>
                 Try(Slot(config.slotConfig.timeToSlot(deadlineVoting.toLong))).toEither.left
                     .map(TreasuryDatumContainsInvalidDeadline(_))
             case _ => Left(TreasuryDatumResolved)
@@ -111,7 +109,7 @@ final case class RuleBasedTreasuryOutput(datum: RuleBasedTreasuryDatum, value: V
 }
 
 object RuleBasedTreasuryOutput {
-    type Config = CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+    type Config = HeadConfig.Bootstrap.Section
 
     def apply(
         output: TransactionOutput

@@ -17,6 +17,7 @@ import scalus.cardano.ledger.TransactionHash
 case class RuleBasedRegimeManager(
     sec: StandaloneEvacuationCommitment.Onchain,
     signatures: List[BlockHeader.Minor.HeaderSignature],
+    coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
     cardanoBackend: CardanoBackend[IO],
     votingDeadline: QuantizedInstant,
     toEvacuate: EvacuationMap,
@@ -33,6 +34,7 @@ case class RuleBasedRegimeManager(
               DisputeActor(
                 sec = sec,
                 signatures = signatures,
+                coilSignatures = coilSignatures,
                 cardanoBackend = cardanoBackend,
               )
             )

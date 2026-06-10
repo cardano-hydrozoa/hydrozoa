@@ -29,7 +29,6 @@ import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v3.PosixTime
 import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
@@ -84,9 +83,7 @@ object DisputeActorTestHelpers {
               // this is cribbed from the CommonGenerators.scala test
               setup = TrustedSetup
                   .takeSrsG2(10)
-                  .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString),
-              coilPeerVKeys = SList.empty,
-              coilQuorum = 0
+                  .map(p2 => BLS12_381_G2_Element(p2).toCompressedByteString)
             )
             treasuryUtxo = RuleBasedTreasuryUtxo(
               utxoId = txIn,
@@ -181,7 +178,8 @@ object DisputeActorTestHelpers {
             disputeActor = DisputeActor(
               sec = blockHeader,
               cardanoBackend = cardanoBackend,
-              signatures = env.multisignHeader(blockHeader).toList
+              signatures = env.multisignHeader(blockHeader).toList,
+              coilSignatures = env.multisignHeaderCoil(blockHeader)
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }
@@ -488,7 +486,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    val _ = property("dispute actor (no actor system)") = runDefault(
+    val _ = property("dispute actor (no actor system)") = runWithCoil()(
       for {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow

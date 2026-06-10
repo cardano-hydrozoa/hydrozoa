@@ -61,6 +61,7 @@ final case class DisputeActor(
     sec: StandaloneEvacuationCommitment.Onchain,
     cardanoBackend: CardanoBackend[IO],
     signatures: List[BlockHeader.Minor.HeaderSignature],
+    coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
     private def handleCardanoBackendError[A](
@@ -148,7 +149,7 @@ final case class DisputeActor(
                       collateralUtxo = collateralUtxo,
                       sec = sec,
                       signatures = signatures,
-                      coilSignatures = List.empty,
+                      coilSignatures = coilSignatures,
                     )
                     for {
                         voteTx <- builder.result match {

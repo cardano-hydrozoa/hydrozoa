@@ -19,7 +19,6 @@ import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPay
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{BlockHeader as _, Value, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
@@ -69,7 +68,7 @@ object CommonGenerators {
     def genTreasuryUnresolvedDatum(
         versionMajor: BigInt
     )(using
-        config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+        config: hydrozoa.config.head.HeadConfig.Section
     ): Gen[Unresolved] =
         for {
             deadlineVoting <- Gen
@@ -82,9 +81,7 @@ object CommonGenerators {
         } yield Unresolved(
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
-          setup = setup,
-          coilPeerVKeys = SList.empty,
-          coilQuorum = 0
+          setup = setup
         )
 
     def genRuleBasedTreasuryUtxo(

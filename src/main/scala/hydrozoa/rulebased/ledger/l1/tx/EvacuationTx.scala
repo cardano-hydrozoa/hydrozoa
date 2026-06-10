@@ -2,16 +2,13 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.syntax.all.*
 import hydrozoa.*
-import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
@@ -46,8 +43,7 @@ object EvacuationTx {
 }
 
 private object EvacuationTxOps {
-    type Config = CardanoNetwork.Section & NodeOperationEvacuationConfig.Section &
-        ScriptReferenceUtxos.Section & HasTokenNames & HeadPeers.Section
+    type Config = HeadConfig.Bootstrap.Section & NodeOperationEvacuationConfig.Section
 
     object Build {
         enum Error extends Throwable:

@@ -2,15 +2,12 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
@@ -42,8 +39,8 @@ object ResolutionTx {
 }
 
 private object ResolutionTxOps {
-    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames & OwnPeerPrivate.Section
+    type Config = HeadConfig.Bootstrap.Section & FallbackContingency.Section &
+        OwnPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:

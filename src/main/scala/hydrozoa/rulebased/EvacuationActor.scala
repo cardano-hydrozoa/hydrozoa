@@ -6,15 +6,13 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
-import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased
 import hydrozoa.rulebased.EvacuationActor.*
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.EvacuateRedeemer
@@ -181,8 +179,7 @@ case class EvacuationActor(
 }
 
 object EvacuationActor {
-    type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
-        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section
+    type Config = HeadConfig.Bootstrap.Section & NodeOperationEvacuationConfig.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 

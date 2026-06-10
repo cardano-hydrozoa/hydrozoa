@@ -73,9 +73,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
     for {
         versionMajor <- Gen.choose(1L, 99L).map(BigInt(_))
         // Generate a treasury UTXO to use a reference input
-        treasuryDatum <- genTreasuryUnresolvedDatum(
-          versionMajor
-        )
+        treasuryDatum <- genTreasuryUnresolvedDatum(versionMajor)(using multiNodeConfig)
         fallbackTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
 
         // This is 4 bytes shorter to accommodate CIP-67 prefixes
@@ -98,6 +96,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         blockHeader <- genOnchainBlockHeader(versionMajor)
 
         signatures = multiNodeConfig.multisignHeader(blockHeader)
+        coilSignatures = multiNodeConfig.multisignHeaderCoil(blockHeader)
 
         // Make vote details
         // TODO: simplify getting peers addresses
@@ -124,14 +123,14 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
       collateralUtxo,
       blockHeader,
       signatures.toList,
-      coilSignatures = List.empty,
+      coilSignatures = coilSignatures,
     )
 }
 
 object VoteTxTest extends Properties("Vote Tx Test") {
     import MultiNodeConfig.*
 
-    val _ = property("Vote Tx") = runDefault(
+    val _ = property("Vote Tx") = runWithCoil()(
       for {
           mnc <- ask
           _ <- {

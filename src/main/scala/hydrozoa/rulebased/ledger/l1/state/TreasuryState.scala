@@ -1,5 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.state
 
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
@@ -18,9 +19,7 @@ object TreasuryState:
         case Unresolved(
             deadlineVoting: PosixTime,
             versionMajor: BigInt,
-            setup: List[ByteString],
-            coilPeerVKeys: List[VerificationKey],
-            coilQuorum: Int
+            setup: List[ByteString]
         )
         case Resolved(
             evacuationActive: MembershipProof,
@@ -30,16 +29,16 @@ object TreasuryState:
             setup: List[ByteString]
         )
         def toOnchain(using
-            config: HasTokenNames & HeadPeers.Section
+            config: HeadConfig.Bootstrap.Section
         ): RuleBasedTreasuryDatumOnchain = this match {
-            case Unresolved(deadlineVoting, versionMajor, setup, coilPeerVKeys, coilQuorum) =>
+            case Unresolved(deadlineVoting, versionMajor, setup) =>
                 UnresolvedOnchain(
                   config.headMultisigScript.policyId,
                   config.headTokenNames.voteTokenName.bytes,
                   List.from(config.headPeerVKeys.toList),
                   BigInt(config.nHeadPeers.toInt),
-                  coilPeerVKeys,
-                  BigInt(coilQuorum),
+                  List.from(config.coilPeerVKeys),
+                  BigInt(config.coilQuorum),
                   deadlineVoting,
                   versionMajor,
                   setup
@@ -94,7 +93,7 @@ object TreasuryState:
                     && headPeersN == BigInt(config.nHeadPeers.toInt)
                 then
                     Some(
-                      Unresolved(deadlineVoting, versionMajor, setup, coilPeers, coilQuorum.toInt)
+                      Unresolved(deadlineVoting, versionMajor, setup)
                     )
                 else None
             case ResolvedOnchain(headMp, evacuationActive, version, setup) =>
