@@ -19,19 +19,19 @@ object TreasuryState:
         case Unresolved(
             deadlineVoting: PosixTime,
             versionMajor: BigInt,
-            setup: List[ByteString]
+            setupG2: List[ByteString]
         )
         case Resolved(
             evacuationActive: MembershipProof,
             // FIXME: missing in the refactored version
             version: (BigInt, BigInt),
             // FIXME: missing in the refactored version
-            setup: List[ByteString]
+            setupG2: List[ByteString]
         )
         def toOnchain(using
             config: HeadConfig.Bootstrap.Section
         ): RuleBasedTreasuryDatumOnchain = this match {
-            case Unresolved(deadlineVoting, versionMajor, setup) =>
+            case Unresolved(deadlineVoting, versionMajor, setupG2) =>
                 UnresolvedOnchain(
                   config.headMultisigScript.policyId,
                   config.headTokenNames.voteTokenName.bytes,
@@ -41,14 +41,14 @@ object TreasuryState:
                   BigInt(config.coilQuorum),
                   deadlineVoting,
                   versionMajor,
-                  setup
+                  setupG2
                 )
-            case Resolved(evacuationActive, version, setup) =>
+            case Resolved(evacuationActive, version, setupG2) =>
                 ResolvedOnchain(
                   config.headMultisigScript.policyId,
                   evacuationActive,
                   version,
-                  setup
+                  setupG2
                 )
         }
 
@@ -68,7 +68,7 @@ object TreasuryState:
             headMp: PolicyId,
             evacuationActive: MembershipProof,
             version: (BigInt, BigInt),
-            setup: List[ByteString]
+            setupG2: List[ByteString]
         )
         // TODO: This should fully parse into a type tag so we don't
         //  need to pattern match again
@@ -85,7 +85,7 @@ object TreasuryState:
                   coilQuorum,
                   deadlineVoting,
                   versionMajor,
-                  setup
+                  setupG2
                 ) =>
                 if headMp == config.headMultisigScript.policyId
                     && disputeId == config.headTokenNames.voteTokenName.bytes
@@ -93,12 +93,12 @@ object TreasuryState:
                     && headPeersN == BigInt(config.nHeadPeers.toInt)
                 then
                     Some(
-                      Unresolved(deadlineVoting, versionMajor, setup)
+                      Unresolved(deadlineVoting, versionMajor, setupG2)
                     )
                 else None
-            case ResolvedOnchain(headMp, evacuationActive, version, setup) =>
+            case ResolvedOnchain(headMp, evacuationActive, version, setupG2) =>
                 if headMp == config.headMultisigScript.policyId
-                then Some(Resolved(evacuationActive, version, setup))
+                then Some(Resolved(evacuationActive, version, setupG2))
                 else None
         }
 

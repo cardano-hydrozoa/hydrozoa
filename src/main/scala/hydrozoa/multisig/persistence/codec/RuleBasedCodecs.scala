@@ -33,7 +33,7 @@ object RuleBasedCodecs:
             Json.obj(
               "deadlineVoting" -> u.deadlineVoting.asJson,
               "versionMajor" -> u.versionMajor.asJson,
-              "setup" -> plistToScala(u.setup).asJson
+              "setup" -> plistToScala(u.setupG2).asJson
             )
         }
 
@@ -51,7 +51,7 @@ object RuleBasedCodecs:
             Json.obj(
               "evacuationActive" -> (r.evacuationActive: ByteString).asJson,
               "version" -> Json.arr(r.version._1.asJson, r.version._2.asJson),
-              "setup" -> plistToScala(r.setup).asJson
+              "setup" -> plistToScala(r.setupG2).asJson
             )
     }
 

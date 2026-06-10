@@ -35,7 +35,7 @@ def genEmptyResolvedTreasuryUtxo(
     val emptyResolvedDatum = Resolved(
       evacuationActive = g1Generator,
       version = (BigInt(1), BigInt(0)),
-      setup = dummySetup
+      setupG2 = dummySetup
     )
 
     val headMp = config.headMultisigScript.policyId

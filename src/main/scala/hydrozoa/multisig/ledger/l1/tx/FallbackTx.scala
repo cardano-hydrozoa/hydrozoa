@@ -156,7 +156,7 @@ private object FallbackTxOps {
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
                           // TODO: pull in N first elements of G2 CRS
                           // KZG setup I think?
-                          setup = SList.empty
+                          setupG2 = SList.empty
                         )
                     }
 

@@ -107,7 +107,7 @@ object InitialDisputeUtxos:
               Unresolved(
                 deadlineVoting = votingDeadline,
                 versionMajor = BigInt(1),
-                setup = setup
+                setupG2 = setup
               ),
               Gen.const(treasuryValue)
             )(using env.headConfig)

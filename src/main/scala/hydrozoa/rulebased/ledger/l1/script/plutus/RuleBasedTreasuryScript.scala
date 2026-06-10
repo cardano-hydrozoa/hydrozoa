@@ -226,7 +226,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 require(
-                  unresolvedDatum.setupG2 === treasuryOutputDatum.setup,
+                  unresolvedDatum.setupG2 === treasuryOutputDatum.setupG2,
                   ResolveTreasuryInputOutputSetup
                 )
 
@@ -310,12 +310,12 @@ object RuleBasedTreasuryValidator extends Validator {
                 val proof_ = bls12_381_G1_uncompress(proof)
 
                 require(
-                  resolvedDatum.setup.length > evacuatedUtxos.length,
+                  resolvedDatum.setupG2.length > evacuatedUtxos.length,
                   EvacuateSetupIsNotBigEnough
                 )
 
                 // Extract setup of needed length
-                val setup = resolvedDatum.setup.take(evacuatedUtxos.length + 1).map(G2.uncompress)
+                val setup = resolvedDatum.setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
                 // evacuatednUtxos.foreach( s =>

@@ -83,7 +83,7 @@ object DisputeActorTestHelpers {
               deadlineVoting = votingDeadline,
               versionMajor = versionMajor,
               // this is cribbed from the CommonGenerators.scala test
-              setup = TrustedSetup
+              setupG2 = TrustedSetup
                   .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                   .map(p2 => G2Element(p2).toCompressedByteString)
             )

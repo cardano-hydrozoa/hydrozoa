@@ -103,7 +103,7 @@ private object ResolutionTxOps {
             Resolved(
               evacuationActive = voteDetails._1,
               version = (unresolved.versionMajor, voteDetails._2),
-              setup = unresolved.setup
+              setupG2 = unresolved.setupG2
             )
         }
 

@@ -82,7 +82,7 @@ object CommonGenerators {
         } yield Unresolved(
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
-          setup = setup
+          setupG2 = setup
         )
 
     def genRuleBasedTreasuryUtxo(
