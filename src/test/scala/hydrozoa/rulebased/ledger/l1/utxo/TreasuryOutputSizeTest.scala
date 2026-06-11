@@ -58,5 +58,5 @@ class TreasuryOutputSizeTest extends AnyFunSuite:
                 (n, sized.size, minAda)
             }
 
-        assert(rows(0)._2 < rows(65)._2, "CBOR size should grow with setup length")
+        val _ = assert(rows(0)._2 < rows(65)._2, "CBOR size should grow with setup length")
         assert(rows.forall(_._3.value > 0), "minAda must be positive for all setup sizes")

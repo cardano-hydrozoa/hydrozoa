@@ -362,8 +362,12 @@ object Bootstrap:
           )
         )
 
-        val Right(treasury) = ScriptReferenceUtxos.TreasuryScriptUtxo(network, treasuryUtxo)
-        val Right(dispute) = ScriptReferenceUtxos.DisputeScriptUtxo(network, disputeUtxo)
+        val treasury = ScriptReferenceUtxos
+            .TreasuryScriptUtxo(network, treasuryUtxo)
+            .fold(throw _, identity)
+        val dispute = ScriptReferenceUtxos
+            .DisputeScriptUtxo(network, disputeUtxo)
+            .fold(throw _, identity)
 
         ScriptReferenceUtxos(
           treasury,

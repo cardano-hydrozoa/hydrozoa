@@ -103,9 +103,10 @@ object ScriptReferenceUtxos {
         case CardanoBackendError(e: CardanoBackend.Error)
 
         override def toString: String = this match
-            case InvalidTreasuryScriptUtxo => "InvalidTreasuryScriptUtxo"
-            case InvalidDisputeScriptUtxo  => "InvalidDisputeScriptUtxo"
-            case CardanoBackendError(e)    => s"CardanoBackendError: $e"
+            case InvalidTreasuryScriptUtxo  => "InvalidTreasuryScriptUtxo"
+            case InvalidDisputeScriptUtxo   => "InvalidDisputeScriptUtxo"
+            case UnresolvableScriptUtxo(ti) => s"UnresolvableScriptUtxo($ti)"
+            case CardanoBackendError(e)     => s"CardanoBackendError: $e"
 
         override def getMessage: String = this match
             case InvalidTreasuryScriptUtxo =>

@@ -78,7 +78,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // Generate a set of 64-1000 L2 utxos
         l2UtxoCount <- Gen.choose(1, 100)
         // FIXME: this is partial, but I'm just trying to restore the old test for now
-        Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
+        case Right(evacMap) <- genUtxosL2(l2UtxoCount).map(
           _.toEvacuationMap(config.headConfig)
         )
         _ = println(s"evac map: ${evacMap.size}")

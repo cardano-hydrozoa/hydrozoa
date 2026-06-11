@@ -345,7 +345,6 @@ object HeadConfig {
           HeadConfig.Bootstrap
         ] with {
             override def apply(hc: HeadConfig.Bootstrap): Json = {
-                given HeadConfig.Bootstrap.Section = hc
                 Json.obj(
                   "cardanoNetwork" -> hc.cardanoNetwork.asJson,
                   "headParams" -> hc.headParameters.asJson,

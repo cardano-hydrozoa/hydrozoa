@@ -1,4 +1,4 @@
-package hydrozoa.lib.petri.net.components
+package hydrozoa.lib.petri.net
 
 /** Package-level documentation for [[hydrozoa.lib.petri.net.components]].
   *
@@ -37,3 +37,4 @@ package hydrozoa.lib.petri.net.components
   *     combinations to those that can be proven (or property-tested) to commute.
   * See also [[hydrozoa.lib.petri.net.Topology]].
   */
+package object components

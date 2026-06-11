@@ -79,7 +79,7 @@ object EvacuationActorTest extends Properties("Evacuation Actor") {
     val _ = property("dispute actor (no actor system)") = run(
       initializer = PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)()),
       testM = for {
-          env <- ask
+          _ <- ask
       } yield true
     )
 }

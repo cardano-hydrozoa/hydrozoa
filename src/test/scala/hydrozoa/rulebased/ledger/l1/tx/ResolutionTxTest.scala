@@ -1,7 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
-import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -45,14 +44,6 @@ def genResolutionTallyBallotBox(
     config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
 ): Gen[BallotBox[Voted]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
-    val scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
-
-    val voteTokenAssetName = config.headTokenNames.voteTokenName
-    val voteToken = Value.asset(
-      policyId = config.headMultisigScript.policyId,
-      assetName = voteTokenAssetName,
-      amount = config.nHeadPeers.convert + 1
-    )
 
     val ballotBoxOutput: BallotBoxOutput[Voted] = BallotBoxOutput(
       key = voteDatum.key,

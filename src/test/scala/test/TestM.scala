@@ -9,6 +9,7 @@ import cats.syntax.all.*
 import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
+import scala.annotation.unused
 
 private type PT[A] = PropertyM[IO, A]
 private type RT[R, A] = ReaderT[PT, R, A]
@@ -85,7 +86,6 @@ object TestM {
           for {
               env <- initializer
               res <- {
-                  given R = env
                   testM.unTestM.run(env)
               }
           } yield res
@@ -126,7 +126,7 @@ object TestM {
   */
 // This might be able to be done better with the partially-applied-type-parameter pattern, but I'm not sure.
 // This does what I want for now
-final class TestMFixedEnv[R](dummy: Boolean = true) {
+final class TestMFixedEnv[R](@annotation.unused dummy: Boolean = true) {
 
     def ask: TestM[R, R] = TestM.ask
 

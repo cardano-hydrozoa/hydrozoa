@@ -1,53 +1,43 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.config.head.{HeadConfig, network}
+import cats.*
+import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime, FallbackTxStartTime, ForcedMajorBlockWakeupTime, SettlementTxEndTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
+import hydrozoa.config.head.network
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage1.Commands.*
+import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 import hydrozoa.integration.stage1.Model.Error.UnexpectedState
 import hydrozoa.integration.stage1.model.Deposits
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantizedInstantCodec}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.logging.{Logging, value}
-import cats.syntax.all.*
-import hydrozoa.multisig.ledger.block.BlockBrief.given
-import cats.*
-import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import io.circe.syntax.*
-import hydrozoa.multisig.ledger.joint.EvacuationMap.given
-import hydrozoa.integration.stage1.Model.logger
-import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus.*
-import hydrozoa.integration.stage1.model.Deposits.depositAbsorptionStart
-import scalus.|>
-import hydrozoa.multisig.ledger.block.BlockBrief.given
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.integration.stage1.model.Deposits.{DepositStatus, depositAbsorptionStart}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
+import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import hydrozoa.lib.logging.{Logging, value}
 import hydrozoa.multisig.consensus.UserRequestWithId
-import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis.mkGenesisId
-import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
-import hydrozoa.multisig.ledger.eutxol2.{HydrozoaTransactionMutator, toEvacuationKey, toEvacuationMap}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor, given}
+import hydrozoa.multisig.ledger.block.*
+import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, given}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import io.bullet.borer.Cbor
-import monocle.Lens
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.given
+import io.circe.syntax.*
+import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
-import scalus.cardano.ledger.{AssetName, KeepRaw, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxos}
-import hydrozoa.lib.logging.value
+import scalus.cardano.ledger.{BlockHeader as _, *}
 
-import scala.collection.immutable.{Queue, TreeMap}
+import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
 
@@ -141,10 +131,7 @@ object Model:
         /** Calculate the current major block wakeup time according to the current state of the
           * deposits. This is the earliest DepositAbsorptionStateTime of any deposit that hydrozoa
           * will check for absorption
-          *
-          * @param config
-          * @return
-          */
+         * */
         def mAbsorptionStartTime: Option[DepositAbsorptionStartTime] = {
             val absorptionBounds: Queue[(DepositAbsorptionStartTime, DepositAbsorptionEndTime)] =
                 deposits.hydrozoaKnownRegisteredDeposits.map(cmd =>
@@ -366,14 +353,11 @@ object Model:
 
                             refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
 
-                            newEvacuationMap <- updateEvacuationMap(absorbedThisBlock)
-
                             blockBrief <- mkBlockBrief(
                               cmd.isFinal,
                               cmd.blockCreationEndTime,
                               cmd.blockNumber,
                               prevVersion,
-                              newEvacuationMap,
                               accumulator,
                               absorbedThisBlock,
                               refundedThisBlock
@@ -416,7 +400,6 @@ object Model:
 
         /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
           * from the [[BlockAccumulator]].
-          * @param events
           * @return
           *   a tuple of (registeredEvents, rejectedEvents)
           */
@@ -437,7 +420,7 @@ object Model:
                     .map(cmd =>
                         val thisEvent: Option[(RequestId, ValidityFlag)] =
                             events.find(event => event._1 == cmd.request.requestId)
-                        thisEvent.map((requestId, validityFlag) => (validityFlag, cmd))
+                        thisEvent.map((_, validityFlag) => (validityFlag, cmd))
                     )
                     // Then filter out all the requests not in the accumulator
                     .filter(_.isDefined)
@@ -456,37 +439,48 @@ object Model:
 
         def absorb(
             blockCreationEndTime: BlockCreationEndTime
-        ): cats.data.State[State, Queue[Absorbed]] = for {
-            state <- cats.data.State.get[State]
-            settlementValidityEnd <- getNewSettlementValidityEnd
+        ): cats.data.State[State, Queue[Absorbed]] =
+            // The fast cycle does not rotate the treasury, so no deposit ever transitions to
+            // Absorbed. Mature Submitted deposits flow to `refund` instead (see SUT's
+            // `NotInPollResults` compartment in `DepositsMap.partition`).
+            cats.data.State.pure(Queue.empty)
 
-            depositsToAbsorb: Queue[Submitted] = {
-                given TxTiming.Section = state.multiNodeConfig
-                val eligible = state.deposits.depositsSubmitted
-                    .filter { submitted =>
-                        {
-
-                            logger.trace(
-                              s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
-                                  s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
-                                  s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
-                            )
-
-                            // Check all the conditions
-                            // mature
-                            submitted.depositAbsorptionStart.convert <= blockCreationEndTime
-                            // Fits in validity window
-                            && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
-                        }
-                    }
-                val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
-                byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
-            }
-
-            _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
-
-            depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
-        } yield depositsAbsorbed
+        // Previous absorb body (kept for review; restore once the slow cycle rotates the
+        // treasury and absorption can actually happen on the fast/slow split):
+        //
+        // def absorb(
+        //     blockCreationEndTime: BlockCreationEndTime
+        // ): cats.data.State[State, Queue[Absorbed]] = for {
+        //     state <- cats.data.State.get[State]
+        //     settlementValidityEnd <- getNewSettlementValidityEnd
+        //
+        //     depositsToAbsorb: Queue[Submitted] = {
+        //         given TxTiming.Section = state.multiNodeConfig
+        //         val eligible = state.deposits.depositsSubmitted
+        //             .filter { submitted =>
+        //                 {
+        //
+        //                     logger.trace(
+        //                       s"MODEL deposit absorption check: ${submitted.request.requestId},\n" +
+        //                           s"depositAbsorptionStart=${submitted.depositAbsorptionStart}, " +
+        //                           s"depositAbsorptionEnd=${submitted.depositAbsorptionEnd}"
+        //                     )
+        //
+        //                     // Check all the conditions
+        //                     // mature
+        //                     submitted.depositAbsorptionStart.convert <= blockCreationEndTime
+        //                     // Fits in validity window
+        //                     && submitted.depositAbsorptionEnd.convert >= settlementValidityEnd.convert
+        //                 }
+        //             }
+        //         val byStartTime = eligible.sortBy(_.depositAbsorptionStart)
+        //         byStartTime.take(state.multiNodeConfig.headConfig.maxDepositsAbsorbedPerBlock)
+        //     }
+        //
+        //     _ = logger.trace(s"depositsToAbsorb: $depositsToAbsorb")
+        //
+        //     depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
+        // } yield depositsAbsorbed
 
         private def refund(
             isFinal: Boolean,
@@ -509,60 +503,25 @@ object Model:
                               s"settlementValidityEnd=$settlementValidityEnd"
                         )
 
-                        // Doesn't fit validity window
+                        // On the fast-only path nothing is ever absorbed, so any mature deposit
+                        // (Submitted included) refunds as soon as the SUT classifies it
+                        // `NotInPollResults`. The expired clause stays as a belt-and-braces.
                         refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-                        || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
-                            .isInstanceOf[Submitted])
+                        || refundable.depositAbsorptionStart.convert <= blockCreationEndTime
                     )
+                    // Previous predicate (restore when the slow cycle wires absorption back in):
+                    //
+                    // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
+                    // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
+                    //     .isInstanceOf[Submitted])
             _ = logger.trace(s"depositToRefund: $depositsToRefund")
             refunded <- DepositStatus.Refunded.refund(depositsToRefund)
         } yield refunded
-
-        // TODO: This can probably just be combined with `absorb`
-        private def updateEvacuationMap(
-            absorbedThisBlock: Queue[Absorbed]
-        ): cats.data.State[State, EvacuationMap] =
-            for {
-                state <- cats.data.State.get[State]
-                // An "L2 genesis" is what we now call deposit compartment, keeping them for now.
-                depositCompartments: Queue[L2Genesis] =
-                    absorbedThisBlock
-                        .map(rdc => {
-                            val l2Payload: Array[Byte] =
-                                rdc.cmd.depositRefundTxSeq.depositTx.depositProduced.l2Payload.bytes
-                            val obligations =
-                                Cbor.decode(l2Payload).to[Queue[GenesisObligation]].value.toList
-                            val genesisId =
-                                mkGenesisId(
-                                  rdc.cmd.depositRefundTxSeq.depositTx.depositProduced.utxoId
-                                )
-                            L2Genesis(Queue.from(obligations), genesisId)
-                        })
-
-                newActiveUtxos =
-                    state.utxosL2Active ++ depositCompartments.flatMap(
-                      _.asUtxos.map((i, o) => i -> o.value)
-                    )
-
-                _ <- cats.data.State.set[State](state.copy(utxosL2Active = newActiveUtxos))
-
-                newEvacuationMap = newActiveUtxos
-                    .toEvacuationMap(state.multiNodeConfig)
-                    .toOption
-                    .getOrElse(throw RuntimeException("cannot build the evacuation map"))
-
-                _ = logger.trace {
-                    given CardanoNetwork.Section = state.multiNodeConfig
-                    s"newEvacuationMap: ${newEvacuationMap.asJson}"
-                }
-
-            } yield newEvacuationMap
 
         private def majorBlock(
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            newEvacuationMap: EvacuationMap,
             events: List[(RequestId, ValidityFlag)],
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
@@ -613,7 +572,6 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
-            newEvacuationMap: EvacuationMap,
             events: List[(RequestId, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
         ): cats.data.State[State, BlockBrief.Minor] = for {
@@ -685,7 +643,6 @@ object Model:
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             prevVersion: BlockVersion.Full,
-            newEvacuationMap: EvacuationMap,
             accumulator: BlockAccumulator,
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
@@ -700,7 +657,6 @@ object Model:
                   blockEndTime,
                   blockNumber,
                   prevVersion.incrementMajor,
-                  newEvacuationMap,
                   events,
                   absorbedThisBlock,
                   refundedThisBlock
@@ -709,7 +665,6 @@ object Model:
                   blockEndTime,
                   blockNumber,
                   prevVersion.incrementMinor,
-                  newEvacuationMap,
                   events,
                   refundedThisBlock
                 )
@@ -746,7 +701,7 @@ object Model:
                         else doMinorBlock
                     } else doMajorBlock
 
-                _ = logger.trace(s"block brief: ${brief}")
+                _ = logger.trace(s"block brief: $brief")
             } yield brief
 
         override def preCondition(cmd: CompleteBlockCommand, state: State): Boolean =
@@ -767,7 +722,6 @@ object Model:
     given ModelCommand[L2TxCommand, Unit, State] with {
 
         override def runState(cmd: L2TxCommand, state: State): (Unit, State) =
-            given CardanoNetwork.Section = state.multiNodeConfig
 
             logger.debug(s"MODEL>> L2TxCommand for event ID: ${cmd.request.requestId}")
 

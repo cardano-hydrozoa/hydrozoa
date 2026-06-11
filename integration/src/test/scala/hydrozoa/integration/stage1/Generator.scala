@@ -636,9 +636,7 @@ end CommandGenerators
 // ===================================
 
 object ScenarioGenerators:
-
-    private val logger: org.slf4j.Logger = Logging.logger("Stage1.ScenarioGenerators")
-
+    
     /** Produces L2 transactions (valid and non-valid) with no withdrawals.
       *
       * There is a customizable delay before starting every new block. If the delay happens to be
@@ -668,7 +666,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -732,7 +730,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -815,7 +813,7 @@ object ScenarioGenerators:
             state: Model.State
         ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
-    import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+            import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>

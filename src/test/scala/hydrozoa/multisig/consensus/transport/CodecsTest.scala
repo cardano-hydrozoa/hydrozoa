@@ -76,11 +76,11 @@ class CodecsTest extends AnyFunSuite {
         val frame = HeadFrame.Msg(get)
         roundTrip(frame) match {
             case HeadFrame.Msg(decoded: Mesh.Get) =>
-                assert(decoded.batchNum == get.batchNum)
-                assert(decoded.block == get.block)
-                assert(decoded.stack == get.stack)
-                assert(decoded.request == get.request)
-                assert(decoded.softAck == get.softAck)
+                val _ = assert(decoded.batchNum == get.batchNum)
+                val _ = assert(decoded.block == get.block)
+                val _ = assert(decoded.stack == get.stack)
+                val _ = assert(decoded.request == get.request)
+                val _ = assert(decoded.softAck == get.softAck)
                 assert(decoded.headHardAck == get.headHardAck)
                 assert(decoded.hubHardAck == get.hubHardAck)
             case other => fail(s"Expected Msg(Mesh.Get), got: $other")
@@ -92,12 +92,12 @@ class CodecsTest extends AnyFunSuite {
         val frame = HeadFrame.Msg(nmb)
         roundTrip(frame) match {
             case HeadFrame.Msg(decoded: Mesh.New) =>
-                assert(decoded.batchNum == nmb.batchNum)
-                assert(decoded.softAck.isEmpty)
-                assert(decoded.block.isEmpty)
+                val _ = assert(decoded.batchNum == nmb.batchNum)
+                val _ = assert(decoded.softAck.isEmpty)
+                val _ = assert(decoded.block.isEmpty)
                 assert(decoded.stack.isEmpty)
-                assert(decoded.headHardAck.isEmpty)
-                assert(decoded.hubHardAck.isEmpty)
+                val _ = assert(decoded.headHardAck.isEmpty)
+                val _ = assert(decoded.hubHardAck.isEmpty)
                 assert(decoded.requests.isEmpty)
             case other => fail(s"Expected Msg(Mesh.New), got: $other")
         }
@@ -116,12 +116,12 @@ class CodecsTest extends AnyFunSuite {
         val frame = HeadFrame.Msg(nmb)
         roundTrip(frame) match {
             case HeadFrame.Msg(decoded: Mesh.New) =>
-                assert(decoded.batchNum == nmb.batchNum)
+                val _ = assert(decoded.batchNum == nmb.batchNum)
                 decoded.softAck match {
                     case Some(decodedAck: SoftAck) =>
-                        assert(decodedAck.ackId == ack.ackId)
-                        assert(decodedAck.blockNum == ack.blockNum)
-                        assert(
+                        val _ = assert(decodedAck.ackId == ack.ackId)
+                        val _ = assert(decodedAck.blockNum == ack.blockNum)
+                        val _ = assert(
                           (decodedAck.headerSignature: IArray[Byte]).toList ==
                               (ack.headerSignature: IArray[Byte]).toList
                         )
@@ -139,7 +139,7 @@ class CodecsTest extends AnyFunSuite {
         val text = HeadFrame.encode(frame)
         HeadFrame.parse(text) match {
             case Right(decoded) =>
-                assert(
+                val _ = assert(
                   HeadFrame.encode(decoded) == text,
                   s"re-encode differs:\n  first: $text\n  again: ${HeadFrame.encode(decoded)}"
                 )

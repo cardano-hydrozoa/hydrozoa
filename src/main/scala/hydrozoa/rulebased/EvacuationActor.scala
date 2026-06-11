@@ -32,10 +32,9 @@ import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success, Try}
-import scalus.builtin.ByteString
 import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** @param candidateEvacMaps
   *   every evacuation map peers could end up tallying onto, keyed by its kzg commitment. The actor

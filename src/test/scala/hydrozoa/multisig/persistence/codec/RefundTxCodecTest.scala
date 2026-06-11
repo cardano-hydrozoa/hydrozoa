@@ -41,13 +41,13 @@ class RefundTxCodecTest extends AnyFunSuite:
 
         val json = refund.asJson.noSpaces
         val back = decode[RefundTx.PostDated](json)
-        assert(back.isRight, s"decode failed: $back")
+        val _ = assert(back.isRight, s"decode failed: $back")
         // Equality on the Tx supertype only compares `tx`, but the case class has its own equals
         // derived from the case-class structure since RefundTx.PostDated extends Tx[PostDated].
         // Verify field-by-field round-trip.
         val got = back.toOption.get
-        assert(got.tx == refund.tx)
-        assert(got.refundStart == refund.refundStart)
-        assert(got.refundDestination == refund.refundDestination)
+        val _ = assert(got.tx == refund.tx)
+        val _ = assert(got.refundStart == refund.refundStart)
+        val _ = assert(got.refundDestination == refund.refundDestination)
         assert(got.requestId == refund.requestId)
     }

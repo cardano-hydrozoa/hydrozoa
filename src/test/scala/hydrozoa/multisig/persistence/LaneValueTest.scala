@@ -19,7 +19,7 @@ class LaneValueTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("frame then stamp + payload is identity") {
         forAll(genStamp, genPayload) { (stamp: ArrivalStamp, payload: Array[Byte]) =>
             val framed = LaneValue.frame(stamp, payload)
-            assert(LaneValue.stamp(framed) == stamp)
+            val _ = assert(LaneValue.stamp(framed) == stamp)
             assert(LaneValue.payload(framed).sameElements(payload))
         }
     }
@@ -33,13 +33,13 @@ class LaneValueTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("an empty payload still frames + unframes cleanly") {
         val stamp = ArrivalStamp(3, 42L)
         val framed = LaneValue.frame(stamp, Array.emptyByteArray)
-        assert(framed.length == LaneValue.stampWidth)
-        assert(LaneValue.stamp(framed) == stamp)
+        val _ = assert(framed.length == LaneValue.stampWidth)
+        val _ = assert(LaneValue.stamp(framed) == stamp)
         assert(LaneValue.payload(framed).isEmpty)
     }
 
     test("stamp / payload throw on a too-short framed value") {
-        intercept[IllegalArgumentException](LaneValue.stamp(Array.emptyByteArray))
+        val _ = intercept[IllegalArgumentException](LaneValue.stamp(Array.emptyByteArray))
         intercept[IllegalArgumentException](
           LaneValue.payload(new Array[Byte](LaneValue.stampWidth - 1))
         )

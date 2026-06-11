@@ -12,7 +12,6 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
-import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{TransactionInput, Utxos}
