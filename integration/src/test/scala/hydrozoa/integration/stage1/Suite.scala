@@ -496,10 +496,8 @@ case class Suite(
 
             fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
                 Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
             clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
                 Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum))
 
             // Weaver stub — emits leader_started for tracing
             blockWeaver <- system.actorOf(

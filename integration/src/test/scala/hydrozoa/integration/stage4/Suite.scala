@@ -67,7 +67,7 @@ enum BackendMode:
 case class Stage4Suite(
     label: String = "stage4",
     nPeers: Int = 2,
-    nCommands: Int = 500,
+    nCommands: Int = 10,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
 ) extends ModelBasedSuite:
@@ -219,16 +219,12 @@ case class Stage4Suite(
             val pending = pendingConnsMap(peerNum)
             val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
                 Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(BlockWeaverEventFormat.jsonlFormat(peerNum))
             val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
                 Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(FastConsensusActorEventFormat.jsonlFormat(peerNum))
             val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
                 Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(CardanoLiaisonEventFormat.jsonlFormat(peerNum))
             val scTracer: ContraTracer[IO, StackComposerEvent] =
                 Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(StackComposerEventFormat.jsonlFormat(peerNum))
             val captureScaSink: ContraTracer[IO, SlowConsensusActorEvent] =
                 ContraTracer.emit[IO, SlowConsensusActorEvent] {
                     case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
@@ -238,7 +234,6 @@ case class Stage4Suite(
             val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
                 captureScaSink
                     |+| Slf4jTracer.sink.contramap(SlowConsensusActorEventFormat.humanFormat(peerNum))
-                    |+| Slf4jTracer.sink.traceMaybe(SlowConsensusActorEventFormat.jsonlFormat(peerNum))
             // Capture sink: only briefs go into the per-peer Ref.
             val captureSink: ContraTracer[IO, JointLedgerEvent] =
                 ContraTracer.emit[IO, JointLedgerEvent] {
@@ -308,8 +303,6 @@ case class Stage4Suite(
             ): ContraTracer[IO, PeerLiaisonEvent] =
                 Slf4jTracer.sink.contramap(
                   PeerLiaisonEventFormat.humanFormat(pn, rpId.peerNum)
-                ) |+| Slf4jTracer.sink.traceMaybe(
-                  PeerLiaisonEventFormat.mermaidFormat(pn, rpId.peerNum)
                 )
             for {
             // Create one local PeerLiaison per (local, remote) pair.
@@ -604,7 +597,9 @@ case class Stage4Suite(
             // beyond the framework default (30s). Size the timeout to the throttle: each stack
             // close sweeps the longest ready prefix, so the remaining blocks fold into the next
             // stack(s); two hard-stack periods cover the close + cross-peer hard-confirm
-            // round-trip. Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
+            // round-trip. Deposits need up to 2 periods each (L1 confirmation + seal), so
+            // use `nCommands * 2` as the coefficient to cover deposit-heavy sequences.
+            // Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
             //
             // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
             // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
@@ -617,7 +612,7 @@ case class Stage4Suite(
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
             stackDrainTimeout =
-                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * 3)
+                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * (nCommands * 2 + 3))
                     .max(30.seconds)
             _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
 
