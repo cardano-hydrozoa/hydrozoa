@@ -538,7 +538,9 @@ case class Stage4Suite(
             // beyond the framework default (30s). Size the timeout to the throttle: each stack
             // close sweeps the longest ready prefix, so the remaining blocks fold into the next
             // stack(s); two hard-stack periods cover the close + cross-peer hard-confirm
-            // round-trip. Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
+            // round-trip. Deposits need up to 2 periods each (L1 confirmation + seal), so
+            // use `nCommands * 2` as the coefficient to cover deposit-heavy sequences.
+            // Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
             //
             // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
             // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
@@ -551,7 +553,7 @@ case class Stage4Suite(
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
             stackDrainTimeout =
-                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * (nCommands + 3))
+                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * (nCommands * 2 + 3))
                     .max(30.seconds)
             _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
 
