@@ -263,12 +263,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             nPeers = env.headConfig.nHeadPeers.convert
 
             // TODO: these buckets probably need refinement. TBD
-            // The "collateral" sentinel goes away because it gets spent to pay for fees in some transactions.
             expectedBuckets: Map[RBRPlaceId, Int] = Map(
               TreasuryRefPlaceId -> 1,
               DisputeRefPlaceId -> 1,
               EvacuationOutputPlaceId -> nEvacs,
               ResolvedTreasuryPlaceId -> 1,
+              CollateralPlaceId -> nPeers,
               AmbientPlaceId -> env.nHeadPeers
             )
 
