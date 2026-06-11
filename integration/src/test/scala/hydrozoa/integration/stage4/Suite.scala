@@ -551,7 +551,7 @@ case class Stage4Suite(
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
             stackDrainTimeout =
-                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * 3)
+                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * (nCommands + 3))
                     .max(30.seconds)
             _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
 
