@@ -194,7 +194,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
 
         // The first request after the brief makes Carol start block 2.
         val anyRequest = p.pick(Arbitrary.arbitrary[UserRequestWithId])
-        p.runIO((blockWeaver ! anyRequest) >> system.waitForIdle())
+        val _ = p.runIO((blockWeaver ! anyRequest) >> system.waitForIdle())
 
         settleOn(p)(
           jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1), BlockNumber(2))
