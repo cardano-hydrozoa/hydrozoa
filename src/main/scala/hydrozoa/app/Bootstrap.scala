@@ -93,6 +93,9 @@ object Bootstrap:
         vKey: VerificationKey,
         sKey: SigningKey,
         minEquity: Coin,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
+        blockfrostApiKey: String,
     ): IO[NodeConfig] = for {
         _ <- IO.pure(())
 
@@ -109,7 +112,7 @@ object Bootstrap:
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
           coilQuorum = 0,
-          l2ParamsHash = Hash32.fromByteString(ByteString.empty),
+          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
@@ -312,9 +315,9 @@ object Bootstrap:
             // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
             evacuationWallet = ownHeadWallet
           ),
-          hydrozoaHost = ???,
-          hydrozoaPort = ???,
-          blockfrostApiKey = ???,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
+          blockfrostApiKey = blockfrostApiKey,
           nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
         ).get
     }

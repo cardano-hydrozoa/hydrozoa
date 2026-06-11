@@ -47,7 +47,9 @@ object Main extends IOApp {
         sugarRushPort: String,
         tokenRecoveryAddress: Option[ShelleyAddress],
         adminUsername: String,
-        adminPassword: String
+        adminPassword: String,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
     ) {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
@@ -152,6 +154,9 @@ object Main extends IOApp {
             adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
             _ <- logger.info(s"Loaded admin credentials for user: $adminUsername")
 
+            hydrozoaHost <- getOptionalEnvVar("HTTP_HOST", "0.0.0.0")
+            hydrozoaPort <- getOptionalEnvVar("HTTP_PORT", "8080")
+
             _ <- logger.info(s"Minimum equity: $minEquity lovelace")
         } yield EnvConfig(
           verificationKey = vKey,
@@ -162,7 +167,9 @@ object Main extends IOApp {
           sugarRushPort = sugarRushPort,
           tokenRecoveryAddress = tokenRecoveryAddressOpt,
           adminUsername = adminUsername,
-          adminPassword = adminPassword
+          adminPassword = adminPassword,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
         )
 
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
@@ -180,7 +187,10 @@ object Main extends IOApp {
             nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
               vKey = env.verificationKey,
               sKey = env.signingKey,
-              minEquity = env.minEquity
+              minEquity = env.minEquity,
+              hydrozoaHost = env.hydrozoaHost,
+              hydrozoaPort = env.hydrozoaPort,
+              blockfrostApiKey = env.blockfrostApiKey,
             )
             _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
             _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
