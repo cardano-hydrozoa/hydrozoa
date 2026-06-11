@@ -1,6 +1,6 @@
 package hydrozoa.rulebased
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.rulebased.DisputeActorEvent.*
 
@@ -12,60 +12,29 @@ object DisputeActorEventFormat:
         Map("peer" -> peerNum.toString)
 
     def humanFormat(peerNum: HeadPeerNumber)(e: DisputeActorEvent): LogEvent =
-        val rk = Some(routingKey(peerNum))
-        val ctx0 = baseCtx(peerNum)
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
         e match
             case CardanoBackendError(err) =>
-                LogEvent(
-                  Level.Warn,
+                warn(
                   "Cardano backend error encountered. This may be due to timeout, utxo contention," +
-                      s" rollbacks, or timing skew, but it may also be a genuine error.\n\tError: \n$err",
-                  ctx0,
-                  routingKey = rk
+                      s" rollbacks, or timing skew, but it may also be a genuine error.\n\tError: \n$err"
                 )
-            case BuildingTx(label) =>
-                LogEvent(Level.Info, s"Building $label Tx", ctx0, routingKey = rk)
-            case SubmittingTxLabel(label) =>
-                LogEvent(Level.Info, s"Submitting $label Tx", ctx0, routingKey = rk)
+            case BuildingTx(label)        => info(s"Building $label Tx")
+            case SubmittingTxLabel(label) => info(s"Submitting $label Tx")
             case SubmittingTxFamily(family, txId) =>
-                LogEvent(Level.Info, s"Submitting $family with Id $txId", ctx0, routingKey = rk)
+                info(s"Submitting $family with Id $txId")
             case TxCbor(pretty, cbor) =>
-                LogEvent(
-                  Level.Debug,
-                  s"\n\tPretty: $pretty\n\tcbor: $cbor",
-                  ctx0,
-                  routingKey = rk
-                )
+                debug(s"\n\tPretty: $pretty\n\tcbor: $cbor")
             case TxSubmitSuccess(family, txId) =>
-                LogEvent(
-                  Level.Info,
-                  s"SUCCESS submitting $family with Id $txId",
-                  ctx0,
-                  routingKey = rk
-                )
+                info(s"SUCCESS submitting $family with Id $txId")
             case LookingForCollateral(addr) =>
-                LogEvent(
-                  Level.Debug,
-                  s"Looking for collateral utxos at address $addr",
-                  ctx0,
-                  routingKey = rk
-                )
-            case CollateralFound =>
-                LogEvent(Level.Debug, "Found collateral utxo", ctx0, routingKey = rk)
+                debug(s"Looking for collateral utxos at address $addr")
+            case CollateralFound => debug("Found collateral utxo")
             case NoCollateralFound(peerNum2) =>
-                LogEvent(
-                  Level.Error,
-                  s"Could not find a collateral utxo for peer $peerNum2",
-                  ctx0,
-                  routingKey = rk
-                )
-            case Tallying =>
-                LogEvent(Level.Info, "Tallying...", ctx0, routingKey = rk)
-            case ParsingTreasury =>
-                LogEvent(Level.Debug, "parsing RuleBased Treasury", ctx0, routingKey = rk)
-            case TreasuryIsUnresolved =>
-                LogEvent(Level.Info, "Treasury is Unresolved", ctx0, routingKey = rk)
-            case TreasuryIsResolved =>
-                LogEvent(Level.Info, "Treasury is Resolved", ctx0, routingKey = rk)
-            case TreasuryFound(value) =>
-                LogEvent(Level.Debug, s"Found treasury utxo with $value", ctx0, routingKey = rk)
+                error(s"Could not find a collateral utxo for peer $peerNum2")
+            case Tallying             => info("Tallying...")
+            case ParsingTreasury      => debug("parsing RuleBased Treasury")
+            case TreasuryIsUnresolved => info("Treasury is Unresolved")
+            case TreasuryIsResolved   => info("Treasury is Resolved")
+            case TreasuryFound(value) => debug(s"Found treasury utxo with $value")

@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.PeerLiaisonEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
@@ -20,11 +20,8 @@ object PeerLiaisonEventFormat:
         Map("peer" -> own.toString, "remote" -> remote.toString)
 
     def humanFormat(own: HeadPeerNumber, remote: HeadPeerNumber)(e: PeerLiaisonEvent): LogEvent = {
-        val rk = Some(routingKey(own, remote))
-        val ctx0 = baseCtx(own, remote)
-        def debug(msg: String) = LogEvent(Level.Debug, msg, ctx0, routingKey = rk)
-        def info(msg: String) = LogEvent(Level.Info, msg, ctx0, routingKey = rk)
-        def warn(msg: String) = LogEvent(Level.Warn, msg, ctx0, routingKey = rk)
+        val ev = LogEvent.From(baseCtx(own, remote), routingKey(own, remote))
+        import ev.*
         e match {
             case Started(remotePeerNum) =>
                 info(s"starting, remote peer: $remotePeerNum")
@@ -78,9 +75,9 @@ object PeerLiaisonEventFormat:
     def mermaidFormat(own: HeadPeerNumber, remote: HeadPeerNumber)(
         e: PeerLiaisonEvent
     ): Option[LogEvent] = {
-        val rk = Some("Mermaid.PeerLiaison")
-        def mmd(s: String) =
-            LogEvent(Level.Info, s"\t$own->>$remote: $s", routingKey = rk)
+        val ev = LogEvent.From(Map.empty, "Mermaid.PeerLiaison")
+        import ev.*
+        def mmd(s: String) = info(s"\t$own->>$remote: $s")
         e match {
             case Started(_) =>
                 Some(mmd("GetMsgBatch.initial"))

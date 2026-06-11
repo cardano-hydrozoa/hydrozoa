@@ -37,6 +37,25 @@ object LogEvent {
         cause: Option[Throwable] = None,
         routingKey: Option[String] = None
     ): LogEventTyped[Map[String, String]] = LogEventTyped(level, msg, ctx, cause, routingKey)
+
+    /** Partially-applied factory: fixes [[ctx]] and [[routingKey]] for a set of related events.
+      * Extra context pairs passed as varargs are merged with the base [[ctx]].
+      */
+    final class From(val ctx: Map[String, String], val routingKey: Option[String]):
+        def trace(msg: String, extra: (String, String)*): LogEvent =
+            LogEvent(Level.Trace, msg, ctx ++ extra, routingKey = routingKey)
+        def debug(msg: String, extra: (String, String)*): LogEvent =
+            LogEvent(Level.Debug, msg, ctx ++ extra, routingKey = routingKey)
+        def info(msg: String, extra: (String, String)*): LogEvent =
+            LogEvent(Level.Info, msg, ctx ++ extra, routingKey = routingKey)
+        def warn(msg: String, extra: (String, String)*): LogEvent =
+            LogEvent(Level.Warn, msg, ctx ++ extra, routingKey = routingKey)
+        def error(msg: String): LogEvent =
+            LogEvent(Level.Error, msg, ctx, routingKey = routingKey)
+
+    object From:
+        def apply(ctx: Map[String, String], routingKey: String): From =
+            new From(ctx, Some(routingKey))
 }
 
 /** Contravariant logger: a function that emits a [[LogEvent]] into IO.

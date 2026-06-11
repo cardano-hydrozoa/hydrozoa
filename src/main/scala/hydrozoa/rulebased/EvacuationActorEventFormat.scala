@@ -1,6 +1,6 @@
 package hydrozoa.rulebased
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.rulebased.EvacuationActorEvent.*
 
@@ -12,69 +12,33 @@ object EvacuationActorEventFormat:
         Map("peer" -> peerNum.toString)
 
     def humanFormat(peerNum: HeadPeerNumber)(e: EvacuationActorEvent): LogEvent =
-        val rk = Some(routingKey(peerNum))
-        val ctx0 = baseCtx(peerNum)
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
         e match
             case BackendErrorContinuingTxs(err) =>
-                LogEvent(
-                  Level.Warn,
-                  s"Backend error querying continuing txs. Will retry.\n\tError: $err",
-                  ctx0,
-                  routingKey = rk
-                )
+                warn(s"Backend error querying continuing txs. Will retry.\n\tError: $err")
             case BackendErrorTreasuryUtxos(err) =>
-                LogEvent(
-                  Level.Warn,
-                  s"Backend error querying treasury UTxOs. Will retry.\n\tError: $err",
-                  ctx0,
-                  routingKey = rk
-                )
+                warn(s"Backend error querying treasury UTxOs. Will retry.\n\tError: $err")
             case BackendErrorFeeUtxos(err) =>
-                LogEvent(
-                  Level.Warn,
-                  s"Backend error querying fee UTxOs. Will retry.\n\tError: $err",
-                  ctx0,
-                  routingKey = rk
-                )
+                warn(s"Backend error querying fee UTxOs. Will retry.\n\tError: $err")
             case BackendErrorSubmittingEvacTx(err) =>
-                LogEvent(
-                  Level.Warn,
-                  s"Backend error submitting evacuation tx. Will retry.\n\tError: $err",
-                  ctx0,
-                  routingKey = rk
-                )
+                warn(s"Backend error submitting evacuation tx. Will retry.\n\tError: $err")
             case TreasuryNotYetResolved =>
-                LogEvent(Level.Debug, "Treasury not yet resolved, retrying", ctx0, routingKey = rk)
+                debug("Treasury not yet resolved, retrying")
             case NoMoreEvacuations =>
-                LogEvent(
-                  Level.Info,
-                  "No more evacuations to be done. Staying alive in case of rollbacks",
-                  ctx0,
-                  routingKey = rk
-                )
+                info("No more evacuations to be done. Staying alive in case of rollbacks")
             case PayoutObligationsLeft(n) =>
-                LogEvent(Level.Info, s"$n payout obligations left", ctx0, routingKey = rk)
+                info(s"$n payout obligations left")
             case NoFeeCollateralUtxo =>
-                LogEvent(
-                  Level.Debug,
-                  "No fee/collateral UTxO found at wallet address, retrying",
-                  ctx0,
-                  routingKey = rk
-                )
+                debug("No fee/collateral UTxO found at wallet address, retrying")
             case BuildingEvacTx(treasuryValue, evacuateeCount, totalValue) =>
-                LogEvent(
-                  Level.Debug,
+                debug(
                   s"Building EvacuationTx with:\n treasury value: $treasuryValue\n # evacuatees:" +
-                      s" $evacuateeCount\n total evacuation value $totalValue",
-                  ctx0,
-                  routingKey = rk
+                      s" $evacuateeCount\n total evacuation value $totalValue"
                 )
             case SubmittingEvacTx(evacuatedOutputs, cbor) =>
-                LogEvent(
-                  Level.Debug,
-                  s"submitting evacTx with $evacuatedOutputs evacuated outputs\n cbor:\n\n$cbor\n\n",
-                  ctx0,
-                  routingKey = rk
+                debug(
+                  s"submitting evacTx with $evacuatedOutputs evacuated outputs\n cbor:\n\n$cbor\n\n"
                 )
             case EvacTxSubmitted =>
-                LogEvent(Level.Info, "Evacuation tx submitted", ctx0, routingKey = rk)
+                info("Evacuation tx submitted")

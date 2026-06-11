@@ -1,6 +1,6 @@
 package hydrozoa.multisig
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.MultisigRegimeManagerEvent.{BW, BWL, CL, ES, FCA, JL, PL, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -17,46 +17,26 @@ object MultisigRegimeManagerEventFormat:
     private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
         Map("peer" -> peerNum.toString)
 
-    def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = e match
-        case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)
-        case JL(jl)   => JointLedgerEventFormat.humanFormat(peerNum)(jl)
-        case FCA(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
-        case CL(cl)   => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
-        case SC(sc)   => StackComposerEventFormat.humanFormat(peerNum)(sc)
-        case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
-        case ES(es)   => EventSequencerEventFormat.humanFormat(peerNum)(es)
-        case PL(remotePeerId, pl) =>
-            PeerLiaisonEventFormat.humanFormat(peerNum, remotePeerId.peerNum)(pl)
-        case BWL(bwl) => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
-        case SCL(scl) => LimiterEventFormat.humanFormat("StackComposer")(scl)
-        case StartingActors =>
-            LogEvent(
-              Level.Info,
-              "Starting multisig actors...",
-              baseCtx(peerNum),
-              routingKey = Some(routingKey(peerNum))
-            )
-        case WatchingActors =>
-            LogEvent(
-              Level.Info,
-              "Watching multisig actors...",
-              baseCtx(peerNum),
-              routingKey = Some(routingKey(peerNum))
-            )
-        case TerminatedActor(actor) =>
-            LogEvent(
-              Level.Warn,
-              s"Terminated $actor actor",
-              baseCtx(peerNum),
-              routingKey = Some(routingKey(peerNum))
-            )
-        case TerminatedDependency(dep) =>
-            LogEvent(
-              Level.Warn,
-              s"Terminated dependency $dep",
-              baseCtx(peerNum),
-              routingKey = Some(routingKey(peerNum))
-            )
+    def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = {
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
+        e match
+            case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)
+            case JL(jl)   => JointLedgerEventFormat.humanFormat(peerNum)(jl)
+            case FCA(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
+            case CL(cl)   => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
+            case SC(sc)   => StackComposerEventFormat.humanFormat(peerNum)(sc)
+            case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
+            case ES(es)   => EventSequencerEventFormat.humanFormat(peerNum)(es)
+            case PL(remotePeerId, pl) =>
+                PeerLiaisonEventFormat.humanFormat(peerNum, remotePeerId.peerNum)(pl)
+            case BWL(bwl)                  => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
+            case SCL(scl)                  => LimiterEventFormat.humanFormat("StackComposer")(scl)
+            case StartingActors            => info("Starting multisig actors...")
+            case WatchingActors            => info("Watching multisig actors...")
+            case TerminatedActor(actor)    => warn(s"Terminated $actor actor")
+            case TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
+    }
 
     def jsonlFormat(peerNumber: HeadPeerNumber)(e: MultisigRegimeManagerEvent): Option[LogEvent] =
         e match

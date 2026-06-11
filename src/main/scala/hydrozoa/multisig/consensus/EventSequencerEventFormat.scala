@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.EventSequencerEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
@@ -13,9 +13,8 @@ object EventSequencerEventFormat:
         Map("peer" -> peerNum.toString)
 
     def humanFormat(peerNum: HeadPeerNumber)(e: EventSequencerEvent): LogEvent = {
-        val rk = Some(routingKey(peerNum))
-        val ctx0 = baseCtx(peerNum)
-        def debug(msg: String) = LogEvent(Level.Debug, msg, ctx0, routingKey = rk)
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
         e match {
             case RequestIdAssigned(peer, requestNum) =>
                 debug(s"Assigned request ID ($peer:$requestNum)")

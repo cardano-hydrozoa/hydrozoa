@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
@@ -13,12 +13,8 @@ object CardanoLiaisonEventFormat:
         Map("peer" -> peerNum.toString)
 
     def humanFormat(peerNum: HeadPeerNumber)(e: CardanoLiaisonEvent): LogEvent = {
-        val rk = Some(routingKey(peerNum))
-        val ctx0 = baseCtx(peerNum)
-        def trace(msg: String) = LogEvent(Level.Trace, msg, ctx0, routingKey = rk)
-        def info(msg: String) = LogEvent(Level.Info, msg, ctx0, routingKey = rk)
-        def warn(msg: String) = LogEvent(Level.Warn, msg, ctx0, routingKey = rk)
-        def error(msg: String) = LogEvent(Level.Error, msg, ctx0, routingKey = rk)
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
         e match {
             case TimeoutReceived =>
                 info("received Timeout, run effects...")
@@ -66,8 +62,9 @@ object CardanoLiaisonEventFormat:
 
     def jsonlFormat(peerNum: HeadPeerNumber)(e: CardanoLiaisonEvent): Option[LogEvent] = {
         val ts = System.currentTimeMillis()
-        val rk = Some("hydrozoa.trace")
-        def htrace(json: String) = LogEvent(Level.Info, s"HTRACE|$json", routingKey = rk)
+        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
+        import ev.*
+        def htrace(json: String) = info(s"HTRACE|$json")
         e match {
             case InitialStackEffectsLearned =>
                 Some(

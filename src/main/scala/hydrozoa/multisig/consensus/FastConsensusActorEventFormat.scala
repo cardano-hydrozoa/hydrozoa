@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.lib.logging.{Level, LogEvent}
+import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.FastConsensusActorEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
@@ -18,37 +18,24 @@ object FastConsensusActorEventFormat:
 
     /** Routes every event to SLF4J text. */
     def humanFormat(peerNum: HeadPeerNumber)(e: FastConsensusActorEvent): LogEvent = {
-        val rk = Some(routingKey(peerNum))
-        val ctx0 = baseCtx(peerNum)
+        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        import ev.*
         e match {
             case AckReceived(bn, p, ackType, isOwn) =>
-                LogEvent(
-                  Level.Debug,
+                debug(
                   s"handleAck: block=$bn peer=$p" + (if isOwn then " (own)" else ""),
-                  ctx0 ++ Map(
-                    "blockNum" -> s"${bn: Int}",
-                    "ackPeer" -> p.toString,
-                    "ackType" -> ackType
-                  ),
-                  routingKey = rk
+                  "blockNum" -> s"${bn: Int}",
+                  "ackPeer" -> p.toString,
+                  "ackType" -> ackType
                 )
             case BlockSoftConfirmed(bn, bt, vMaj, vMin) =>
-                LogEvent(
-                  Level.Info,
+                info(
                   s"block soft-confirmed: block=$bn type=$bt v$vMaj.$vMin",
-                  ctx0 ++ Map(
-                    "blockNum" -> s"${bn: Int}",
-                    "blockType" -> bt
-                  ),
-                  routingKey = rk
+                  "blockNum" -> s"${bn: Int}",
+                  "blockType" -> bt
                 )
             case LeaderStarted(bn, p) =>
-                LogEvent(
-                  Level.Info,
-                  s"leader started: block=$bn peer=$p",
-                  ctx0 ++ Map("blockNum" -> s"${bn: Int}"),
-                  routingKey = rk
-                )
+                info(s"leader started: block=$bn peer=$p", "blockNum" -> s"${bn: Int}")
         }
     }
 
@@ -57,30 +44,26 @@ object FastConsensusActorEventFormat:
       */
     def jsonlFormat(nodeId: HeadPeerNumber)(e: FastConsensusActorEvent): Option[LogEvent] = {
         val ts = System.currentTimeMillis()
-        val rk = Some("hydrozoa.trace")
+        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
+        import ev.*
+        def htrace(json: String) = info(s"HTRACE|$json")
         e match {
             case AckReceived(bn, p, ackType, _) =>
                 Some(
-                  LogEvent(
-                    Level.Info,
-                    s"""HTRACE|{"ts":$ts,"node":"$nodeId","event":"ack","block_num":${bn: Int},"peer":${p: Int},"ack_type":"$ackType"}""",
-                    routingKey = rk
+                  htrace(
+                    s"""{"ts":$ts,"node":"$nodeId","event":"ack","block_num":${bn: Int},"peer":${p: Int},"ack_type":"$ackType"}"""
                   )
                 )
             case BlockSoftConfirmed(bn, bt, vMaj, vMin) =>
                 Some(
-                  LogEvent(
-                    Level.Info,
-                    s"""HTRACE|{"ts":$ts,"node":"$nodeId","event":"block_confirmed","block_num":${bn: Int},"block_type":"$bt","v_major":$vMaj,"v_minor":$vMin}""",
-                    routingKey = rk
+                  htrace(
+                    s"""{"ts":$ts,"node":"$nodeId","event":"block_confirmed","block_num":${bn: Int},"block_type":"$bt","v_major":$vMaj,"v_minor":$vMin}"""
                   )
                 )
             case LeaderStarted(bn, p) =>
                 Some(
-                  LogEvent(
-                    Level.Info,
-                    s"""HTRACE|{"ts":$ts,"node":"$nodeId","event":"leader_started","block_num":${bn: Int},"peer":${p: Int}}""",
-                    routingKey = rk
+                  htrace(
+                    s"""{"ts":$ts,"node":"$nodeId","event":"leader_started","block_num":${bn: Int},"peer":${p: Int}}"""
                   )
                 )
         }
