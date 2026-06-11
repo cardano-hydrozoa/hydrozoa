@@ -88,11 +88,9 @@ integration-yaci:
   trap 'just notify "integration-yaci"' EXIT
   sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
-[parallel]
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 
-[parallel]
 prepush: precommit test integration-fast build-werror
   just notify "prepush"
 
