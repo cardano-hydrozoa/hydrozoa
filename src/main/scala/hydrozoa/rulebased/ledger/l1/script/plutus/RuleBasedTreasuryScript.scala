@@ -106,6 +106,12 @@ object RuleBasedTreasuryValidator extends Validator {
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuationOutput"
     private inline val EvacuateOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
+    private inline val EvacuateHeadMpShouldBePreserved =
+        "headMp in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateVersionShouldBePreserved =
+        "version in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateSetupG2ShouldBePreserved =
+        "setupG2 in treasuryInput and treasuryOutput must match"
 
     // Deinit redeemer
     private inline val DeinitRequiresResolvedTreasury =
@@ -337,6 +343,25 @@ object RuleBasedTreasuryValidator extends Validator {
                 require(
                   outputResolvedDatum.evacuationActive == proof,
                   EvacuateOutputAccumulatorUpdated
+                )
+
+                // Identity-binding fields must be preserved across the Evacuate transition
+                // (foundation I6 Preservation). Without these, an attacker could land one
+                // legitimate Evacuate, corrupt the output's setupG2 to a degenerate value
+                // (e.g., all G2 identity points, which trivially satisfy any pairing check),
+                // then drain the treasury via subsequent Evacuates that pass checkMembership
+                // for arbitrary (subset, proof). Equivalent risks exist for headMp and version.
+                require(
+                  outputResolvedDatum.headMp === resolvedDatum.headMp,
+                  EvacuateHeadMpShouldBePreserved
+                )
+                require(
+                  outputResolvedDatum.version === resolvedDatum.version,
+                  EvacuateVersionShouldBePreserved
+                )
+                require(
+                  outputResolvedDatum.setupG2 === resolvedDatum.setupG2,
+                  EvacuateSetupG2ShouldBePreserved
                 )
 
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
