@@ -68,7 +68,7 @@ def genTreasuryResolvedDatum(
     } yield Resolved(
       evacuationActive = utxosCommitment,
       version = version,
-      setup = setup
+      setupG2 = setup
     )
 
 /** Generator for EvacuationTx transaction recipe */

@@ -80,8 +80,8 @@ object RuleBasedTreasuryValidator extends Validator {
         "The activeUtxo in resolved treasury must match voting results"
     private inline val ResolveTreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
-    private inline val ResolveTreasuryInputOutputSetup =
-        "setup in treasuryInput and treasuryOutput must match"
+    private inline val ResolveTreasuryInputOutputSetupG2 =
+        "setupG2 in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedAwaitingVote =
@@ -106,6 +106,12 @@ object RuleBasedTreasuryValidator extends Validator {
         "Value invariant should hold: treasuryInput = treasuryOutput + Σ evacuationOutput"
     private inline val EvacuateOutputAccumulatorUpdated =
         "Accumulator in the output should be properly updated"
+    private inline val EvacuateHeadMpShouldBePreserved =
+        "headMp in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateVersionShouldBePreserved =
+        "version in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateSetupG2ShouldBePreserved =
+        "setupG2 in treasuryInput and treasuryOutput must match"
 
     // Deinit redeemer
     private inline val DeinitRequiresResolvedTreasury =
@@ -226,8 +232,8 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 require(
-                  unresolvedDatum.setupG2 === treasuryOutputDatum.setup,
-                  ResolveTreasuryInputOutputSetup
+                  unresolvedDatum.setupG2 === treasuryOutputDatum.setupG2,
+                  ResolveTreasuryInputOutputSetupG2
                 )
 
             // ===================================
@@ -310,12 +316,13 @@ object RuleBasedTreasuryValidator extends Validator {
                 val proof_ = bls12_381_G1_uncompress(proof)
 
                 require(
-                  resolvedDatum.setup.length > evacuatedUtxos.length,
+                  resolvedDatum.setupG2.length > evacuatedUtxos.length,
                   EvacuateSetupIsNotBigEnough
                 )
 
-                // Extract setup of needed length
-                val setup = resolvedDatum.setup.take(evacuatedUtxos.length + 1).map(G2.uncompress)
+                // Extract the G2 setup prefix of needed length and decompress for pairing.
+                val uncompressedSetup =
+                    resolvedDatum.setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
                 // evacuatednUtxos.foreach( s =>
@@ -323,7 +330,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // )
 
                 require(
-                  checkMembership(setup, acc, evacuatedUtxos, proof_),
+                  checkMembership(uncompressedSetup, acc, evacuatedUtxos, proof_),
                   EvacuateMembershipValidationFailed
                 )
 
@@ -336,6 +343,25 @@ object RuleBasedTreasuryValidator extends Validator {
                 require(
                   outputResolvedDatum.evacuationActive == proof,
                   EvacuateOutputAccumulatorUpdated
+                )
+
+                // Identity-binding fields must be preserved across the Evacuate transition
+                // (foundation I6 Preservation). Without these, an attacker could land one
+                // legitimate Evacuate, corrupt the output's setupG2 to a degenerate value
+                // (e.g., all G2 identity points, which trivially satisfy any pairing check),
+                // then drain the treasury via subsequent Evacuates that pass checkMembership
+                // for arbitrary (subset, proof). Equivalent risks exist for headMp and version.
+                require(
+                  outputResolvedDatum.headMp === resolvedDatum.headMp,
+                  EvacuateHeadMpShouldBePreserved
+                )
+                require(
+                  outputResolvedDatum.version === resolvedDatum.version,
+                  EvacuateVersionShouldBePreserved
+                )
+                require(
+                  outputResolvedDatum.setupG2 === resolvedDatum.setupG2,
+                  EvacuateSetupG2ShouldBePreserved
                 )
 
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
@@ -405,11 +431,11 @@ object RuleBasedTreasuryValidator extends Validator {
     }
 
     def getG2Commitment(
-        setup: List[G2Element],
+        setupG2: List[G2Element],
         subset: List[ScalusScalar]
     ): G2Element = {
         val subsetInGroup =
-            List.map2(getFinalPolyScalus(subset), setup): (sb, st) =>
+            List.map2(getFinalPolyScalus(subset), setupG2): (sb, st) =>
                 st.scale(sb.toInt)
 
         subsetInGroup.foldLeft(G2.zero): (a, b) =>
@@ -419,24 +445,26 @@ object RuleBasedTreasuryValidator extends Validator {
     /** Checks the membership `proof` for a `subset` of elements against the given accumulator
       * `acc`.
       *
-      * @param setup
-      *   The setup of the accumulator.
+      * @param setupG2
+      *   The uncompressed G2 prefix of the KZG trusted setup, sized to `subset.length + 1`.
       * @param acc
-      *   The accumulator to check.
+      *   The accumulator to check (a G1 commitment over the full set).
       * @param subset
-      *   The subset of the setup.
+      *   The subset of evacuation-key scalars being proven.
+      * @param proof
+      *   The membership proof — a G1 commitment over the set's complement of `subset`.
       * @return
       *   True if the accumulator is valid, false otherwise.
       */
     def checkMembership(
-        setup: List[G2Element],
+        setupG2: List[G2Element],
         acc: G1Element,
         subset: List[ScalusScalar],
         proof: G1Element
     ): Boolean = {
-        val g2 = setup !! 0
+        val g2 = setupG2 !! 0
         val lhs = bls12_381_millerLoop(acc, g2)
-        val rhs = bls12_381_millerLoop(proof, getG2Commitment(setup, subset))
+        val rhs = bls12_381_millerLoop(proof, getG2Commitment(setupG2, subset))
         bls12_381_finalVerify(lhs, rhs)
     }
 }

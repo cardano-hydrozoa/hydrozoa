@@ -154,9 +154,8 @@ private object FallbackTxOps {
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                          // TODO: pull in N first elements of G2 CRS
-                          // KZG setup I think?
-                          setup = SList.empty
+                          // TODO: pull the onchain G2 prefix from the head's TrustedSetup
+                          setupG2 = SList.empty
                         )
                     }
 

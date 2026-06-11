@@ -83,7 +83,7 @@ object DisputeActorTestHelpers {
               deadlineVoting = votingDeadline,
               versionMajor = versionMajor,
               // this is cribbed from the CommonGenerators.scala test
-              setup = TrustedSetup
+              setupG2 = TrustedSetup
                   .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                   .map(p2 => G2Element(p2).toCompressedByteString)
             )
@@ -141,8 +141,7 @@ object DisputeActorTestHelpers {
             currentSlot = now.toSlot
 
             blockHeader = StandaloneEvacuationCommitment.Onchain(
-              blockNum = 1,
-              startTime = now.toPosixTime,
+              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = versionMinor,
               commitment = initialCommitment
@@ -183,7 +182,7 @@ object DisputeActorTestHelpers {
               action = RuleBasedRegimeManager.DisputeAction.Vote(
                 sec = blockHeader,
                 signatures = env.multisignHeader(blockHeader).toList,
-                coilSignatures = ???
+                coilSignatures = env.multisignHeaderCoil(blockHeader)
               ),
               cardanoBackend = cardanoBackend,
               tracerLocal = tracer
