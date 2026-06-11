@@ -7,10 +7,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, PeerLiaisonEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
-/** Top-level formatters delegating to each producer's per-event formatter. Build the prod or test
-  * tracer at the wiring layer with
-  * `Slf4jTracer.sink.contramap(humanFormat(peer)) |+| Slf4jTracer.sink.traceMaybe(jsonlFormat(nodeId))`.
-  */
+/** Top-level formatter delegating to each producer's per-event formatter. */
 object MultisigRegimeManagerEventFormat:
 
     private def routingKey(peerNum: HeadPeerNumber): String = s"MultisigRegimeManager.$peerNum"
@@ -37,18 +34,3 @@ object MultisigRegimeManagerEventFormat:
             case TerminatedActor(actor)    => warn(s"Terminated $actor actor")
             case TerminatedDependency(dep) => warn(s"Terminated dependency $dep")
     }
-
-    def jsonlFormat(peerNumber: HeadPeerNumber)(e: MultisigRegimeManagerEvent): Option[LogEvent] =
-        e match
-            case BW(bw)   => BlockWeaverEventFormat.jsonlFormat(peerNumber)(bw)
-            case JL(jl)   => JointLedgerEventFormat.jsonlFormat(peerNumber)(jl)
-            case FCA(fca) => FastConsensusActorEventFormat.jsonlFormat(peerNumber)(fca)
-            case CL(cl)   => CardanoLiaisonEventFormat.jsonlFormat(peerNumber)(cl)
-            case SC(sc)   => StackComposerEventFormat.jsonlFormat(peerNumber)(sc)
-            case SCA(sca) => SlowConsensusActorEventFormat.jsonlFormat(peerNumber)(sca)
-            case ES(_)    => None
-            case PL(remotePeerId, pl) =>
-                PeerLiaisonEventFormat.mermaidFormat(peerNumber, remotePeerId.peerNum)(pl)
-            case BWL(_) | SCL(_) => None
-            case StartingActors | WatchingActors | TerminatedActor(_) | TerminatedDependency(_) =>
-                None

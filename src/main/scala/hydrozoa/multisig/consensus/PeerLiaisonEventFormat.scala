@@ -4,13 +4,7 @@ import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.PeerLiaisonEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
-/** Renderers from [[PeerLiaisonEvent]] to [[LogEvent]] for various back-end sinks.
-  *
-  * Three format functions are provided:
-  *   - [[humanFormat]] — one structured line per event to the per-link SLF4J logger.
-  *   - [[mermaidFormat]] — `Some` for events that also emit a Mermaid sequence-diagram line; `None`
-  *     for the rest. Wire as `Slf4jTracer.sink.traceMaybe(mermaidFormat(own, remote))`.
-  */
+/** Renderers from [[PeerLiaisonEvent]] to [[LogEvent]]. */
 object PeerLiaisonEventFormat:
 
     private def routingKey(own: HeadPeerNumber, remote: HeadPeerNumber): String =
@@ -66,35 +60,5 @@ object PeerLiaisonEventFormat:
                 debug(s"Got BlockConfirmed (non-final): block=$blockNum")
             case BlockConfirmedFinal(blockNum) =>
                 debug(s"Got BlockConfirmed (final): block=$blockNum")
-        }
-    }
-
-    /** Returns a Mermaid sequence-diagram line for events that are part of the `GetMsgBatch` /
-      * `NewMsgBatch` exchange, `None` for all others.
-      */
-    def mermaidFormat(own: HeadPeerNumber, remote: HeadPeerNumber)(
-        e: PeerLiaisonEvent
-    ): Option[LogEvent] = {
-        val ev = LogEvent.From(Map.empty, "Mermaid.PeerLiaison")
-        import ev.*
-        def mmd(s: String) = info(s"\t$own->>$remote: $s")
-        e match {
-            case Started(_) =>
-                Some(mmd("GetMsgBatch.initial"))
-            case NewMsgBatchSent(b, ack, block, stack, hard, reqs) =>
-                Some(
-                  mmd(
-                    s"NewMsgBatch: batch=$b, ack=$ack, block=$block, " +
-                        s"stackBrief=$stack, hardAck=$hard, reqs=$reqs"
-                  )
-                )
-            case BatchAdvanced(b, ack, block, stack, hard, req) =>
-                Some(
-                  mmd(
-                    s"GetMsgBatch: batch=$b, ack=$ack, block=$block, " +
-                        s"stackBrief=$stack, hardAck=$hard, req=$req"
-                  )
-                )
-            case _ => None
         }
     }

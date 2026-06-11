@@ -4,7 +4,7 @@ import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
-/** Renderers from [[CardanoLiaisonEvent]] to [[LogEvent]] for various back-end sinks. */
+/** Renderers from [[CardanoLiaisonEvent]] to [[LogEvent]]. */
 object CardanoLiaisonEventFormat:
 
     private def routingKey(peerNum: HeadPeerNumber): String = s"CardanoLiaison.$peerNum"
@@ -57,39 +57,5 @@ object CardanoLiaisonEventFormat:
                 trace(s"Submitting tx hash: $txId")
             case SubmissionErrors(count) =>
                 trace(s"Submission errors (generally ignored): $count")
-        }
-    }
-
-    def jsonlFormat(peerNum: HeadPeerNumber)(e: CardanoLiaisonEvent): Option[LogEvent] = {
-        val ts = System.currentTimeMillis()
-        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
-        import ev.*
-        def htrace(json: String) = info(s"HTRACE|$json")
-        e match {
-            case InitialStackEffectsLearned =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"initial_stack_effects_learned"}"""
-                  )
-                )
-            case StackEffectsLearned(settlements, fallbacks, rollouts, hasFinalization) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"stack_effects_learned","settlements":$settlements,"fallbacks":$fallbacks,"rollouts":$rollouts,"finalization":$hasFinalization}"""
-                  )
-                )
-            case StackHardConfirmedReceived(stackNum) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"stack_hard_confirmed_received","stack":"$stackNum"}"""
-                  )
-                )
-            case ActionsDispatched(_, hasFallback) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"actions_dispatched","has_fallback":$hasFallback}"""
-                  )
-                )
-            case _ => None
         }
     }

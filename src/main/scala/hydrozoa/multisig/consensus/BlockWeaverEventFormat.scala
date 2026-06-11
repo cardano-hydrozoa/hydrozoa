@@ -4,7 +4,7 @@ import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.BlockWeaverEvent.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 
-/** Renderers from [[BlockWeaverEvent]] to [[LogEvent]] for various back-end sinks. */
+/** Renderers from [[BlockWeaverEvent]] to [[LogEvent]]. */
 object BlockWeaverEventFormat:
 
     private def routingKey(peerNum: HeadPeerNumber): String = s"BlockWeaver.$peerNum"
@@ -58,25 +58,5 @@ object BlockWeaverEventFormat:
                 )
             case WakeupFiberStarted(blockNum) =>
                 trace(s"wakeup fiber scheduled for block ${blockNum: Int}")
-        }
-    }
-
-    def jsonlFormat(peerNum: HeadPeerNumber)(e: BlockWeaverEvent): Option[LogEvent] = {
-        val ts = System.currentTimeMillis()
-        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
-        import ev.*
-        def htrace(json: String) = info(s"HTRACE|$json")
-        e match {
-            case BlockBriefReceived(blockNum) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"block_brief_received","block_num":${blockNum: Int}}"""
-                  )
-                )
-            case FinalizationTriggered =>
-                Some(
-                  htrace(s"""{"ts":$ts,"node":"$peerNum","event":"finalization_triggered"}""")
-                )
-            case _ => None
         }
     }

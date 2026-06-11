@@ -1,14 +1,11 @@
 package hydrozoa.multisig.ledger.joint
 
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockBrief
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent.*
 
-/** Renderers from [[JointLedgerEvent]] to [[LogEvent]] for various back-end sinks. Lives separately
-  * from the event ADT so the type itself stays pure data, and callers (Main / harness) compose
-  * `Slf4jTracer.sink.contramap(humanFormat(peer)) |+| Slf4jTracer.sink.traceMaybe(jsonlFormat(nodeId))`.
+/** Renderers from [[JointLedgerEvent]] to [[LogEvent]]. Lives separately from the event ADT so the
+  * type itself stays pure data.
   */
 object JointLedgerEventFormat:
 
@@ -94,48 +91,3 @@ object JointLedgerEventFormat:
                 LogEvent(level, msg, ev.ctx ++ ctx, routingKey = ev.routingKey)
         }
     }
-
-    /** Routes only protocol-trace-worthy events to the `hydrozoa.trace` JSONL logger; returns
-      * `None` for everything else (passed to `traceMaybe`).
-      */
-    def jsonlFormat(peerNum: HeadPeerNumber)(e: JointLedgerEvent): Option[LogEvent] = {
-        val ts = System.currentTimeMillis()
-        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
-        import ev.*
-        def htrace(json: String) = info(s"HTRACE|$json")
-        e match {
-            case BriefProduced(b) =>
-                val v = b.header.blockVersion
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"brief_produced","block_num":${b.blockNum: Int},"block_type":"${briefTypeName(
-                          b
-                        )}","v_major":${v.major: Int},"v_minor":${v.minor: Int},"event_count":${b.body.events.size}}"""
-                  )
-                )
-            case DepositRegistrationCompleted(rid, bn) =>
-                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = true, htrace))
-            case TransactionApplicationCompleted(rid, bn) =>
-                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = true, htrace))
-            case RequestRejected(rid, bn, _) =>
-                Some(eventProcessedLine(ts, peerNum, rid, bn, valid = false, htrace))
-            case _ => None
-        }
-    }
-
-    private def eventProcessedLine(
-        ts: Long,
-        nodeId: HeadPeerNumber,
-        rid: RequestId,
-        bn: BlockNumberInt,
-        valid: Boolean,
-        htrace: String => LogEvent
-    ): LogEvent = {
-        val eventId = s"${rid.peerNum}:${rid.requestNum}"
-        htrace(
-          s"""{"ts":$ts,"node":"$nodeId","event":"event_processed","event_id":"$eventId","block_num":${bn: Int},"valid":$valid}"""
-        )
-    }
-
-    // Alias for readability — keep BlockNumber's opaque-Int erasure local to this file.
-    private type BlockNumberInt = hydrozoa.multisig.ledger.block.BlockNumber

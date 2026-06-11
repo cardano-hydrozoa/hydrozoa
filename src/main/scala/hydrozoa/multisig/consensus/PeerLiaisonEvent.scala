@@ -48,9 +48,7 @@ object PeerLiaisonEvent:
         requestNum: RequestNumber
     ) extends PeerLiaisonEvent
 
-    /** Emitted when a [[PeerLiaison.Request.NewMsgBatch]] is sent to the remote peer. Also doubles
-      * as the source for a Mermaid sequence-diagram line (see
-      * [[PeerLiaisonEventFormat.mermaidFormat]]).
+    /** Emitted when a [[PeerLiaison.Request.NewMsgBatch]] is sent to the remote peer.
       *
       * `hardAck` is the string form of `stackNum/round`; `requestIds` is the rendered list.
       */

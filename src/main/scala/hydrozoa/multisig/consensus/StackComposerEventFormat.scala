@@ -31,24 +31,3 @@ object StackComposerEventFormat:
                 )
         }
     }
-
-    def jsonlFormat(peerNum: HeadPeerNumber)(e: StackComposerEvent): Option[LogEvent] = {
-        val ts = System.currentTimeMillis()
-        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
-        import ev.*
-        e match {
-            case InitialStackBootstrapped => None
-            case StackClosed(sn, first, last, isLeader) =>
-                Some(
-                  info(
-                    s"""HTRACE|{"ts":$ts,"node":"$peerNum","event":"stack_closed","stack_num":${sn: Int},"first_block":${first: Int},"last_block":${last: Int},"is_leader":$isLeader}"""
-                  )
-                )
-            case StructuralDivergence(sn, lFirst, lLast, expected) =>
-                Some(
-                  warn(
-                    s"""HTRACE|{"ts":$ts,"node":"$peerNum","event":"stack_structural_divergence","stack_num":${sn: Int},"leader_first":${lFirst: Int},"leader_last":${lLast: Int},"expected_first":${expected: Int}}"""
-                  )
-                )
-        }
-    }

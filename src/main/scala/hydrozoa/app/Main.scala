@@ -230,10 +230,7 @@ object Main extends IOApp {
             val mrmTracer =
                 Slf4jTracer.sink.contramap(
                   MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
-                ) |+|
-                    Slf4jTracer.sink.traceMaybe(
-                      MultisigRegimeManagerEventFormat.jsonlFormat(nodeConfig.ownHeadPeerNum)
-                    )
+                )
             for {
                 mrm <- MultisigRegimeManager.apply(
                   nodeConfig,

@@ -31,31 +31,3 @@ object SlowConsensusActorEventFormat:
                 info(s"stack $sn HARD-CONFIRMED", "stackNum" -> s"${sn: Int}")
         }
     }
-
-    def jsonlFormat(peerNum: HeadPeerNumber)(e: SlowConsensusActorEvent): Option[LogEvent] = {
-        val ts = System.currentTimeMillis()
-        val ev = LogEvent.From(Map.empty, "hydrozoa.trace")
-        import ev.*
-        def htrace(json: String) = info(s"HTRACE|$json")
-        e match {
-            case StackHandedOff(sn, phase) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"stack_handed_off","stack_num":${sn: Int},"phase":"$phase"}"""
-                  )
-                )
-            case Round1Confirmed(sn) =>
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"stack_round1_confirmed","stack_num":${sn: Int}}"""
-                  )
-                )
-            case StackHardConfirmed(stack) =>
-                val sn = stack.brief.stackNum
-                Some(
-                  htrace(
-                    s"""{"ts":$ts,"node":"$peerNum","event":"stack_hard_confirmed","stack_num":${sn: Int}}"""
-                  )
-                )
-        }
-    }
