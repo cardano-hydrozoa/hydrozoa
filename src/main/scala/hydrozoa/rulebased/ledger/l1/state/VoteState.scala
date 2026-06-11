@@ -11,8 +11,8 @@ import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 object VoteDatum {
 
-    /** The public ballot box (key == 0). Anyone can vote on it; the peer signature is not required.
-      * Seeded with the commitment from the treasury at fallback time; versionMinor starts at 0.
+    /** Seeds the key=0 ballot box directly in the Open phase with versionMinor 0. Any multisigned
+      * SEC can ratchet its status forward; the peer signature is not required.
       */
     def public(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
       key = 0,
@@ -49,10 +49,9 @@ object VoteDatum {
 object VoteState:
     // TODO: I'd like to turn this into `VoteDatum[Status <: VoteStatus]`, but then data derivation breaks
     case class VoteDatum(
-        // Uniquely identifies a ballot box. The public ballot box has key 0.
-        // Anyone can vote on key 0; peer signature is not required.
+        // Uniquely identifies a ballot box in the dispute's linked list (rooted at key=0).
         key: Key,
-        // Uniquely references another vote utxo by its key
+        // References the next ballot box by key, or 0 to indicate end-of-list.
         link: Link,
         voteStatus: VoteStatus
     )
@@ -60,17 +59,19 @@ object VoteState:
     given FromData[VoteDatum] = FromData.derived
     given ToData[VoteDatum] = ToData.derived
 
-    /** Status of a single vote utxo at the dispute resolution address.
+    /** Status of a single vote utxo at the dispute resolution address. Maps to the foundation
+      * spec's phases: [[AwaitingVote]] is Reserved; [[Voted]] and [[Abstain]] are Open.
       *
-      *   - [[AwaitingVote]] — peer has not yet acted; can transition to [[Voted]] (cast vote) or
-      *     [[Abstain]] (peer publicly declines to vote, e.g. when no SEC is available because the
-      *     latest hard-confirmed stack is Initial or a Major with no trailing minors — introduced
-      *     to close the gap left by the KZG-out-of-BlockHeader refactor).
-      *   - [[Voted]] — peer has cast a vote on a specific KZG commitment + minor block version.
-      *   - [[Abstain]] — peer has publicly abandoned this ballot box. Tallies the same as
-      *     [[AwaitingVote]] in [[Eq]]/precedence terms (any [[Voted]] supersedes it), but is
-      *     terminal: the script lets the peer's own utxo be tallied immediately rather than waiting
-      *     for `deadlineVoting`.
+      *   - [[AwaitingVote]] — Reserved phase: the named peer can transition this box to [[Voted]]
+      *     or [[Abstain]] via the permissioned one-shot path.
+      *   - [[Voted]] — Open phase: a KZG commitment + minor block version. Any multisigned SEC with
+      *     a strictly higher `versionMinor` (under the same `versionMajor`) can ratchet this status
+      *     forward, regardless of who signs the transaction.
+      *   - [[Abstain]] — Open phase: the reserved peer opted out (e.g. when no SEC is available
+      *     because the latest hard-confirmed stack is Initial or a Major with no trailing minors —
+      *     closes the gap left by the KZG-out-of-BlockHeader refactor). A subsequent multisigned
+      *     SEC can still ratchet this to [[Voted]] (with any `versionMinor > 0`), enlarging the
+      *     open-phase pool.
       */
     enum VoteStatus:
         case AwaitingVote(peer: PubKeyHash)

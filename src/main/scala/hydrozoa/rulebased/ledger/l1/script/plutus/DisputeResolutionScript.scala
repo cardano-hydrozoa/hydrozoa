@@ -72,9 +72,8 @@ object DisputeResolutionValidator extends Validator {
 
     // Vote redeemer
     private inline val VoteOnlyOneVoteUtxoIsSpent = "Only one vote utxo can be spent"
-    private inline val VoteAlreadyCast = "Vote already cast in exclusive ballot box"
     private inline val VoteRatchetNotMonotonic =
-        "Public ballot box ratchet must strictly increase versionMinor"
+        "Open-phase ratchet must strictly increase versionMinor"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
     private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
@@ -121,10 +120,10 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should match voting inputs on head policy"
     private inline val TreasuryDatumMatchesDisputeId =
         "Treasury datum should match voting inputs on dispute id"
-    private inline val ValidityStartShouldBeSetToTallyAwaiting =
-        "Tx that tallies awaiting votes should specify the validity start"
-    private inline val AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly =
-        "Vote utxos in awaiting status can be tallied up only after deadlineVoting"
+    private inline val TallyValidityStartRequired =
+        "Tally tx must specify the validity start (to prove deadline has elapsed)"
+    private inline val TallyOnlyAfterVotingDeadline =
+        "Tally tx may only fire after deadlineVoting has elapsed"
     private inline val HighestVoteCheck =
         "continuingOutput must match the highest voteStatus"
     private inline val AbsentOrWrongContinuingOutput =
@@ -191,18 +190,22 @@ object DisputeResolutionValidator extends Validator {
 
                 voteDatum.voteStatus match {
                     case AwaitingVote(pkh) =>
+                        // Reserved phase: only the named peer can transition this box (one-shot).
                         require(tx.signatories.contains(pkh), VoteMustBeSignedByPeer)
                     case VoteStatus.Voted(_, prevVersionMinor) =>
-                        // Public ballot box (key == 0) starts as Voted and may be re-voted by
-                        // anyone, but only with a strictly higher versionMinor (foundation I8).
-                        require(voteDatum.key == BigInt(0), VoteAlreadyCast)
+                        // Open phase: any multisigned SEC can ratchet this box, but only with
+                        // strictly higher versionMinor (foundation I8).
                         require(
                           voteRedeemer.sec.versionMinor > prevVersionMinor,
                           VoteRatchetNotMonotonic
                         )
                     case VoteStatus.Abstain =>
-                        // Abstain is terminal; cannot be re-voted on any ballot box.
-                        fail(VoteAlreadyCast)
+                        // Open phase: any multisigned SEC can ratchet from Abstain to Voted.
+                        // Implicit prior versionMinor is 0; SEC must have versionMinor > 0.
+                        require(
+                          voteRedeemer.sec.versionMinor > BigInt(0),
+                          VoteRatchetNotMonotonic
+                        )
                 }
 
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
@@ -451,53 +454,48 @@ object DisputeResolutionValidator extends Validator {
 
                 // Verify the treasury reference input
 
-                // If the voteStatus of either continuingInput or removedInput is AwaitingVote,
-                // the tally tx must wait for the voting deadline. Abstain is a terminal,
-                // peer-acknowledged "no commitment" — same as Voted for tally-timing purposes
-                // (deadline does NOT have to elapse to absorb an Abstain).
-                if isAwaiting(continuingDatum.voteStatus) || isAwaiting(removedDatum.voteStatus)
-                then {
-                    // ...all the following must be satisfied
+                // Always require the tally tx's validity start to be at or after deadlineVoting.
+                // The key=0 ballot box starts in the Open phase and remains ratchet-able by any
+                // multisigned SEC up until the deadline; since every dispute includes that box,
+                // local short-cuts based on the two specific tally inputs cannot speed up the
+                // global tally. Simplest rule: deadline applies uniformly.
 
-                    // Let treasury be a reference input holding the head beacon token of headMp
-                    // and CIP-67 prefix 4937
-                    val treasuryReference = tx.referenceInputs
-                        .find { i =>
-                            i.resolved.value.toSortedMap
-                                .get(contCs)
-                                .getOrElse(SortedMap.empty)
-                                .toList
-                                .find((tokenName, amount) =>
-                                    tokenName.take(4) == cip67BeaconTokenPrefix
-                                        && amount == BigInt(1)
-                                ) match
-                                case Some(_) => true
-                                case _       => false
-                        }
-                        .getOrFail(TreasuryReferenceInputExists)
-
-                    // headMp and disputeId must match the corresponding fields of the Unresolved
-                    // datum in treasury
-                    val treasuryDatum =
-                        treasuryReference.resolved
-                            .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
-                            case u: UnresolvedOnchain => u
-                            case _                    => fail(TreasuryDatumIsUnresolved)
-                        }
-
-                    require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
-                    require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
-
-                    // Merging vote utxos that are in the awaiting mode is not allowed before the
-                    // voting deadline.
-                    tx.validRange.from.boundType match {
-                        case IntervalBoundType.Finite(fromTime) =>
-                            require(
-                              treasuryDatum.deadlineVoting <= fromTime,
-                              AwaitingVotesCanBeTalliedAfterVotingDeadlineOnly
-                            )
-                        case _ => fail(ValidityStartShouldBeSetToTallyAwaiting)
+                // Let treasury be a reference input holding the head beacon token of headMp
+                // and CIP-67 prefix 4937
+                val treasuryReference = tx.referenceInputs
+                    .find { i =>
+                        i.resolved.value.toSortedMap
+                            .get(contCs)
+                            .getOrElse(SortedMap.empty)
+                            .toList
+                            .find((tokenName, amount) =>
+                                tokenName.take(4) == cip67BeaconTokenPrefix
+                                    && amount == BigInt(1)
+                            ) match
+                            case Some(_) => true
+                            case _       => false
                     }
+                    .getOrFail(TreasuryReferenceInputExists)
+
+                // headMp and disputeId must match the corresponding fields of the Unresolved
+                // datum in treasury
+                val treasuryDatum =
+                    treasuryReference.resolved
+                        .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
+                        case u: UnresolvedOnchain => u
+                        case _                    => fail(TreasuryDatumIsUnresolved)
+                    }
+
+                require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
+                require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
+
+                tx.validRange.from.boundType match {
+                    case IntervalBoundType.Finite(fromTime) =>
+                        require(
+                          treasuryDatum.deadlineVoting <= fromTime,
+                          TallyOnlyAfterVotingDeadline
+                        )
+                    case _ => fail(TallyValidityStartRequired)
                 }
 
                 // Verify the vote output
@@ -621,14 +619,6 @@ object DisputeResolutionValidator extends Validator {
                 }
                 require(voteDatum.key === voteOutputDatum.key, AbstainOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, AbstainOutputDatumAdditionalChecks)
-
-    /** True iff `s` is `AwaitingVote`. `Voted` and `Abstain` both count as terminal/decided. */
-    def isAwaiting(s: VoteStatus): Boolean =
-        s match {
-            case VoteStatus.AwaitingVote(_) => true
-            case VoteStatus.Voted(_, _)     => false
-            case VoteStatus.Abstain         => false
-        }
 
     /** Pick the higher-precedence vote status. Precedence: `Voted` > `AwaitingVote` > `Abstain`.
       */

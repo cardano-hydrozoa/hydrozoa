@@ -23,9 +23,9 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 /** Off-chain construction of the **Abstain** action: a peer publicly declines to vote on its own
   * [[BallotBox]] by flipping its datum from `AwaitingVote(peer)` to
-  * [[VoteState.VoteStatus.Abstain]]. Once landed on L1, the resulting Abstain utxo is terminal —
-  * the `Tally` action can absorb it before the voting deadline without further peer signatures (see
-  * [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.isAwaiting]]).
+  * [[VoteState.VoteStatus.Abstain]]. Once landed on L1, the resulting Abstain utxo is in the Open
+  * phase: it can be ratcheted up to Voted by any multisigned SEC, or absorbed by `Tally` (which
+  * always waits for `deadlineVoting` to elapse regardless of input statuses).
   */
 final case class AbstainTx(
     ballotBoxSpent: BallotBox[VoteStatus.AwaitingVote],
