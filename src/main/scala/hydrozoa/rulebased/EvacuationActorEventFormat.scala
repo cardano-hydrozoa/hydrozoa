@@ -6,13 +6,8 @@ import hydrozoa.rulebased.EvacuationActorEvent.*
 
 object EvacuationActorEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"EvacuationActor.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: EvacuationActorEvent): LogEvent =
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("EvacuationActor", peerNum)
         import ev.*
         e match
             case BackendErrorContinuingTxs(err) =>

@@ -7,13 +7,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[SlowConsensusActorEvent]] to [[LogEvent]] for various back-end sinks. */
 object SlowConsensusActorEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"SlowConsensusActor.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: SlowConsensusActorEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("SlowConsensusActor", peerNum)
         import ev.*
         e match {
             case StackHandedOff(sn, phase) =>

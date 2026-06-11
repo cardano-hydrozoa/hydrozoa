@@ -7,10 +7,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[BlockWeaverEvent]] to [[LogEvent]]. */
 object BlockWeaverEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"BlockWeaver.$peerNum"
-
     def humanFormat(peerNum: HeadPeerNumber)(e: BlockWeaverEvent): LogEvent = {
-        val ev = LogEvent.From(Map("peer" -> peerNum.toString), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("BlockWeaver", peerNum)
         import ev.*
         e match {
             case Stopped           => info("stopping")

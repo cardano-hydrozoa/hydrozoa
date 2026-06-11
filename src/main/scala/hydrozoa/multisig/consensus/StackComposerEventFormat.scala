@@ -7,13 +7,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[StackComposerEvent]] to [[LogEvent]] for various back-end sinks. */
 object StackComposerEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"StackComposer.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: StackComposerEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("StackComposer", peerNum)
         import ev.*
         e match {
             case InitialStackBootstrapped =>

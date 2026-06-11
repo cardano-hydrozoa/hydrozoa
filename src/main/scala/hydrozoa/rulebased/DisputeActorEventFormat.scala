@@ -6,13 +6,8 @@ import hydrozoa.rulebased.DisputeActorEvent.*
 
 object DisputeActorEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"DisputeActor.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: DisputeActorEvent): LogEvent =
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("DisputeActor", peerNum)
         import ev.*
         e match
             case CardanoBackendError(err) =>

@@ -56,6 +56,8 @@ object LogEvent {
     object From:
         def apply(ctx: Map[String, String], routingKey: String): From =
             new From(ctx, Some(routingKey))
+        def forPeer(actorName: String, peerNum: Int): From =
+            From(Map("peer" -> peerNum.toString), s"$actorName.$peerNum")
 }
 
 /** Contravariant logger: a function that emits a [[LogEvent]] into IO.

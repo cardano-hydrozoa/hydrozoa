@@ -14,14 +14,9 @@ object JointLedgerEventFormat:
         case _: BlockBrief.Major => "major"
     }
 
-    private def routingKey(peerNum: Int): String = s"JointLedger.$peerNum"
-
-    private def baseCtx(peerNum: Int): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     /** Routes every event to SLF4J text. */
     def humanFormat(peerNum: Int)(e: JointLedgerEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("JointLedger", peerNum)
         import ev.*
         e match {
             case BriefProduced(b) =>

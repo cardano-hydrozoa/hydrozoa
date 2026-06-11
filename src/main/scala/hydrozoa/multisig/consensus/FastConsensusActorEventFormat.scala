@@ -9,14 +9,9 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
   */
 object FastConsensusActorEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"FastConsensusActor.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     /** Routes every event to SLF4J text. */
     def humanFormat(peerNum: HeadPeerNumber)(e: FastConsensusActorEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("FastConsensusActor", peerNum)
         import ev.*
         e match {
             case AckReceived(bn, p, ackType, isOwn) =>

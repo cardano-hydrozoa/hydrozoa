@@ -7,14 +7,11 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[PeerLiaisonEvent]] to [[LogEvent]]. */
 object PeerLiaisonEventFormat:
 
-    private def routingKey(own: HeadPeerNumber, remote: HeadPeerNumber): String =
-        s"PeerLiaison.$own->$remote"
-
-    private def baseCtx(own: HeadPeerNumber, remote: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> own.toString, "remote" -> remote.toString)
-
     def humanFormat(own: HeadPeerNumber, remote: HeadPeerNumber)(e: PeerLiaisonEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(own, remote), routingKey(own, remote))
+        val ev = LogEvent.From(
+          Map("peer" -> own.toString, "remote" -> remote.toString),
+          s"PeerLiaison.$own->$remote"
+        )
         import ev.*
         e match {
             case Started(remotePeerNum) =>

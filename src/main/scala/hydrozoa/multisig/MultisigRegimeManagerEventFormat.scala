@@ -10,12 +10,8 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 /** Top-level formatter delegating to each producer's per-event formatter. */
 object MultisigRegimeManagerEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"MultisigRegimeManager.$peerNum"
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("MultisigRegimeManager", peerNum)
         import ev.*
         e match
             case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)

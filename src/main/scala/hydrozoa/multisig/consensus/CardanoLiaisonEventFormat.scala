@@ -7,13 +7,8 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 /** Renderers from [[CardanoLiaisonEvent]] to [[LogEvent]]. */
 object CardanoLiaisonEventFormat:
 
-    private def routingKey(peerNum: HeadPeerNumber): String = s"CardanoLiaison.$peerNum"
-
-    private def baseCtx(peerNum: HeadPeerNumber): Map[String, String] =
-        Map("peer" -> peerNum.toString)
-
     def humanFormat(peerNum: HeadPeerNumber)(e: CardanoLiaisonEvent): LogEvent = {
-        val ev = LogEvent.From(baseCtx(peerNum), routingKey(peerNum))
+        val ev = LogEvent.From.forPeer("CardanoLiaison", peerNum)
         import ev.*
         e match {
             case TimeoutReceived =>
