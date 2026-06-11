@@ -28,3 +28,6 @@ target/
 
 # Local scratch / notes (not for commit)
 .scratch/
+
+# AI
+.claude/
