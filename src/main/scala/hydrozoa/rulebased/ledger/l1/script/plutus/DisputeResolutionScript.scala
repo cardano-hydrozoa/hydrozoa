@@ -21,7 +21,6 @@ import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.PlutusV3
 import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
-import scalus.uplc.builtin.ByteString.hex
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
@@ -50,22 +49,12 @@ object DisputeResolutionValidator extends Validator {
     // EdDSA / ed25519 signature
     private type Signature = ByteString
 
-    enum BlockTypeL2:
-        case Minor
-        case Major
-        case Final
-
-    given FromData[BlockTypeL2] = FromData.derived
-    given ToData[BlockTypeL2] = ToData.derived
-
     enum TallyRedeemer:
         case Continuing
         case Removed
 
     given FromData[TallyRedeemer] = FromData.derived
     given ToData[TallyRedeemer] = ToData.derived
-
-    inline def cip67DisputeTokenPrefix = hex"021eb240"
 
     // Common errors
     private inline val DatumIsMissing = "Vote datum should be present"
@@ -341,13 +330,13 @@ object DisputeResolutionValidator extends Validator {
                   VoteMajorVersionCheck
                 )
 
-                // Vote output
-                val voteOutput = tx.outputs.find(o =>
-                    // We decided to use collateral, now the value should be preserved.
-                    o.value === voteInput.value
-                ) match
-                    case Some(e) => e
-                    case None    => fail(VoteVoteOutputExists)
+                // Vote output: must exist exactly one continuing output preserving the vote
+                // utxo's value (token + ADA).
+                val voteOutput = tx.outputs.filter(o => o.value === voteInput.value) match
+                    case List.Cons(o, tail) =>
+                        require(tail.isEmpty, VoteVoteOutputExists)
+                        o
+                    case _ => fail(VoteVoteOutputExists)
 
                 require(voteOutput.address === voteInput.address, VoteVoteOutputExists)
 
@@ -360,7 +349,7 @@ object DisputeResolutionValidator extends Validator {
                 val voteOutputDatum = voteOutput.inlineDatumOfType[VoteDatum]
 
                 // voteStatus field of voteOutput must be a Vote matching voteRedeemer
-                // on the utxosActive and versionMinor fields.
+                // on the commitment and versionMinor fields.
                 voteOutputDatum.voteStatus match {
                     case VoteStatus.Voted(commitment, versionMinor) =>
                         require(
@@ -378,33 +367,31 @@ object DisputeResolutionValidator extends Validator {
                 require(voteDatum.key === voteOutputDatum.key, VoteOutputDatumAdditionalChecks)
                 require(voteDatum.link === voteOutputDatum.link, VoteOutputDatumAdditionalChecks)
 
-            /** Tallying is done as follows:
-              *
-              * +-----------+        +-----------+        +-----------+        +-----------+
-              * |  key = 0  |        |  key = 1  |        |  key = 2  |        |  key = 3  |
-              * | link = 1  |        | link = 2  |-+      | link = 3  |        | link = 0  |-+
-              * |CONTINUING |        |  REMOVED  | |      |CONTINUING |        |  REMOVED  | |
-              * |                                  |      |                                  |
-              * v                                  |       v                                 |
-              * +-----------+                      |       +-----------+                     |
-              * |  key = 0  |                      |       |  key = 2  |                     |
-              * | link = 2  | <------------------- +       | link = 0  |<-------+------------+
-              * |CONTINUING |                              |  REMOVED  |        |
-              * |                                                               |
-              * v                                                               |
-              * +-----------+                                                   |
-              * |  key = 0  |                                                   |
-              * | link = 0  |<--------------------------------------------------+
-              * |   FINAL   |
-              *
-              * NB:
-              * 1. `peer` is always set to None since it's not needed and since it's not relevant
-              * 2. the higher `vote` is selected
-              * 3. we start pair-wise from the beginning, but an arbitrary adjacent votes can be tallied
-              */
-
             case DisputeRedeemer.Tally(tallyRedeemer) =>
                 log("Tally")
+
+                // Tallying contracts the ballot-box linked list pairwise. The higher voteStatus
+                // (per maxVote) is selected and inherited by the surviving (continuing) box;
+                // the other (removed) box is consumed and its link is grafted onto the
+                // continuing one.
+                //
+                //   +---------+    +---------+    +---------+    +---------+
+                //   | key=0   |    | key=1   |    | key=2   |    | key=3   |
+                //   | link=1  |    | link=2  |-+  | link=3  |    | link=0  |-+
+                //   | CONT    |    | REMOVED | |  | CONT    |    | REMOVED | |
+                //   v                          |  v                          |
+                //   +---------+                |  +---------+                |
+                //   | key=0   |                |  | key=2   |                |
+                //   | link=2  | <------------- +  | link=0  | <-------+------+
+                //   | CONT    |                   | REMOVED |         |
+                //   v                                                 |
+                //   +---------+                                       |
+                //   | key=0   |                                       |
+                //   | link=0  | <------------------------------------ +
+                //   | FINAL   |
+                //
+                // Tallying can be done on any two adjacent boxes; pair-from-the-start is just
+                // the simplest schedule.
 
                 // TODO: hide `ownInput` and `otherInput` so they can't be used accidentally
                 val ownInput = tx.inputs.find(_.outRef === ownRef).get
@@ -447,15 +434,13 @@ object DisputeResolutionValidator extends Validator {
                   KeyLinkFieldsDoNotMatch
                 )
 
-                // FIXME: we don't have address anymore since address is how we find the other input
-                // There must be no other spent inputs from the same address as continuingInput
-                // or holding any tokens of headMp.
+                // No other input may hold any token of this head's policy (contCs). This
+                // prevents co-spending unrelated ballot boxes or the treasury in the same
+                // Tally tx.
                 require(
                   tx.inputs
                       .filter(i =>
-                          // Input other than we handle
                           (i.outRef !== continuingInputId) && (i.outRef !== removedInputId)
-                          // holding any tokens of headMp
                               && (i.resolved.value.containsCurrencySymbol(contCs))
                       )
                       .isEmpty,
@@ -508,27 +493,26 @@ object DisputeResolutionValidator extends Validator {
                     case _ => fail(TallyValidityStartRequired)
                 }
 
-                // Verify the vote output
-
-                // 8. Let continuingOutput be an output with:
-                // - same address
-                // - combined tokens
-                // - ada amount that is not less than ada in continuing input + max (0, (ada in removed input - tx fees))
-
-                // This is better that require(removedInput.value.getLovelace - tx.fee), since this may prevent the
-                // tx from getting through.
+                // continuingOutput must have: same address, combined tokens, and ADA at least
+                // continuingInput.ADA + max(0, removedInput.ADA - tx.fee). Computing residualAda
+                // this way avoids failing the tx if tx.fee exceeds removedInput's ADA (the
+                // alternative `require(removedInput.value.getLovelace >= tx.fee)` is overly
+                // strict and would block otherwise-valid tallies).
                 val residualAda = {
                     val residualAda = removedInput.value.getLovelace - tx.fee
                     if residualAda > 0 then residualAda else BigInt(0)
                 }
 
                 val continuingOutput = tx.outputs
-                    .find(o =>
+                    .filter(o =>
                         o.address === continuingInput.address
                             && o.value.onlyNonAdaAsset === (continuingInput.value + removedInput.value).onlyNonAdaAsset
                             && o.value.getLovelace >= continuingInput.value.getLovelace + residualAda
-                    )
-                    .getOrFail(AbsentOrWrongContinuingOutput)
+                    ) match
+                    case List.Cons(o, tail) =>
+                        require(tail.isEmpty, AbsentOrWrongContinuingOutput)
+                        o
+                    case _ => fail(AbsentOrWrongContinuingOutput)
 
                 // Reject an attached reference script — would bloat the utxo and could push
                 // downstream Tally / Resolve over the tx-size limit (denial of evacuation).
@@ -536,8 +520,7 @@ object DisputeResolutionValidator extends Validator {
                     case None    => ()
                     case Some(_) => fail(TallyOutputNoScriptRef)
 
-                // 9. The voteStatus field of continuingOutput must match the highest voteStatus
-                // of continuingInput and removedInput
+                // voteStatus of continuingOutput must equal maxVote of the two inputs.
                 val continuingOutputDatum = continuingOutput.inlineDatumOfType[VoteDatum]
                 require(
                   continuingOutputDatum.voteStatus === maxVote(
@@ -547,10 +530,10 @@ object DisputeResolutionValidator extends Validator {
                   HighestVoteCheck
                 )
 
-                // 10. The link field of removedInput and continuingOutput must match.
+                // link of continuingOutput inherits removedInput's link (linked-list contraction).
                 require(continuingOutputDatum.link == removedDatum.link, LinkCheck)
 
-                // 11. All other fields of continuingInput and continuingOutput must match.
+                // key of continuingOutput is preserved from continuingInput.
                 require(continuingOutputDatum.key === continuingDatum.key, KeyCheck)
 
             case DisputeRedeemer.Resolve =>
