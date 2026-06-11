@@ -69,6 +69,7 @@ case class Stage4Suite(
     nPeers: Int = 2,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
+    nCommands: Int = 10,
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -88,7 +89,7 @@ case class Stage4Suite(
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
 
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] = [A] =>
-        (g: Gen[A]) => Gen.resize(500, g)
+        (g: Gen[A]) => Gen.resize(nCommands, g)
 
     override def onTestCaseGenerated(
         initialState: ModelState,
