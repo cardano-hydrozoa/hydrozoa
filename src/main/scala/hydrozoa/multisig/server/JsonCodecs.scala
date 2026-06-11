@@ -9,7 +9,7 @@ import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -240,13 +240,6 @@ object JsonCodecs {
 
     given headPeerNumberDecoder: Decoder[HeadPeerNumber] =
         Decoder.decodeInt.map(HeadPeerNumber.apply)
-
-    // RequestId codec
-    given requestIdEncoder: Encoder[RequestId] = (requestId: RequestId) =>
-        io.circe.Json.fromLong(requestId.asI64)
-
-    given requestIdDecoder: Decoder[RequestId] =
-        Decoder.decodeLong.map(RequestId.fromI64)
 
     // Response types
     given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]

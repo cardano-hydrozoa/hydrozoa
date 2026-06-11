@@ -10,7 +10,6 @@ import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
 import io.circe.*
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import scala.util.Try
 import scalus.cardano.address.Address
@@ -90,7 +89,7 @@ object L2LedgerCommand {
             import Destination.given
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
-            import hydrozoa.multisig.server.JsonCodecs.requestIdEncoder
+            import RequestId.given
             (r: L2LedgerCommand.RegisterDeposit) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
@@ -110,7 +109,7 @@ object L2LedgerCommand {
         given depositRegistrationDecoder: io.circe.Decoder[L2LedgerCommand.RegisterDeposit] = {
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Decoder_Value, given_Decoder_Coin}
-            import hydrozoa.multisig.server.JsonCodecs.requestIdDecoder
+            import RequestId.given
             io.circe.generic.semiauto.deriveDecoder
         }
     }
@@ -125,7 +124,7 @@ object L2LedgerCommand {
     object ApplyDepositDecisions {
         given Codec[L2LedgerCommand.ApplyDepositDecisions] = {
             import BlockNumber.given
-            import hydrozoa.multisig.server.JsonCodecs.{requestIdEncoder, requestIdDecoder}
+            import RequestId.given
             io.circe.generic.semiauto.deriveCodec
         }
     }
@@ -157,9 +156,16 @@ object L2LedgerCommand {
                   "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
                 )
 
-        // FIXME: As above, this can't possibly round-trip...
         given applyTransactionDecoder: io.circe.Decoder[L2LedgerCommand.ApplyTransaction] =
-            deriveDecoder
+            io.circe.Decoder.instance(c =>
+                for {
+                    rid <- c.downField("requestId").as[RequestId]
+                    vk <- c.downField("userVk").as[VerificationKey]
+                    bn <- c.downField("blockNumber").as[BlockNumber]
+                    t <- c.downField("blockCreationStartTime").as[PosixTime]
+                    p <- c.downField("l2Payload").as[ByteString]
+                } yield L2LedgerCommand.ApplyTransaction(rid, vk, bn, t, p)
+            )
     }
 
     object ProxyBlockConfirmation {

@@ -4,7 +4,6 @@ import cats.implicits.catsSyntaxOrder
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import io.circe.*
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import scala.annotation.targetName
 
@@ -37,18 +36,8 @@ object RequestId {
       }
     )
 
-    given Encoder[Id] = Encoder.instance(id =>
-        Json.obj(
-          "headPeerNumber" -> id._1.asJson,
-          "requestNumber" -> id._2.asJson
-        )
-    )
-    given Decoder[Id] = Decoder.instance(c =>
-        for {
-            hpn <- c.downField("headPeerNumber").as[HeadPeerNumber]
-            rn <- c.downField("requestNumber").as[RequestNumber]
-        } yield (hpn, rn)
-    )
+    given Encoder[Id] = Encoder.instance(id => Json.fromLong(id.asI64))
+    given Decoder[Id] = Decoder.decodeLong.map(fromI64)
 
     opaque type Id = (HeadPeerNumber, RequestNumber)
 
