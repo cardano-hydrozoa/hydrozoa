@@ -38,4 +38,4 @@ jobs:
         run: nix develop --command just test
 
       - name: Integration tests
-        run: nix develop --command just integration
+        run: nix develop --command just integration-fast

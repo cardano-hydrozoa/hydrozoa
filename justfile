@@ -76,7 +76,7 @@ migrate ADDRESS:
 integration-fast:
   #!/usr/bin/env bash
   trap 'just notify "integration-fast"' EXIT
-  sbt "integration/testOnly * -- -s 10"
+  sbt "integration/testOnly * -- -s 10 -f ^(?!.*\(extended\))"
 
 integration:
   #!/usr/bin/env bash

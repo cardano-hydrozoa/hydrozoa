@@ -121,19 +121,10 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
-            // .withPropFilter(Some("Two-peers head works"))
-            // .withPropFilter(Some("Three-peers head works"))
-            // .withPropFilter(Some("Twenty-peers head works"))
-            // .withPropFilter(Some("Two-peers head works WS"))
-             .withPropFilter(Some("Two-heads-one-coil works WS"))
-            //.withPropFilter(Some("Ten-peers head works WS"))
-            // .withInitialSeed(SOk,.eed.fromBase64("uOllVn-lTcPloHDUuC3_x8oVjOgUbTR7vUoBi3T71gF=").get)
-            // .withInitialSeed(Seed.fromBase64("wZ2FQc_Iv2duN06RHMXFg7014XeEirS_K2-wY0RN38O=").get)
-            // .withInitialSeed(Seed.fromBase64("7wf2XaHHBHdGl4XOoIpW8PvN2t8XFcR0fFE0RBX6pWG=").get)
-            // .withInitialSeed(Seed.fromBase64("Irdkn14LUINcIDjKQOxKuN-GF2399UOCwL-C11NVESJ=").get)
             .withWorkers(1)
             .withMinSuccessfulTests(1)
 
+    // Fast variants (CI): small command sequences, minimal peer count
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
@@ -152,7 +143,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
 
-    val _ = property("Twenty-peers head works") =
+    val _ = property("Twenty-peers head works (extended)") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
 
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
@@ -167,9 +158,30 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       backendMode = BackendMode.RocksDb()
     ).property()
 
-    val _ = property("Ten-peers head works WS") = Stage4Suite(
-      label = "stage4-ws-ten-peers",
+    // Extended variants: large command sequences or high peer counts
+    val _ = property("Two-peers head works (extended)") =
+        Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
+
+    val _ = property("Two-heads-one-coil works (extended)") =
+        Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoilPeers = 1, nCommands = 500).property()
+
+    val _ = property("Three-peers head works (extended)") =
+        Stage4Suite(label = "stage4-three-peers", nPeers = 3, nCommands = 500).property()
+
+    val _ = property("Twenty-peers head works (extended)") =
+        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
+    val _ = property("Two-peers head works WS (extended)") = Stage4Suite(
+      label = "stage4-ws-two-peers-extended",
+      nPeers = 2,
+      nCommands = 500,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+    val _ = property("Ten-peers head works WS (extended)") = Stage4Suite(
+      label = "stage4-ws-ten-peers-extended",
       nPeers = 10,
+      nCommands = 500,
       transportMode = TransportMode.WebSocket(),
       backendMode = BackendMode.RocksDb()
     ).property()
