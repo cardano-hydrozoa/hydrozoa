@@ -119,7 +119,8 @@ case class RuleBasedRegimeManager(
                             case Some(multiSec) =>
                                 DisputeAction.Vote(
                                   sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment),
-                                  signatures = multiSec.headerMultiSigned
+                                  signatures = multiSec.headerMultiSigned,
+                                  coilSignatures = Nil // coil-side recovery is deferred
                                 )
                         }
                         // Default-vote map — what the multisig treasury was committed to at
@@ -191,7 +192,8 @@ object RuleBasedRegimeManager {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature]
+            signatures: List[BlockHeader.Minor.HeaderSignature],
+            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
         )
         case Abstain
 

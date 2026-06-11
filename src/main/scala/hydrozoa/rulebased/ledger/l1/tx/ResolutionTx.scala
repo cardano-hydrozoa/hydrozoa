@@ -2,15 +2,12 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.implicits.*
 import hydrozoa.*
-import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
@@ -20,14 +17,14 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 final case class ResolutionTx(
-    talliedVoteUtxo: VoteUtxo[Voted],
+    talliedBallotBox: BallotBox[Voted],
     treasuryUnresolvedUtxoSpent: RuleBasedTreasuryUtxo,
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
@@ -42,8 +39,8 @@ object ResolutionTx {
 }
 
 private object ResolutionTxOps {
-    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames & OwnPeerPrivate.Section
+    type Config = HeadConfig.Bootstrap.Section & FallbackContingency.Section &
+        OwnPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:
@@ -70,7 +67,7 @@ private object ResolutionTxOps {
     }
 
     final case class Build(
-        talliedVoteUtxo: VoteUtxo[Voted],
+        talliedBallotBox: BallotBox[Voted],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
@@ -79,7 +76,7 @@ private object ResolutionTxOps {
                 treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
                 resolvedTreasuryDatum = mkResolvedTreasuryDatum(
                   treasuryDatum,
-                  talliedVoteUtxo.voteOutput.status
+                  talliedBallotBox.ballotBoxOutput.status
                 )
                 result <- buildResolutionTx(resolvedTreasuryDatum).left.map(
                   Build.Error.BuildError(_)
@@ -106,7 +103,7 @@ private object ResolutionTxOps {
             Resolved(
               evacuationActive = voteDetails._1,
               version = (unresolved.versionMajor, voteDetails._2),
-              setup = unresolved.setup
+              setupG2 = unresolved.setupG2
             )
         }
 
@@ -118,7 +115,7 @@ private object ResolutionTxOps {
             val treasuryRedeemer = TreasuryRedeemer.Resolve
 
             val newTreasuryValue =
-                treasuryUtxo.treasuryOutput.value + talliedVoteUtxo.voteOutput.toOutput.value
+                treasuryUtxo.treasuryOutput.value + talliedBallotBox.ballotBoxOutput.toOutput.value
 
             // TODO: Partial, we can definitely find a way to make this more type safe
             val newTreasury = RuleBasedTreasuryOutput(resolvedTreasuryDatum, newTreasuryValue)
@@ -129,8 +126,8 @@ private object ResolutionTxOps {
                       List(
                         config.referenceTreasury,
                         config.referenceDispute,
-                        // Spend the tallied vote utxo
-                        talliedVoteUtxo.spend(voteRedeemer),
+                        // Spend the tallied ballot box
+                        talliedBallotBox.spend(voteRedeemer),
                         // Spend the treasury utxo and update its datum to resolved state
                         treasuryUtxo.spendAttached(treasuryRedeemer),
                         // Send resolved treasury back with resolved datum and total value
@@ -154,7 +151,7 @@ private object ResolutionTxOps {
                 )
 
             } yield ResolutionTx(
-              talliedVoteUtxo = talliedVoteUtxo,
+              talliedBallotBox = talliedBallotBox,
               treasuryUnresolvedUtxoSpent = treasuryUtxo,
               treasuryResolvedUtxoProduced = newTreasuryUtxo,
               tx = finalized.transaction

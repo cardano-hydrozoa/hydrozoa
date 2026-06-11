@@ -77,8 +77,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     val _ = property("evacuation resolves via vote: treasury present, no votes remain") =
         run(
-          scenario(mkAction = (sec, sigs) =>
-              RuleBasedRegimeManager.DisputeAction.Vote(sec = sec, signatures = sigs)
+          scenario(mkAction = (sec, sigs, coilSigs) =>
+              RuleBasedRegimeManager.DisputeAction.Vote(
+                sec = sec,
+                signatures = sigs,
+                coilSignatures = coilSigs
+              )
           ),
           PropertyM.pick(
             MultiNodeConfig
@@ -91,7 +95,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     lazy val _ = property("evacuation resolves via abstain: treasury present, no votes remain") =
         run(
-          scenario(mkAction = (_, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
+          scenario(mkAction = (_, _, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
           PropertyM.pick(
             MultiNodeConfig
                 .generate(TestPeersSpec.default)(
@@ -117,7 +121,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private def scenario(
         mkAction: (
             StandaloneEvacuationCommitment.Onchain,
-            List[BlockHeader.Minor.HeaderSignature]
+            List[BlockHeader.Minor.HeaderSignature],
+            List[Option[BlockHeader.Minor.HeaderSignature]]
         ) => RuleBasedRegimeManager.DisputeAction
     ): MultiNodeConfigTestM[Boolean] =
         for
@@ -149,8 +154,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
             // block header: all peers vote for the same commitment (happy path).
             blockHeader = StandaloneEvacuationCommitment.Onchain(
-              blockNum = BigInt(1),
-              startTime = now.toPosixTime,
+              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = BigInt(1),
               versionMinor = BigInt(1),
               commitment = initialUtxos.kzgCommitment
@@ -159,7 +163,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             // All peers co-sign the block header (a voted block requires all signatures)
             signatures = env.multisignHeader(blockHeader).toList
 
-            action = mkAction(blockHeader, signatures)
+            // First coilQuorum coil peers sign; rest are None (per MultiNodeConfig helper).
+            coilSignatures = env.multisignHeaderCoil(blockHeader)
+
+            action = mkAction(blockHeader, signatures, coilSignatures)
 
             backendAndSnapshot <- lift(
               CardanoBackendMock.mockIOWithSnapshot(

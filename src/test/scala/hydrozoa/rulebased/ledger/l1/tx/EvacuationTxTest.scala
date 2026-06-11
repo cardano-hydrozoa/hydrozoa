@@ -68,7 +68,7 @@ def genTreasuryResolvedDatum(
     } yield Resolved(
       evacuationActive = utxosCommitment,
       version = version,
-      setup = setup
+      setupG2 = setup
     )
 
 /** Generator for EvacuationTx transaction recipe */
@@ -188,7 +188,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
     val _ = property(
       "EvacuationTx builds successfully with valid recipe"
-    ) = runDefault(
+    ) = runWithCoil()(
       for {
           env <- ask
           builder <- pick(genEvacuationTxBuild(using env))

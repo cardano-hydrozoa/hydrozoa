@@ -6,6 +6,7 @@ import cats.effect.{IO, IOLocal}
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -317,7 +318,8 @@ case class EvacuationActor(
 
 object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
-        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section
+        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
+        HeadConfig.Bootstrap.Section
 
     // TODO: replace brittle string sentinels with domain-specific typed log events
     object LogMessages:

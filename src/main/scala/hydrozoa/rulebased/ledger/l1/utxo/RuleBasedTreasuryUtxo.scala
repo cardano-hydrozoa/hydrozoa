@@ -1,8 +1,6 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, RuleBasedTreasuryDatumOnchain}
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
@@ -142,7 +140,7 @@ final case class RuleBasedTreasuryOutput(datum: RuleBasedTreasuryDatum, value: V
 }
 
 object RuleBasedTreasuryOutput {
-    type Config = CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+    type Config = HeadConfig.Bootstrap.Section
 
     def apply(
         output: TransactionOutput
