@@ -214,19 +214,29 @@ object DisputeResolutionValidator extends Validator {
                 val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
 
                 // Verify the treasury reference input
-                // Let treasury be the only reference input matching voteOutref on tx hash.
-                val treasuryReference = tx.referenceInputs match {
-                    case List.Nil => fail(VoteOneRefInputTreasury)
-                    case l @ List.Cons(_, _) =>
-                        val treasuryRefInputs: List[TxInInfo] =
-                            l.filter(_.outRef.id === voteOutref.outRef.id)
-                        require(treasuryRefInputs.size === BigInt(1), VoteOneRefInputTreasury)
-                        treasuryRefInputs.head
-                }
+                // Find a reference input that holds a CIP-67-HYDR-prefixed token under the same
+                // headMp policy as the vote utxo. (The previous txid-match filter only worked for
+                // ratchets on fallback-created boxes — under foundation I8 we must support
+                // arbitrary post-AwaitingVote ratchet chains where the vote utxo's source-tx
+                // txid diverges from the treasury's.)
+                val treasuryReference = tx.referenceInputs
+                    .find { i =>
+                        i.resolved.value.toSortedMap
+                            .get(headMp)
+                            .getOrElse(SortedMap.empty)
+                            .toList
+                            .find((tokenName, amount) =>
+                                tokenName.take(4) == cip67BeaconTokenPrefix
+                                    && amount == BigInt(1)
+                            ) match
+                            case Some(_) => true
+                            case _       => false
+                    }
+                    .getOrFail(VoteOneRefInputTreasury)
 
-                // A head beacon token of headMp and CIP-67 prefix 4937 must be in treasury, and
-                // its full asset name must equal voteRedeemer.sec.headId (foundation I5 — no
-                // cross-head contamination).
+                // A head beacon token of headMp and CIP-67 prefix 4937 must be the only
+                // headMp-policy token in treasury, and its full asset name must equal
+                // voteRedeemer.sec.headId (foundation I5 — no cross-head contamination).
                 treasuryReference.resolved.value.toSortedMap
                     .get(headMp)
                     .getOrElse(SortedMap.empty)
