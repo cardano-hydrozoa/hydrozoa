@@ -58,7 +58,9 @@ object Main extends IOApp {
         sugarRushPort: String,
         tokenRecoveryAddress: Option[ShelleyAddress],
         adminUsername: String,
-        adminPassword: String
+        adminPassword: String,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
     ) {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
@@ -159,6 +161,10 @@ object Main extends IOApp {
             adminUsername <- getMandatoryEnvVar("ADMIN_USERNAME")
             adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
             _ <- logger.info(s"Loaded admin credentials for user: $adminUsername")
+
+            hydrozoaHost <- getMandatoryEnvVar("HTTP_HOST")
+            hydrozoaPort <- getMandatoryEnvVar("HTTP_PORT")
+            _ <- logger.info(s"Loaded HTTP endpoint config: $hydrozoaHost:$hydrozoaPort")
         } yield EnvConfig(
           verificationKey = vKey,
           signingKey = sKey,
@@ -167,7 +173,9 @@ object Main extends IOApp {
           sugarRushPort = sugarRushPort,
           tokenRecoveryAddress = tokenRecoveryAddressOpt,
           adminUsername = adminUsername,
-          adminPassword = adminPassword
+          adminPassword = adminPassword,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
         )
 
     /** Parse the `NODE_ID` env (`<head|coil>:<index>`) into a [[NodeIdentity]]. */

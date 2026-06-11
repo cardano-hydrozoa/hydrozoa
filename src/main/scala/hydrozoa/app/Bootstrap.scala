@@ -122,7 +122,7 @@ object Bootstrap:
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
           coilQuorum = membership.coilQuorum,
-          l2ParamsHash = Hash32.fromByteString(ByteString.empty),
+          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
