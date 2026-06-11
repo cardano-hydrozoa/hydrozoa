@@ -15,6 +15,9 @@
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
+    <logger name="MultisigRegimeManager" level="warn"/>
+    <logger name="DisputeActor" level="warn"/>
+    <logger name="EvacuationActor" level="warn"/>
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>

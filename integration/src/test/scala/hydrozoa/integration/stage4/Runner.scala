@@ -128,6 +128,18 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
+    val _ = property("Two-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-two-peers", nPeers = 2, nCommands = 10).property()
+
+    val _ = property("Three-peers head works") =
+        Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
+
+    val _ = property("Three-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-three-peers", nPeers = 3, nCommands = 10).property()
+
+    val _ = property("Twenty-peers head works") =
+        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
+
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
     // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
     // `useTestControl = false`, and `startupSut` sleeps the wall clock until that anchor, so
@@ -136,6 +148,14 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works WS") = Stage4Suite(
       label = "stage4-ws-two-peers",
       nPeers = 2,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
+    val _ = property("Two-peers head works WS (quick)") = Stage4Suite(
+      label = "stage4-ws-quick-two-peers",
+      nPeers = 2,
+      nCommands = 10,
       transportMode = TransportMode.WebSocket(),
       backendMode = BackendMode.RocksDb()
     ).property()

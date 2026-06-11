@@ -7,7 +7,7 @@ import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.PeerLiaison.*
 import hydrozoa.multisig.consensus.PeerLiaison.Request.*
@@ -23,6 +23,7 @@ trait PeerLiaison(
     config: Config,
     remotePeerId: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaison.Connections,
+    tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
@@ -32,15 +33,6 @@ trait PeerLiaison(
       * `WriteBatch.put`s in [[persistInbound]] pick it up.
       */
     private given CardanoNetwork.Section = config
-
-    private val logger =
-        Logging.loggerIO(s"PeerLiaison.${config.ownHeadPeerNum}->${remotePeerId.peerNum}")
-
-    private val loggerMmd =
-        Logging.loggerIO("Mermaid.PeerLiaison")
-
-    private def mermaid(s: String): IO[Unit] =
-        loggerMmd.info(s"\t${config.ownHeadPeerNum}->>${remotePeerId.peerNum}: ${s}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -84,10 +76,15 @@ trait PeerLiaison(
     private def resendCurrentTo(conn: Connections): IO[Unit] =
         for {
             current <- state.getCurrentlyRequesting
-            _ <- logger.debug(
-              s"resend tick: GetMsgBatch batch=${current.batchNum}, ack=${current.softAckNumber}, " +
-                  s"block=${current.blockNum}, stackBrief=${current.stackNum}, " +
-                  s"hardAck=${current.hardAckNum}, req=${current.requestNum}"
+            _ <- tracer.traceWith(
+              PeerLiaisonEvent.ResendTick(
+                current.batchNum,
+                current.softAckNumber,
+                current.blockNum,
+                current.stackNum,
+                current.hardAckNum,
+                current.requestNum
+              )
             )
             _ <- conn.remotePeerLiaison ! current
         } yield ()
@@ -140,19 +137,25 @@ trait PeerLiaison(
                 for {
                     _ <- x match {
                         case y: UserRequestWithId =>
-                            logger.debug(
-                              s"outbox: request (${y.requestId.peerNum}:${y.requestId.requestNum})"
+                            tracer.traceWith(
+                              PeerLiaisonEvent.OutboxRequest(
+                                y.requestId.peerNum,
+                                y.requestId.requestNum
+                              )
                             )
                         case y: SoftAck =>
-                            logger.debug(s"outbox: soft ack block=${y.blockNum} peer=${y.peerNum}")
+                            tracer.traceWith(PeerLiaisonEvent.OutboxSoftAck(y.blockNum, y.peerNum))
                         case y: BlockBrief.Next =>
-                            logger.debug(s"outbox: block block=${y.blockNum}")
+                            tracer.traceWith(PeerLiaisonEvent.OutboxBlock(y.blockNum))
                         case y: StackBrief =>
-                            logger.debug(s"outbox: stack brief stack=${y.stackNum}")
+                            tracer.traceWith(PeerLiaisonEvent.OutboxStackBrief(y.stackNum))
                         case y: HardAck =>
-                            logger.debug(
-                              s"outbox: hard ack stack=${y.stackNum} peer=${y.peerNum} " +
-                                  s"round=${y.payload.round}"
+                            tracer.traceWith(
+                              PeerLiaisonEvent.OutboxHardAck(
+                                y.stackNum,
+                                y.peerNum,
+                                y.payload.round.toString
+                              )
                             )
                     }
                     // Append the event to the corresponding queue in the state
@@ -165,26 +168,30 @@ trait PeerLiaison(
 
             case x: GetMsgBatch =>
                 for {
-                    _ <- logger.debug(
-                      s"Got GetMsgBatch: batch=${x.batchNum}, ack=${x.softAckNumber}, " +
-                          s"block=${x.blockNum}, stackBrief=${x.stackNum}, " +
-                          s"hardAck=${x.hardAckNum}, req=${x.requestNum}"
+                    _ <- tracer.traceWith(
+                      PeerLiaisonEvent.GetMsgBatchReceived(
+                        x.batchNum,
+                        x.softAckNumber,
+                        x.blockNum,
+                        x.stackNum,
+                        x.hardAckNum,
+                        x.requestNum
+                      )
                     )
                     eNewBatch <- state.buildNewMsgBatch(x, config.peerLiaisonMaxRequestsPerBatch)
                     _ <- eNewBatch match {
                         case Right(newBatch) =>
                             for {
-                                msg <- IO.pure(
-                                  s"NewMsgBatch: batch=${newBatch.batchNum}, " +
-                                      s"ack=${newBatch.softAck.map(_.ackNum)}, " +
-                                      s"block=${newBatch.blockBrief.map(_.blockNum)}, " +
-                                      s"stackBrief=${newBatch.stackBrief.map(_.stackNum)}, " +
-                                      s"hardAck=${newBatch.hardAck
-                                              .map(h => s"${h.stackNum}/${h.payload.round}")}, " +
-                                      s"reqs=${newBatch.requests.map(_.requestId)}"
+                                _ <- tracer.traceWith(
+                                  PeerLiaisonEvent.NewMsgBatchSent(
+                                    newBatch.batchNum,
+                                    newBatch.softAck.map(_.ackNum),
+                                    newBatch.blockBrief.map(_.blockNum),
+                                    newBatch.stackBrief.map(_.stackNum),
+                                    newBatch.hardAck.map(h => s"${h.stackNum}/${h.payload.round}"),
+                                    newBatch.requests.map(_.requestId)
+                                  )
                                 )
-                                _ <- logger.debug(s"sending $msg")
-                                _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! newBatch
                             } yield ()
                         case Left(state.EmptyNewMsgBatch) =>
@@ -196,13 +203,15 @@ trait PeerLiaison(
 
             case x: NewMsgBatch =>
                 for {
-                    _ <- logger.debug(
-                      s"got NewMsgBatch: batch=${x.batchNum}, " +
-                          s"ack=${x.softAck.map(_.ackNum)}, " +
-                          s"block=${x.blockBrief.map(_.blockNum)}, " +
-                          s"stackBrief=${x.stackBrief.map(_.stackNum)}, " +
-                          s"hardAck=${x.hardAck.map(h => s"${h.stackNum}/${h.payload.round}")}, " +
-                          s"reqs=${x.requests.size}"
+                    _ <- tracer.traceWith(
+                      PeerLiaisonEvent.NewMsgBatchReceived(
+                        x.batchNum,
+                        x.softAck.map(_.ackNum),
+                        x.blockBrief.map(_.blockNum),
+                        x.stackBrief.map(_.stackNum),
+                        x.hardAck.map(h => s"${h.stackNum}/${h.payload.round}"),
+                        x.requests.size
+                      )
                     )
                     outcome <- state.verify(x)
                     _ <- outcome match {
@@ -212,13 +221,16 @@ trait PeerLiaison(
                                 // cursor advances past them (write-before-advance, §4).
                                 _ <- persistInbound(x)
                                 _ <- state.advanceTo(next)
-                                msg <- IO.pure(
-                                  s"GetMsgBatch: batch=${next.batchNum}, ack=${next.softAckNumber}, " +
-                                      s"block=${next.blockNum}, " +
-                                      s"stackBrief=${next.stackNum}, " +
-                                      s"hardAck=${next.hardAckNum}, req=${next.requestNum}"
+                                _ <- tracer.traceWith(
+                                  PeerLiaisonEvent.BatchAdvanced(
+                                    next.batchNum,
+                                    next.softAckNumber,
+                                    next.blockNum,
+                                    next.stackNum,
+                                    next.hardAckNum,
+                                    next.requestNum
+                                  )
                                 )
-                                _ <- mermaid(msg)
                                 _ <- conn.remotePeerLiaison ! next
                                 _ <- x.softAck.traverse_(conn.consensusActor ! _)
                                 _ <- x.blockBrief.traverse_(conn.blockWeaver ! _)
@@ -232,14 +244,14 @@ trait PeerLiaison(
                             // way, don't bounce a GetMsgBatch back (the timer keeps the
                             // chain alive) and don't re-dispatch payloads. WARN so the
                             // specific failing predicate shows up in normal logs.
-                            logger.warn(
-                              s"dropping NewMsgBatch batch=${x.batchNum}: $reason"
+                            tracer.traceWith(
+                              PeerLiaisonEvent.BatchRejected(x.batchNum, reason.toString)
                             )
                     }
                 } yield ()
 
             case x: (BlockConfirmed & BlockType.NonFinal) =>
-                logger.debug(s"Got BlockConfirmed (non-final): block=${x.blockNum}") >>
+                tracer.traceWith(PeerLiaisonEvent.BlockConfirmedNonFinal(x.blockNum)) >>
                     state.dequeueConfirmed(x)
 
             // TODO: when the final block is confirmed, inform the counterpart that
@@ -247,16 +259,15 @@ trait PeerLiaison(
             //   When both sides have received the final confirmed block, the connection can be closed and
             //   the peer liaison can terminate.
             case x: (BlockConfirmed & BlockType.Final) =>
-                logger.debug(s"Got BlockConfirmed (final): block=${x.blockNum}") >>
+                tracer.traceWith(PeerLiaisonEvent.BlockConfirmedFinal(x.blockNum)) >>
                     state.dequeueConfirmed(x)
         }
 
     private def preStartLocal: IO[Unit] =
         for
-            _ <- logger.info(s"starting, remote peer: ${remotePeerId.peerNum}")
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started(remotePeerId.peerNum))
             _ <- initializeConnections
             conn <- getConnections
-            _ <- mermaid("GetMsgBatch.initial")
             _ <- conn.remotePeerLiaison ! GetMsgBatch.initial(remotePeerId)
             _ <- startResendTimer
         yield ()
@@ -643,9 +654,10 @@ object PeerLiaison {
         config: Config,
         remotePeerId: HeadPeerId,
         pendingLocalConnections: MultisigRegimeManager.PendingConnections,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaison] =
-        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections, persistence) {})
+        IO(new PeerLiaison(config, remotePeerId, pendingLocalConnections, tracer, persistence) {})
 
     // `& CardanoNetwork.Section`: the inbound lane codecs are Section-dependent; the full configs
     // passed in satisfy it.

@@ -2,7 +2,7 @@ package hydrozoa.rulebased
 
 import cats.*
 import cats.data.*
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -13,7 +13,7 @@ import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
@@ -41,27 +41,22 @@ import scalus.uplc.builtin.{ByteString, Data}
   *   (the winning kzg), and picks the matching map from here as the active one to evacuate against.
   * @param cardanoBackend
   * @param fallbackTxHash
-  * @param tracerLocal
+  * @param tracer
   * @param config
   */
 case class EvacuationActor(
     candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
     cardanoBackend: CardanoBackend[IO],
     fallbackTxHash: TransactionHash,
-    tracerLocal: IOLocal[Tracer],
+    tracer: ContraTracer[IO, EvacuationActorEvent],
 )(using config: Config)
     extends Actor[IO, Requests.Request] {
-
-    given IOLocal[Tracer] = tracerLocal
 
     override def preStart: IO[Unit] =
         context.self ! Requests.PreStart
 
     private def preStartLocal: IO[Unit] =
-        for {
-            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, Evacuate)
-            _ <- Tracer.routeLocal(s"EvacuationActor.${config.ownHeadPeerNum}")
-        } yield ()
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, Evacuate)
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal
@@ -118,9 +113,7 @@ case class EvacuationActor(
                     after = fallbackTxHash
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(
-                      s"Backend error querying continuing txs. Will retry.\n\tError: $e"
-                    )
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorContinuingTxs(e))
                 )
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
@@ -129,7 +122,7 @@ case class EvacuationActor(
                         // Treasury not resolved, can't evacuate, return left and retry
                         case 0 =>
                             EitherT.left(
-                              Tracer.debug("Treasury not yet resolved, retrying") >>
+                              tracer.traceWith(EvacuationActorEvent.TreasuryNotYetResolved) >>
                                   IO.pure(Error.QueryError.NoTreasuryFound)
                             )
                         // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
@@ -200,7 +193,7 @@ case class EvacuationActor(
                     )
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error querying treasury UTxOs. Will retry.\n\tError: $e")
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorTreasuryUtxos(e))
                 )
 
                 treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
@@ -226,12 +219,18 @@ case class EvacuationActor(
                     if toEvacuate.isEmpty
                     then
                         EitherT.left(
-                          Tracer.info(LogMessages.NoMoreEvacuations) >> IO.sleep(10.seconds) >>
+                          tracer.traceWith(EvacuationActorEvent.NoMoreEvacuations) >>
+                              IO.sleep(10.seconds) >>
                               IO.pure(
                                 Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
                               )
                         )
-                    else EitherT.right(Tracer.info(s"${toEvacuate.size} payout obligations left"))
+                    else
+                        EitherT.right(
+                          tracer.traceWith(
+                            EvacuationActorEvent.PayoutObligationsLeft(toEvacuate.size)
+                          )
+                        )
 
                 walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress()(using
                   config
@@ -243,16 +242,14 @@ case class EvacuationActor(
                     address = walletAddress
                   )
                 ).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error querying fee UTxOs. Will retry.\n\tError: $e")
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorFeeUtxos(e))
                 )
 
                 // Derive collateral from the fee wallet UTxOs.
                 collateralUtxo <- feeUtxos.headOption match {
                     case None =>
                         EitherT.left(
-                          Tracer.debug(
-                            "No fee/collateral UTxO found at wallet address, retrying"
-                          ) >>
+                          tracer.traceWith(EvacuationActorEvent.NoFeeCollateralUtxo) >>
                               IO.pure(Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
                         )
                     case Some((input, output)) =>
@@ -274,11 +271,12 @@ case class EvacuationActor(
                     )
 
                 _ <- EitherT.liftF(
-                  Tracer.debug(
-                    "Building EvacuationTx with:" +
-                        s"\n treasury value: ${treasuryUtxoAndDatum._1.treasuryOutput.value}" +
-                        s"\n # evacuatees: ${toEvacuate.size}" +
-                        s"\n total evacuation value ${toEvacuate.totalValue}"
+                  tracer.traceWith(
+                    EvacuationActorEvent.BuildingEvacTx(
+                      treasuryUtxoAndDatum._1.treasuryOutput.value.toString,
+                      toEvacuate.size,
+                      toEvacuate.totalValue.toString
+                    )
                   )
                 )
                 evacTx <- evacBuilder.result match {
@@ -296,17 +294,19 @@ case class EvacuationActor(
 
                 _ <- (for {
                     _ <- EitherT.liftF(
-                      Tracer.debug(
-                        s"submitting evacTx with ${evacTx.evacuatedOutputs.size} evacuated outputs" +
-                            s"\n cbor:\n\n${ByteString.fromArray(evacTx.tx.toCbor).toHex}\n\n"
+                      tracer.traceWith(
+                        EvacuationActorEvent.SubmittingEvacTx(
+                          evacTx.evacuatedOutputs.size,
+                          ByteString.fromArray(evacTx.tx.toCbor).toHex
+                        )
                       )
                     )
                     _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))
                 } yield ()).leftSemiflatTap(e =>
-                    Tracer.warn(s"Backend error submitting evacuation tx. Will retry.\n\tError: $e")
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorSubmittingEvacTx(e))
                 )
 
-                _ <- EitherT.liftF(Tracer.info("Evacuation tx submitted"))
+                _ <- EitherT.liftF(tracer.traceWith(EvacuationActorEvent.EvacTxSubmitted))
             } yield ()
         }
         et.value
@@ -317,10 +317,6 @@ case class EvacuationActor(
 object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
         HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnHeadPeerPublic.Section
-
-    // TODO: replace brittle string sentinels with domain-specific typed log events
-    object LogMessages:
-        val NoMoreEvacuations = "No more evacuations to be done. Staying alive in case of rollbacks"
 
     type Handle = ActorRef[IO, Requests.Request]
 

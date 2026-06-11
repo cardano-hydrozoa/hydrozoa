@@ -1,5 +1,5 @@
 package hydrozoa.multisig.consensus
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -10,7 +10,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
@@ -19,17 +19,13 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockType
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
-import org.typelevel.log4cats.Logger
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial,
-    tracerLocal: IOLocal[Tracer]
+    tracer: ContraTracer[IO, BlockWeaverEvent],
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
-
-    private val logger = Logging.loggerIO(s"BlockWeaver.${config.ownHeadPeerNum}")
-    given IOLocal[Tracer] = tracerLocal
 
     override def preStart: IO[Unit] = for {
         _ <- context.self ! BlockWeaver.PreStart
@@ -52,14 +48,12 @@ final case class BlockWeaver(
     override def receive: Receive[IO, BlockWeaver.Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"BlockWeaver.${config.ownHeadPeerNum}")
                 connections <- initializeConnections
-                startingState <- State.start(config, connections, logger)
+                startingState <- State.start(config, connections, tracer)
                 _ <- become(startingState)
             } yield ()
         case x =>
-            val msg = s"Unexpected message received before PreStart: $x"
-            logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+            IO.raiseError(RuntimeException(s"Unexpected message received before PreStart: $x"))
     }
 
     private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
@@ -113,15 +107,15 @@ object BlockWeaver {
         type NextReactiveState <: State.Reactive
 
         def connections: Connections
-        def logger: Logger[IO]
+        def tracer: ContraTracer[IO, BlockWeaverEvent]
         def pollResults: PollResults
         def finalizationLocallyTriggered: LocalFinalizationTrigger
 
         final def stop(): IO[None.type] =
-            logger.info("Stopping") >> IO.pure(None)
+            tracer.traceWith(BlockWeaverEvent.Stopped) >> IO.pure(None)
 
         final def logStateTransition: IO[Unit] =
-            logger.info(s"Becoming $stateName.")
+            tracer.traceWith(BlockWeaverEvent.BecameState(stateName))
 
         /** Wrap a reactive state in `Some` and emit the "Becoming X" log only if the receiver (the
           * previous state) has a different [[stateName]]. Same-name self-loops (e.g. `pure(this)`
@@ -186,13 +180,13 @@ object BlockWeaver {
         def start(
             config: Config,
             connections: Connections,
-            logger: Logger[IO]
+            tracer: ContraTracer[IO, BlockWeaverEvent]
         ): IO[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] =
             for {
                 state: Some[Follower.AwaitingBlockBrief | Leader.AwaitingConfirmation] <-
                     DecidingRole(
                       connections = connections,
-                      logger = logger,
+                      tracer = tracer,
                       pollResults = PollResults.empty,
                       finalizationLocallyTriggered = LocalFinalizationTrigger.NotTriggered,
                       mempool = Mempool.empty,
@@ -204,17 +198,16 @@ object BlockWeaver {
         sealed trait WithMempool extends State {
             def mempool: Mempool
 
-            def storeRequest(request: UserRequestWithId): IO[Mempool] = for {
-                _ <- logger.trace(s"Adding request ID ${request.requestId} to mempool.")
-                newMempool <- mempool.addRequest(request) match {
+            def storeRequest(request: UserRequestWithId): IO[Mempool] =
+                mempool.addRequest(request) match {
                     case Some(newMempool) => IO.pure(newMempool)
                     case None =>
-                        val msg =
+                        IO.raiseError(
+                          RuntimeException(
                             s"Request ID ${request.requestId} is already in the mempool."
-                        logger.error(msg) >>
-                            IO.raiseError(RuntimeException(msg))
+                          )
+                        )
                 }
-            } yield newMempool
         }
 
         /** An active state can immediately transition into another state, without waiting for a new
@@ -249,15 +242,16 @@ object BlockWeaver {
                 state: State.Reactive,
                 unexpected: Unexpected
             ): IO[None.type] =
-                val msg =
+                IO.raiseError(
+                  RuntimeException(
                     s"Unexpectedly received in ${state.stateName.toString} state: ${unexpected.toString}"
-                logger.error(msg) >>
-                    IO.raiseError(RuntimeException(msg))
+                  )
+                )
         }
 
         final case class DecidingRole private[State] (
             override val connections: Connections,
-            override val logger: Logger[IO],
+            override val tracer: ContraTracer[IO, BlockWeaverEvent],
             override val pollResults: PollResults,
             override val finalizationLocallyTriggered: LocalFinalizationTrigger,
             override val mempool: Mempool,
@@ -293,7 +287,7 @@ object BlockWeaver {
                 import stateToTransitionFrom.*
                 DecidingRole(
                   connections,
-                  logger,
+                  tracer,
                   pollResults,
                   finalizationLocallyTriggered,
                   mempool,
@@ -304,7 +298,7 @@ object BlockWeaver {
         object Follower {
             final case class AwaitingBlockBrief private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -326,27 +320,26 @@ object BlockWeaver {
                             } yield newState
 
                         case bb: BlockBrief.Next =>
-                            logger.info(s"New block brief ${bb.blockNum}.") >>
+                            tracer.traceWith(BlockWeaverEvent.BlockBriefReceived(bb.blockNum)) >>
                                 Follower.ProcessingReadyRequests(this, mempool, bb).act(config)
 
                         case pr: PollResults =>
-                            logger.trace("New poll results.") >>
+                            tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
                                 pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.info("Finalization was locally triggered.") >>
+                            tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case w: Wakeup =>
-                            logger.trace(
-                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
-                            ) >>
+                            tracer.traceWith(BlockWeaverEvent.WakeupDropped(w.blockNumber)) >>
                                 pure(this)
 
                         case bc: Block.SoftConfirmed =>
-                            logger.trace(
-                              s"Ignoring soft block confirmation ${bc.blockNum}"
-                            ) >> pure(this)
+                            tracer.traceWith(
+                              BlockWeaverEvent.SoftConfirmationIgnored(bc.blockNum)
+                            ) >>
+                                pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -366,7 +359,7 @@ object BlockWeaver {
                     import state.*
                     Follower.AwaitingBlockBrief(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -378,7 +371,7 @@ object BlockWeaver {
               */
             final case class ProcessingReadyRequests private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -415,11 +408,8 @@ object BlockWeaver {
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
                     import newExtractionResult.*
                     for {
-                        _ <- logger.trace(
-                          "Extracted requests from mempool. Sending them to joint ledger: " +
-                              s"${extractedRequests.map(r =>
-                                      s"(${r.requestId.peerNum}:${r.requestId.requestNum})"
-                                  )}"
+                        _ <- tracer.traceWith(
+                          BlockWeaverEvent.MempoolExtracted(extractedRequests.map(_.requestId))
                         )
                         _ <- extractedRequests.traverse_(connections.jointLedger ! _)
                     } yield newExtractionResult
@@ -437,7 +427,7 @@ object BlockWeaver {
                     import state.*
                     Follower.ProcessingReadyRequests(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -448,7 +438,7 @@ object BlockWeaver {
 
             final case class AwaitingRequest private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -465,16 +455,16 @@ object BlockWeaver {
                         case ur: UserRequestWithId =>
                             for {
                                 // Store first
-                                _ <- logger.info(
-                                  s"Storing request in the mempool (${ur.requestId})"
+                                _ <- tracer.traceWith(
+                                  BlockWeaverEvent.RequestAddedToMempool(ur.requestId)
                                 )
                                 newMempool <- storeRequest(ur)
                                 // Then decide what to do
                                 newState <-
                                     if ur.requestId == incompleteExtraction.awaitingRequestId then
                                         for {
-                                            _ <- logger.info(
-                                              s"Awaited request received (${ur.requestId}), continue feeding block events"
+                                            _ <- tracer.traceWith(
+                                              BlockWeaverEvent.AwaitedRequestReceived(ur.requestId)
                                             )
                                             newExtractionResult <-
                                                 extractAndSendRequestsFromMempool(newMempool)
@@ -508,31 +498,33 @@ object BlockWeaver {
                                         } yield newState
                                     else
                                         for {
-                                            _ <- logger.info(
-                                              s"Another request received (${ur.requestId}), keep waiting for (${incompleteExtraction.awaitingRequestId})..."
+                                            _ <- tracer.traceWith(
+                                              BlockWeaverEvent.WaitingForRequest(
+                                                ur.requestId,
+                                                incompleteExtraction.awaitingRequestId
+                                              )
                                             )
                                             newState <- pure(copy(mempool = newMempool))
                                         } yield newState
                             } yield newState
 
                         case pr: PollResults =>
-                            logger.trace("New poll results.") >>
+                            tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
                                 pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.info("Finalization was locally triggered.") >>
+                            tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case w: Wakeup =>
-                            logger.trace(
-                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
-                            ) >>
+                            tracer.traceWith(BlockWeaverEvent.WakeupDropped(w.blockNumber)) >>
                                 pure(this)
 
                         case bc: Block.SoftConfirmed =>
-                            logger.trace(
-                              s"Ignoring soft block confirmation ${bc.blockNum}"
-                            ) >> pure(this)
+                            tracer.traceWith(
+                              BlockWeaverEvent.SoftConfirmationIgnored(bc.blockNum)
+                            ) >>
+                                pure(this)
 
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
@@ -548,11 +540,8 @@ object BlockWeaver {
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
                     import newExtractionResult.*
                     for {
-                        _ <- logger.trace(
-                          "Extracted more requests from mempool: " +
-                              s"${newExtractionResult.extractedRequests.map(r =>
-                                      s"(${r.requestId.peerNum}:${r.requestId.requestNum})"
-                                  )}"
+                        _ <- tracer.traceWith(
+                          BlockWeaverEvent.MempoolExtracted(extractedRequests.map(_.requestId))
                         )
                         _ <- extractedRequests.traverse_(connections.jointLedger ! _)
                     } yield newExtractionResult
@@ -571,7 +560,7 @@ object BlockWeaver {
                     import state.*
                     Follower.AwaitingRequest(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       incompleteExtraction.survivingMempool,
@@ -584,7 +573,7 @@ object BlockWeaver {
         object Leader {
             final case class ProcessingReadyRequests private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
@@ -618,13 +607,9 @@ object BlockWeaver {
 
                 private def extractRequestsInOrder: IO[List[UserRequestWithId]] = {
                     val requests = mempool.extractRequestsInOrder
-                    for {
-                        _ <- logger.trace(
-                          "Extracting remaining requests from mempool in order of arrival. " +
-                              s"First twenty request IDs: ${requests.iterator.take(20).map(r => s"(${r.requestId.peerNum}:${r.requestId.requestNum})").mkString(", ")}"
-                        )
-
-                    } yield requests
+                    tracer.traceWith(
+                      BlockWeaverEvent.MempoolExtracted(requests.map(_.requestId))
+                    ) >> IO.pure(requests)
                 }
             }
 
@@ -639,7 +624,7 @@ object BlockWeaver {
                     import state.*
                     Leader.ProcessingReadyRequests(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       mempool,
@@ -650,7 +635,7 @@ object BlockWeaver {
 
             final case class AwaitingConfirmation private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 leadingBlockNumber: BlockNumber,
@@ -666,12 +651,12 @@ object BlockWeaver {
                             // First block is implicitly confirmed, so we exit immediately back to
                             // the DecidingRole state.
                             def completeFirstBlock = for {
-                                _ <- logger.trace(
-                                  s"Completing first block immediately with request (${ur.requestId.peerNum}:${ur.requestId.requestNum})"
+                                _ <- tracer.traceWith(
+                                  BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
                                 ) >> sendCompleteRegularBlockAsLeader(config)
                                 newState <- DecidingRole(
                                   connections,
-                                  logger,
+                                  tracer,
                                   pollResults,
                                   finalizationLocallyTriggered,
                                   mempool = Mempool.empty,
@@ -684,8 +669,8 @@ object BlockWeaver {
                                   sendStartBlock(config)(leadingBlockNumber)
                                 )
 
-                                _ <- logger.trace(
-                                  s"Sending to joint ledger: request (${ur.requestId.peerNum}:${ur.requestId.requestNum})"
+                                _ <- tracer.traceWith(
+                                  BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
                                 )
                                 _ <- connections.jointLedger ! ur
                                 res <-
@@ -699,7 +684,7 @@ object BlockWeaver {
                                 sendCompleteRegularBlockAsLeader(config) >>
                                     DecidingRole(
                                       connections,
-                                      logger,
+                                      tracer,
                                       pollResults,
                                       finalizationLocallyTriggered = finalizationLocallyTriggered,
                                       mempool = Mempool.empty,
@@ -721,8 +706,8 @@ object BlockWeaver {
                                 if isBlockStarted == Started
                                 then completeNextBlock
                                 else
-                                    logger.info(
-                                      s"Handling confirmation for previous block ${bc.blockNum}"
+                                    tracer.traceWith(
+                                      BlockWeaverEvent.PreviousBlockConfirmation(bc.blockNum)
                                     ) >> scheduleWakeupFiber(config, bc) >>
                                         pure(
                                           Leader.AwaitingRequest(this, previousBlockConfirmed = bc)
@@ -743,28 +728,31 @@ object BlockWeaver {
 
                                 if belatedPreviousConfirmation
                                 then
-                                    logger.info(
-                                      s"Received belated block confirmation ${bc.blockNum} when producing" +
-                                          s" $leadingBlockNumber, ignoring."
+                                    tracer.traceWith(
+                                      BlockWeaverEvent.BelatedConfirmation(
+                                        bc.blockNum,
+                                        leadingBlockNumber
+                                      )
                                     ) >> pure(this)
                                 else
-                                    val msg = "Received block confirmation for the current or a future block. We are producing" +
-                                        s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
-                                    logger.error(msg) >> IO.raiseError(RuntimeException(msg))
+                                    IO.raiseError(
+                                      RuntimeException(
+                                        "Received block confirmation for the current or a future block. We are producing" +
+                                            s" $leadingBlockNumber, but the confirmed block that we received is ${bc.blockNum}"
+                                      )
+                                    )
                             }
 
                         case pr: PollResults =>
-                            logger.trace("New poll results.") >>
+                            tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
                                 pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.info("Finalization was locally triggered.") >>
+                            tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case w: Wakeup =>
-                            logger.trace(
-                              s"Unexpected wakeup for block ${w.blockNumber}, ignoring."
-                            ) >>
+                            tracer.traceWith(BlockWeaverEvent.WakeupDropped(w.blockNumber)) >>
                                 pure(this)
 
                         case unexpected: Unexpected =>
@@ -810,29 +798,18 @@ object BlockWeaver {
                                 //
                                 // See:
                                 //   https://linear.app/gummiworm-labs/issue/GUM-111/should-negative-weavers-wakeups-be-permitted
-                                logger.info(
-                                  "non-positive wakeup sleep duration, firing immediately: " +
-                                      s"now=$now, wakeupInstant=$wakeupInstant, sleepDuration=$sleepDuration"
+                                tracer.traceWith(
+                                  BlockWeaverEvent.NonPositiveWakeupDelay(this.leadingBlockNumber)
                                 ) >> (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
                             } else
-                                logger.info(
-                                  s"Starting wakeup fiber, sleepDuration=${sleepDuration}"
+                                tracer.traceWith(
+                                  BlockWeaverEvent.WakeupFiberStarted(this.leadingBlockNumber)
                                 ) >> sleepSendWakeup(sleepDuration).start.void
                     } yield ()
 
                 private def sleepSendWakeup(sleepDuration: QuantizedFiniteDuration): IO[Unit] =
-                    for {
-                        before <- IO.realTime
-                        _ <- logger.trace(
-                          s"Sleeping for ${sleepDuration.finiteDuration} started at now=$before"
-                        )
-                        _ <- IO.sleep(sleepDuration.finiteDuration)
-                        after <- IO.realTime
-                        _ <- logger.trace(
-                          s"Sleeping for ${sleepDuration.finiteDuration} is done now=$after"
-                        )
-                        _ <- connections.blockWeaver ! Wakeup(this.leadingBlockNumber)
-                    } yield ()
+                    IO.sleep(sleepDuration.finiteDuration) >>
+                        (connections.blockWeaver ! Wakeup(this.leadingBlockNumber))
             }
 
             object AwaitingConfirmation {
@@ -850,7 +827,7 @@ object BlockWeaver {
                     import state.*
                     Leader.AwaitingConfirmation(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       blockNumber,
@@ -863,7 +840,7 @@ object BlockWeaver {
 
             final case class AwaitingRequest private (
                 override val connections: Connections,
-                override val logger: Logger[IO],
+                override val tracer: ContraTracer[IO, BlockWeaverEvent],
                 override val pollResults: PollResults,
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 previousBlockConfirmed: Block.SoftConfirmed.NonFinal,
@@ -900,8 +877,8 @@ object BlockWeaver {
                         case w: Wakeup =>
                             def forceMajorBlock =
                                 for {
-                                    _ <- logger.info(
-                                      "Wakeup for the current block is received, force block start/complete"
+                                    _ <- tracer.traceWith(
+                                      BlockWeaverEvent.ForcedBlockCompletion(currentBlockNumber)
                                     )
                                     _ <- sendStartBlock(config)(currentBlockNumber)
                                     newState <- completeBlock
@@ -909,25 +886,21 @@ object BlockWeaver {
 
                             if w.blockNumber == currentBlockNumber
                             then forceMajorBlock
-                            else {
-                                (if w.blockNumber > currentBlockNumber
-                                 then
-                                     logger.warn(
-                                       s"Ignoring wakeup for a future block ${w.blockNumber}, current block: ${currentBlockNumber}"
-                                     )
-                                 else
-                                     logger.info(
-                                       s"Ignoring wakeup for preceding block ${w.blockNumber}, current block: ${currentBlockNumber}"
-                                     )
+                            else
+                                tracer.traceWith(
+                                  BlockWeaverEvent.WakeupIgnored(
+                                    w.blockNumber,
+                                    currentBlockNumber,
+                                    isFuture = w.blockNumber > currentBlockNumber
+                                  )
                                 ) >> pure(this)
-                            }
 
                         case pr: PollResults =>
-                            logger.trace("New poll results.") >>
+                            tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
                                 pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            logger.info("Finalization was locally triggered.") >>
+                            tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
                                 pure(copy(finalizationLocallyTriggered = ft))
 
                         case unexpected: Unexpected =>
@@ -949,7 +922,7 @@ object BlockWeaver {
                     import state.*
                     Leader.AwaitingRequest(
                       connections,
-                      logger,
+                      tracer,
                       pollResults,
                       finalizationLocallyTriggered,
                       previousBlockConfirmed,

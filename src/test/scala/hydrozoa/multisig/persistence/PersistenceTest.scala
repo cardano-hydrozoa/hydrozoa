@@ -1,9 +1,9 @@
 package hydrozoa.multisig.persistence
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, IOLocal}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -121,9 +121,8 @@ class PersistenceTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             (for
-                tracerLocal <- Tracer.makeLocal
+                tracerLocal <- Slf4jTracer.makeLocal
                 result <- {
-                    given IOLocal[Tracer] = tracerLocal
                     RocksDbBackendStore
                         .open(tempDir)
                         .use(backend => Persistence.fromBackend(backend).flatMap(prog))

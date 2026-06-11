@@ -17,7 +17,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -30,9 +30,9 @@ import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
@@ -155,10 +155,9 @@ object JointLedgerTestHelpers {
             stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
 
             eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
-            tracerLocal <- PropertyM.run(Tracer.makeLocal)
             persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
             persistence <- PropertyM.run(
-              Persistence.fromBackend(persistenceBackend)(using config, tracerLocal)
+              Persistence.fromBackend(persistenceBackend)(using config)
             )
             jointLedger <- PropertyM.run(
               system.actorOf(
@@ -170,8 +169,9 @@ object JointLedgerTestHelpers {
                     peerLiaisons = List()
                   ),
                   eutxoLedger,
-                  hydrozoa.lib.tracing.ProtocolTracer.noop,
-                  tracerLocal,
+                  Slf4jTracer.sink.contramap(
+                    JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
+                  ),
                   persistence
                 )
               )

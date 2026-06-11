@@ -23,6 +23,9 @@
     </root>
     <logger name="CardanoLiaison" level="trace"/>
     <logger name="JointLedger" level="trace"/>
+    <logger name="MultisigRegimeManager" level="trace"/>
+    <logger name="DisputeActor" level="trace"/>
+    <logger name="EvacuationActor" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
     <logger name="HydrozoaRoutes" level="trace"/>

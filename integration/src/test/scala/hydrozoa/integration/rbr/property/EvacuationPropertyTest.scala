@@ -12,14 +12,14 @@ import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.classification.Histogram
-import hydrozoa.lib.logging.{ContraTracer, LogEvent, Tracer}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.HeadPeerWallet
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
-import hydrozoa.rulebased.{DisputeActor, EvacuationActor, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -189,20 +189,35 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             // Fires when any peer logs that no evacuations remain.
             evacuatedSignal <- lift(IO.deferred[Unit])
 
-            // Shared tracer that completes the evacuation signal when the terminal log fires.
-            tracer <- lift {
-                // TODO: replace string sentinel matching with domain-specific typed log events
-                val signalTracer: Tracer = ContraTracer.emit { (ev: LogEvent) =>
-                    if ev.msg == EvacuationActor.LogMessages.NoMoreEvacuations
-                    then evacuatedSignal.complete(()).void
-                    else IO.unit
-                }
-                Tracer.makeLocal.flatMap(local => local.update(_ |+| signalTracer).as(local))
+            peerNum = env.nodeConfigs.head._2.ownHeadPeerNum
+            
+            // Signal tracer that fires when any peer finishes evacuating.
+            evacuationSignalTap: ContraTracer[IO, EvacuationActorEvent] = ContraTracer.emit {
+                case EvacuationActorEvent.NoMoreEvacuations => evacuatedSignal.complete(()).void
+                case _                                      => IO.unit
             }
+
+            baseEvacTracer: ContraTracer[IO, EvacuationActorEvent] =
+                Slf4jTracer.sink.contramap(EvacuationActorEventFormat.humanFormat(peerNum))
+
+            baseDisputeTracer: ContraTracer[IO, DisputeActorEvent] =
+                Slf4jTracer.sink.contramap(DisputeActorEventFormat.humanFormat(peerNum))
 
             terminalUtxos <- lift {
                 val peerBots: List[IO[Unit]] =
                     env.nodePrivateConfigs.toList.map { (peerId, _) =>
+                        val peerEvacTracer =
+                            Slf4jTracer.sink.contramap(
+                              EvacuationActorEventFormat.humanFormat(
+                                env.nodeConfigs(peerId).ownHeadPeerNum
+                              )
+                            ) |+| evacuationSignalTap
+                        val peerDisputeTracer =
+                            Slf4jTracer.sink.contramap(
+                              DisputeActorEventFormat.humanFormat(
+                                env.nodeConfigs(peerId).ownHeadPeerNum
+                              )
+                            )
                         actorsFor(
                           peerId = peerId,
                           action = action,
@@ -212,22 +227,19 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                                 initialUtxos.evacuationMap
                           ),
                           fallbackTxHash = fallbackTxId,
-                          tracer = tracer,
+                          disputeTracer = peerDisputeTracer,
+                          evacuationTracer = peerEvacTracer,
                         )(using env.nodeConfigs(peerId))
                     }
 
-                // Race the terminal log signal (plus a post-completion buffer) against the bots.
-                // The buffer keeps the actors running for `postCompletionBuffer` after the
-                // "no more evacuations" log fires so any post-completion crash surfaces here
-                // instead of being masked by an immediate cancellation. timeoutTo still handles
-                // the "silent retry" case where actors never die and never signal.
+                val infoTracer = Slf4jTracer.sink.contramap(
+                  EvacuationActorEventFormat.humanFormat(peerNum)
+                )
+
                 IO.race(
                   evacuatedSignal.get
-                      >> Tracer.info("!!! EVACUATION FINISHED !!!")(using tracer)
-                      >> IO.sleep(postCompletionBuffer)
-                      >> Tracer.info(
-                        s"!!! POST-COMPLETION BUFFER ($postCompletionBuffer) ELAPSED !!!"
-                      )(using tracer),
+                      >> infoTracer.traceWith(EvacuationActorEvent.EvacTxSubmitted)
+                      >> IO.sleep(postCompletionBuffer),
                   peerBots.parSequence
                 ).timeoutTo(
                   actorRunDuration,
@@ -251,12 +263,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             nPeers = env.headConfig.nHeadPeers.convert
 
             // TODO: these buckets probably need refinement. TBD
-            // The "collateral" sentinel goes away because it gets spent to pay for fees in some transactions.
             expectedBuckets: Map[RBRPlaceId, Int] = Map(
               TreasuryRefPlaceId -> 1,
               DisputeRefPlaceId -> 1,
               EvacuationOutputPlaceId -> nEvacs,
               ResolvedTreasuryPlaceId -> 1,
+              CollateralPlaceId -> nPeers,
               AmbientPlaceId -> env.nHeadPeers
             )
 
@@ -280,7 +292,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         sharedBackend: CardanoBackend[IO],
         candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
         fallbackTxHash: TransactionHash,
-        tracer: IOLocal[Tracer],
+        disputeTracer: ContraTracer[IO, DisputeActorEvent],
+        evacuationTracer: ContraTracer[IO, EvacuationActorEvent],
     )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
         ActorSystem[IO](s"RBR actors for peer $peerId").use { system =>
             for {
@@ -288,7 +301,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                   DisputeActor(
                     action = action,
                     cardanoBackend = sharedBackend,
-                    tracerLocal = tracer
+                    tracer = disputeTracer
                   )
                 )
                 _ <- system.actorOf(
@@ -296,7 +309,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                     candidateEvacMaps = candidateEvacMaps,
                     cardanoBackend = sharedBackend,
                     fallbackTxHash = fallbackTxHash,
-                    tracerLocal = tracer
+                    tracer = evacuationTracer
                   )
                 )
                 _ <- system.waitForTermination
