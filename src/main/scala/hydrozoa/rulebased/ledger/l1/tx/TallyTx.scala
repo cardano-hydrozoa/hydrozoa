@@ -61,6 +61,8 @@ object TallyTxOps {
                         s"removed on is $removed"
                 case BuildError(wrapped: SomeBuildError) =>
                     s"Encountered a build error in the tallying tx: ${wrapped.toString}"
+                case TreasuryParseError(wrapped) =>
+                    s"Failed to parse the rule-based treasury output: $wrapped"
             }
 
     }

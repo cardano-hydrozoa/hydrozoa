@@ -56,11 +56,11 @@ class CodecsTest extends AnyFunSuite {
         val frame = Frame.Msg(gmb)
         roundTrip(frame) match {
             case Frame.Msg(decoded: GetMsgBatch) =>
-                assert(decoded.batchNum == gmb.batchNum)
-                assert(decoded.softAckNumber == gmb.softAckNumber)
-                assert(decoded.blockNum == gmb.blockNum)
-                assert(decoded.stackNum == gmb.stackNum)
-                assert(decoded.hardAckNum == gmb.hardAckNum)
+                val _ = assert(decoded.batchNum == gmb.batchNum)
+                val _ = assert(decoded.softAckNumber == gmb.softAckNumber)
+                val _ = assert(decoded.blockNum == gmb.blockNum)
+                val _ = assert(decoded.stackNum == gmb.stackNum)
+                val _ = assert(decoded.hardAckNum == gmb.hardAckNum)
                 assert(decoded.requestNum == gmb.requestNum)
             case other => fail(s"Expected Msg(GetMsgBatch), got: $other")
         }
@@ -78,11 +78,11 @@ class CodecsTest extends AnyFunSuite {
         val frame = Frame.Msg(nmb)
         roundTrip(frame) match {
             case Frame.Msg(decoded: NewMsgBatch) =>
-                assert(decoded.batchNum == nmb.batchNum)
-                assert(decoded.softAck.isEmpty)
-                assert(decoded.blockBrief.isEmpty)
-                assert(decoded.stackBrief.isEmpty)
-                assert(decoded.hardAck.isEmpty)
+                val _ = assert(decoded.batchNum == nmb.batchNum)
+                val _ = assert(decoded.softAck.isEmpty)
+                val _ = assert(decoded.blockBrief.isEmpty)
+                val _ = assert(decoded.stackBrief.isEmpty)
+                val _ = assert(decoded.hardAck.isEmpty)
                 assert(decoded.requests.isEmpty)
             case other => fail(s"Expected Msg(NewMsgBatch), got: $other")
         }
@@ -108,12 +108,12 @@ class CodecsTest extends AnyFunSuite {
         val frame = Frame.Msg(nmb)
         roundTrip(frame) match {
             case Frame.Msg(decoded: NewMsgBatch) =>
-                assert(decoded.batchNum == nmb.batchNum)
+                val _ = assert(decoded.batchNum == nmb.batchNum)
                 decoded.softAck match {
                     case Some(decodedAck: SoftAck) =>
-                        assert(decodedAck.ackId == ack.ackId)
-                        assert(decodedAck.blockNum == ack.blockNum)
-                        assert(
+                        val _ = assert(decodedAck.ackId == ack.ackId)
+                        val _ = assert(decodedAck.blockNum == ack.blockNum)
+                        val _ = assert(
                           (decodedAck.headerSignature: IArray[Byte]).toList ==
                               (ack.headerSignature: IArray[Byte]).toList
                         )
@@ -131,7 +131,7 @@ class CodecsTest extends AnyFunSuite {
         val text = Frame.encode(frame)
         Frame.parse(text) match {
             case Right(decoded) =>
-                assert(
+                val _ = assert(
                   Frame.encode(decoded) == text,
                   s"re-encode differs:\n  first: $text\n  again: ${Frame.encode(decoded)}"
                 )
@@ -262,8 +262,8 @@ class CodecsTest extends AnyFunSuite {
         val gmb = GetMsgBatch.initial(testRemoteId)
         val nmb = NewMsgBatch(PeerLiaison.Batch.Number(0), None, None, None, None, Nil)
 
-        assert(Frame.fromWire(gmb).contains(gmb))
-        assert(Frame.fromWire(nmb).contains(nmb))
+        val _ = assert(Frame.fromWire(gmb).contains(gmb))
+        val _ = assert(Frame.fromWire(nmb).contains(nmb))
         assert(Frame.fromWire(PeerLiaison.PreStart).isEmpty)
     }
 }

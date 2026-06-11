@@ -1,25 +1,22 @@
 package hydrozoa.integration.stage1
 
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.{TxMutator, TxStrategy}
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.ledger.block.BlockBrief.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import io.circe.syntax.*
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
 import scalus.cardano.ledger.Transaction
-import hydrozoa.multisig.ledger.block.BlockBrief.given
-import io.circe.syntax.*
 
 import scala.collection.immutable.Queue
-import scala.concurrent.duration.FiniteDuration
 
 object Commands:
 

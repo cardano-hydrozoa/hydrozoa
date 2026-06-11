@@ -153,6 +153,14 @@ See [Comments](docs/style-guide.md#comments) for the full rule. In short:
   - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback.xml`
   - `integration`: `integration/src/test/resources/logback.xml`
 
+### Warnings
+
+- CI compiles with `-Werror` (gated on `$CI` in `build.sbt`); reproduce locally with
+  `just build-werror`.
+- Monocle's `Focus[T](_.field)` macro emits synthetic field-named locals that trip
+  `-Wunused:all`. Annotate the enclosing def with
+  `@nowarn("msg=unused local definition")` (import `scala.annotation.nowarn`).
+
 ## Testing
 
 - **Unit tests**: Located in `src/test/scala/hydrozoa/`

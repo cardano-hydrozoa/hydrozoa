@@ -7,8 +7,6 @@ import hydrozoa.integration.stage1.Stage1PropertiesL1Mock.property
 import hydrozoa.integration.stage1.SuiteCardano.{Mock, Public, Yaci}
 import hydrozoa.integration.yaci.DevKit
 import org.scalacheck.YetAnotherProperties
-import org.scalacheck.rng.Seed
-import org.scalacheck.util.Pretty
 import test.SeedPhrase
 
 object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 on L1 mock"):
@@ -52,7 +50,7 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
       * and once the target is hit finalizes the head immediately. Only command sequences that
       * satisfy the condition "head is finalized" are run.
       */
-    val _ = property("Dusty head finalization") = Suite(
+    val _ = property("Dusty head finalization (extended)") = Suite(
       suiteCardano = Mock(preprod),
       txTimingGen = generateDefaultTxTiming,
       scenarioGen = MakeDustScenarioGen(minL2Utxos = 500),

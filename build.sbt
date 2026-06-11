@@ -126,13 +126,12 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
-  // "-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
   "-Wall",
   "-Yretain-trees", // Essential for incremental compilation
-)
+) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)

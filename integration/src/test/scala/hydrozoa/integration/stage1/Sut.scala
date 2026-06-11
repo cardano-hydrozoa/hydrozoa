@@ -7,7 +7,6 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
@@ -23,11 +22,11 @@ import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
-
-import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.utils.Pretty
+
+import scala.concurrent.duration.DurationInt
 
 // ===================================
 // Stage 1 SUT
