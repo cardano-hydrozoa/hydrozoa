@@ -1,21 +1,23 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO, IOLocal}
+import cats.effect.{Deferred, IO}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.Tracer
-import hydrozoa.lib.tracing.ProtocolTracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
+import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
+import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.limiter.Limiter
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
+import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
@@ -25,10 +27,33 @@ trait MultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracerLocal: IOLocal[Tracer]
+    tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
 ) extends Actor[IO, Request] {
 
-    given IOLocal[Tracer] = tracerLocal
+    /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
+      * producer's narrow event type up into [[MultisigRegimeManagerEvent]] so it can reach the
+      * single sink composition the wiring layer assembled.
+      */
+    private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.BW.apply)
+    private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
+    private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
+    private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.CL.apply)
+    private val scTracer: ContraTracer[IO, StackComposerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
+    private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
+    private val esTracer: ContraTracer[IO, EventSequencerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.ES.apply)
+    private def plTracer(remotePeerId: PeerId): ContraTracer[IO, PeerLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.PL(remotePeerId, _))
+    private val bwlTracer: ContraTracer[IO, LimiterEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.BWL.apply)
+    private val sclTracer: ContraTracer[IO, LimiterEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SCL.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -51,83 +76,56 @@ trait MultisigRegimeManager(
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case PreStart => preStartLocal
         case TerminatedChild(childType, _) =>
-            childType match {
-                case Actors.BlockWeaver =>
-                    Tracer.warn("Terminated block weaver actor")
-                case Actors.CardanoLiaison =>
-                    Tracer.warn("Terminated Cardano liaison actor")
-                case Actors.Consensus =>
-                    Tracer.warn("Terminated consensus actor")
-                case Actors.JointLedger =>
-                    Tracer.warn("Terminated joint ledger actor")
-                case Actors.PeerLiaisonHeadToHead =>
-                    Tracer.warn("Terminated peer liaison actor")
-                case Actors.RequestSequencer =>
-                    Tracer.warn("Terminated request sequencer actor")
-                case Actors.StackComposer =>
-                    Tracer.warn("Terminated stack composer actor")
-                case Actors.SlowConsensus =>
-                    Tracer.warn("Terminated slow consensus actor")
-            }
+            tracer.traceWith(TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
-            dependencyType match {
-                case Dependencies.CardanoBackend =>
-                    Tracer.warn("Terminated cardano backend")
-                case Dependencies.Persistence =>
-                    Tracer.warn("Terminated persistence")
-            }
+            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
     def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.routeLocal("MultisigRegimeManager")
-            _ <- Tracer.updateLocalCtx("peer" -> config.ownPeerLabel)
-            _ <- Tracer.info("Starting multisig actors...")
-
-            nodeId = s"head:${config.ownPeerIndex}"
-            tracer <- ProtocolTracer.jsonLines(nodeId)
+            _ <- tracer.traceWith(StartingActors)
 
             pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, bwTracer))
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaisonHeadToHead, …) keep direct refs.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](blockWeaver, config, tracerLocal)
+              Limiter[BlockWeaver.Request](blockWeaver, config, bwlTracer)
             )
 
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer)
                 )
 
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              FastConsensusActor(config, pendingConnections, fcaTracer, persistence)
             )
 
             requestSequencer <- context.actorOf(
-              RequestSequencer(config, pendingConnections, persistence)
+              RequestSequencer(config, pendingConnections, esTracer, persistence)
             )
 
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
+              JointLedger(config, pendingConnections, l2Ledger, jlTracer, persistence)
             )
 
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal, persistence)
+              StackComposer(config, pendingConnections, scTracer, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
             stackComposerLimiter <- context.actorOf(
-              Limiter[StackComposer.Request](stackComposer, config, tracerLocal)
+              Limiter[StackComposer.Request](stackComposer, config, sclTracer)
             )
 
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              SlowConsensusActor(config, pendingConnections, scaTracer, persistence)
             )
 
             // One peer liaison toward every other head peer (the head mesh). The liaisons project
@@ -138,8 +136,13 @@ trait MultisigRegimeManager(
                     .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
                     .traverse(pid =>
                         context.actorOf(
-                          liaison
-                              .PeerLiaisonHeadToHead(config, pid, pendingConnections, persistence)
+                          liaison.PeerLiaisonHeadToHead(
+                            config,
+                            pid,
+                            pendingConnections,
+                            plTracer(PeerId.Head(pid.peerNum)),
+                            persistence
+                          )
                         )
                     )
 
@@ -167,7 +170,13 @@ trait MultisigRegimeManager(
             coilPeerLiaisons <-
                 hubbedCoilPeers.traverse(coilNum =>
                     context.actorOf(
-                      liaison.PeerLiaisonHubToCoil(config, coilNum, pendingConnections, persistence)
+                      liaison.PeerLiaisonHubToCoil(
+                        config,
+                        coilNum,
+                        pendingConnections,
+                        plTracer(PeerId.Coil(coilNum)),
+                        persistence
+                      )
                     )
                 )
 
@@ -185,13 +194,12 @@ trait MultisigRegimeManager(
               coilRelay = coilRelay,
               coilAckSequencer = coilAckSequencer,
               coilPeerLiaisons = coilPeerLiaisons,
-              tracer = tracer,
             )
 
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
-            _ <- Tracer.info("Watching multisig actors...")
+            _ <- tracer.traceWith(WatchingActors)
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- headPeerLiaisons.traverse(r =>
@@ -262,7 +270,6 @@ object MultisigRegimeManager {
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None,
         /** Hub→coil liaisons this hub runs (for `CoilRelay`'s fan-out); empty elsewhere. */
         coilPeerLiaisons: List[liaison.PeerLiaisonHubToCoil.Handle] = Nil,
-        tracer: ProtocolTracer = ProtocolTracer.noop,
     )
 
     type PendingConnections = Deferred[IO, Connections]
@@ -272,7 +279,7 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracerLocal: IOLocal[Tracer]
+        tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
     ): IO[MultisigRegimeManager] =
         IO(
           new MultisigRegimeManager(
@@ -280,7 +287,7 @@ object MultisigRegimeManager {
             cardanoBackend,
             virtualLedger,
             persistence,
-            tracerLocal
+            tracer
           ) {}
         )
 

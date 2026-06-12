@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
-import org.typelevel.log4cats.Logger
+import hydrozoa.lib.logging.ContraTracer
 
 /** The pull half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: send
   * `GetMsgBatch`es, consume the remote's `NewMsgBatch` replies, and advance our inbound lane
@@ -29,6 +29,8 @@ import org.typelevel.log4cats.Logger
   *   read the batch number off a batch request
   * @param numberOfBatch
   *   read the batch number off a batch
+  * @param tracer
+  *   the owning liaison's event channel; emits the stale-drop / reject events.
   * @param send
   *   send a request to the counterpart liaison.
   */
@@ -38,8 +40,9 @@ final class Puller[G, N](
     accept: N => IO[Either[String, Unit]],
     dispatch: N => IO[Unit],
     numberOfBatchRequest: G => BatchNumber,
-    numberOfBatch: N => BatchNumber
-)(send: G => IO[Unit])(using logger: Logger[IO]) {
+    numberOfBatch: N => BatchNumber,
+    tracer: ContraTracer[IO, PeerLiaisonEvent]
+)(send: G => IO[Unit]) {
     private val currentlyRequesting = Ref.unsafe[IO, G](initialGet)
 
     /** Send the initial request. */
@@ -56,14 +59,18 @@ final class Puller[G, N](
     def handleReply(received: N): IO[Unit] =
         currentlyRequesting.get.flatMap { outstanding =>
             if numberOfBatch(received) != numberOfBatchRequest(outstanding) then
-                logger.debug(
-                  s"dropping stale reply batch=${numberOfBatch(received)} " +
-                      s"(outstanding=${numberOfBatchRequest(outstanding)})"
+                tracer.traceWith(
+                  PeerLiaisonEvent.StaleBatchDropped(
+                    numberOfBatch(received),
+                    numberOfBatchRequest(outstanding)
+                  )
                 )
             else
                 accept(received).flatMap {
                     case Left(reason) =>
-                        logger.warn(s"rejecting reply batch=${numberOfBatch(received)}: $reason")
+                        tracer.traceWith(
+                          PeerLiaisonEvent.BatchRejected(numberOfBatch(received), reason)
+                        )
                     case Right(()) =>
                         for {
                             next <- buildGet(numberOfBatchRequest(outstanding).increment)

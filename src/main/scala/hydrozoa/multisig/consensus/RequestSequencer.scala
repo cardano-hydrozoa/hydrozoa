@@ -8,13 +8,12 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
-import org.typelevel.log4cats.Logger
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one request sequencer is running per node, specifically to handle
@@ -26,12 +25,11 @@ import org.typelevel.log4cats.Logger
 trait RequestSequencer(
     config: Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
+    tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
-
-    private given logger: Logger[IO] = Logging.loggerIO(s"RequestSequencer.${config.ownPeerLabel}")
 
     /** `config` is a `CardanoNetwork.Section`; expose it as a given so the typed `Request`-lane
       * `WriteBatch.put` (the CR1 persist) picks it up.
@@ -95,8 +93,8 @@ trait RequestSequencer(
                         userRequest = userRequest,
                         requestId = newId
                       )
-                      _ <- logger.debug(
-                        s"Assigned request ID (${newId.peerNum}:${newId.requestNum})"
+                      _ <- tracer.traceWith(
+                        EventSequencerEvent.RequestIdAssigned(newId.peerNum, newId.requestNum)
                       )
                       // CR1: persist the assigned request to the Request lane BEFORE telling the
                       // user the id (the id is durable before it is observable; §4 CR1/CR4).
@@ -134,9 +132,10 @@ object RequestSequencer {
     def apply(
         config: Config,
         pendingConnections: MultisigRegimeManager.PendingConnections,
+        tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
     ): IO[RequestSequencer] =
-        IO(new RequestSequencer(config, pendingConnections, persistence) {})
+        IO(new RequestSequencer(config, pendingConnections, tracer, persistence) {})
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.

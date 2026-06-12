@@ -3,12 +3,13 @@ package hydrozoa.rulebased.ledger.l1
 import cats.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -21,7 +22,7 @@ import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
-import hydrozoa.rulebased.{DisputeActor, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -176,7 +177,9 @@ object DisputeActorTestHelpers {
                     )
               )
             )
-            tracer <- lift(Tracer.makeLocal)
+            tracer = Slf4jTracer.sink.contramap(
+              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+            )
 
             disputeActor = DisputeActor(
               action = RuleBasedRegimeManager.DisputeAction.Vote(
@@ -185,7 +188,7 @@ object DisputeActorTestHelpers {
                 coilSignatures = env.multisignHeaderCoil(blockHeader)
               ),
               cardanoBackend = cardanoBackend,
-              tracerLocal = tracer
+              tracer = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
 }

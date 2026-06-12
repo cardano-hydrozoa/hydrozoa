@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
-import cats.effect.{IO, IOLocal, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -11,7 +11,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -45,12 +45,10 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey,
 final case class StackComposer(
     config: StackComposer.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | StackComposer.Connections,
-    tracerLocal: IOLocal[Tracer],
+    tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
-
-    given IOLocal[Tracer] = tracerLocal
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
       * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
@@ -71,10 +69,8 @@ final case class StackComposer(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"StackComposer.${config.ownPeerLabel}")
                 _ <- initializeConnections
                 _ <- bootstrapInitialStack
-                _ <- Tracer.info("StackComposer started.")
             } yield ()
         case r: BlockResult =>
             handleBlockResult(r)
@@ -114,27 +110,24 @@ final case class StackComposer(
         for {
             handoff <- buildHandoff(unsigned)
             conn <- getConnections
-            _ <- Tracer.info("Bootstrapping initial stack 0 (init + fallback)")
+            _ <- tracer.traceWith(StackComposerEvent.InitialStackBootstrapped)
             _ <- conn.slowConsensusActor ! handoff
         } yield ()
     }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
-        _ <- Tracer.debug(s"BlockResult received for block ${r.brief.blockNum}")
         _ <- state.update(_.recordBlockResult(r))
         _ <- state.update(_.tryPair(r.brief.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleSoftConfirmed(b: Block.SoftConfirmed): IO[Unit] = for {
-        _ <- Tracer.debug(s"Block.SoftConfirmed received for block ${b.blockNum}")
         _ <- state.update(_.recordSoftConfirmed(b))
         _ <- state.update(_.tryPair(b.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
-        _ <- Tracer.debug(s"StackBrief received for stack ${brief.stackNum}")
         _ <- state.update(_.withInboundLeaderBrief(brief))
         // Stack briefs led by OTHER heads are relayed to CoilRelay by the hub's mesh liaisons, not
         // here — so this actor relays only its OWN-led briefs (in tryCloseAsLeader). That keeps each
@@ -147,7 +140,6 @@ final case class StackComposer(
     ): IO[Unit] = {
         val stackNum = s.brief.stackNum
         for {
-            _ <- Tracer.debug(s"Stack.HardConfirmed received for stack $stackNum")
             _ <- state.update(_.withPreviousStackHardConfirmed(stackNum))
             _ <- tryProgress
         } yield ()
@@ -174,9 +166,13 @@ final case class StackComposer(
                 for {
                     now <- realTimeQuantizedInstant(config.slotConfig)
                     brief = mkStackBrief(nextStackNum, prefix, StackCreationEndTime(now))
-                    _ <- Tracer.info(
-                      s"Leader closing stack $nextStackNum with blocks " +
-                          s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
+                    _ <- tracer.traceWith(
+                      StackComposerEvent.StackClosed(
+                        nextStackNum,
+                        prefix.head.result.brief.blockNum,
+                        prefix.last.result.brief.blockNum,
+                        isLeader = true
+                      )
                     )
                     res <- mkStackUnsigned(brief, prefix, s.treasury, s.evacuationMap)
                     ComposedStack(unsigned, newTreasury, newMap, partitions) = res
@@ -330,10 +326,13 @@ final case class StackComposer(
                     // (1) genuine divergence — leader's composition is inconsistent with our
                     // single-flight position. Unrecoverable: warn, then panic to halt the node so
                     // the MultisigRegimeManager hands over to the rule-based regime.
-                    Tracer.warn(
-                      s"Follower stack $nextStackNum structural divergence: leader brief " +
-                          s"[${brief.firstBlockNum}..${brief.lastBlockNum}] but expected to " +
-                          s"start at $expectedFirst (lastClosedBlockNum=${s.lastClosedBlockNum})."
+                    tracer.traceWith(
+                      StackComposerEvent.StructuralDivergence(
+                        nextStackNum,
+                        brief.firstBlockNum,
+                        brief.lastBlockNum,
+                        expectedFirst
+                      )
                     ) >> panic(
                       s"Stack $nextStackNum structural divergence; consensus is broken."
                     ) >> context.self.stop
@@ -342,18 +341,17 @@ final case class StackComposer(
                         case None =>
                             // (2) not caught up — benign; wait for more BlockResults /
                             // SoftConfirmeds. tryProgress re-fires on the next event.
-                            Tracer.debug(
-                              s"Follower waiting for stack $nextStackNum: paired blocks do " +
-                                  s"not yet cover [${brief.firstBlockNum}.." +
-                                  s"${brief.lastBlockNum}]"
-                            )
+                            IO.unit
                         case Some(slice) =>
                             // (3) covered — accept exactly the brief's range.
                             for {
-                                _ <- Tracer.info(
-                                  s"Follower accepting stack $nextStackNum brief from " +
-                                      s"leader; blocks ${brief.firstBlockNum}.." +
-                                      s"${brief.lastBlockNum}"
+                                _ <- tracer.traceWith(
+                                  StackComposerEvent.StackClosed(
+                                    nextStackNum,
+                                    brief.firstBlockNum,
+                                    brief.lastBlockNum,
+                                    isLeader = false
+                                  )
                                 )
                                 res <- mkStackUnsigned(brief, slice, s.treasury, s.evacuationMap)
                                 ComposedStack(unsigned, newTreasury, newMap, partitions) = res
@@ -397,7 +395,7 @@ final case class StackComposer(
                   ComposedStack(Stack.Unsigned(brief, effects), newTreasury, newMap, partitions)
                 )
             case Left(err) =>
-                Tracer.error(s"slow-side effect derivation failed: $err") *> IO.raiseError(err)
+                IO.raiseError(err)
         }
     }
 

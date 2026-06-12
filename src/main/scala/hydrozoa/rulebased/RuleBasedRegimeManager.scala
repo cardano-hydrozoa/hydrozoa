@@ -6,7 +6,7 @@ import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
@@ -32,7 +32,8 @@ case class RuleBasedRegimeManager(
     persistence: Persistence[IO],
     backend: BackendStore[IO],
     votingDeadline: QuantizedInstant,
-    tracerLocal: IOLocal[Tracer]
+    disputeTracer: ContraTracer[IO, DisputeActorEvent],
+    evacuationTracer: ContraTracer[IO, EvacuationActorEvent],
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 
@@ -44,7 +45,7 @@ case class RuleBasedRegimeManager(
               DisputeActor(
                 action = state.action,
                 cardanoBackend = cardanoBackend,
-                tracerLocal = tracerLocal
+                tracer = disputeTracer
               )
             )
             _ <- context.actorOf(
@@ -52,7 +53,7 @@ case class RuleBasedRegimeManager(
                 candidateEvacMaps = state.candidateEvacMaps,
                 cardanoBackend = cardanoBackend,
                 fallbackTxHash = state.fallbackTxHash,
-                tracerLocal = tracerLocal
+                tracer = evacuationTracer
               )
             )
         } yield ()

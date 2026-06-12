@@ -128,6 +128,9 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
+    val _ = property("Two-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-two-peers", nPeers = 2, nCommands = 10).property()
+
     // Two head peers hubbing one coil peer (coilQuorum = 1). The Pc4 multi-head relay makes the coil peer a full
     // participant: it follows every leader's blocks (relayed briefs + relayed user requests,
     // de-muxed by author, with the follower BlockWeaver buffering early briefs) and co-signs every
@@ -143,7 +146,10 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
 
-    val _ = property("Twenty-peers head works (extended)") =
+    val _ = property("Three-peers head works (quick)") =
+        Stage4Suite(label = "stage4-quick-three-peers", nPeers = 3, nCommands = 10).property()
+
+    val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
 
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
@@ -158,6 +164,14 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       backendMode = BackendMode.RocksDb()
     ).property()
 
+    val _ = property("Two-peers head works WS (quick)") = Stage4Suite(
+      label = "stage4-ws-quick-two-peers",
+      nPeers = 2,
+      nCommands = 10,
+      transportMode = TransportMode.WebSocket(),
+      backendMode = BackendMode.RocksDb()
+    ).property()
+
     // Extended variants: large command sequences or high peer counts
     val _ = property("Two-peers head works (extended)") =
         Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
@@ -166,10 +180,11 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
         Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoilPeers = 1, nCommands = 500).property()
 
     val _ = property("Three-peers head works (extended)") =
-        Stage4Suite(label = "stage4-three-peers", nPeers = 3, nCommands = 500).property()
+        Stage4Suite(label = "stage4-three-peers-extended", nPeers = 3, nCommands = 500).property()
 
     val _ = property("Twenty-peers head works (extended)") =
-        Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
+        Stage4Suite(label = "stage4-twenty-peers-extended", nPeers = 20, nCommands = 500).property()
+
     val _ = property("Two-peers head works WS (extended)") = Stage4Suite(
       label = "stage4-ws-two-peers-extended",
       nPeers = 2,

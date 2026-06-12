@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import cats.effect.{IO, IOLocal, Ref}
+import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -8,7 +8,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -55,12 +55,10 @@ import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 final case class SlowConsensusActor(
     config: SlowConsensusActor.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | SlowConsensusActor.Connections,
-    tracerLocal: IOLocal[Tracer],
+    tracer: ContraTracer[IO, SlowConsensusActorEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, SlowConsensusActor.Request] {
     import SlowConsensusActor.*
-
-    given IOLocal[Tracer] = tracerLocal
 
     /** `config` is a `CardanoNetwork.Section` transitively; expose it as a given so the typed
       * `WriteBatch.put` / `Persistence.write` calls used by [[persistHardConfirmation]] pick it up
@@ -98,11 +96,7 @@ final case class SlowConsensusActor(
 
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
-            for {
-                _ <- Tracer.routeLocal(s"SlowConsensusActor.${config.ownPeerLabel}")
-                _ <- initializeConnections
-                _ <- Tracer.info("SlowConsensusActor started.")
-            } yield ()
+            initializeConnections
         case h: StackHandoff =>
             handleStackHandoff(h)
         case h: HardAck =>
@@ -119,29 +113,27 @@ final case class SlowConsensusActor(
       *   - `Regular` with no unlock (all-`Minor`) ⇒ sole / 1-phase.
       */
     private def handleStackHandoff(h: StackHandoff): IO[Unit] =
-        Tracer.scopedCtx("stackNum" -> h.unsigned.stackNum.toString) {
-            val stackNum = h.unsigned.stackNum
-            val ownPeer: PeerId = config.ownPeerId
+        val stackNum = h.unsigned.stackNum
+        val ownPeer: PeerId = config.ownPeerId
 
-            h.unsigned.effects match {
-                case _: StackEffects.Unsigned.Initial =>
-                    parseOwn2PhaseAcks(h, "own round-1 (Initial)", "own round-2 (Initial)")
-                        .flatMap { (ownR1, ownR2) =>
-                            start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
-                        }
-                case r: StackEffects.Unsigned.Regular =>
-                    PartitionEffects.unlock(r.partitions) match {
-                        case Some(_) =>
-                            parseOwn2PhaseAcks(h, "own round-1 (Regular)", "own round-2 (Regular)")
-                                .flatMap { (ownR1, ownR2) =>
-                                    start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
-                                }
-                        case None =>
-                            parseOwnSoleAck(h).flatMap { ownSole =>
-                                startSolePhase(stackNum, ownPeer, h.unsigned, ownSole)
-                            }
+        h.unsigned.effects match {
+            case _: StackEffects.Unsigned.Initial =>
+                parseOwn2PhaseAcks(h, "own round-1 (Initial)", "own round-2 (Initial)")
+                    .flatMap { (ownR1, ownR2) =>
+                        start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
                     }
-            }
+            case r: StackEffects.Unsigned.Regular =>
+                PartitionEffects.unlock(r.partitions) match {
+                    case Some(_) =>
+                        parseOwn2PhaseAcks(h, "own round-1 (Regular)", "own round-2 (Regular)")
+                            .flatMap { (ownR1, ownR2) =>
+                                start2Phase(stackNum, ownPeer, h.unsigned, ownR1, ownR2)
+                            }
+                    case None =>
+                        parseOwnSoleAck(h).flatMap { ownSole =>
+                            startSolePhase(stackNum, ownPeer, h.unsigned, ownSole)
+                        }
+                }
         }
 
     /** Extract this peer's own round-1 + round-2 acks from the handoff (2-phase: Regular or
@@ -190,9 +182,7 @@ final case class SlowConsensusActor(
             round2Stash = Map.empty
           )
         )
-        _ <- Tracer.info(
-          s"stack $stackNum handed off (2-phase); broadcasting own round-1"
-        )
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "2-phase"))
         _ <- broadcast(ownR1._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
@@ -212,7 +202,7 @@ final case class SlowConsensusActor(
           stackNum,
           Cell.WaitingSole(unsigned = unsigned, sole = Map(ownPeer -> ownSole._2))
         )
-        _ <- Tracer.info(s"stack $stackNum handed off (sole); broadcasting own sole ack")
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHandedOff(stackNum, "sole"))
         _ <- broadcast(ownSole._1)
         _ <- replayOrphans(stackNum)
         _ <- tryAdvance(stackNum)
@@ -228,28 +218,22 @@ final case class SlowConsensusActor(
     // ===================================
 
     private def handleRemoteHardAck(h: HardAck): IO[Unit] =
-        Tracer.scopedCtx(h.toContext*) {
-            if h.peerId == config.ownPeerId then
-                // Our own hard-ack echoed back on the `HubHardAckLane`: a hub re-publishes a coil
-                // peer's acks to every coil peer it serves, the author included (filtering would
-                // punch gaps in the contiguous lane). We already hold our own ack locally, so drop
-                // the echo — re-applying it would, once the cell has advanced past the echoed round,
-                // hit the "wrong round" guard in `applyRemote`.
-                Tracer.debug(s"ignoring echo of own hard-ack for stack ${h.stackNum}")
-            else
-                for {
-                    s <- stateRef.get
-                    _ <- s.cells.get(h.stackNum) match {
-                        case None =>
-                            Tracer.debug(
-                              s"orphan hard-ack for stack ${h.stackNum} from peer ${h.peerId} " +
-                                  "(no cell yet); buffering"
-                            ) >> stateRef.update(_.bufferOrphan(h))
-                        case Some(_) =>
-                            applyRemote(h) >> tryAdvance(h.stackNum)
-                    }
-                } yield ()
-        }
+        if h.peerId == config.ownPeerId then
+            // Our own hard-ack echoed back on the `HubHardAckLane`: a hub re-publishes a coil
+            // peer's acks to every coil peer it serves, the author included (filtering would
+            // punch gaps in the contiguous lane). We already hold our own ack locally, so drop
+            // the echo — re-applying it would, once the cell has advanced past the echoed round,
+            // hit the "wrong round" guard in `applyRemote`.
+            tracer.traceWith(SlowConsensusActorEvent.OwnHardAckEchoIgnored(h.stackNum))
+        else
+            stateRef.get.flatMap { s =>
+                s.cells.get(h.stackNum) match {
+                    case None =>
+                        stateRef.update(_.bufferOrphan(h))
+                    case Some(_) =>
+                        applyRemote(h) >> tryAdvance(h.stackNum)
+                }
+            }
 
     /** Apply one remote ack into its (existing) cell, verifying it against the local effects. */
     private def applyRemote(h: HardAck): IO[Unit] = withCell(h.stackNum) { cell =>
@@ -321,9 +305,7 @@ final case class SlowConsensusActor(
     }
 
     private def completeRound1(stackNum: StackNumber, c: Cell.WaitingRound1): IO[Unit] = for {
-        _ <- Tracer.info(
-          s"stack $stackNum round-1 confirmed; releasing own round-2 ack"
-        )
+        _ <- tracer.traceWith(SlowConsensusActorEvent.Round1Confirmed(stackNum))
         ownPeer = config.ownPeerId
         ownR2Payload <- round2PayloadOf(c.ownRound2)
         round2 = c.round2Stash.updated(ownPeer, ownR2Payload)
@@ -361,11 +343,8 @@ final case class SlowConsensusActor(
         wmap = ackAggregator.aggregateTxSignatures(restricted, vkeys)
         evac = ackAggregator.collectSecSignatures(restricted, secSigners)
         signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
-        _ <- Tracer.info(
-          s"stack $stackNum HARD-CONFIRMED — aggregated ackAggregator onto ${wmap.size} " +
-              "effect tx(s); emitting downstream"
-        )
         hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
         _ <- persistHardConfirmation(stackNum, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
@@ -453,9 +432,6 @@ final case class SlowConsensusActor(
     private def replayOrphans(stackNum: StackNumber): IO[Unit] = for {
         s <- stateRef.get
         orphans = s.orphanAcks.getOrElse(stackNum, Nil)
-        _ <- IO.whenA(orphans.nonEmpty)(
-          Tracer.debug(s"replaying ${orphans.size} orphan ack(s) for stack $stackNum")
-        )
         _ <- stateRef.update(_.clearOrphans(stackNum))
         _ <- orphans.traverse_(applyRemote)
     } yield ()

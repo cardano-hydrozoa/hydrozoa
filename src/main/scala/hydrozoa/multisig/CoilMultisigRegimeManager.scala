@@ -1,18 +1,22 @@
 package hydrozoa.multisig
 
-import cats.effect.{Deferred, IO, IOLocal}
+import cats.*
+import cats.effect.{Deferred, IO}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.lib.logging.Tracer
-import hydrozoa.lib.tracing.ProtocolTracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager.*
+import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
+import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
-import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
@@ -20,8 +24,8 @@ import scala.concurrent.duration.DurationInt
 /** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
   * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
   * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
-  *   - exactly one [[PeerLiaisonHeadToHead]], toward the coil peer's hub head peer (§5.5)
-  *     [doc-ref], instead of the head mesh;
+  *   - exactly one liaison ([[liaison.PeerLiaisonCoilToHub]]), toward the coil peer's hub head peer
+  *     (§5.5) [doc-ref], instead of the head mesh;
   *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
@@ -32,11 +36,28 @@ trait CoilMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
-    tracerLocal: IOLocal[Tracer],
-    persistence: Persistence[IO]
+    persistence: Persistence[IO],
+    tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
 ) extends Actor[IO, Request] {
 
-    given IOLocal[Tracer] = tracerLocal
+    /** Specialize the regime-wide tracer down to per-actor channels, exactly as
+      * [[MultisigRegimeManager]] does — the reused child actors emit the same event types on a coil
+      * peer, so the same roll-up reaches the single sink composition the wiring layer assembled.
+      */
+    private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.BW.apply)
+    private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
+    private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
+    private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.CL.apply)
+    private val scTracer: ContraTracer[IO, StackComposerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
+    private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
+    private def plTracer(remotePeerId: PeerId): ContraTracer[IO, PeerLiaisonEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.PL(remotePeerId, _))
 
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
 
@@ -54,16 +75,14 @@ trait CoilMultisigRegimeManager(
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case PreStart => preStartLocal
         case TerminatedChild(childType, _) =>
-            Tracer.warn(s"Terminated coil child actor: $childType")
+            tracer.traceWith(TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
-            Tracer.warn(s"Terminated coil dependency: $dependencyType")
+            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
     }
 
     private def preStartLocal: IO[Unit] =
         for {
-            _ <- Tracer.routeLocal("CoilMultisigRegimeManager")
-            _ <- Tracer.updateLocalCtx("peer" -> config.ownPeerLabel)
-            _ <- Tracer.info("Starting coil multisig actors...")
+            _ <- tracer.traceWith(StartingActors)
 
             ownCoilNum = config.ownPeerId match {
                 case Coil(n) => n
@@ -77,20 +96,15 @@ trait CoilMultisigRegimeManager(
                 .getOrElse(
                   throw new IllegalStateException(s"No hub configured for coil $ownCoilNum")
                 )
-            hubPeerId = HeadPeerId(hubNum, config.nHeadPeers)
-
-            nodeId = s"coil:${config.ownPeerIndex}"
-            tracer <- ProtocolTracer.jsonLines(nodeId)
-
             pendingConnections <- Deferred[IO, Connections]
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, tracerLocal))
+            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, bwTracer))
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, tracerLocal)
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer)
                 )
             consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              FastConsensusActor(config, pendingConnections, fcaTracer, persistence)
             )
 
             // No-op placeholder: a coil peer authors no user requests, but the reused actors resolve
@@ -99,20 +113,25 @@ trait CoilMultisigRegimeManager(
             // optional) so a coil peer doesn't carry this inert slot at all — rule of least knowledge.
             requestSequencer <- context.actorOf(NoopActor[RequestSequencer.Request])
             jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, tracer, tracerLocal, persistence)
+              JointLedger(config, pendingConnections, l2Ledger, jlTracer, persistence)
             )
             stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, tracerLocal, persistence)
+              StackComposer(config, pendingConnections, scTracer, persistence)
             )
             slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, tracerLocal, persistence)
+              SlowConsensusActor(config, pendingConnections, scaTracer, persistence)
             )
 
             // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. It projects its connections from
             // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) stays empty in
             // this production placeholder (in-process wiring fills it).
             hubLiaison <- context.actorOf(
-              liaison.PeerLiaisonCoilToHub(config, hubPeerId, pendingConnections, persistence)
+              liaison.PeerLiaisonCoilToHub(
+                config,
+                pendingConnections,
+                plTracer(Head(hubNum)),
+                persistence
+              )
             )
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
@@ -129,13 +148,12 @@ trait CoilMultisigRegimeManager(
               stackComposerLimiter = stackComposer,
               slowConsensusActor = slowConsensusActor,
               coilUplink = Some(hubLiaison),
-              tracer = tracer,
             )
 
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
 
-            _ <- Tracer.info("Watching coil multisig actors...")
+            _ <- tracer.traceWith(WatchingActors)
 
             _ <- context.watch(blockWeaver, TerminatedChild(Actors.BlockWeaver, blockWeaver))
             _ <- context.watch(
@@ -159,16 +177,16 @@ object CoilMultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
-        tracerLocal: IOLocal[Tracer],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
     ): IO[CoilMultisigRegimeManager] =
         IO(
           new CoilMultisigRegimeManager(
             config,
             cardanoBackend,
             virtualLedger,
-            tracerLocal,
-            persistence
+            persistence,
+            tracer
           ) {}
         )
 }

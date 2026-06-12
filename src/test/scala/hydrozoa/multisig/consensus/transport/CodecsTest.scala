@@ -81,7 +81,7 @@ class CodecsTest extends AnyFunSuite {
                 val _ = assert(decoded.stack == get.stack)
                 val _ = assert(decoded.request == get.request)
                 val _ = assert(decoded.softAck == get.softAck)
-                assert(decoded.headHardAck == get.headHardAck)
+                val _ = assert(decoded.headHardAck == get.headHardAck)
                 assert(decoded.hubHardAck == get.hubHardAck)
             case other => fail(s"Expected Msg(Mesh.Get), got: $other")
         }
@@ -95,7 +95,7 @@ class CodecsTest extends AnyFunSuite {
                 val _ = assert(decoded.batchNum == nmb.batchNum)
                 val _ = assert(decoded.softAck.isEmpty)
                 val _ = assert(decoded.block.isEmpty)
-                assert(decoded.stack.isEmpty)
+                val _ = assert(decoded.stack.isEmpty)
                 val _ = assert(decoded.headHardAck.isEmpty)
                 val _ = assert(decoded.hubHardAck.isEmpty)
                 assert(decoded.requests.isEmpty)
@@ -275,8 +275,8 @@ class CodecsTest extends AnyFunSuite {
         val get = testMeshGet
         val nmb = emptyNew(BatchNumber.zero)
 
-        assert(HeadFrame.fromWire(get).contains(get))
-        assert(HeadFrame.fromWire(nmb).contains(nmb))
+        val _ = assert(HeadFrame.fromWire(get).contains(get))
+        val _ = assert(HeadFrame.fromWire(nmb).contains(nmb))
         assert(HeadFrame.fromWire(LiaisonProtocol.PreStart).isEmpty)
     }
 }

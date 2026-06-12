@@ -2,7 +2,7 @@ package org.scalacheck.commands
 
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, Resource}
 import ch.qos.logback.classic.Level
 import hydrozoa.lib.logging.Logging
 import org.scalacheck.{Gen, Prop, Shrink}
@@ -319,9 +319,10 @@ trait ModelBasedSuite {
     ): Boolean
 
     /** Create a new [[Sut]] instance with an internal state that corresponds to the provided
-      * abstract state instance.
+      * abstract state instance. Returned as a `Resource` so cleanup (e.g. open ports, RocksDB
+      * handles) runs even when a command throws or the test is cancelled before [[shutdownSut]].
       */
-    def startupSut(state: State): IO[Sut]
+    def startupSut(state: State): Resource[IO, Sut]
 
     /** Shutdown the SUT instance, and release any resources related to it. May also run some checks
       * upon shutting SUT down, for which the latest state can be used.
@@ -355,7 +356,7 @@ trait ModelBasedSuite {
       */
     final def property(): Prop = {
 
-        val suts = collection.mutable.Map.empty[AnyRef, Option[State => IO[Sut]]]
+        val suts = collection.mutable.Map.empty[AnyRef, Option[State => Resource[IO, Sut]]]
 
         Prop.forAll(genTestCase) { testCase =>
             logger.info(
@@ -480,7 +481,7 @@ trait ModelBasedSuite {
 
     private def runTestCase(
         testCase: TestCase,
-        startupSut: State => IO[Sut]
+        startupSut: State => Resource[IO, Sut]
     ): Prop = {
         onTestCaseGenerated(testCase.initialState, testCase.commands).unsafeRunSync()
 
@@ -535,16 +536,13 @@ trait ModelBasedSuite {
       */
     private def runCommandsPlain(
         testCase: TestCase,
-        startupSut: State => IO[Sut]
+        startupSut: State => Resource[IO, Sut]
     ): (Sut, Prop, State, Int, TestCase) = {
         logger.debug("Using plain IO to run the test case...")
-        val io = for {
-            initial <- startupSut(testCase.initialState).map(sut =>
-                (sut, Prop.proved, testCase.initialState, 0)
-            )
-            (sut, p, s, lastCmd) = initial
-            result <- testCase.commands.foldLeft(IO.pure((sut, p, s, lastCmd, false))) {
-                case (acc, c) =>
+        val io = startupSut(testCase.initialState).use { sut =>
+            val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
+            for {
+                result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
                     acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
                         // Short-circuit: if the property has already failed, skip remaining commands
                         if hasFailed then IO.pure((sut, p, s, lastCmd, true))
@@ -564,10 +562,11 @@ trait ModelBasedSuite {
                                 (sut, newProp, newState, lastCmd + 1, newPredResult.failure)
                             }
                     }
-            }
-            (sut, prop, s, lastCmd, _) = result
-            shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
+                }
+                (sut, prop, s, lastCmd, _) = result
+                shutdownProp <- shutdownSut(s, sut)
+            } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
+        }
 
         io.unsafeRunSync()
     }
@@ -605,7 +604,7 @@ trait ModelBasedSuite {
       */
     private def runCommandsWithTestControl(
         testCase: TestCase,
-        startupSut: State => IO[Sut]
+        startupSut: State => Resource[IO, Sut]
     ): (Sut, Prop, State, Int, TestCase) = {
         import java.util.concurrent.atomic.AtomicReference
 
@@ -615,40 +614,47 @@ trait ModelBasedSuite {
 
         logger.debug("Using TestControl to run the test case...")
 
-        val innerIO: IO[(Sut, Prop, State, Int, TestCase)] = for {
-            initial <- startupSut(testCase.initialState).map(sut =>
-                (sut, Prop.proved, testCase.initialState, 0, false)
-            )
-            result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
-                    if hasFailed then IO.pure((sut, p, s, lastCmd, true))
-                    else
-                        for {
-                            gate <- Deferred[IO, Unit]
-                            _ <- IO(pendingDelay.set(Some((c.delay, gate))))
-                            _ <- loggerIO.info("Suspend on the gate...")
-                            _ <- gate.get
-                            _ <- loggerIO.info("Running the command...")
-                            pred <- c.runPC(sut)
-                            (newPredResult, newState) = LoggingControl.withSuppressedLogs(
-                              "predicate evaluation and state advancement"
-                            ) {
-                                val predResult = pred(s).apply(Gen.Parameters.default)
-                                val nextState = c.advanceState(s)
-                                (predResult, nextState)
-                            }
-                        } yield (sut, p && pred(s), newState, lastCmd + 1, newPredResult.failure)
-                }
+        val innerIO: IO[(Sut, Prop, State, Int, TestCase)] =
+            startupSut(testCase.initialState).use { sut =>
+                val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
+                for {
+                    result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
+                        acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
+                            if hasFailed then IO.pure((sut, p, s, lastCmd, true))
+                            else
+                                for {
+                                    gate <- Deferred[IO, Unit]
+                                    _ <- IO(pendingDelay.set(Some((c.delay, gate))))
+                                    _ <- loggerIO.info("Suspend on the gate...")
+                                    _ <- gate.get
+                                    _ <- loggerIO.info("Running the command...")
+                                    pred <- c.runPC(sut)
+                                    (newPredResult, newState) = LoggingControl.withSuppressedLogs(
+                                      "predicate evaluation and state advancement"
+                                    ) {
+                                        val predResult = pred(s).apply(Gen.Parameters.default)
+                                        val nextState = c.advanceState(s)
+                                        (predResult, nextState)
+                                    }
+                                } yield (
+                                  sut,
+                                  p && pred(s),
+                                  newState,
+                                  lastCmd + 1,
+                                  newPredResult.failure
+                                )
+                        }
+                    }
+                    (sut, prop, s, lastCmd, _) = result
+                    // Sentinel: signal outer that all commands are done before entering shutdownSut.
+                    // shutdownSut calls waitForIdle → IO.sleep, which needs nextInterval advances.
+                    // The sentinel lets the outer switch from tickUntil (strict) to tickUntilAdvancing.
+                    shutdownGate <- Deferred[IO, Unit]
+                    _ <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
+                    _ <- shutdownGate.get
+                    shutdownProp <- shutdownSut(s, sut)
+                } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
             }
-            (sut, prop, s, lastCmd, _) = result
-            // Sentinel: signal outer that all commands are done before entering shutdownSut.
-            // shutdownSut calls waitForIdle → IO.sleep, which needs nextInterval advances.
-            // The sentinel lets the outer switch from tickUntil (strict) to tickUntilAdvancing.
-            shutdownGate <- Deferred[IO, Unit]
-            _ <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
-            _ <- shutdownGate.get
-            shutdownProp <- shutdownSut(s, sut)
-        } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
 
         // Outer driver: advances the virtual clock and drives tickOne loops between commands.
         // tickAll / tick are not used — they iterate indefinitely over the per-actor 1 s ping loop.

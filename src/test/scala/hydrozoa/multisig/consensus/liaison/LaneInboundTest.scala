@@ -23,12 +23,12 @@ class LaneInboundTest extends AnyFunSuite {
 
     test("verify matches the cursor and reports the next; mismatch is reported") {
         val lane = contiguousFrom(0)
-        assert(lane.cursor.unsafeRunSync() == 0)
-        assert(lane.verify(List(0), 0) == Right(1))
-        assert(lane.verify(Nil, 0) == Right(0)) // empty leaves the cursor
-        assert(lane.verify(List(1), 0) == Left(Mismatch(0, 1)))
+        val _ = assert(lane.cursor.unsafeRunSync() == 0)
+        val _ = assert(lane.verify(List(0), 0) == Right(1))
+        val _ = assert(lane.verify(Nil, 0) == Right(0)) // empty leaves the cursor
+        val _ = assert(lane.verify(List(1), 0) == Left(Mismatch(0, 1)))
         // Consecutive multi-item slice advances to the last + 1.
-        assert(lane.verify(List(0, 1, 2), 0) == Right(3))
+        val _ = assert(lane.verify(List(0, 1, 2), 0) == Right(3))
         // Non-consecutive multi-item slice is rejected at the gap.
         assert(lane.verify(List(0, 2), 0) == Left(Mismatch(0, 2)))
     }
@@ -44,7 +44,7 @@ class LaneInboundTest extends AnyFunSuite {
     ) {
         val lane = sparseRemote
         // Initial inbound cursor is the remote's first led item (odd >= 1) => 1.
-        assert(lane.cursor.unsafeRunSync() == 1)
+        val _ = assert(lane.cursor.unsafeRunSync() == 1)
         // Receiving the remote's 1 advances the cursor to its next led item, 3.
         assert(lane.verify(List(1), 1) == Right(3))
     }

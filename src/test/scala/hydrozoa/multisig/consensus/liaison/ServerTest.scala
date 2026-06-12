@@ -24,7 +24,7 @@ class ServerTest extends AnyFunSuite {
         val server = new Server[Get, New](serve)(n => sent.update(_ :+ n))
 
         server.handleGet(Get(BatchNumber.zero, 5)).unsafeRunSync() // nothing yet -> stash
-        assert(sent.get.unsafeRunSync().isEmpty)
+        val _ = assert(sent.get.unsafeRunSync().isEmpty)
         queue.set(List(5)).unsafeRunSync()
         server.afterAppend.unsafeRunSync() // content arrived -> answer
         assert(sent.get.unsafeRunSync() == List(New(BatchNumber.zero, Some(5))))

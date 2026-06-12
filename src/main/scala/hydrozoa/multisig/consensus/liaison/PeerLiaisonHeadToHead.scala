@@ -8,7 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
@@ -19,7 +19,6 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
-import org.typelevel.log4cats.Logger
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -35,6 +34,7 @@ abstract class PeerLiaisonHeadToHead(
     remoteHead: HeadPeerId,
     pendingConnections: MultisigRegimeManager.PendingConnections |
         PeerLiaisonHeadToHead.Connections,
+    tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
 
@@ -60,11 +60,6 @@ abstract class PeerLiaisonHeadToHead(
                 )
             case own: PeerLiaisonHeadToHead.Connections => IO.pure(own)
         }
-
-    private given logger: Logger[IO] =
-        Logging.loggerIO(
-          s"PeerLiaisonHeadToHead.${config.ownPeerLabel}->${remoteHead.peerNum.convert}"
-        )
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
@@ -235,7 +230,8 @@ abstract class PeerLiaisonHeadToHead(
       accept = accept,
       dispatch = dispatch,
       numberOfBatchRequest = _.batchNum,
-      numberOfBatch = _.batchNum
+      numberOfBatch = _.batchNum,
+      tracer = tracer
     )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Serve half (our own production) --------------------------------------------------------
@@ -306,7 +302,7 @@ abstract class PeerLiaisonHeadToHead(
         for {
             c <- resolveConnections
             _ <- connections.set(Some(c))
-            _ <- logger.info(s"starting, remote head peer ${remoteHead.peerNum.convert}")
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -322,9 +318,12 @@ object PeerLiaisonHeadToHead {
         config: Config,
         remoteHead: HeadPeerId,
         pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHeadToHead] =
-        IO(new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections, persistence) {})
+        IO(
+          new PeerLiaisonHeadToHead(config, remoteHead, pendingConnections, tracer, persistence) {}
+        )
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section

@@ -26,7 +26,7 @@ class CoilPeersTest extends AnyFunSuite {
           )
         )
         val json = cps.asJson
-        assert(
+        val _ = assert(
           json.asObject.exists(o => o.contains("0") && o.contains("1")),
           s"keyed by number: $json"
         )
@@ -50,10 +50,10 @@ class CoilPeersTest extends AnyFunSuite {
             CoilPeerData(vk1, HeadPeerNumber(1))
           )
         )
-        assert(cps.verificationKeys == List(vk0, vk1))
-        assert(cps.verificationKey(CoilPeerNumber(0)).contains(vk0))
-        assert(cps.hubHeadPeerNumber(CoilPeerNumber(1)).contains(HeadPeerNumber(1)))
-        assert(cps.hubbedBy(HeadPeerNumber(0)) == List(CoilPeerNumber(0)))
+        val _ = assert(cps.verificationKeys == List(vk0, vk1))
+        val _ = assert(cps.verificationKey(CoilPeerNumber(0)).contains(vk0))
+        val _ = assert(cps.hubHeadPeerNumber(CoilPeerNumber(1)).contains(HeadPeerNumber(1)))
+        val _ = assert(cps.hubbedBy(HeadPeerNumber(0)) == List(CoilPeerNumber(0)))
         assert(cps.hubHeadPeerNumbers == List(HeadPeerNumber(0), HeadPeerNumber(1)))
     }
 }

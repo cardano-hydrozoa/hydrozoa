@@ -3,16 +3,13 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
 import cats.implicits.*
+import hydrozoa.lib.logging.ContraTracer
 import org.scalatest.funsuite.AnyFunSuite
-import org.typelevel.log4cats.Logger
-import org.typelevel.log4cats.noop.NoOpLogger
 
 /** Unit tests for the [[Puller]] pull-side state machine, with `Int`-cursor fake batch types so it
   * is exercised in isolation from real lanes.
   */
 class PullerTest extends AnyFunSuite {
-    private given Logger[IO] = NoOpLogger[IO]
-
     final case class Get(batchNum: BatchNumber, cursor: Int)
     final case class New(batchNum: BatchNumber, payload: Option[Int])
 
@@ -37,25 +34,26 @@ class PullerTest extends AnyFunSuite {
           accept = accept,
           dispatch = dispatch,
           numberOfBatchRequest = _.batchNum,
-          numberOfBatch = _.batchNum
+          numberOfBatch = _.batchNum,
+          tracer = ContraTracer.nullTracer[IO, PeerLiaisonEvent]
         )(g => sent.update(_ :+ g))
 
         puller.start.unsafeRunSync()
-        assert(sent.get.unsafeRunSync() == List(Get(BatchNumber.zero, 0)))
+        val _ = assert(sent.get.unsafeRunSync() == List(Get(BatchNumber.zero, 0)))
 
         puller.handleReply(New(BatchNumber.zero, Some(0))).unsafeRunSync()
-        assert(cursor.get.unsafeRunSync() == 1)
-        assert(dispatched.get.unsafeRunSync() == List(0))
-        assert(sent.get.unsafeRunSync().last == Get(BatchNumber(1), 1))
+        val _ = assert(cursor.get.unsafeRunSync() == 1)
+        val _ = assert(dispatched.get.unsafeRunSync() == List(0))
+        val _ = assert(sent.get.unsafeRunSync().last == Get(BatchNumber(1), 1))
 
         // Stale: batch 0 while the outstanding request is batch 1 -> dropped, no change.
         puller.handleReply(New(BatchNumber.zero, Some(1))).unsafeRunSync()
-        assert(cursor.get.unsafeRunSync() == 1)
+        val _ = assert(cursor.get.unsafeRunSync() == 1)
 
         // Gap: payload 2 but cursor is 1 -> rejected, no advance, no new request.
         val before = sent.get.unsafeRunSync().size
         puller.handleReply(New(BatchNumber(1), Some(2))).unsafeRunSync()
-        assert(cursor.get.unsafeRunSync() == 1)
+        val _ = assert(cursor.get.unsafeRunSync() == 1)
         assert(sent.get.unsafeRunSync().size == before)
     }
 }

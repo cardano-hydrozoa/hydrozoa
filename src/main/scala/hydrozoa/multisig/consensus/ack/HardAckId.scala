@@ -21,7 +21,14 @@ object HardAckId {
     def apply(peerId: PeerId, hardAckNum: HardAckNumber): HardAckId =
         (peerId, hardAckNum)
 
-    given Ordering[HardAckId] = Ordering.by((id: HardAckId) => (id._1, id._2))
+    // Compare components explicitly: inside this scope `HardAckId` dealiases to the bare tuple,
+    // so a tuple-derived `Ordering.by` would summon the very given being defined.
+    given Ordering[HardAckId] with {
+        override def compare(x: HardAckId, y: HardAckId): Int = {
+            val byPeer = Ordering[PeerId].compare(x._1, y._1)
+            if byPeer != 0 then byPeer else Ordering[HardAckNumber].compare(x._2, y._2)
+        }
+    }
 
     extension (self: HardAckId)
         def peerId: PeerId = self._1

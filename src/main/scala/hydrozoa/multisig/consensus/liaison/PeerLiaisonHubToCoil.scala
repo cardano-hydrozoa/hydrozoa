@@ -8,7 +8,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
@@ -19,7 +19,6 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
-import org.typelevel.log4cats.Logger
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
@@ -38,6 +37,7 @@ abstract class PeerLiaisonHubToCoil(
     config: PeerLiaisonHubToCoil.Config,
     coil: CoilPeerNumber,
     pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections,
+    tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
 
@@ -68,9 +68,6 @@ abstract class PeerLiaisonHubToCoil(
                 )
             case own: PeerLiaisonHubToCoil.Connections => IO.pure(own)
         }
-
-    private given logger: Logger[IO] =
-        Logging.loggerIO(s"PeerLiaisonHubToCoil.${config.ownPeerLabel}->c${coil.convert}")
 
     private val headPeerNums: List[HeadPeerNumber] = config.headPeerNums.toList
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
@@ -261,7 +258,8 @@ abstract class PeerLiaisonHubToCoil(
       accept = accept,
       dispatch = dispatch,
       numberOfBatchRequest = _.batchNum,
-      numberOfBatch = _.batchNum
+      numberOfBatch = _.batchNum,
+      tracer = tracer
     )(g => getConnections.flatMap(_.remote ! g))
 
     // ---- Actor shell ----------------------------------------------------------------------------
@@ -284,7 +282,7 @@ abstract class PeerLiaisonHubToCoil(
         for {
             c <- resolveConnections
             _ <- connections.set(Some(c))
-            _ <- logger.info(s"starting, coil peer c${coil.convert}")
+            _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -300,9 +298,10 @@ object PeerLiaisonHubToCoil {
         config: Config,
         coil: CoilPeerNumber,
         pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHubToCoil] =
-        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections, persistence) {})
+        IO(new PeerLiaisonHubToCoil(config, coil, pendingConnections, tracer, persistence) {})
 
     type Config =
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section

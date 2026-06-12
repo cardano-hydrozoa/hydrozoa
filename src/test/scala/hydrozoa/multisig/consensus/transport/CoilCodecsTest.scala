@@ -41,7 +41,7 @@ class CoilCodecsTest extends AnyFunSuite {
         val text = CoilFrame.encode(frame)
         CoilFrame.parse(text) match {
             case Right(decoded) =>
-                assert(
+                val _ = assert(
                   CoilFrame.encode(decoded) == text,
                   s"re-encode differs:\n  first: $text\n  again: ${CoilFrame.encode(decoded)}"
                 )

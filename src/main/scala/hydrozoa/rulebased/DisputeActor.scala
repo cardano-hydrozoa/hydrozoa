@@ -13,7 +13,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
@@ -57,11 +57,9 @@ extension (tx: Transaction) {
 final case class DisputeActor(
     action: RuleBasedRegimeManager.DisputeAction,
     cardanoBackend: CardanoBackend[IO],
-    tracerLocal: IOLocal[Tracer]
+    tracer: ContraTracer[IO, DisputeActorEvent]
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
-
-    given IOLocal[Tracer] = tracerLocal
 
     private def handleCardanoBackendError[A](
         action: IO[Either[CardanoBackend.Error, A]]
@@ -73,13 +71,11 @@ final case class DisputeActor(
                 // the next poll. We expect transient failures from UTxO contention, validity-interval
                 // mismatches (e.g. tally attempted before deadline), and rollbacks.
                 case Left(e) =>
-                    EitherT.left(for {
-                        _ <- Tracer.warn(
-                          "Cardano backend error encountered. This may be due to " +
-                              "timeout, utxo contention, rollbacks, or timing skew, but it may also be a genuine error." +
-                              s"\n\tError: \n$e"
-                        )
-                    } yield Error.RecoverableCardanoBackendError(e))
+                    EitherT.left(
+                      tracer
+                          .traceWith(DisputeActorEvent.CardanoBackendError(e))
+                          .as(Error.RecoverableCardanoBackendError(e))
+                    )
                 case Right(a) => EitherT.right[DisputeActor.Error.RecoverableErrors](IO.pure(a))
             }
         } yield a
@@ -94,12 +90,12 @@ final case class DisputeActor(
         wrapError: E => Throwable,
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
         for {
-            _ <- EitherT.liftF(Tracer.info(s"Building $label Tx"))
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.BuildingTx(label)))
             tx <- result match {
                 case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
                 case Right(tx) => EitherT.right(IO.pure(tx))
             }
-            _ <- EitherT.liftF(Tracer.info(s"Submitting $label Tx"))
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.SubmittingTxLabel(label)))
             _ <- signAndSubmitTx[T](tx)
         } yield ()
 
@@ -108,17 +104,23 @@ final case class DisputeActor(
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
         for {
             _ <- EitherT.right(
-              Tracer.info(s"Submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+              tracer.traceWith(
+                DisputeActorEvent.SubmittingTxFamily(tx.transactionFamily, tx.tx.id.toString)
+              )
             )
             _ <- EitherT.right(
-              Tracer.debug(
-                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(tx.tx).render(100)}" +
-                    s"\n\tcbor: ${HexUtil.encodeHexString(tx.tx.toCbor)}"
+              tracer.traceWith(
+                DisputeActorEvent.TxCbor(
+                  summon[Pretty[Transaction]].pretty(tx.tx).render(100),
+                  HexUtil.encodeHexString(tx.tx.toCbor)
+                )
               )
             )
             res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
             _ <- EitherT.right(
-              Tracer.info(s"SUCCESS submitting ${tx.transactionFamily} with Id ${tx.tx.id}")
+              tracer.traceWith(
+                DisputeActorEvent.TxSubmitSuccess(tx.transactionFamily, tx.tx.id.toString)
+              )
             )
         } yield res
     }
@@ -127,7 +129,9 @@ final case class DisputeActor(
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] = {
         val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
         for {
-            _ <- EitherT.liftF(Tracer.debug(s"Looking for collateral utxos at address ${peerAddr}"))
+            _ <- EitherT.liftF(
+              tracer.traceWith(DisputeActorEvent.LookingForCollateral(peerAddr.toString))
+            )
             collateralCandidates <- handleCardanoBackendError(
               cardanoBackend.utxosAt(peerAddr)
             )
@@ -157,14 +161,13 @@ final case class DisputeActor(
                       )
                     )
                 case _ =>
-                    EitherT.liftF(for {
-                        _ <- Tracer.error(
-                          s"Could not find a collateral utxo for peer ${config.ownPeerLabel}"
-                        )
-                        res <- IO.raiseError(NoSuitableCollateralUtxosFound)
-                    } yield res)
+                    EitherT.liftF(
+                      tracer
+                          .traceWith(DisputeActorEvent.NoCollateralFound(config.ownPeerLabel))
+                          .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
+                    )
             }
-            _ <- EitherT.liftF(Tracer.debug("Found collateral utxo"))
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.CollateralFound))
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
     }
 
@@ -187,7 +190,7 @@ final case class DisputeActor(
                     (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
               )
             )
-            treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
+            treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)(using config, tracer)
 
             _ <- disputeUtxos match {
                 case DisputeUtxos.CastVote(ownBallotBox) =>
@@ -231,7 +234,7 @@ final case class DisputeActor(
                     val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
-                        _ <- EitherT.liftF(Tracer.info("Tallying..."))
+                        _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.Tallying))
 
                         removed <- keySorted.tail.find(ballotBox =>
                             ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
@@ -291,11 +294,7 @@ final case class DisputeActor(
         context.self ! Requests.PreStart
 
     private def preStartLocal: IO[Unit] =
-        for {
-            _ <- context.setReceiveTimeout(config.evacuationBotPollingPeriod, HandleDisputeRes)
-
-            _ <- Tracer.routeLocal(s"DisputeActor.${config.ownPeerLabel}")
-        } yield ()
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, HandleDisputeRes)
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal
@@ -462,11 +461,6 @@ object DisputeActor {
 
     }
 
-    // TODO: replace brittle string sentinels with domain-specific typed log events
-    object LogMessages:
-        val TreasuryIsResolved = "Treasury is Resolved"
-        val TreasuryIsUnresolved = "Treasury is Unresolved"
-
     // Parsing. Its in EitherT over IO because we have some recoverable failures (Lefts) and some unrecoverable failures
     // thrown as exceptions.
     // - If we get more than one treasury token or a parsing failure, thats an exception
@@ -476,11 +470,11 @@ object DisputeActor {
         utxos: Utxos
     )(using
         config: Config,
-        tracer: IOLocal[Tracer]
+        tracer: ContraTracer[IO, DisputeActorEvent]
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         import RuleBasedTreasuryUtxo.LookupError
         for {
-            _ <- EitherT.liftF(Tracer.debug("parsing RuleBased Treasury"))
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.ParsingTreasury))
             treasuryUtxo <- EitherT(
               IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
                   case Right(u) => Right(u)
@@ -492,20 +486,20 @@ object DisputeActor {
             _ <- treasuryUtxo.treasuryOutput.datum match {
                 case _: RuleBasedTreasuryDatum.Unresolved =>
                     EitherT.liftF[IO, Error.RecoverableErrors, Unit](
-                      Tracer.info(LogMessages.TreasuryIsUnresolved)
+                      tracer.traceWith(DisputeActorEvent.TreasuryIsUnresolved)
                     )
                 case _: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.left[Unit](
-                      Tracer
-                          .info(LogMessages.TreasuryIsResolved)
-                          .as(
-                            TreasuryResolved: Error.RecoverableErrors
-                          )
+                      tracer
+                          .traceWith(DisputeActorEvent.TreasuryIsResolved)
+                          .as(TreasuryResolved: Error.RecoverableErrors)
                     )
             }
 
             _ <- EitherT.liftF(
-              Tracer.debug(s"Found treasury utxo with ${treasuryUtxo.treasuryOutput.value}")
+              tracer.traceWith(
+                DisputeActorEvent.TreasuryFound(treasuryUtxo.treasuryOutput.value.toString)
+              )
             )
         } yield treasuryUtxo
 }
