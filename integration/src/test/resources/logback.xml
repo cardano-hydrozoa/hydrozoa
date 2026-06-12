@@ -64,7 +64,6 @@
     <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
     <logger name="Stage4.BlockBriefObserver" level="info"/>
-    <logger name="Stage4.StackObserver" level="debug"/>
 
 
     <!-- hydrozoa -->
