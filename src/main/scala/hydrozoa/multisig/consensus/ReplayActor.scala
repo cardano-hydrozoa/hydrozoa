@@ -37,8 +37,8 @@ import scalus.cardano.address.ShelleyAddress
   *      Block spine → FCA at `softConfirmed+1` and BlockWeaver at `softAcked+1`, Stack spine →
   *      StackComposer at `hardAcked+1`).
   *
-  * Inbound is not restored from PeerLiaison (it forwards, holds no inbound queue); this is the
-  * single place that re-feeds the consensus actors from the persisted lane tail.
+  * Inbound is not restored from PeerLiaisonHeadToHead (it forwards, holds no inbound queue); this
+  * is the single place that re-feeds the consensus actors from the persisted lane tail.
   */
 object ReplayActor:
 
@@ -191,3 +191,6 @@ object ReplayActor:
                 if Ordering[StackNumber].gteq(brief.stackNum, cursors.stackSpineForComposer.num)
                 then targets.stackComposer ! brief
                 else IO.unit
+            // Coil lanes are not replayed: replay is head-shaped (`ReplayCursors.scanLanes` never
+            // includes them); coil-peer recovery is a separate workstream.
+            case _: LaneKey.CoilHardAck | _: LaneKey.HubHardAck => IO.unit

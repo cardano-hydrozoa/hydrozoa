@@ -8,20 +8,20 @@ package hydrozoa.integration
   * `cats-actors` `ActorSystem`, and verify that the protocol behaves correctly under concurrent
   * user requests, deposits, and inevitable per-peer message reordering.
   *
-  * Each peer's `PeerLiaison` actors are wired directly to their counterparts in-process via
+  * Each peer's `PeerLiaisonHeadToHead` actors are wired directly to their counterparts in-process via
   * `cats-actors` `ActorRef`s — there is no serialization and no network. Stage 5 (planned) replaces
   * the in-process wiring with real point-to-point peer transport, container-per-peer.
   *
   * ==SUT architecture==
   *
-  *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `EventSequencer`, `JointLedger`,
-  *     `FastConsensusActor`, plus one `PeerLiaison` per (local, remote) pair, all wired in-process.
+  *   - For each peer: `BlockWeaver`, `CardanoLiaison`, `RequestSequencer`, `JointLedger`,
+  *     `FastConsensusActor`, plus one `PeerLiaisonHeadToHead` per (local, remote) pair, all wired in-process.
   *     There is no real network transport.
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
   *     state).
   *   - Factory pattern: build all actors against a `Deferred[IO,
   *     MultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
-  *     exist so the cross-peer `PeerLiaison` graph can be wired.
+  *     exist so the cross-peer `PeerLiaisonHeadToHead` graph can be wired.
   *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `FastConsensusActor` to capture
   *     both leader-produced and follower-reproduced block briefs into per-peer
   *     `Ref[IO, Vector[BlockBrief.Intermediate]]`.
@@ -76,8 +76,8 @@ package hydrozoa.integration
   * Without TestControl the model clock and the harness submission wall-clock still stay in lockstep
   * at every command boundary — the harness sleeps `interArrivalDelay` real milliseconds and the
   * model advances by the same `interArrivalDelay` in `runState`, so the value the model assigns to
-  * a request's submission time matches the wall time when `EventSequencer` accepts the `?:`. The
-  * subtler concern is one level deeper: the `?:` returns as soon as the EventSequencer enqueues the
+  * a request's submission time matches the wall time when `RequestSequencer` accepts the `?:`. The
+  * subtler concern is one level deeper: the `?:` returns as soon as the RequestSequencer enqueues the
   * request, '''not''' when the leader actually folds it into a block. Block production, cross-peer
   * consensus, peer round-trips, and L1 polling all happen asynchronously on real wall-clock time
   * when TestControl is off. The leader evaluates the event at its block's `blockCreationStartTime`,
@@ -137,7 +137,7 @@ package hydrozoa.integration
   *      ([[Generator.CommandGenerators.genL2TxCommand]] or
   *      [[Generator.CommandGenerators.genRegisterDepositCommand]]).
   *   2. '''Execution''' — `SutCommand.run` submits each request directly to the owning peer's
-  *      `EventSequencer`. Validity is recorded per request in [[Model.ModelState.modelFlags]]; the
+  *      `RequestSequencer`. Validity is recorded per request in [[Model.ModelState.modelFlags]]; the
   *      SUT's verdicts come later from the block briefs.
   *   3. '''Shutdown / analysis''' — `Stage4Suite.shutdownSut` cancels the liaison tick fibers,
   *      drains the actor system via `waitForIdle` so any in-progress block seals and is captured by

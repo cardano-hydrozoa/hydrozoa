@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import scala.collection.immutable.SortedMap
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, Coin, EvaluatorMode, MultiAsset, PlutusScriptEvaluator, TransactionOutput, Utxo, Utxos, Value}
@@ -25,10 +25,10 @@ object Janitor:
       *   - burns all token under [[headPolicy]]
       *   - sends all ADA to [[faucetAddress]]
       *   - sends all non-head tokens to [[tokenRecoveryAddress]] (if defined)
-      *   - is signed by [[headPeerWallet]]
+      *   - is signed by [[peerWallet]]
       *
       * @param backend
-      * @param headPeerWallet
+      * @param peerWallet
       * @param config
       * @param faucetAddress
       * @param tokenRecoveryAddress
@@ -36,7 +36,7 @@ object Janitor:
     def cleanUp(
         backend: CardanoBackend[IO],
         config: HeadConfig,
-        headPeerWallet: HeadPeerWallet,
+        peerWallet: PeerWallet,
         faucetAddress: ShelleyAddress,
         tokenRecoveryAddress: Option[ShelleyAddress]
     ): IO[Unit] = for {
@@ -163,7 +163,7 @@ object Janitor:
                     )
                     .fold(err => throw RuntimeException(err.toString), _.transaction)
 
-                signed = headPeerWallet.signTx(balanced)
+                signed = peerWallet.signTx(balanced)
 
                 _ <- logger.info(s"clean-up tx: ${HexUtil.encodeHexString(signed.toCbor)}")
 

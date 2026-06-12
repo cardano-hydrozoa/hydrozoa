@@ -129,7 +129,7 @@ object HeadPeers {
         final def headPeerVKey(p: HeadPeerId): Option[VerificationKey] =
             Option.when(p.nHeadPeers == nHeadPeers)(headPeerVKeys.toList(p.peerNum))
 
-        final def headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
+        def headMultisigScript: HeadMultisigScript = HeadMultisigScript(this)
 
         final def nHeadPeers: PositiveInt = PositiveInt.unsafeApply(headPeerVKeys.size)
     }

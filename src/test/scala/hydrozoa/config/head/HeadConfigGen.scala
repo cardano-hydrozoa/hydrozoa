@@ -2,6 +2,7 @@ package hydrozoa.config.head
 
 import cats.data.{Kleisli, ReaderT, Validated}
 import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters, InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.fallback.generateFallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
@@ -45,7 +46,8 @@ def generateHeadConfigBootstrap(
       InitializationParametersGenBottomUp.generateInitializationParameters
     ),
     generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
-        generateScriptReferenceUtxos
+        generateScriptReferenceUtxos,
+    coilPeers: CoilPeers = CoilPeers.empty
 ): GenWithTestPeers[HeadConfig.Bootstrap] =
     for {
         testPeers <- Kleisli.ask
@@ -75,7 +77,7 @@ def generateHeadConfigBootstrap(
           cardanoNetwork = cardanoNetwork,
           headParams = headParams,
           headPeers = testPeers.headPeers,
-          coilPeers = List.empty,
+          coilPeers = coilPeers,
           initializationParams = initializationParams,
           scriptReferenceUtxos = scriptReferenceUtxos
         ) match {

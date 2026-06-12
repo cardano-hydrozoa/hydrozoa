@@ -24,9 +24,10 @@ object NodeOperationMultisigConfig {
         def peerLiaisonMaxRequestsPerBatch: PositiveInt =
             nodeOperationMultisigConfig.peerLiaisonMaxRequestsPerBatch
 
-        /** How often each [[hydrozoa.multisig.consensus.PeerLiaison]] re-sends its currently
-          * outstanding `GetMsgBatch` to the remote peer, to recover from a stalled request-response
-          * chain (e.g. caused by a dropped WS frame). The re-send is idempotent on the wire.
+        /** How often each [[hydrozoa.multisig.consensus.PeerLiaisonHeadToHead]] re-sends its
+          * currently outstanding `GetMsgBatch` to the remote peer, to recover from a stalled
+          * request-response chain (e.g. caused by a dropped WS frame). The re-send is idempotent on
+          * the wire.
           */
         def peerLiaisonResendInterval: FiniteDuration =
             nodeOperationMultisigConfig.peerLiaisonResendInterval

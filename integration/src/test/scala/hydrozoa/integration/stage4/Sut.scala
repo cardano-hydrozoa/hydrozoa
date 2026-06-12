@@ -2,15 +2,13 @@ package hydrozoa.integration.stage4
 
 import cats.effect.{Fiber, IO, IOLocal, Ref}
 import cats.syntax.all.*
-import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.lib.logging.{Logging, Tracer}
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, FastConsensusActor, EventSequencer, PeerLiaison, SlowConsensusActor, StackComposer, UserRequest, UserRequestWithId}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.block.BlockBrief
-import BlockBrief.{Minor as BMinor, Major as BMajor}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.joint.JointLedger
@@ -25,7 +23,7 @@ import org.scalacheck.commands.SutCommand
 private[stage4] case class PeerStack(
     blockWeaver: BlockWeaver.Handle,
     cardanoLiaison: CardanoLiaison.Handle,
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
     jointLedger: JointLedger.Handle,
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
@@ -43,90 +41,12 @@ private[stage4] case class PeerStack(
 )
 
 // ===================================
-// Block brief observer
-// ===================================
-
-/** Proxy actor wrapping FastConsensusActor. Intercepts intermediate `BlockBrief`s (Minor / Major)
-  * to record the per-peer brief sequence; forwards everything else unchanged. Both leader-produced
-  * and follower-reproduced briefs flow through JointLedger.handleBlock → FastConsensusActor, so
-  * this captures the complete ordered sequence seen by the peer.
-  */
-private[stage4] class BlockBriefObserver(
-    peerNum: HeadPeerNumber,
-    real: FastConsensusActor.Handle,
-    briefs: Ref[IO, Vector[BlockBrief.Intermediate]],
-) extends Actor[IO, FastConsensusActor.Request]:
-    private val logger = Logging.loggerIO(s"Stage4.BlockBriefObserver.${peerNum: Int}")
-    override def receive: Receive[IO, FastConsensusActor.Request] = {
-        case brief: BMinor =>
-            logger.debug(
-              s"received BlockBrief.Minor block=${brief.blockNum}, capturing and forwarding"
-            ) >>
-                briefs.update(_ :+ brief) >>
-                (real ! brief) >>
-                logger.debug(
-                  s"forwarded BlockBrief.Minor block=${brief.blockNum} to real FastConsensusActor"
-                )
-        case brief: BMajor =>
-            logger.debug(
-              s"received BlockBrief.Major block=${brief.blockNum}, capturing and forwarding"
-            ) >>
-                briefs.update(_ :+ brief) >>
-                (real ! brief) >>
-                logger.debug(
-                  s"forwarded BlockBrief.Major block=${brief.blockNum} to real FastConsensusActor"
-                )
-        case msg =>
-            logger.debug(s"received non-brief msg=${msg.getClass.getSimpleName}, forwarding") >>
-                (real ! msg) >>
-                logger.debug(
-                  s"forwarded non-brief msg=${msg.getClass.getSimpleName} to real FastConsensusActor"
-                )
-    }
-
-// ===================================
-// Stack observer
-// ===================================
-
-/** Proxy actor wrapping CardanoLiaison. Intercepts every `Stack.HardConfirmed` the peer's
-  * SlowConsensusActor emits (the slow cycle's terminal artifact) to record the per-peer sequence of
-  * hard-confirmed stacks; forwards everything else (and the stack itself) unchanged so the real
-  * CardanoLiaison still drives L1 submission. Parallels [[BlockBriefObserver]] on the slow side.
-  */
-private[stage4] class StackObserver(
-    peerNum: HeadPeerNumber,
-    real: CardanoLiaison.Handle,
-    stacks: Ref[IO, Vector[Stack.HardConfirmed]],
-) extends Actor[IO, CardanoLiaison.Request]:
-    private val logger = Logging.loggerIO(s"Stage4.StackObserver.${peerNum: Int}")
-    override def receive: Receive[IO, CardanoLiaison.Request] = {
-        case s: Stack.HardConfirmed =>
-            val brief = s.brief
-            logger.debug(
-              s"received Stack.HardConfirmed stack=${brief.stackNum} " +
-                  s"blocks=${brief.firstBlockNum}..${brief.lastBlockNum}, " +
-                  "capturing and forwarding"
-            ) >>
-                stacks.update(_ :+ s) >>
-                (real ! s) >>
-                logger.debug(
-                  s"forwarded Stack.HardConfirmed stack=${brief.stackNum} to real CardanoLiaison"
-                )
-        case msg =>
-            logger.debug(s"received non-stack msg=${msg.getClass.getSimpleName}, forwarding") >>
-                (real ! msg) >>
-                logger.debug(
-                  s"forwarded non-stack msg=${msg.getClass.getSimpleName} to real CardanoLiaison"
-                )
-    }
-
-// ===================================
 // Stage 4 SUT
 // ===================================
 
 /** Per-peer actor handles exposed to SUT commands. */
 case class Stage4PeerHandle(
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
 )
 
 case class Stage4Sut(
@@ -144,16 +64,20 @@ case class Stage4Sut(
     // (poll L1 + push `PollResults` to BlockWeaver).
     liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
-    // Per-peer hard-confirmed stacks captured by [[StackObserver]] (the slow cycle's
+    // Per-peer hard-confirmed stacks captured by the SCA ContraTracer sink (the slow cycle's
     // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
     // `analyzeBlockBriefs` to assert the slow side covered every observed block.
     stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA ContraTracer sink
+    // (same mechanism as `stacks` on the head side). Empty for a pure-head run. Used to assert
+    // the coil peer participates in the slow cycle.
+    coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
-    tracerLocal: IOLocal[Tracer],
+    tracerLocal: IOLocal[Slf4jTracer],
     // Cleanup hooks for resources allocated outside the actor system (currently the
     // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
     // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
@@ -162,13 +86,14 @@ case class Stage4Sut(
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from the
-  *     corresponding peer's actor system. In-process, no network. Compatible with
-  *     [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct
-  *     port. Cross-peer communication happens over real WebSocket connections. Forces
-  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
-  *     Ports start at [[basePort]] and increase by `peerNum`.
+  *   - [[Direct]] (default) — every peer's liaison gets the actual remote handle from the
+  *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
+  *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
+  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
+  *     on a distinct port, mounting `/head` for the head mesh and (on a hub) `/hub` for its coil
+  *     peers; each coil dials its hub's `/hub`. Cross-peer communication happens over real
+  *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
+  *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
   */
 enum TransportMode:
     case Direct
@@ -187,28 +112,28 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's EventSequencer.
+    // L2 tx: submit directly to the peer's RequestSequencer.
     // Result is always Valid (trivial); oracle check in shutdownSut compares model
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Tracer] = sut.tracerLocal
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
-                _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with EventSequencer AND submit the signed deposit tx to the shared
+    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Tracer] = sut.tracerLocal
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
-                _ <- Tracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
             } yield ValidityFlag.Valid

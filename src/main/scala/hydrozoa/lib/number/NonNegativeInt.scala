@@ -10,7 +10,10 @@ object NonNegativeInt {
     def apply(i: scala.Int): Option[NonNegativeInt] = if i >= 0 then Some(i) else None
 
     def unsafeApply(i: scala.Int): NonNegativeInt = {
-        require(i >= 0)
+        require(
+          i >= 0,
+          s"Creating a NonNegativeInt requires an integer greater than -1, but we got $i. You may want to check for overflow."
+        )
         i
     }
 

@@ -48,7 +48,7 @@ object Markers:
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or
       * `RequestNumber(0)` for an empty store. The same own-prefixed-max read as the `*Acked`
-      * markers, but the Request key is `[peer:1][requestNum:8]` (8-byte index). EventSequencer
+      * markers, but the Request key is `[peer:1][requestNum:8]` (8-byte index). RequestSequencer
       * seeds its counter with this on boot (R3).
       */
     def recoverNextRequestNumber(

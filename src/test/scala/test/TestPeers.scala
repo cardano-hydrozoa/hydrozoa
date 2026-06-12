@@ -13,7 +13,7 @@ import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, HeadPeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
@@ -114,10 +114,10 @@ case class TestPeers private (
         addressCache.useOrCreate(peer)
     }
 
-    def walletFor(peerNumber: HeadPeerNumber): HeadPeerWallet =
+    def walletFor(peerNumber: HeadPeerNumber): PeerWallet =
         walletFor(TestPeerName.fromOrdinal(peerNumber))
 
-    def walletFor(peer: TestPeerName): HeadPeerWallet =
+    def walletFor(peer: TestPeerName): PeerWallet =
         require(
           peer.ordinal < peersNumber,
           s"Can't access peer $peer there is only $peersNumber is the head"
@@ -173,11 +173,10 @@ case class TestPeers private (
             verificationKeyFor(peer).shelleyAddress()(using cardanoNetwork)
         )
 
-    private val walletCache: mutable.Map[TestPeerName, HeadPeerWallet] = mutable.Map.empty
+    private val walletCache: mutable.Map[TestPeerName, PeerWallet] = mutable.Map.empty
         .withDefault(peer => {
             val hdKeyPair = bloxbeanAccountFor(peer).hdKeyPair()
-            HeadPeerWallet(
-              HeadPeerNumber(peer.ordinal),
+            PeerWallet(
               WalletModule.BloxBean,
               hdKeyPair.getPublicKey,
               hdKeyPair.getPrivateKey

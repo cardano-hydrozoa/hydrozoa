@@ -1,8 +1,8 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.UserRequestWithId
-import hydrozoa.multisig.consensus.ack.{HardAck as HardAckMsg, HardAckNumber, SoftAck as SoftAckMsg, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.ack.{HardAck as HardAckMsg, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck as SoftAckMsg, SoftAckNumber}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -20,6 +20,8 @@ import java.nio.ByteBuffer
   *   - `Request` → `[peer : 1][requestNum : 8]`
   *   - `SoftAck` → `[peer : 1][softAckNum : 4]`
   *   - `HardAck` → `[peer : 1][hardAckNum : 4]`
+  *   - `CoilHardAck` → `[coil : 1][hardAckNum : 4]`
+  *   - `HubHardAck` → `[hub : 1][hubHardAckNum : 4]`
   *
   * The lane-type discriminant is the column family ([[Cf]]) — no tag byte in the key.
   *
@@ -83,6 +85,25 @@ object LaneKey:
         def laneId: LaneId = LaneId.HardAck(peer)
         def encode: Array[Byte] = peerByte(peer) ++ intBytes(num)
 
+    /** Coil-hard-ack receive lane (per coil peer): a hub's raw inbound hard-ack from one of its
+      * coil peers, keyed by `(coil, hardAckNum)`. Persisted by `PeerLiaisonHubToCoil` on receipt so
+      * a coil peer's ack survives a hub crash before `CoilAckSequencer` re-sequences it.
+      */
+    final case class CoilHardAck(coil: CoilPeerNumber, num: HardAckNumber) extends LaneKey:
+        type Value = LaneValue[HardAckMsg]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
+        def laneId: LaneId = LaneId.CoilHardAck(coil)
+        def encode: Array[Byte] = coilByte(coil) ++ intBytes(num)
+
+    /** Hub-hard-ack lane (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
+      * the head mesh and the hub→coil links, keyed by `(hub, hubHardAckNum)`.
+      */
+    final case class HubHardAck(hub: HeadPeerNumber, num: HubHardAckNumber) extends LaneKey:
+        type Value = LaneValue[HardAckWithId]
+        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckWithId]
+        def laneId: LaneId = LaneId.HubHardAck(hub)
+        def encode: Array[Byte] = peerByte(hub) ++ intBytes(num)
+
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed
       * payload (interpreted as store corruption — fail safe).
       */
@@ -102,6 +123,12 @@ object LaneKey:
         case Cf.HardAck =>
             requireLen(cf, bytes, 1 + 4)
             HardAck(HeadPeerNumber(readPeer(bytes, 0)), HardAckNumber(readIntBE(bytes, 1)))
+        case Cf.CoilHardAck =>
+            requireLen(cf, bytes, 1 + 4)
+            CoilHardAck(CoilPeerNumber(readPeer(bytes, 0)), HardAckNumber(readIntBE(bytes, 1)))
+        case Cf.HubHardAck =>
+            requireLen(cf, bytes, 1 + 4)
+            HubHardAck(HeadPeerNumber(readPeer(bytes, 0)), HubHardAckNumber(readIntBE(bytes, 1)))
         case Cf.BlockResult | Cf.SoftConfirmation | Cf.HardConfirmation | Cf.DepositMap |
             Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.L2CommandNumber |
             Cf.UnsignedStack | Cf.Meta =>
@@ -120,6 +147,10 @@ object LaneKey:
     /** Encode a `HeadPeerNumber` (constrained `< 2⁸`) as a single byte. */
     private[persistence] def peerByte(peer: HeadPeerNumber): Array[Byte] =
         Array(((peer: Int) & 0xff).toByte)
+
+    /** Encode a `CoilPeerNumber` (constrained `< 2⁸`) as a single byte. */
+    private[persistence] def coilByte(coil: CoilPeerNumber): Array[Byte] =
+        Array(((coil: Int) & 0xff).toByte)
 
     private def readIntBE(bytes: Array[Byte], offset: Int): Int =
         ByteBuffer.wrap(bytes, offset, 4).getInt

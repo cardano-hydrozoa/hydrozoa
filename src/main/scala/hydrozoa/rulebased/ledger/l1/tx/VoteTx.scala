@@ -3,17 +3,15 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -27,7 +25,7 @@ import monocle.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{BlockHeader as _, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
+import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
@@ -35,8 +33,8 @@ import scalus.uplc.builtin.Data.fromData
 import scalus.uplc.builtin.{ByteString, Data}
 
 final case class VoteTx(
-    voteUtxoSpent: VoteUtxo[VoteStatus.AwaitingVote],
-    voteUtxoProduced: VoteUtxo[VoteStatus.Voted],
+    ballotBoxSpent: BallotBox[VoteStatus.AwaitingVote],
+    ballotBoxProduced: BallotBox[VoteStatus.Voted],
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
@@ -49,8 +47,8 @@ object VoteTx {
 }
 
 private object VoteTxOps {
-    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Bootstrap.Section & ScriptReferenceUtxos.Section &
+        FallbackContingency.Section & OwnPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:
@@ -71,15 +69,18 @@ private object VoteTxOps {
     }
 
     final case class Build(
-        uncastVoteUtxo: VoteUtxo[VoteStatus.AwaitingVote],
+        uncastBallotBox: BallotBox[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
+        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
     ) {
 
-        // TODO relocate to "VoteOutput" companion object?
-        def parseAndVote(unparsedVoteDatum: Option[DatumOption]): Either[Error, VoteOutput[Voted]] =
+        // TODO relocate to "BallotBoxOutput" companion object?
+        def parseAndVote(
+            unparsedVoteDatum: Option[DatumOption]
+        ): Either[Error, BallotBoxOutput[Voted]] =
             unparsedVoteDatum match {
                 case Some(DatumOption.Inline(datumData)) =>
                     Try(fromData[VoteDatum](datumData)) match {
@@ -87,7 +88,7 @@ private object VoteTxOps {
                             voteDatum.voteStatus match {
                                 case AwaitingVote(_) =>
                                     Right(
-                                      uncastVoteUtxo.voteOutput.castVote(
+                                      uncastBallotBox.ballotBoxOutput.castVote(
                                         sec.commitment,
                                         sec.versionMinor
                                       )
@@ -110,10 +111,10 @@ private object VoteTxOps {
             import Build.Error
 
             // Extract current vote datum from the UTXO
-            val uncastVoteOutput = uncastVoteUtxo.toUtxo.output
+            val uncastBallotBoxOutput = uncastBallotBox.toUtxo.output
 
             for {
-                newVoteDatum <- parseAndVote(uncastVoteOutput.datumOption)
+                newVoteDatum <- parseAndVote(uncastBallotBoxOutput.datumOption)
                 votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
                   Error.TreasuryParseError(_)
                 )
@@ -122,7 +123,7 @@ private object VoteTxOps {
         }
 
         private def buildVoteTx(
-            votedOutput: VoteOutput[Voted],
+            votedOutput: BallotBoxOutput[Voted],
             votingDeadline: Slot
         )(using config: Config): Either[SomeBuildError, VoteTx] = {
 
@@ -132,6 +133,14 @@ private object VoteTxOps {
                 sec,
                 SList.from(
                   signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+                ),
+                SList.from(
+                  coilSignatures.map {
+                      case Some(sig) =>
+                          SOption.Some(ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+                      case None =>
+                          SOption.None
+                  }
                 )
               )
             )
@@ -146,7 +155,7 @@ private object VoteTxOps {
                     collateralUtxo.collateralOutput.send,
                     // Spend the vote utxo with dispute resolution script witness
                     // So far we use in-place script
-                    uncastVoteUtxo.votingSpend(redeemer),
+                    uncastBallotBox.votingSpend(redeemer),
                     // Send back to the vote contract address with updated datum
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
@@ -163,9 +172,9 @@ private object VoteTxOps {
                     )
 
             } yield VoteTx(
-              voteUtxoSpent = uncastVoteUtxo,
-              voteUtxoProduced = VoteUtxo(
-                TransactionInput(finalized.transaction.id, 0),
+              ballotBoxSpent = uncastBallotBox,
+              ballotBoxProduced = BallotBox(
+                TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
               tx = finalized.transaction

@@ -37,12 +37,12 @@ class Unit extends AnyFunSuite {
     }
 
     test("MultiAsset.Unbounded added to zero is identity") {
-        assert(ma + MultiAsset.Unbounded.zero === ma)
+        val _ = assert(ma + MultiAsset.Unbounded.zero === ma)
         assert(MultiAsset.Unbounded.zero + ma === ma)
     }
 
     test("MultiAsset.Unbounded minus zero") {
-        assert(ma - MultiAsset.Unbounded.zero === ma)
+        val _ = assert(ma - MultiAsset.Unbounded.zero === ma)
         assert(MultiAsset.Unbounded.zero - ma === -ma)
     }
 
@@ -74,10 +74,10 @@ class Unit extends AnyFunSuite {
 
         // multiset2 uses the sensible additive monoid, namely addition on integers
         val multiset2: Multiset[String, Int, goodMonoid.type, Order[String]] = {
-            given badMonoid: AdditiveMonoid[Int] = new AdditiveMonoid[Int] {
-                override def zero: Int = 1
-                override def plus(x: Int, y: Int): Int = x * y
-            }
+//            given badMonoid: AdditiveMonoid[Int] = new AdditiveMonoid[Int] {
+//                override def zero: Int = 1
+//                override def plus(x: Int, y: Int): Int = x * y
+//            }
             Multiset(SortedMap("foo" -> 0, "bar" -> 1))
             // Trying to force the `badMonoid` into the multiset should
             // give a compiler error:

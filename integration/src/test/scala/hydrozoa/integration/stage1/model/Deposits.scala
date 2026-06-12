@@ -2,7 +2,6 @@ package hydrozoa.integration.stage1.model
 
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.Commands.RegisterDepositCommand
 import hydrozoa.integration.stage1.Model
 
@@ -10,7 +9,7 @@ import scala.collection.immutable.Queue
 import monocle.*
 import monocle.syntax.all.*
 import scalus.|>
-import cats.data.{Kleisli, RWS, State}
+import cats.data.{RWS, State}
 import cats.*
 import cats.syntax.all.*
 import Deposits.DepositStatus

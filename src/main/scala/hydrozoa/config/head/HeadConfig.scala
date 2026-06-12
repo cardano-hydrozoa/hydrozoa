@@ -9,7 +9,7 @@ import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
 import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
-import hydrozoa.config.head.coil.CoilPeer
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -22,15 +22,17 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
 import scalus.cardano.ledger.*
+import scalus.crypto.ed25519.VerificationKey
 
 /** Invariant: this _must_ be able to project down to a HeadConfig.Bootstrap
   */
@@ -38,7 +40,7 @@ final case class HeadConfig private (
     override val cardanoNetwork: CardanoNetwork,
     override val headParameters: HeadParameters,
     override val headPeers: HeadPeers,
-    override val coilPeers: List[CoilPeer],
+    override val coilPeers: CoilPeers,
     _initialEvacuationMap: EvacuationMap,
     _initialEquityContributions: NonEmptyMap[HeadPeerNumber, Coin],
     override val scriptReferenceUtxos: ScriptReferenceUtxos,
@@ -201,7 +203,7 @@ object HeadConfig {
         cardanoNetwork: CardanoNetwork,
         headParams: HeadParameters,
         headPeers: HeadPeers,
-        coilPeers: List[CoilPeer],
+        coilPeers: CoilPeers,
         initialBlock: InitialBlock,
         initializationParams: InitializationParameters,
         scriptReferenceUtxos: ScriptReferenceUtxos
@@ -226,7 +228,7 @@ object HeadConfig {
     }
 
     /** @param coilPeers
-      *   A mapping from the coil peer verification key to their head peer number
+      *   The coil peers keyed by explicit [[CoilPeerNumber]] (verification key + hub head peer).
       * @param l2Params
       *   a black-box, L2-specific blake2b-256 hash of parameters that the peers must agree on
       *   before initialization.
@@ -235,7 +237,7 @@ object HeadConfig {
         override val cardanoNetwork: CardanoNetwork,
         override val headParameters: HeadParameters,
         override val headPeers: HeadPeers,
-        override val coilPeers: List[CoilPeer],
+        override val coilPeers: CoilPeers,
         override val initializationParameters: InitializationParameters,
         override val scriptReferenceUtxos: ScriptReferenceUtxos
     ) extends Bootstrap.Section {
@@ -343,7 +345,6 @@ object HeadConfig {
           HeadConfig.Bootstrap
         ] with {
             override def apply(hc: HeadConfig.Bootstrap): Json = {
-                given HeadConfig.Bootstrap.Section = hc
                 Json.obj(
                   "cardanoNetwork" -> hc.cardanoNetwork.asJson,
                   "headParams" -> hc.headParameters.asJson,
@@ -382,13 +383,13 @@ object HeadConfig {
                 headParams <- c.downField("headParams").as[HeadParameters]
                 coilPeers <- c
                     .downField("coilPeers")
-                    .as[List[CoilPeer]]
+                    .as[CoilPeers]
                 _ <-
-                    if coilPeers.length < headParams.coilQuorum
+                    if coilPeers.size < headParams.coilQuorum
                     then
                         Left(
                           io.circe.DecodingFailure(
-                            s"Error decoding HeadConfig.Bootstrap: the number of coil peers ${coilPeers.length}" +
+                            s"Error decoding HeadConfig.Bootstrap: the number of coil peers ${coilPeers.size}" +
                                 s" is less than the coil quorum ${headParams.coilQuorum}",
                             c.history
                           )
@@ -430,7 +431,7 @@ object HeadConfig {
             for {
                 headParams <- c.downField("headParams").as[HeadParameters]
                 headPeers <- c.downField("headPeers").as[HeadPeers]
-                coilPeers <- c.downField("coilPeers").as[List[CoilPeer]]
+                coilPeers <- c.downField("coilPeers").as[CoilPeers]
                 initialEvacuationMap <- c
                     .downField("initialEvacuationMap")
                     .as[EvacuationMap]
@@ -510,7 +511,7 @@ object HeadConfig {
             cardanoNetwork: CardanoNetwork,
             headParams: HeadParameters,
             headPeers: HeadPeers,
-            coilPeers: List[CoilPeer],
+            coilPeers: CoilPeers,
             initializationParams: InitializationParameters,
             scriptReferenceUtxos: ScriptReferenceUtxos
         ): ValidatedNel[HeadConfigBootstrapError, HeadConfig.Bootstrap] = {
@@ -564,7 +565,40 @@ object HeadConfig {
             def cardanoNetwork: CardanoNetwork = headConfigBootstrap.cardanoNetwork
             def headParameters: HeadParameters = headConfigBootstrap.headParameters
             def headPeers: HeadPeers = headConfigBootstrap.headPeers
-            def coilPeers: List[CoilPeer] = headConfigBootstrap.coilPeers
+            def coilPeers: CoilPeers = headConfigBootstrap.coilPeers
+
+            /** Coil peer verification keys in [[CoilPeerNumber]] order — the explicit number keyed
+              * in the config, NOT a derived vkey ordering. A key's position in this list equals its
+              * coil peer number, shared by the threshold native script's coil branch and by
+              * hard-ack signer resolution.
+              */
+            final def coilPeerVKeys: List[VerificationKey] = coilPeers.verificationKeys
+
+            /** Resolve a coil peer's verification key from its [[CoilPeerNumber]]. */
+            final def coilPeerVKey(p: CoilPeerNumber): Option[VerificationKey] =
+                coilPeers.verificationKey(p)
+
+            /** The hub head peer for the given coil peer — the single head peer the coil peer links
+              * to. `None` if the coil peer number is out of range.
+              */
+            final def coilPeerHub(p: CoilPeerNumber): Option[HeadPeerNumber] =
+                coilPeers.hubHeadPeerNumber(p)
+
+            /** The coil peers hubbed by the given head peer, by [[CoilPeerNumber]]. A hub head peer
+              * spawns one peer liaison toward each of these coil peers.
+              */
+            final def hubbedCoilPeerNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
+                coilPeers.hubbedBy(headNum)
+
+            /** The head multisig native script including the coil threshold branch — all head peers
+              * plus `MOf(coilQuorum, coilPeerVKeys)`. Overrides the head-only derivation on
+              * [[HeadPeers.Section]] so every `headMultisigScript` / `headMultisigAddress` call
+              * (and thus the minting policy, treasury / regime spend, and head address) resolves to
+              * the threshold script. With no coil peers it is byte-identical to the head-only
+              * script.
+              */
+            override def headMultisigScript: HeadMultisigScript =
+                HeadMultisigScript(this, coilPeerVKeys, coilQuorum)
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =

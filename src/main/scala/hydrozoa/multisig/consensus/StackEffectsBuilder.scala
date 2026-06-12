@@ -81,6 +81,7 @@ object StackEffectsBuilder {
         //
         // `kzg` is the KZG commitment of the evacuation map at the END of the block being
         // committed (computed slow-side by folding diffs over the running map).
+        val headId = config.headTokenNames.treasuryTokenName.bytes
         def secOf(b: BlockResult, kzg: KzgCommitment): StandaloneEvacuationCommitment = {
             val h = b.brief.header
             StandaloneEvacuationCommitment(
@@ -88,7 +89,7 @@ object StackEffectsBuilder {
               blockVersion = h.blockVersion,
               kzgCommitment = kzg,
               header = StandaloneEvacuationCommitment.Onchain.Serialized(
-                StandaloneEvacuationCommitment.Onchain(h, kzg)
+                StandaloneEvacuationCommitment.Onchain(headId, h, kzg)
               )
             )
         }

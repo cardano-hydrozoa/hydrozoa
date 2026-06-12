@@ -8,7 +8,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import io.circe.Codec

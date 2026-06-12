@@ -1,13 +1,13 @@
 package hydrozoa.multisig.ledger.eutxol2.store
 
-import cats.effect.{IO, Resource}
 import cats.effect.unsafe.implicits.global
+import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import io.circe.syntax.*
 import java.nio.file.Files
 import org.scalacheck.Gen

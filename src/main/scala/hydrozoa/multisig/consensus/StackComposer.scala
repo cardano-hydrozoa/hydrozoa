@@ -1,19 +1,20 @@
 package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
-import cats.effect.{IO, IOLocal, Ref}
+import cats.effect.{IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -45,12 +46,10 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, 
 final case class StackComposer(
     config: StackComposer.Config,
     pendingConnections: MultisigRegimeManager.PendingConnections | StackComposer.Connections,
-    tracerLocal: IOLocal[Tracer],
+    tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, StackComposer.Request] {
     import StackComposer.*
-
-    given IOLocal[Tracer] = tracerLocal
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section` →
       * `HeadConfig.Bootstrap.Section` → `CardanoNetwork.Section`); expose it as a given so the
@@ -71,10 +70,8 @@ final case class StackComposer(
     override def receive: Receive[IO, Request] = PartialFunction.fromFunction {
         case PreStart =>
             for {
-                _ <- Tracer.routeLocal(s"StackComposer.${config.ownHeadPeerNum}")
                 _ <- initializeConnections
                 _ <- recoverOrBootstrap
-                _ <- Tracer.info("StackComposer started.")
             } yield ()
         case r: BlockResult =>
             handleBlockResult(r)
@@ -93,23 +90,29 @@ final case class StackComposer(
       * (CR3). [[State.recover]] mirrors the same marker (it returns `None` exactly when `hardAcked`
       * is empty), so we drive the branch off its result: `Some` ⇒ seed the recovered state and skip
       * bootstrap, `None` ⇒ cold start.
+      *
+      * Recovery via the head-peer markers is head-only ([[Markers.derive]] scans the head `HardAck`
+      * lane); a coil peer's own hard-acks live in the `CoilHardAck` lane, so a coil peer always
+      * cold-boots.
       */
     private def recoverOrBootstrap: IO[Unit] =
-        for {
-            markers <- Markers.derive(persistence.backend, config.ownHeadPeerNum)
-            recovered <- State.recover(
-              persistence,
-              markers.hardAcked,
-              markers.hardConfirmed,
-              config.ownHeadPeerNum
-            )
-            _ <- recovered match {
-                case Some(recoveredState) =>
-                    state.set(recoveredState) >>
-                        Tracer.info("Recovered from a non-empty store; skipping stack-0 bootstrap.")
-                case None => bootstrapInitialStack
-            }
-        } yield ()
+        config.ownPeerId match {
+            case PeerId.Coil(_) => bootstrapInitialStack
+            case PeerId.Head(own) =>
+                for {
+                    markers <- Markers.derive(persistence.backend, own)
+                    recovered <- State.recover(
+                      persistence,
+                      markers.hardAcked,
+                      markers.hardConfirmed,
+                      own
+                    )
+                    _ <- recovered match {
+                        case Some(recoveredState) => state.set(recoveredState)
+                        case None                 => bootstrapInitialStack
+                    }
+                } yield ()
+        }
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *
@@ -139,28 +142,28 @@ final case class StackComposer(
         for {
             handoff <- buildHandoff(unsigned)
             conn <- getConnections
-            _ <- Tracer.info("Bootstrapping initial stack 0 (init + fallback)")
+            _ <- tracer.traceWith(StackComposerEvent.InitialStackBootstrapped)
             _ <- conn.slowConsensusActor ! handoff
         } yield ()
     }
 
     private def handleBlockResult(r: BlockResult): IO[Unit] = for {
-        _ <- Tracer.debug(s"BlockResult received for block ${r.brief.blockNum}")
         _ <- state.update(_.recordBlockResult(r))
         _ <- state.update(_.tryPair(r.brief.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleSoftConfirmed(b: Block.SoftConfirmed): IO[Unit] = for {
-        _ <- Tracer.debug(s"Block.SoftConfirmed received for block ${b.blockNum}")
         _ <- state.update(_.recordSoftConfirmed(b))
         _ <- state.update(_.tryPair(b.blockNum))
         _ <- tryProgress
     } yield ()
 
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
-        _ <- Tracer.debug(s"StackBrief received for stack ${brief.stackNum}")
         _ <- state.update(_.withInboundLeaderBrief(brief))
+        // Stack briefs led by OTHER heads are relayed to CoilRelay by the hub's mesh liaisons, not
+        // here — so this actor relays only its OWN-led briefs (in tryCloseAsLeader). That keeps each
+        // brief relayed exactly once, in spine order.
         _ <- tryProgress
     } yield ()
 
@@ -169,7 +172,6 @@ final case class StackComposer(
     ): IO[Unit] = {
         val stackNum = s.brief.stackNum
         for {
-            _ <- Tracer.debug(s"Stack.HardConfirmed received for stack $stackNum")
             _ <- state.update(_.withPreviousStackHardConfirmed(stackNum))
             _ <- tryProgress
         } yield ()
@@ -182,8 +184,7 @@ final case class StackComposer(
     private def tryProgress: IO[Unit] = state.get.flatMap { s =>
         val nextStackNum = s.lastClosedStackNum.increment
         if !s.previousStackHardConfirmed then IO.unit
-        else if config.ownHeadPeerId.isSlowLeader(nextStackNum) then
-            tryCloseAsLeader(s, nextStackNum)
+        else if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
         else tryCloseAsFollower(s, nextStackNum)
     }
 
@@ -197,9 +198,13 @@ final case class StackComposer(
                 for {
                     now <- realTimeQuantizedInstant(config.slotConfig)
                     brief = mkStackBrief(nextStackNum, prefix, StackCreationEndTime(now))
-                    _ <- Tracer.info(
-                      s"Leader closing stack $nextStackNum with blocks " +
-                          s"${prefix.head.result.brief.blockNum}..${prefix.last.result.brief.blockNum}"
+                    _ <- tracer.traceWith(
+                      StackComposerEvent.StackClosed(
+                        nextStackNum,
+                        prefix.head.result.brief.blockNum,
+                        prefix.last.result.brief.blockNum,
+                        isLeader = true
+                      )
                     )
                     res <- mkStackUnsigned(brief, prefix, s.treasury, s.evacuationMap)
                     ComposedStack(unsigned, newTreasury, newMap, partitions) = res
@@ -218,7 +223,11 @@ final case class StackComposer(
                     )
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
-                    _ <- (conn.peerLiaisons ! brief).parallel
+                    _ <- (conn.headPeerLiaisons ! brief).parallel
+                    // A hub relays its OWN-led stack brief to CoilRelay (§5.4) [doc-ref]; briefs led by other
+                    // heads are relayed by the hub's mesh liaisons, so each is relayed once, in spine
+                    // order. No-op off a hub.
+                    _ <- conn.coilRelay.traverse_(_ ! brief)
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
@@ -266,11 +275,16 @@ final case class StackComposer(
             laneBatch = {
                 val base = WriteBatch.start.put(StoreKey.UnsignedStack(brief.stackNum))(unsigned)
                 val withBrief =
-                    if config.ownHeadPeerId.isSlowLeader(brief.stackNum) then
+                    if config.canLeadSlow(brief.stackNum) then
                         base.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
                     else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
-                    b.put(LaneKey.HardAck(ack.peerNum, ack.hardAckNum))(LaneValue(stamp, ack))
+                    ack.peerId match {
+                        case PeerId.Head(n) =>
+                            b.put(LaneKey.HardAck(n, ack.hardAckNum))(LaneValue(stamp, ack))
+                        case PeerId.Coil(c) =>
+                            b.put(LaneKey.CoilHardAck(c, ack.hardAckNum))(LaneValue(stamp, ack))
+                    }
                 )
             }
             // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
@@ -352,10 +366,13 @@ final case class StackComposer(
                     // (1) genuine divergence — leader's composition is inconsistent with our
                     // single-flight position. Unrecoverable: warn, then panic to halt the node so
                     // the MultisigRegimeManager hands over to the rule-based regime.
-                    Tracer.warn(
-                      s"Follower stack $nextStackNum structural divergence: leader brief " +
-                          s"[${brief.firstBlockNum}..${brief.lastBlockNum}] but expected to " +
-                          s"start at $expectedFirst (lastClosedBlockNum=${s.lastClosedBlockNum})."
+                    tracer.traceWith(
+                      StackComposerEvent.StructuralDivergence(
+                        nextStackNum,
+                        brief.firstBlockNum,
+                        brief.lastBlockNum,
+                        expectedFirst
+                      )
                     ) >> panic(
                       s"Stack $nextStackNum structural divergence; consensus is broken."
                     ) >> context.self.stop
@@ -364,18 +381,17 @@ final case class StackComposer(
                         case None =>
                             // (2) not caught up — benign; wait for more BlockResults /
                             // SoftConfirmeds. tryProgress re-fires on the next event.
-                            Tracer.debug(
-                              s"Follower waiting for stack $nextStackNum: paired blocks do " +
-                                  s"not yet cover [${brief.firstBlockNum}.." +
-                                  s"${brief.lastBlockNum}]"
-                            )
+                            IO.unit
                         case Some(slice) =>
                             // (3) covered — accept exactly the brief's range.
                             for {
-                                _ <- Tracer.info(
-                                  s"Follower accepting stack $nextStackNum brief from " +
-                                      s"leader; blocks ${brief.firstBlockNum}.." +
-                                      s"${brief.lastBlockNum}"
+                                _ <- tracer.traceWith(
+                                  StackComposerEvent.StackClosed(
+                                    nextStackNum,
+                                    brief.firstBlockNum,
+                                    brief.lastBlockNum,
+                                    isLeader = false
+                                  )
                                 )
                                 res <- mkStackUnsigned(brief, slice, s.treasury, s.evacuationMap)
                                 ComposedStack(unsigned, newTreasury, newMap, partitions) = res
@@ -421,7 +437,7 @@ final case class StackComposer(
                   ComposedStack(Stack.Unsigned(brief, effects), newTreasury, newMap, partitions)
                 )
             case Left(err) =>
-                Tracer.error(s"slow-side effect derivation failed: $err") *> IO.raiseError(err)
+                IO.raiseError(err)
         }
     }
 
@@ -443,7 +459,7 @@ final case class StackComposer(
     ): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
             val stackNum = unsigned.brief.stackNum
-            val peer = config.ownHeadPeerNum
+            val peer: PeerId = config.ownPeerId
 
             val (acks, newNextOwnHardAckNum) = unsigned.effects match {
                 case i: StackEffects.Unsigned.Initial =>
@@ -510,7 +526,7 @@ final case class StackComposer(
       * inverse of [[HardAck.Round1Payload.Regular.asSlots]]).
       */
     private object EffectSigner {
-        private val wallet = config.ownHeadWallet
+        private val wallet = config.ownWallet
 
         /** Stack 0 round 1: sign the locally-derived fallback tx. */
         def mkInitialRound1Signatures(
@@ -691,7 +707,8 @@ final case class StackComposer(
                       jointLedger = c.jointLedger,
                       fastConsensusActor = c.consensusActor,
                       slowConsensusActor = c.slowConsensusActor,
-                      peerLiaisons = c.peerLiaisons
+                      headPeerLiaisons = c.headPeerLiaisons,
+                      coilRelay = c.coilRelay
                     )
                   )
                 )
@@ -703,13 +720,17 @@ final case class StackComposer(
 object StackComposer {
     type Handle = ActorRef[IO, Request]
 
-    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        /** A hub's coil relay (§5.4) [doc-ref]: every stack brief (own-led and received) is sent
+          * here so the hub's coil peers get the whole stack spine. `None` off a hub.
+          */
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches
@@ -879,9 +900,9 @@ object StackComposer {
           // actually hard-confirm before stack 1 may close. So the trigger starts DISARMED; the
           // stack-0 `Stack.HardConfirmed` arriving back from SlowConsensusActor arms it.
           previousStackHardConfirmed = false,
-          // Next hard-ack number to assign. 0-based: the PeerLiaison hard-ack
+          // Next hard-ack number to assign. 0-based: the PeerLiaisonHeadToHead hard-ack
           // lane is next-expected with an initial cursor of 0 (see the
-          // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack
+          // GetMsgBatch cursor protocol in PeerLiaisonHeadToHead), so the first hard-ack
           // is number 0. The initial stack, once injected, takes 0 = round-1,
           // 1 = round-2.
           nextOwnHardAckNum = HardAckNumber.zero,
@@ -903,8 +924,9 @@ object StackComposer {
           * number is read from the last own HardAck **value**; the marker number gives only
           * `nextOwnHardAckNum = hardAcked + 1`. The brief, treasury, and evacuation map are present
           * on every peer for any hard-acked stack — the brief via `persistOwnStackClose` (if this
-          * peer led) or `PeerLiaison.persistInbound` (if it received); treasury + evacuation map
-          * are written by every peer at each close — so a missing entry is store corruption.
+          * peer led) or `PeerLiaisonHeadToHead.persistInbound` (if it received); treasury +
+          * evacuation map are written by every peer at each close — so a missing entry is store
+          * corruption.
           */
         def recover(
             persistence: Persistence[IO],

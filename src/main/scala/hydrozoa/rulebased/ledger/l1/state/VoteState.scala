@@ -10,7 +10,11 @@ import scalus.uplc.builtin.Data.{FromData, ToData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 object VoteDatum {
-    def default(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
+
+    /** Seeds the key=0 ballot box directly in the Open phase with versionMinor 0. Any multisigned
+      * SEC can ratchet its status forward; the peer signature is not required.
+      */
+    def public(commitment: KzgCommitment): VoteDatum = VoteState.VoteDatum(
       key = 0,
       // N.B.: Version "Branch: (None) @ c28633a • Commit date: 2025-10-16" of the spec says
       // to set link to `0 < peersN ? 1 : 0`. But we have peers as a NonEmptyList, so this is just 1.
@@ -31,8 +35,8 @@ object VoteDatum {
                 val i = x._2
                 val pkh = x._1
                 VoteState.VoteDatum(
-                  key = i,
-                  link = if i < numPeers then i + 1 else 0,
+                  key = i + 1,
+                  link = if i < numPeers - 1 then i + 2 else 0,
                   voteStatus = AwaitingVote(pkh)
                 )
             }
@@ -45,10 +49,9 @@ object VoteDatum {
 object VoteState:
     // TODO: I'd like to turn this into `VoteDatum[Status <: VoteStatus]`, but then data derivation breaks
     case class VoteDatum(
-        // Uniquely identifies a vote utxo. The default vote utxo has key number 0,
-        // according to the spec draft 2025-11-07
+        // Uniquely identifies a ballot box in the dispute's linked list (rooted at key=0).
         key: Key,
-        // Uniquely references another vote utxo by its key
+        // References the next ballot box by key, or 0 to indicate end-of-list.
         link: Link,
         voteStatus: VoteStatus
     )
@@ -56,9 +59,24 @@ object VoteState:
     given FromData[VoteDatum] = FromData.derived
     given ToData[VoteDatum] = ToData.derived
 
+    /** Status of a single vote utxo at the dispute resolution address. Maps to the foundation
+      * spec's phases: [[AwaitingVote]] is Reserved; [[Voted]] and [[Abstain]] are Open.
+      *
+      *   - [[AwaitingVote]] — Reserved phase: the named peer can transition this box to [[Voted]]
+      *     or [[Abstain]] via the permissioned one-shot path.
+      *   - [[Voted]] — Open phase: a KZG commitment + minor block version. Any multisigned SEC with
+      *     a strictly higher `versionMinor` (under the same `versionMajor`) can ratchet this status
+      *     forward, regardless of who signs the transaction.
+      *   - [[Abstain]] — Open phase: the reserved peer opted out (e.g. when no SEC is available
+      *     because the latest hard-confirmed stack is Initial or a Major with no trailing minors —
+      *     closes the gap left by the KZG-out-of-BlockHeader refactor). A subsequent multisigned
+      *     SEC can still ratchet this to [[Voted]] (with any `versionMinor > 0`), enlarging the
+      *     open-phase pool.
+      */
     enum VoteStatus:
         case AwaitingVote(peer: PubKeyHash)
         case Voted(commitment: KzgCommitment, versionMinor: BigInt)
+        case Abstain
 
     given FromData[VoteStatus] = FromData.derived
     given ToData[VoteStatus] = ToData.derived
@@ -68,14 +86,16 @@ object VoteState:
             case VoteStatus.AwaitingVote(peerA) =>
                 b match
                     case VoteStatus.AwaitingVote(peerB) => peerA === peerB
-                    case VoteStatus.Voted(_, _)         => false
+                    case _                              => false
             case VoteStatus.Voted(commitmentA, versionMinorA) =>
-                a match {
-                    case VoteStatus.AwaitingVote(_) => false
+                b match
                     case VoteStatus.Voted(commitmentB, versionMinorB) =>
-                        commitmentA === commitmentB
-                        && versionMinorA === versionMinorB
-                }
+                        commitmentA === commitmentB && versionMinorA === versionMinorB
+                    case _ => false
+            case VoteStatus.Abstain =>
+                b match
+                    case VoteStatus.Abstain => true
+                    case _                  => false
 
     type Key = BigInt
 

@@ -63,7 +63,7 @@ lazy val core: Project = (project in file("."))
         // cats
         "org.typelevel" %% "cats-core" % "2.13.0",
         "org.typelevel" %% "cats-effect" % "3.6.3",
-        "com.github.suprnation.cats-actors" %% "cats-actors" % "2.0.1",
+        "com.github.suprnation.cats-actors" %% "cats-actors" % "2.1.0",
         "org.typelevel" %% "spire" % "0.18.0",
         "org.scalactic" %% "scalactic" % "3.2.19",
         "org.typelevel" %% "cats-core" % "2.13.0",
@@ -126,13 +126,12 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
-  // "-Werror",
   "-language:implicitConversions",
   "-Wvalue-discard",
   "-Wunused:all",
   "-Wall",
   "-Yretain-trees", // Essential for incremental compilation
-)
+) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
 
 // Add the Scalus compiler plugin
 addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)

@@ -2,21 +2,19 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.syntax.all.*
 import hydrozoa.*
-import hydrozoa.config.ScriptReferenceUtxos
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
+import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx.Assumptions
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTxOps.Build.Error.BuilderError
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
@@ -43,11 +41,17 @@ final case class EvacuationTx(
 object EvacuationTx {
     export EvacuationTxOps.{Build, Config}
 
+    object Assumptions {
+        /* Hardcoding this until we genuinely want to test that the whole setup works with other values.
+         * Also, the whole KZG setup should be wrapped into something higher-level soon.
+         */
+        val maxEvacuationsPerTx = 64
+    }
+
 }
 
 private object EvacuationTxOps {
-    type Config = CardanoNetwork.Section & NodeOperationEvacuationConfig.Section &
-        ScriptReferenceUtxos.Section & HasTokenNames & HeadPeers.Section
+    type Config = HeadConfig.Bootstrap.Section & NodeOperationEvacuationConfig.Section
 
     object Build {
         enum Error extends Throwable:
@@ -71,24 +75,26 @@ private object EvacuationTxOps {
                 case NoEvacuatees =>
                     "No evacuatees provided"
                 case NotASubset(evacuatees, evacuationMap) =>
-                    s"Evacuatees are not a subset of the evacuation map. Evacuatees: ${evacuatees.evacuationMap.keySet}, Evacuation map: ${evacuationMap.evacuationMap.keySet}"
+                    "Evacuatees are not a subset of the evacuation map." +
+                        s"Evacuatees - EvacuationMap = ${evacuatees.evacuationMap.keySet
+                                -- evacuationMap.evacuationMap.keySet}"
                 case MembershipError(wrapped) =>
                     s"Membership error: ${wrapped}"
                 case BuilderError((buildError, explanation)) =>
                     s"Builder error: $explanation - $buildError"
     }
 
-    /** @param evacuatees
+    /** @param evacuateesToTryNext
       *   The sub-map of evacuations to try in this transaction
-      * @param notEvacuatedYet
+      * @param allRemainingEvacuatees
       *   The map of all evacuations that still need to be processed
       * @param feeUtxos
       *   Utxos to use to pay the fees
       */
     final case class Build(
-        treasuryUtxo: RuleBasedTreasuryUtxo,
-        evacuatees: EvacuationMap,
-        notEvacuatedYet: EvacuationMap,
+        inputTreasuryUtxo: RuleBasedTreasuryUtxo,
+        evacuateesToTryNext: EvacuationMap,
+        allRemainingEvacuatees: EvacuationMap,
         collateralUtxo: CollateralUtxo,
         feeUtxos: Utxos,
     ) {
@@ -106,20 +112,20 @@ private object EvacuationTxOps {
             // "loop" requires that the subset actually be a subset. We establish this once before looping, and
             // rely on `halveEvacuation` to maintain this property
             _ <- Either.cond(
-              test = evacuatees.evacuationMap.keySet
-                  .subsetOf(notEvacuatedYet.evacuationMap.keySet),
+              test = evacuateesToTryNext.evacuationMap.keySet
+                  .subsetOf(allRemainingEvacuatees.evacuationMap.keySet),
               right = (),
               left = EvacuationTx.Build.Error.NotASubset(
-                evacuatees = evacuatees,
-                evaucationMap = notEvacuatedYet
+                evacuatees = evacuateesToTryNext,
+                evaucationMap = allRemainingEvacuatees
               )
             )
 
-            treasuryDatum <- extractTreasuryDatum(treasuryUtxo)
+            inputTreasuryDatum <- extractTreasuryDatum(inputTreasuryUtxo)
 
             res <- {
-                given Resolved = treasuryDatum
-                loop(evacuatees)
+                given Resolved = inputTreasuryDatum
+                loop(evacuateesToTryNext)
             }
         } yield res
 
@@ -135,18 +141,27 @@ private object EvacuationTxOps {
                   left = EvacuationTx.Build.Error.NoEvacuatees
                 )
 
+                // The subset we will actually evacuate in this transaction
+                // (capped by [[EvacutionTx.Assumptions.maxEvacuationsPerTx]]).
+                // All subsequent computations (membership proof, outputs, residual) must use this
+                // same subset so that the on-chain value invariant holds:
+                //   treasuryInput = treasuryOutput + Σ evacuationOutput
+                evacuatingNow = EvacuationMap(
+                  evacuatees.evacuationMap.take(Assumptions.maxEvacuationsPerTx)
+                )
+
                 membershipProof <- Membership
                     .mkMembershipProofValidated(
-                      set = notEvacuatedYet,
-                      subset = evacuatees
+                      set = allRemainingEvacuatees,
+                      subset = evacuatingNow
                     )
                     .left
                     .map(Build.Error.MembershipError(_))
 
                 // From this point we should choose and stick to a particular order of withdrawals, so
-                // to order of outputs in the tx (starting from index 1) and the order of utxo ids in
+                // the order of outputs in the tx (starting from index 1) and the order of utxo ids in
                 // the redeemer should be the same.
-                evacuationList = evacuatees.evacuationMap.toList
+                evacuationList = evacuatingNow.evacuationMap.toList
 
                 evacuationRedeemer = TreasuryRedeemer.Evacuate(
                   EvacuateRedeemer(
@@ -163,8 +178,8 @@ private object EvacuationTxOps {
                 evacuationOutputs = evacuationList.map(_._2.utxo.value)
 
                 residualValue <- calculateResidualTreasury(
-                  treasuryUtxo,
-                  evacuatees
+                  inputTreasuryUtxo,
+                  evacuatingNow
                 )
 
                 /////////////
@@ -189,7 +204,7 @@ private object EvacuationTxOps {
                 context <- build(
                   List(
                     config.referenceTreasury,
-                    treasuryUtxo.spendAttached(evacuationRedeemer),
+                    inputTreasuryUtxo.spendAttached(evacuationRedeemer),
                     collateralUtxo.add,
                     sendChangeUtxo,
                     residualTreasury.send
@@ -206,15 +221,20 @@ private object EvacuationTxOps {
                     .left
                     .map(BuilderError(_))
 
-                finalized <- context
+                finalize = context
                     .finalizeContext(
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
                       validators = Tx.Validators.nonSigningValidators
                     )
-                    .explainConst("Finalizing evacuation tx failed")
+                    .explainConst(
+                      "Finalizing evacuation tx failed. Failed context txid :" +
+                          s"\n\n${context.transaction.id}"
+                    )
                     .left
                     .map(BuilderError(_))
+
+                finalized <- finalize
 
                 newTreasuryUtxo = RuleBasedTreasuryUtxo(
                   utxoId = TransactionInput(
@@ -225,23 +245,28 @@ private object EvacuationTxOps {
                 )
 
                 evacuationTx = EvacuationTx(
-                  treasuryUtxo,
+                  inputTreasuryUtxo,
                   newTreasuryUtxo,
                   evacuationOutputs,
                   finalized.transaction
                 )
             } yield evacuationTx) match {
                 case Right(w) => Right(w)
+                // When the tx is too large or exceeds ex-unit limits, retry with a smaller batch.
+                // TODO: non-size errors (e.g. value conservation failures from the balancer adding
+                //   ADA when minAda in the residual treasury is too small) also end up here and
+                //   cause infinite halving down to a batch of 1. Root cause: the resolution tx does
+                //   not reserve enough ADA in the treasury output. Fix there and restore Left(e).
                 case Left(
                       BuilderError(
-                        SomeBuildError.ValidationError(e: InvalidTransactionSizeException, ctx),
+                        SomeBuildError.ValidationError(_: InvalidTransactionSizeException, _),
                         _
                       )
                     ) =>
                     loop(halveEvacuation(evacuatees))
                 case Left(
                       BuilderError(
-                        SomeBuildError.ValidationError(e: ExUnitsExceedMaxException, ctx),
+                        SomeBuildError.ValidationError(_: ExUnitsExceedMaxException, _),
                         _
                       )
                     ) =>

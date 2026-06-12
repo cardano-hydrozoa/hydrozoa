@@ -11,15 +11,21 @@
     <logger name="BlockWeaver" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
+    <logger name="PeerLiaison" level="warn"/>
+    <logger name="PeerLiaison.HeadToHead" level="warn"/>
+    <logger name="PeerLiaison.HubToCoil" level="warn"/>
+    <logger name="PeerLiaison.CoilToHub" level="warn"/>
     <logger name="InitializationTxSeq" level="warn"/>
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
+    <logger name="MultisigRegimeManager" level="warn"/>
+    <logger name="DisputeActor" level="warn"/>
+    <logger name="EvacuationActor" level="warn"/>
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>
-    <logger name="Stage4.StackObserver" level="warn"/>
     <logger name="scalus" level="warn"/>
 </configuration>

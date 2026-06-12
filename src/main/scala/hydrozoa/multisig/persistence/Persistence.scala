@@ -1,8 +1,8 @@
 package hydrozoa.multisig.persistence
 
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Logging
 import java.nio.ByteBuffer
 
 /** The **typed, actor-facing** persistence API.
@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
   *
   * **Logging.** Every op (get / put / delete / write) is traced at INFO with explicit
   * `routingKey = "Persistence"`, so log lines route to the `"Persistence"` logger in `logback.xml`
-  * regardless of the ambient actor's [[Tracer.routeLocal]].
+  * regardless of the ambient actor's [[Slf4jTracer.routeLocal]].
   *
   * See `design/persistence-and-crash-recovery.md` §7.
   */
@@ -60,14 +60,6 @@ trait Persistence[F[_]]:
     def backend: BackendStore[F]
 
 object Persistence:
-    /** Force the routing key to `"Persistence"` for the duration of `fa`, so every `Tracer.info` /
-      * `Tracer.debug` inside lands on the `"Persistence"` Logback logger regardless of the calling
-      * actor's `Tracer.routeLocal`. Restores the prior tracer on exit — does not corrupt the
-      * caller's per-fiber routing.
-      */
-    private def withRoute[A](fa: IO[A])(using IOLocal[Tracer]): IO[A] =
-        Tracer.scoped(_.copy(routingKey = Some("Persistence")))(fa)
-
     /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
     private val generationKey: Array[Byte] = "arrival-generation".getBytes("UTF-8")
 
@@ -88,13 +80,12 @@ object Persistence:
       * [[Persistence.arrivalStamp]]s are durably ordered across restarts.
       *
       * Takes the [[CardanoNetwork.Section]] once and makes it implicitly available to every codec
-      * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`). Also captures the ambient
-      * [[IOLocal]][[Tracer]] for per-op INFO trace lines (see the trait docstring); per-op trace
-      * lines are scoped through [[withRoute]] so they always route to the `"Persistence"` logger.
+      * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`).
       */
     def fromBackend(
         store: BackendStore[IO]
-    )(using CardanoNetwork.Section, IOLocal[Tracer]): IO[Persistence[IO]] =
+    )(using CardanoNetwork.Section): IO[Persistence[IO]] =
+        val logger = Logging.loggerIO("Persistence")
         for generation <- bumpGeneration(store)
         yield new Persistence[IO]:
             val backend: BackendStore[IO] = store
@@ -103,16 +94,14 @@ object Persistence:
                 IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
 
             def get(key: StoreKey): IO[Option[key.Value]] =
-                withRoute(
-                  backend
-                      .get(key.cf, key.encode)
-                      .flatTap(bytesOpt =>
-                          Tracer.info(
-                            s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}"
-                          )
-                      )
-                      .map(_.map(key.decodeValue))
-                )
+                backend
+                    .get(key.cf, key.encode)
+                    .flatTap(bytesOpt =>
+                        logger.info(
+                          s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}"
+                        )
+                    )
+                    .map(_.map(key.decodeValue))
 
             def getOrFail(key: StoreKey): IO[key.Value] =
                 get(key).flatMap {
@@ -124,17 +113,11 @@ object Persistence:
                 }
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
-                withRoute(
-                  backend.put(key.cf, key.encode, key.encodeValue(value)) *>
-                      Tracer.info(s"put $key")
-                )
+                backend.put(key.cf, key.encode, key.encodeValue(value)) *>
+                    logger.info(s"put $key")
 
             def delete(key: StoreKey): IO[Unit] =
-                withRoute(
-                  backend.delete(key.cf, key.encode) *> Tracer.info(s"delete $key")
-                )
+                backend.delete(key.cf, key.encode) *> logger.info(s"delete $key")
 
             def write(batch: WriteBatch): IO[Unit] =
-                withRoute(
-                  backend.write(batch.toRaw) *> Tracer.info(s"write batch (${batch.size} ops)")
-                )
+                backend.write(batch.toRaw) *> logger.info(s"write batch (${batch.size} ops)")

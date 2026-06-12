@@ -7,11 +7,10 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage1
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
@@ -23,11 +22,11 @@ import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
-
-import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.utils.Pretty
+
+import scala.concurrent.duration.DurationInt
 
 // ===================================
 // Stage 1 SUT
@@ -44,9 +43,8 @@ case class Stage1Sut(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
-    tracerLocal: IOLocal[Tracer],
+    tracerLocal: IOLocal[Slf4jTracer],
     runId: String = "",
-    traceRef: Ref[IO, List[String]] = Ref.unsafe(List.empty)
 )
 
 // ===================================
@@ -152,19 +150,19 @@ object SutCommands:
 
     implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Tracer] = sut.tracerLocal
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Tracer.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
+                _ <- Slf4jTracer.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
                 now <- IO.realTimeInstant
-                _ <- Tracer.debug(s"\tCurrent time: ${now.toEpochMilli}")
+                _ <- Slf4jTracer.debug(s"\tCurrent time: ${now.toEpochMilli}")
                 _ <- sut.agent ! Timeout
             } yield ()
     }
 
     implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
         override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Tracer] = sut.tracerLocal
-            Tracer.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
+            Slf4jTracer.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
                 (sut.agent ! StartBlock(
                   blockNum = cmd.blockNumber,
                   blockCreationStartTime = cmd.creationTime
@@ -173,23 +171,23 @@ object SutCommands:
 
     implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Tracer] = sut.tracerLocal
-            Tracer.debug(">> LedgerEventCommand") >>
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
+            Slf4jTracer.debug(">> LedgerEventCommand") >>
                 (sut.agent ! cmd.request)
     }
 
     implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] =
-            given IOLocal[Tracer] = sut.tracerLocal
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Tracer.debug(
+                _ <- Slf4jTracer.debug(
                   s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
                       s"blockDuration=${cmd.blockDuration}, " +
                       s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
                       s"isFinal=${cmd.isFinal})"
                 )
                 now <- IO.realTimeInstant
-                _ <- Tracer.trace(
+                _ <- Slf4jTracer.trace(
                   s"SUTCommand[CompleteBlockCommand, (...)]: current time: ${now.toEpochMilli}"
                 )
                 headUtxos <- sut.cardanoBackend
@@ -218,8 +216,8 @@ object SutCommands:
 
     given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
         override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Tracer] = sut.tracerLocal
-            Tracer.debug(">> RegisterDepositCommand") >>
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
+            Slf4jTracer.debug(">> RegisterDepositCommand") >>
                 (sut.agent ! cmd.request)
     }
 
@@ -227,9 +225,9 @@ object SutCommands:
 
         // This uses only depositsForSubmission and ignores rejected deposits
         override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Tracer] = sut.tracerLocal
+            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Tracer.debug(
+                _ <- Slf4jTracer.debug(
                   s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})"
                 )
                 ret <- IO.traverse(cmd.depositsForSubmission)(cmd => {
@@ -241,12 +239,12 @@ object SutCommands:
 
                 submissionErrors = ret.filter(_._2.isLeft)
                 _ <- IO.whenA(submissionErrors.nonEmpty)(
-                  Tracer.error(
+                  Slf4jTracer.error(
                     "Submit deposit errors:" + submissionErrors
                         .map(a =>
                             s"\n\t- ${a._1._1},\n\terror:\n\t${a._2.left}" +
-                                "\n\tPretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}" +
-                                "\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
+                                s"\n\tPretty: ${summon[Pretty[Transaction]].pretty(a._1._2)}" +
+                                s"\n\tcbor: ${HexUtil.encodeHexString(a._1._2.toCbor)}"
                         )
                         .mkString
                   )

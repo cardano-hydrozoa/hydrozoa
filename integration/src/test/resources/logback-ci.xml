@@ -1,0 +1,34 @@
+<configuration>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{64}) %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>integration-tests.log</file>
+        <append>false</append>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{64} %n%msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <appender name="MERMAID" class="ch.qos.logback.core.FileAppender">
+        <file>stage4-peers-interaction.mmd</file>
+        <append>false</append>
+        <layout class="hydrozoa.integration.MermaidSequenceDiagramLayout">
+            <pattern>%msg%n</pattern>
+        </layout>
+    </appender>
+    <logger name="Mermaid.PeerLiaison" level="info" additivity="false">
+        <appender-ref ref="MERMAID"/>
+    </logger>
+
+    <root level="trace">
+        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

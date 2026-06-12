@@ -3,54 +3,57 @@ package hydrozoa.multisig.consensus.transport
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Host, Port}
 import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.consensus.PeerLiaison
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
-import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
+import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
-import org.http4s.ember.server.EmberServerBuilder
-import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
-import org.http4s.server.{Server, websocket as _}
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.{HttpRoutes, Uri}
 import scala.concurrent.duration.*
 
-/** Per-peer transport: owns a local WebSocket server, dials peers with higher peerNum, accepts
-  * inbound connections from peers with lower peerNum, and exposes a [[send]] / [[register]] API.
+/** The head-peer mesh WS link for one peer: contributes the `/head` route to the peer's shared
+  * [[NodeWsServer]], dials peers with higher peerNum, accepts inbound from peers with lower
+  * peerNum, and exposes a [[send]] / [[register]] API.
+  *
+  * It does NOT own the Ember server — a hub head peer shares one server across the mesh and the
+  * hub→coil link, so server ownership lives in [[NodeWsServer]] and the caller mounts [[routes]]
+  * there.
   *
   * Connection topology: lower-numbered peer dials higher-numbered peer. Exactly one logical link
   * per (own, remote) pair — full-duplex over a single WS connection.
   *
   * Outbound queues are unbounded and retained across reconnects. The protocol on top
-  * ([[PeerLiaison]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so a brief
-  * window where the same message is delivered twice during a reconnect is harmless.
+  * ([[PeerLiaisonHeadToHead]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so
+  * a brief window where the same message is delivered twice during a reconnect is harmless.
   */
 final class PeerWsTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
-    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaison.Handle]],
+    private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
+    private val remotes: Map[HeadPeerId, Uri],
 )(using CardanoNetwork.Section) {
 
     private val logger = Logging.loggerIO(s"PeerWsTransport.${ownPeerId.peerNum: Int}")
 
-    /** Wire a local PeerLiaison handle as the inbound dispatch target for messages arriving from
-      * [[remote]]. Must be called before the link to [[remote]] starts receiving traffic.
+    /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
+      * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
+      * traffic.
       */
-    def register(remote: HeadPeerId, localLiaison: PeerLiaison.Handle): IO[Unit] =
+    def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    def send(remote: HeadPeerId, request: PeerLiaison.Request): IO[Unit] =
-        Frame.fromWire(request) match {
+    def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
+        HeadFrame.fromWire(request) match {
             case Some(wire) =>
-                val line = Frame.encode(Frame.Msg(wire))
+                val line = HeadFrame.encode(HeadFrame.Msg(wire))
                 outboxes.get(remote) match {
                     case Some(q) => q.offer(line)
                     case None =>
@@ -63,7 +66,10 @@ final class PeerWsTransport private (
                 )
         }
 
-    private def dispatchInbound(remote: HeadPeerId, payload: PeerLiaison.Request): IO[Unit] =
+    private def dispatchInbound(
+        remote: HeadPeerId,
+        payload: LiaisonProtocol.HeadToHeadRequest
+    ): IO[Unit] =
         inboundRef.get.flatMap { m =>
             m.get(remote) match {
                 case Some(liaison) => liaison ! payload
@@ -75,45 +81,19 @@ final class PeerWsTransport private (
             }
         }
 
-    /** Run the read+write loop for an established connection. Read and write run in parallel;
-      * either side completing terminates the duplex.
+    /** Parse one inbound text line on an established link and dispatch a [[HeadFrame.Msg]] payload.
       */
-    private def runDuplexHigh(
-        remote: HeadPeerId,
-        conn: WSConnectionHighLevel[IO]
-    ): IO[Unit] = {
-        val outbox = outboxes(remote)
-
-        val writer: IO[Unit] =
-            Stream
-                .fromQueueUnterminated(outbox)
-                .evalMap(line => conn.send(WSFrame.Text(line)))
-                .compile
-                .drain
-
-        val reader: IO[Unit] =
-            conn.receiveStream
-                .evalMap {
-                    case WSFrame.Text(s, _) =>
-                        Frame.parse(s) match {
-                            case Right(Frame.Msg(payload)) => dispatchInbound(remote, payload)
-                            case Right(Frame.Hello(_))     =>
-                                // Hello is only valid on the first frame; subsequent ones ignored.
-                                IO.unit
-                            case Left(err) =>
-                                logger.warn(
-                                  "failed to decode frame from " +
-                                      s"remote=${remote.peerNum: Int}: ${err.getMessage}"
-                                )
-                        }
-                    case _ => IO.unit
-                }
-                .compile
-                .drain
-
-        // Race: whichever side ends first cancels the other.
-        IO.race(writer, reader).void
-    }
+    private def onLine(remote: HeadPeerId)(s: String): IO[Unit] =
+        HeadFrame.parse(s) match {
+            case Right(HeadFrame.Msg(payload)) => dispatchInbound(remote, payload)
+            case Right(HeadFrame.Hello(_))     =>
+                // Hello is only valid on the first frame; subsequent ones ignored.
+                IO.unit
+            case Left(err) =>
+                logger.warn(
+                  s"failed to decode frame from remote=${remote.peerNum: Int}: ${err.getMessage}"
+                )
+        }
 
     /** Long-running dialer for a single remote. Reconnects with exponential backoff (capped).
       * Outbox is preserved across reconnects.
@@ -127,13 +107,12 @@ final class PeerWsTransport private (
 
         def once: IO[Unit] =
             client.connectHighLevel(request).use { conn =>
-                val helloLine = Frame.encode(Frame.Hello(ownPeerId.peerNum))
+                val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
                 logger.info(s"dialer: connected to remote=${remote.peerNum: Int} at $uri") >>
                     conn.send(WSFrame.Text(helloLine)) >>
-                    runDuplexHigh(remote, conn)
+                    WsDuplex.run(conn, outboxes(remote), onLine(remote))
             }
 
-        // Reconnect-on-drop with a small backoff. Errors are logged then retried.
         val attempt: IO[Unit] = once.handleErrorWith(e =>
             logger.warn(s"dialer to remote=${remote.peerNum: Int} failed: ${e.getMessage}")
         )
@@ -141,13 +120,11 @@ final class PeerWsTransport private (
         (attempt >> IO.sleep(1.second)).foreverM
     }
 
-    /** Server-side handler for an incoming WS connection. The first frame must be [[Frame.Hello]]
-      * carrying the connecting peer's number; subsequent frames are dispatched as [[Frame.Msg]].
+    /** Server-side handler for an incoming WS connection. The first frame must be
+      * [[HeadFrame.Hello]] carrying the connecting peer's number; subsequent frames are dispatched
+      * as [[HeadFrame.Msg]].
       */
-    private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] = {
-        // Used by the send-side to learn which peer is on the other end before pulling from
-        // that peer's outbox. The server doesn't know who's connecting until the Hello frame
-        // arrives, so we gate the send stream on a Deferred populated by the receive side.
+    private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
         for {
             peerD <- cats.effect.Deferred[IO, HeadPeerId]
             sendStream: Stream[IO, WebSocketFrame] =
@@ -160,28 +137,25 @@ final class PeerWsTransport private (
                     }
             receivePipe: fs2.Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
                 case WebSocketFrame.Text(s, _) =>
-                    Frame.parse(s) match {
-                        case Right(Frame.Hello(peerNum)) =>
-                            // Validate topology: server only accepts inbound from lower-numbered peers
+                    HeadFrame.parse(s) match {
+                        case Right(HeadFrame.Hello(peerNum)) =>
+                            // Topology: the server only accepts inbound from lower-numbered peers.
                             val pn: Int = peerNum
                             val ownPn: Int = ownPeerId.peerNum
                             if pn < ownPn && pn >= 0 then {
                                 val remote = HeadPeerId(pn, ownPeerId.nHeadPeers)
-                                logger.info(
-                                  s"server: accepted inbound from remote=$pn"
-                                ) >> peerD.complete(remote).void
+                                logger.info(s"server: accepted inbound from remote=$pn") >>
+                                    peerD.complete(remote).void
                             } else {
                                 logger.warn(
                                   s"server: rejecting hello from peerNum=$pn " +
                                       s"(own=$ownPn, must be lower)"
                                 )
                             }
-                        case Right(Frame.Msg(payload)) =>
-                            // Lookup which peer this connection belongs to (must have seen Hello)
+                        case Right(HeadFrame.Msg(payload)) =>
                             peerD.tryGet.flatMap {
                                 case Some(remote) => dispatchInbound(remote, payload)
-                                case None =>
-                                    logger.warn("server: msg before hello, dropping")
+                                case None => logger.warn("server: msg before hello, dropping")
                             }
                         case Left(err) =>
                             logger.warn(s"server: failed to decode frame: ${err.getMessage}")
@@ -190,69 +164,43 @@ final class PeerWsTransport private (
             }
             response <- wsb.build(sendStream, receivePipe)
         } yield response
-    }
 
-    private[transport] def routes(wsb: WebSocketBuilder2[IO]): HttpRoutes[IO] =
-        HttpRoutes.of[IO] { case GET -> Root / "peer" =>
+    /** The `/head` route to mount on the peer's shared [[NodeWsServer]]. */
+    def routes(wsb: WebSocketBuilder2[IO]): HttpRoutes[IO] =
+        HttpRoutes.of[IO] { case GET -> Root / "head" =>
             serverHandler(wsb)
         }
+
+    /** Launch a dialer fiber for each remote with peerNum greater than ours (lower dials higher).
+      * The fibers are torn down when the resource is released.
+      */
+    def startDialers(client: WSClient[IO]): Resource[IO, Unit] =
+        remotes.toList
+            .filter { case (rid, _) => (rid.peerNum: Int) > (ownPeerId.peerNum: Int) }
+            .traverse_ { case (rid, uri) =>
+                Resource.make(dialerLoop(client, rid, uri).start)(_.cancel).void
+            }
 }
 
 object PeerWsTransport {
 
-    /** Build a transport. Allocates outboxes for every remote, starts the WS server, and launches a
-      * dialer fiber for each remote with peerNum > ownPeerId.peerNum.
+    /** Allocate the per-peer mesh transport: one outbox per remote + an empty inbound map. The
+      * caller mounts [[routes]] on a [[NodeWsServer]] and calls [[startDialers]] with a shared
+      * [[WSClient]].
       *
       * @param ownPeerId
-      *   Identity of this peer.
-      * @param bindHost
-      *   Local host to bind the WS server.
-      * @param bindPort
-      *   Local port to bind the WS server.
+      *   identity of this peer.
       * @param remotes
-      *   Map of remote peers to their WebSocket URI (used for dialing higher-numbered peers).
+      *   remote peers to their WebSocket URI (used for dialing higher-numbered peers).
       */
-    def resource(
+    def create(
         ownPeerId: HeadPeerId,
-        bindHost: Host,
-        bindPort: Port,
         remotes: Map[HeadPeerId, Uri],
-    )(using CardanoNetwork.Section): Resource[IO, PeerWsTransport] = {
-        val logger = Logging.loggerIO(s"WsTransport.${ownPeerId.peerNum: Int}")
-
+    )(using CardanoNetwork.Section): IO[PeerWsTransport] =
         for {
-            outboxes <- Resource.eval(
-              remotes.keys.toList
-                  .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
-                  .map(_.toMap)
-            )
-            inboundRef <- Resource.eval(Ref[IO].of(Map.empty[HeadPeerId, PeerLiaison.Handle]))
-            transport = new PeerWsTransport(ownPeerId, outboxes, inboundRef)
-
-            _: Server <- EmberServerBuilder
-                .default[IO]
-                .withHost(bindHost)
-                .withPort(bindPort)
-                // Ember closes idle WS sockets after 60s by default. We want the PeerLiaison
-                // protocol's own retransmit timer to be the only thing that brings a stalled
-                // link back to life, so in production we'd set this to `Duration.Inf`. We
-                // intentionally leave the default in place during tests so reconnect handling
-                // gets exercised.
-                // TODO: surface this as a config parameter on the transport (default `Inf` for
-                //   production; short value in tests that want to exercise the reconnect path).
-                // .withIdleTimeout(Duration.Inf)
-                .withHttpWebSocketApp(wsb => transport.routes(wsb).orNotFound)
-                .build
-                .evalTap(_ => logger.info(s"WS server bound at ws://$bindHost:$bindPort/peer"))
-
-            client <- Resource.eval(JdkWSClient.simple[IO])
-
-            // Dialer fibers: own dials remotes with higher peerNum.
-            _ <- remotes.toList
-                .filter { case (rid, _) => (rid.peerNum: Int) > (ownPeerId.peerNum: Int) }
-                .traverse { case (rid, uri) =>
-                    Resource.make(transport.dialerLoop(client, rid, uri).start)(_.cancel)
-                }
-        } yield transport
-    }
+            outboxes <- remotes.keys.toList
+                .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
+                .map(_.toMap)
+            inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
+        } yield new PeerWsTransport(ownPeerId, outboxes, inboundRef, remotes)
 }

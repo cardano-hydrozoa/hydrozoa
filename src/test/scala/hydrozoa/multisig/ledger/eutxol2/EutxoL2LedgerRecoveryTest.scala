@@ -7,7 +7,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Store}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite

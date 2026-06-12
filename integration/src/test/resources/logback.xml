@@ -1,6 +1,6 @@
 <configuration>
 
-    <root level="error">
+    <root level="debug">
         <appender-ref ref="STDOUT"/>
         <appender-ref ref="FILE"/>
     </root>
@@ -64,7 +64,6 @@
     <logger name="Stage4.Sut" level="info"/>
     <logger name="Stage4.Suite" level="info"/>
     <logger name="Stage4.BlockBriefObserver" level="info"/>
-    <logger name="Stage4.StackObserver" level="debug"/>
 
 
     <!-- hydrozoa -->
@@ -76,8 +75,14 @@
     <logger name="EventSequencer" level="info"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
+    <logger name="MultisigRegimeManager" level="info"/>
+    <logger name="DisputeActor" level="info"/>
+    <logger name="EvacuationActor" level="info"/>
     <logger name="Limiter" level="debug"/>
     <logger name="PeerLiaison" level="debug"/>
+    <logger name="PeerLiaison.HeadToHead" level="debug"/>
+    <logger name="PeerLiaison.HubToCoil" level="debug"/>
+    <logger name="PeerLiaison.CoilToHub" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
     <logger name="PeerWsTransport" level="debug"/>
     <logger name="Persistence" level="info"/>

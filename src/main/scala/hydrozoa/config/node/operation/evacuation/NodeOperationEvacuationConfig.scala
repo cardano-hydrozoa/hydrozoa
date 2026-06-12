@@ -1,14 +1,14 @@
 package hydrozoa.config.node.operation.evacuation
 
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given
-import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.*
 import io.circe.generic.semiauto.*
 import scala.concurrent.duration.FiniteDuration
 
 final case class NodeOperationEvacuationConfig(
     override val evacuationBotPollingPeriod: FiniteDuration,
-    override val evacuationWallet: HeadPeerWallet
+    override val evacuationWallet: PeerWallet
 ) extends NodeOperationEvacuationConfig.Section {
     override transparent inline def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig =
         this
@@ -21,7 +21,7 @@ object NodeOperationEvacuationConfig {
         def evacuationBotPollingPeriod: FiniteDuration =
             nodeOperationEvacuationConfig.evacuationBotPollingPeriod
 
-        def evacuationWallet: HeadPeerWallet = nodeOperationEvacuationConfig.evacuationWallet
+        def evacuationWallet: PeerWallet = nodeOperationEvacuationConfig.evacuationWallet
     }
 
     given nodeOperationEvacuationConfigEncoder: Encoder[NodeOperationEvacuationConfig] =
@@ -31,7 +31,7 @@ object NodeOperationEvacuationConfig {
         Decoder.instance(c =>
             for {
                 ebpp <- c.downField("evacuationBotPollingPeriod").as[FiniteDuration]
-                ew <- c.downField("evacuationWallet").as[HeadPeerWallet]
+                ew <- c.downField("evacuationWallet").as[PeerWallet]
             } yield NodeOperationEvacuationConfig(ebpp, ew)
         )
 }

@@ -56,7 +56,7 @@ These three are wrapped by an **`AgentActor`** (`Sut.scala:80`) which handles th
 Stubbed:
 
 - **`BlockWeaverMock`** (`Suite.scala:60`) — does **not** auto-fire blocks; just tracks leader role for tracing purposes. Blocks happen only when the test scenario sends a `CompleteBlock` command.
-- **`EventSequencerStub`** — minimal request bookkeeping.
+- **`RequestSequencerStub`** — minimal request bookkeeping.
 - **`StackComposerStub`** — accepts `BlockResult`s and ignores them. **No `SlowConsensusActor` is started.** Stage 1 has zero slow-cycle activity and asserts nothing about it.
 
 ### Commands
@@ -67,8 +67,8 @@ Stage 1's command set is intentionally explicit:
 |--------------------------|--------------------------------------------------------------------------------------------------|
 | `DelayCommand`           | Advances simulated time by some duration; under TestControl this is virtual.                    |
 | `StartBlockCommand`      | Tells `AgentActor` to open a new block (sets block creation start time).                        |
-| `L2TxCommand`            | Submits an L2 tx to `EventSequencer` for inclusion in the open block.                            |
-| `RegisterDepositCommand` | Registers a deposit with `EventSequencer` (model-side; SUT records the registration only).      |
+| `L2TxCommand`            | Submits an L2 tx to `RequestSequencer` for inclusion in the open block.                            |
+| `RegisterDepositCommand` | Registers a deposit with `RequestSequencer` (model-side; SUT records the registration only).      |
 | `SubmitDepositsCommand`  | Pushes the deposit's signed L1 tx directly to the backend, so `CardanoLiaison` observes it.      |
 | `CompleteBlockCommand`   | Closes the block (block creation end time) and waits for the synchronous `BlockBrief.Next` reply. |
 
@@ -148,7 +148,7 @@ Per peer, stage 4 starts **seven real actors** wired together by `MultisigRegime
 - `FastConsensusActor` — soft-ack collector (fast cycle).
 - `StackComposer` — pairs `BlockResult`s with soft-confirmations into closed stacks.
 - `SlowConsensusActor` — hard-ack collector (slow cycle).
-- `EventSequencer` — request ingress.
+- `RequestSequencer` — request ingress.
 - `CardanoLiaison` — L1 submission and polling.
 
 Two observer actors wrap consensus and cardano-liaison to capture intermediate state for the properties:
@@ -171,7 +171,7 @@ Stage 4 has only three commands:
 | Command | Effect |
 |---|---|
 | `DelayCommand` | Pass time. Drives the `BlockWeaver` timers and the model clock. |
-| `L2TxCommand(peerNum, request)` | Submit an L2 tx through that peer's `EventSequencer`. |
+| `L2TxCommand(peerNum, request)` | Submit an L2 tx through that peer's `RequestSequencer`. |
 | `RegisterAndSubmitDepositCommand` | Register the deposit + submit its signed tx straight to the shared mock L1 (so `CardanoLiaison` sees it). |
 
 The generator uses **cumulative model time + Poisson superposition**:

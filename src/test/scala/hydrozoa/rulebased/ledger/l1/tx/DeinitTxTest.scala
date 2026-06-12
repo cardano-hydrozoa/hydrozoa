@@ -2,13 +2,10 @@ package hydrozoa.rulebased.ledger.l1.tx
 
 import cats.effect.unsafe.implicits.global
 import hydrozoa.*
-import hydrozoa.config.HydrozoaBlueprint
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
-import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -27,17 +24,17 @@ def genEmptyResolvedTreasuryUtxo(
     fallbackTxId: TransactionHash,
     voteTokensAmount: Int
 )(using
-    config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
+    config: HeadConfig.Bootstrap.Section
 ): Gen[RuleBasedTreasuryUtxo] = {
     val g1Generator =
         hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
-    val dummyParams = ByteString.empty
+
     val dummySetup = scalus.cardano.onchain.plutus.prelude.List.empty
 
     val emptyResolvedDatum = Resolved(
       evacuationActive = g1Generator,
       version = (BigInt(1), BigInt(0)),
-      setup = dummySetup
+      setupG2 = dummySetup
     )
 
     val headMp = config.headMultisigScript.policyId
@@ -48,7 +45,6 @@ def genEmptyResolvedTreasuryUtxo(
         outputIx <- Gen.choose(0, 5)
     } yield {
         val txId = TransactionInput(fallbackTxId, outputIx)
-        val scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
         val value = Value(config.babbageUtxoMinLovelace(PositiveInt.unsafeApply(150)))
             + Value.asset(headMp, beaconTokenName, 1)
             + Value.asset(headMp, voteTokenName, voteTokensAmount)
@@ -64,7 +60,7 @@ def genEmptyResolvedTreasuryUtxo(
 
         // Respect minAda
         val outputMinAda = treasuryUtxo.toUtxo.toTuple._2.ensureMinAda(config)
-        treasuryUtxo.focus(_.treasuryOutput.value).set(outputMinAda.value)
+        treasuryUtxo.focus(_.treasuryOutput.value).replace(outputMinAda.value)
     }
 }
 
@@ -94,7 +90,7 @@ def genShares(n: Int): Gen[List[Rational]] =
 // FIXME: The arguments to this function can be simplified once the DeinitTx itself is updated to use the new
 // configuration
 def genSimpleDeinitTxBuilder(using
-    config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+    config: HeadConfig.Bootstrap.Section
 ): Gen[DeinitTx.Build] =
 
     for {

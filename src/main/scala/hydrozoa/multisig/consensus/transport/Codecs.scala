@@ -3,11 +3,13 @@ package hydrozoa.multisig.consensus.transport
 import cats.data.NonEmptyList
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-import hydrozoa.multisig.consensus.PeerLiaison.Request.{GetMsgBatch, NewMsgBatch}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAck, SoftAckId, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{PeerLiaison, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, SoftAck, SoftAckId, SoftAckNumber}
+import hydrozoa.multisig.consensus.liaison.BatchMessages.{Mesh, OwnHardAck, Population}
+import hydrozoa.multisig.consensus.liaison.BatchNumber.given
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -18,7 +20,7 @@ import io.circe.syntax.*
 import scalus.crypto.ed25519.VerificationKey
 import scodec.bits.ByteVector
 
-/** JSON codecs for the wire-eligible subset of [[PeerLiaison.Request]].
+/** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
   *
   * Only [[GetMsgBatch]] and [[NewMsgBatch]] are sent over the wire; all other request variants
   * (RemoteBroadcast, BlockConfirmed, PreStart) are local-only.
@@ -36,12 +38,6 @@ object Codecs {
         io.circe.Codec.from(
           Decoder.decodeInt.map(SoftAckNumber.apply),
           Encoder.encodeInt.contramap((a: SoftAckNumber) => a.convert)
-        )
-
-    given Codec[PeerLiaison.Batch.Number] =
-        io.circe.Codec.from(
-          Decoder.decodeInt.map(PeerLiaison.Batch.Number.apply),
-          Encoder.encodeInt.contramap((n: PeerLiaison.Batch.Number) => n: Int)
         )
 
     given Codec[SoftAckId] =
@@ -118,12 +114,12 @@ object Codecs {
         io.circe.Codec.from(
           Decoder.instance(c =>
               for {
-                  pn <- c.downField("peerNum").as[HeadPeerNumber]
+                  pid <- c.downField("peerId").as[PeerId]
                   hn <- c.downField("hardAckNum").as[HardAckNumber]
-              } yield HardAckId(pn, hn)
+              } yield HardAckId(pid, hn)
           ),
           Encoder.instance((id: HardAckId) =>
-              Json.obj("peerNum" -> id.peerNum.asJson, "hardAckNum" -> id.hardAckNum.asJson)
+              Json.obj("peerId" -> id.peerId.asJson, "hardAckNum" -> id.hardAckNum.asJson)
           )
         )
 
@@ -545,9 +541,29 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
-    // ---- GetMsgBatch / NewMsgBatch ----
+    // ---- HardAckWithId ----
+    // Non-private: the persistence layer reuses it for the `HubHardAck` lane value codec.
 
-    given Codec[GetMsgBatch] = deriveCodec[GetMsgBatch]
+    given Codec[HardAckWithId] = deriveCodec[HardAckWithId]
 
-    given (using CardanoNetwork.Section): Codec[NewMsgBatch] = deriveCodec[NewMsgBatch]
+    // ---- Head-mesh batch messages (the only wire-eligible liaison messages) ----
+
+    given Codec[Mesh.Get] = deriveCodec[Mesh.Get]
+
+    given (using CardanoNetwork.Section): Codec[Mesh.New] = deriveCodec[Mesh.New]
+
+    // ---- Hub→coil batch messages (the wire-eligible coil-link messages) ----
+    //
+    // Population.Get/New carry per-head-peer lane families as `Map[HeadPeerNumber, _]`; the
+    // `KeyEncoder`/`KeyDecoder[HeadPeerNumber]` (imported above) make those maps derive, and the
+    // value codecs are the same ones the Mesh messages use.
+
+    given populationGetCodec: Codec[Population.Get] = deriveCodec[Population.Get]
+
+    given populationNewCodec(using CardanoNetwork.Section): Codec[Population.New] =
+        deriveCodec[Population.New]
+
+    given ownHardAckGetCodec: Codec[OwnHardAck.Get] = deriveCodec[OwnHardAck.Get]
+
+    given ownHardAckNewCodec: Codec[OwnHardAck.New] = deriveCodec[OwnHardAck.New]
 }

@@ -333,14 +333,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             )
 
             props.append(
-              "default vote utxo with default vote deposit and vote token created" |: {
+              "public ballot box with public vote deposit and vote token created" |: {
 
-                  val defaultVoteUtxo = Utxo(
+                  val publicBallotBox = Utxo(
                     TransactionInput(transactionId = fbTx.tx.id, index = 1),
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.headParameters.fallbackContingency.collectiveContingency.defaultVoteDeposit,
+                        config.headParameters.fallbackContingency.collectiveContingency.publicVoteDeposit
+                            + config.headParameters.fallbackContingency.collectiveContingency.minAdaForTreasury,
                         MultiAsset(
                           SortedMap(
                             expectedHeadNativeScript.policyId -> SortedMap(
@@ -350,12 +351,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                         )
                       ),
                       datumOption = Some(
-                        Inline(VoteDatum.default(multisigTreasuryUtxo.datum.commit).toData)
+                        Inline(VoteDatum.public(fbTx.treasurySpent.kzgCommitment).toData)
                       ),
                       scriptRef = None
                     ).ensureMinAda(config)
                   )
-                  fbTxBody.outputs.last.value == defaultVoteUtxo.output
+                  fbTxBody.outputs.last.value == publicBallotBox.output
               }
             )
 
@@ -368,7 +369,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.individualContingency.forVoteUtxo,
+                        config.individualContingency.forBallotBox,
                         MultiAsset(
                           SortedMap(
                             hns.policyId -> SortedMap(config.headTokenNames.voteTokenName -> 1L)
@@ -393,7 +394,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       .toList
                       .map(_.value)
                 )
-                val reportedPeerVoteOutputs = fbTx.peerVoteUtxosProduced.map(_.output)
+                val reportedPeerVoteOutputs = fbTx.peerBallotBoxesProduced.map(_.output)
                 actualPeerVoteOutputs == reportedPeerVoteOutputs
                 && expectedPeerVoteOutputs == reportedPeerVoteOutputs
 

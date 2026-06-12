@@ -169,26 +169,30 @@ object Generators {
         )
 
         def genPayoutObligation(
-            genValue: Gen[Value] = Hydrozoa.genPositiveValue
+            genValue: Gen[Value] = Hydrozoa.genPositiveValue,
+            genDatum: Gen[Option[DatumOption]] =
+                arbitrary[ByteString].map(b => Some(Inline(b.toData)))
         )(using config: CardanoNetwork.Section): Gen[Payout.Obligation] =
             for {
                 value <- genValue
-                res <- genKnownValuePayoutObligationWithMinAdaEnsured(value)
+                res <- genKnownValuePayoutObligationWithMinAdaEnsured(value, genDatum)
             } yield res
 
         def genKnownValuePayoutObligationWithMinAdaEnsured(
-            value: Value
+            value: Value,
+            genDatum: Gen[Option[DatumOption]] =
+                arbitrary[ByteString].map(b => Some(Inline(b.toData)))
         )(using network: CardanoNetwork.Section): Gen[Payout.Obligation] = {
             for {
                 l2Input <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
                 address = address0.copy(network = network.network)
-                datum <- arbitrary[ByteString]
+                datum <- genDatum
                 output = Babbage(
                   address = address,
                   value = value,
-                  datumOption = Some(Inline(datum.toData)),
+                  datumOption = datum,
                   scriptRef = None
                 )
             } yield Payout
@@ -359,30 +363,31 @@ object Generators {
 
                     val bogusTxIn = TransactionInput(transactionId = bogusInputId, index = 0)
 
-                    val newTx: L2Tx = {
-                        val underlyingOriginal = transaction.tx
-                        val underlyingModified = underlyingOriginal
-                            |>
-                                // First focus on the inputs of the transaction
-                                Focus[Transaction](_.body)
-                                    .andThen(KeepRaw.lens[TransactionBody]())
-                                    .refocus(_.inputs)
-                                    // then modify those inputs: the goal is to replace the txId of one input with
-                                    // our bogusInputId
-                                    .modify(x =>
-                                        TaggedSortedSet.from(
-                                          // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
-                                          // so we convert to and from List
-                                          x.toSet.toList
-                                              // Focus on the first element of the list, and...
-                                              .focus(_.index(0))
-                                              // replace its transactionId with our bogus txId
-                                              .replace(bogusTxIn)
-                                        )
-                                    )
-
-                        ??? // L2Tx(underlyingModified)
-                    }
+                    val newTx: L2Tx = ???
+//                    {
+//                        val underlyingOriginal = transaction.tx
+//                        val underlyingModified = underlyingOriginal
+//                            |>
+//                                // First focus on the inputs of the transaction
+//                                Focus[Transaction](_.body)
+//                                    .andThen(KeepRaw.lens[TransactionBody]())
+//                                    .refocus(_.inputs)
+//                                    // then modify those inputs: the goal is to replace the txId of one input with
+//                                    // our bogusInputId
+//                                    .modify(x =>
+//                                        TaggedSortedSet.from(
+//                                          // Inputs come as set, and I don't think monocle can `_.index(n)` a set,
+//                                          // so we convert to and from List
+//                                          x.toSet.toList
+//                                              // Focus on the first element of the list, and...
+//                                              .focus(_.index(0))
+//                                              // replace its transactionId with our bogus txId
+//                                              .replace(bogusTxIn)
+//                                        )
+//                                    )
+//
+//                         L2Tx(underlyingModified)
+//                    }
 
                     val expectedException = new TransactionException.BadAllInputsUTxOException(
                       transactionId = newTx.tx.id,
@@ -413,6 +418,8 @@ object Generators {
         def genEvacuationMap(
             nEntries: Int,
             generateEvacuationKey: Gen[EvacuationKey] = Arbitrary.arbitrary[EvacuationKey],
+            genDatum: Gen[Option[DatumOption]] =
+                arbitrary[ByteString].map(b => Some(Inline(b.toData)))
         )(using network: CardanoNetwork.Section): Gen[EvacuationMap] = {
             if nEntries == 0
             then Gen.const(EvacuationMap.empty)
@@ -437,7 +444,7 @@ object Generators {
                     })
                     valueDist <- Other.genSequencedValueDistribution(
                       nEntries,
-                      v => genPayoutObligation(Gen.const(v))
+                      v => genPayoutObligation(Gen.const(v), genDatum)
                     )
 
                 } yield EvacuationMap(

@@ -2,7 +2,7 @@ package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, IOLocal, Ref}
+import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
@@ -11,10 +11,9 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -22,8 +21,8 @@ import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, Stac
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, LaneKey, LaneValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.uplc.builtin.ByteString
 import scala.concurrent.duration.DurationInt
+import scalus.uplc.builtin.ByteString
 
 /** Records every message routed to it (a stand-in for a consensus actor). */
 private final case class Recorder[R](sink: Ref[IO, Vector[R]]) extends Actor[IO, R]:
@@ -42,6 +41,12 @@ class ReplayActorTest extends AnyFunSuite:
     private val headConfig: HeadConfig = config.headConfig
     private given CardanoNetwork.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
+
+    /** This node's head peer number (the fixture config is always a head node). */
+    private val ownNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) => fail("fixture config must be a head node")
+    }
 
     test(
       "ReplayActor routes the recovered tail into the right mailboxes (floors + in-flight stack)"
@@ -87,47 +92,43 @@ class ReplayActorTest extends AnyFunSuite:
       * each probe's received messages and the replay outcome.
       */
     private def runReplay(seed: Persistence[IO] => IO[Unit]): Captured =
-        val own = config.ownHeadPeerNum
+        val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
         val treasuryAddress = config.initializationTx.treasuryProduced.address
-        (for {
-            tracerLocal <- Tracer.makeLocal
-            result <- {
-                given IOLocal[Tracer] = tracerLocal
-                InMemoryBackendStore.open.use(backend =>
-                    ActorSystem[IO]("replay-test").use(system =>
-                        for {
-                            persistence <- Persistence.fromBackend(backend)
-                            cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
-                            bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
-                            fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
-                            scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
-                            scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
-                            bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
-                            fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
-                            sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
-                            sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
-                            _ <- seed(persistence)
-                            outcome <- ReplayActor
-                                .replay(
-                                  persistence,
-                                  cardanoBackend,
-                                  ReplayActor.Targets(bw, fca, sca, sc),
-                                  own,
-                                  peers,
-                                  treasuryAddress
-                                )
-                                .attempt
-                            _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
-                            bwMsgs <- bwSink.get
-                            fcaMsgs <- fcaSink.get
-                            scaMsgs <- scaSink.get
-                            scMsgs <- scSink.get
-                        } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, outcome)
-                    )
+        InMemoryBackendStore.open
+            .use(backend =>
+                ActorSystem[IO]("replay-test").use(system =>
+                    for {
+                        persistence <- Persistence.fromBackend(backend)
+                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
+                        bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
+                        fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
+                        scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
+                        scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
+                        bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
+                        fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
+                        sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
+                        sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
+                        _ <- seed(persistence)
+                        outcome <- ReplayActor
+                            .replay(
+                              persistence,
+                              cardanoBackend,
+                              ReplayActor.Targets(bw, fca, sca, sc),
+                              own,
+                              peers,
+                              treasuryAddress
+                            )
+                            .attempt
+                        _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
+                        bwMsgs <- bwSink.get
+                        fcaMsgs <- fcaSink.get
+                        scaMsgs <- scaSink.get
+                        scMsgs <- scSink.get
+                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, outcome)
                 )
-            }
-        } yield result).unsafeRunSync()
+            )
+            .unsafeRunSync()
 
     private def hasBlock(msgs: Vector[?], blockNum: Int): Boolean =
         msgs.exists {
@@ -140,7 +141,7 @@ class ReplayActorTest extends AnyFunSuite:
       * two stack briefs (1 + 2) to exercise the composer floor.
       */
     private def seedRecoverable(p: Persistence[IO]): IO[Unit] =
-        val own = config.ownHeadPeerNum
+        val own = ownNum
         val other = HeadPeerNumber(1)
         for {
             // hardConfirmed = Some(0): the marker reads only the HardConfirmation KEY, so a dummy
@@ -178,7 +179,7 @@ class ReplayActorTest extends AnyFunSuite:
       * keys, so dummy value bytes suffice.
       */
     private def seedInconsistent(p: Persistence[IO]): IO[Unit] =
-        val own = config.ownHeadPeerNum
+        val own = ownNum
         for {
             _ <- p.backend.put(
               Cf.SoftConfirmation,
@@ -245,7 +246,7 @@ class ReplayActorTest extends AnyFunSuite:
 
     private def hardAck(peer: Int, ackNum: Int, stack: Int): HardAck =
         HardAck(
-          ackId = HardAckId(HeadPeerNumber(peer), HardAckNumber(ackNum)),
+          ackId = HardAckId(PeerId.Head(HeadPeerNumber(peer)), HardAckNumber(ackNum)),
           stackNum = StackNumber(stack),
           payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
         )

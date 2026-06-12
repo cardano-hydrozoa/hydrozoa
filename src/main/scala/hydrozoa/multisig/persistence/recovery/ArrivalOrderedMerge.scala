@@ -15,8 +15,8 @@ package hydrozoa.multisig.persistence.recovery
   *
   * **Order is total and deterministic.** `monotonicNanos` comes from a single `IO.monotonic` source
   * and `generation` separates processes (§5.4), so the stamp orders almost everything on its own —
-  * but ties are **normal, not degenerate**: `PeerLiaison` assigns one arrival stamp per inbound
-  * `NewMsgBatch`, so every entry delivered in the same batch (a block, an ack, several requests)
+  * but ties are **normal, not degenerate**: `PeerLiaisonHeadToHead` assigns one arrival stamp per
+  * inbound batch, so every entry delivered in the same batch (a block, an ack, several requests)
   * shares it. The `(cf-ordinal, key-bytes)` tiebreak is therefore load-bearing — within a lane it
   * reduces to index order; across lanes it fixes a deterministic interleaving of same-batch
   * entries. Consensus is interleaving-robust (§5.6), so any deterministic choice within a tie is

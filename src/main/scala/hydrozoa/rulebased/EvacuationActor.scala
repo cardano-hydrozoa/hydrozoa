@@ -6,39 +6,62 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased
-import hydrozoa.rulebased.EvacuationActor.*
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.EvacuateRedeemer
+import hydrozoa.rulebased.EvacuationActor.Error.ParseError.TreasuryDeinitialized
+import hydrozoa.rulebased.EvacuationActor.Requests.Evacuate
+import hydrozoa.rulebased.EvacuationActor.{Error, *}
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
+import scalus.uplc.builtin.{ByteString, Data}
 
+/** @param candidateEvacMaps
+  *   every evacuation map peers could end up tallying onto, keyed by its kzg commitment. The actor
+  *   waits until the dispute resolution lands, reads the resolved treasury's `evacuationActive`
+  *   (the winning kzg), and picks the matching map from here as the active one to evacuate against.
+  * @param cardanoBackend
+  * @param fallbackTxHash
+  * @param tracer
+  * @param config
+  */
 case class EvacuationActor(
-    toEvacuate: EvacuationMap,
+    candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
     cardanoBackend: CardanoBackend[IO],
-    evacuationMapAtFallback: EvacuationMap,
     fallbackTxHash: TransactionHash,
+    tracer: ContraTracer[IO, EvacuationActorEvent],
 )(using config: Config)
     extends Actor[IO, Requests.Request] {
-    override def preStart: IO[Unit] =
-        context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
 
-    override def receive: Receive[IO, Requests.Request] = { case _: Requests.Evacuate =>
-        handleEvacuation
+    override def preStart: IO[Unit] =
+        context.self ! Requests.PreStart
+
+    private def preStartLocal: IO[Unit] =
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, Evacuate)
+
+    override def receive: Receive[IO, Requests.Request] = {
+        case _: Requests.PreStart.type => preStartLocal
+        case _: Requests.Evacuate.type => handleEvacuation
     }
 
     //  TODOS:
@@ -82,7 +105,7 @@ case class EvacuationActor(
 
                 // The resolution tx is the first tx after the fallback that spends the treasury.
                 // Every subsequent transaction also spends the treasury for a withdrawal
-                treasuryTxRedeemers: List[(TransactionHash, Data)] <- EitherT(
+                treasuryTxRedeemersAndDatums: List[(TransactionHash, Data, Data)] <- EitherT(
                   cardanoBackend.lastContinuingTxs(
                     asset = (
                       config.headMultisigScript.policyId,
@@ -90,49 +113,76 @@ case class EvacuationActor(
                     ),
                     after = fallbackTxHash
                   )
+                ).leftSemiflatTap(e =>
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorContinuingTxs(e))
                 )
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
-                redeemers: List[EvacuateRedeemer] <- treasuryTxRedeemers.length match {
-                    // Treasury not resolved, can't liquidate, return left and retry
-                    case 0 => EitherT.fromEither[IO](Left(Error.QueryError.NoTreasuryFound))
-                    // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
-                    case 1 => EitherT.fromEither[IO](Right(List.empty[EvacuateRedeemer]))
-                    // Treasury resolved, some withdrawals processed. We need to parse redeemers to determine active utxo set.
-                    case n =>
-                        // The first transaction reported will be the dispute resolution tx.
-                        // The remaining will be withdrawal transactions, up until the point that the deinit transaction
-                        // occurs.
-                        treasuryTxRedeemers.tail.traverse(tuple =>
-                            val (_, redeemerData) = tuple
-                            Try(fromData[EvacuateRedeemer](redeemerData)) match {
-                                // Can't deserialize the redeemer. Raise exception
-                                case Failure(t) =>
-                                    EitherT(
-                                      IO.raiseError(
-                                        Error.ParseError
-                                            .TreasuryWithdrawRedeemerDataDeserializationFailure(t)
-                                      )
-                                    )
-                                case Success(r) =>
-                                    EitherT.right[Error.RecoverableErrors](IO.pure(r))
+                evacuateRedeemers: List[EvacuateRedeemer] <-
+                    treasuryTxRedeemersAndDatums.length match {
+                        // Treasury not resolved, can't evacuate, return left and retry
+                        case 0 =>
+                            EitherT.left(
+                              tracer.traceWith(EvacuationActorEvent.TreasuryNotYetResolved) >>
+                                  IO.pure(Error.QueryError.NoTreasuryFound)
+                            )
+                        // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
+                        case 1 => EitherT.fromEither[IO](Right(List.empty[EvacuateRedeemer]))
+                        // Treasury resolved, some withdrawals processed. We need to parse redeemers to determine active utxo set.
+                        case n =>
+                            // The last transaction reported will be the dispute resolution tx (oldest).
+                            // The preceding entries will be withdrawal transactions, up until the point that the deinit transaction
+                            // occurs.
+                            treasuryTxRedeemersAndDatums.init.traverse {
+                                case (_, redeemerData, _) =>
+                                    Try(fromData[TreasuryRedeemer](redeemerData)) match {
+                                        // Can't deserialize the redeemer. Raise exception
+                                        case Failure(t) =>
+                                            EitherT(
+                                              IO.raiseError(
+                                                Error.ParseError
+                                                    .TreasuryEvacuationRedeemerParseError(
+                                                      t
+                                                    )
+                                              )
+                                            )
+                                        case Success(TreasuryRedeemer.Evacuate(r)) =>
+                                            EitherT.right[Error.RecoverableErrors](IO.pure(r))
+                                        case Success(_) =>
+                                            EitherT.left(IO.pure(TreasuryDeinitialized))
+                                    }
                             }
-                        )
+
+                    }
+
+                resolutionKzg <- {
+                    val resolutionTreasuryOutputDatum = treasuryTxRedeemersAndDatums.last._3
+                    Try(
+                      fromData[TreasuryState.RuleBasedTreasuryDatumOnchain](
+                        resolutionTreasuryOutputDatum
+                      )
+                    ) match {
+                        case Failure(t) =>
+                            EitherT(
+                              IO.raiseError(Error.ParseError.TreasuryResolveRedeemerParseError(t))
+                            )
+                        case Success(
+                              r: TreasuryState.RuleBasedTreasuryDatumOnchain.ResolvedOnchain
+                            ) =>
+                            EitherT.right(IO.pure(r.evacuationActive))
+                        case Success(_) =>
+                            EitherT(IO.raiseError(Error.ParseError.TreasuryNotResolved))
+                    }
                 }
 
-                // All L2 utxos that were withdrawn in previous withdrawal transactions.
-                previouslyEvacuated: Set[EvacuationKey] = redeemers.foldLeft(
-                  Set.empty[EvacuationKey]
-                )((acc, redeemer) =>
-                    acc ++
-                        redeemer.evacuationKeys.toScalaList
-                )
-
-                notEvacuatedYet: EvacuationMap =
-                    evacuationMapAtFallback.removedAll(previouslyEvacuated)
+                evacuationMapAtResolution <- candidateEvacMaps.get(resolutionKzg) match {
+                    case None =>
+                        EitherT.right(IO.raiseError(Error.UnknownResolvedKzg(resolutionKzg)))
+                    case Some(evacMap) => EitherT.right(IO.pure(evacMap))
+                }
 
                 /////////////////////////////////
-                // Step 2: Figure out the current treasury
+                // Step 2: Figure out the current treasury, pick the active evacuation map
                 ////////////////////////////////
 
                 unparsedTreasuryUtxos <- EitherT(
@@ -143,9 +193,45 @@ case class EvacuationActor(
                       config.headTokenNames.treasuryTokenName
                     )
                   )
+                ).leftSemiflatTap(e =>
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorTreasuryUtxos(e))
                 )
 
                 treasuryUtxoAndDatum <- parseRBTreasury(unparsedTreasuryUtxos)
+
+                // All L2 utxos that were withdrawn in previous withdrawal transactions.
+                previouslyEvacuated: Set[EvacuationKey] = evacuateRedeemers.foldLeft(
+                  Set.empty[EvacuationKey]
+                )((acc, redeemer) =>
+                    acc ++
+                        redeemer.evacuationKeys.toScalaList
+                )
+
+                // The current on-chain state of the total evacuation map
+                currentEvacuationMap: EvacuationMap = evacuationMapAtResolution.removedAll(
+                  previouslyEvacuated
+                )
+
+                // Evacuations _we_ still have to attempt — under the current "evacuate
+                // everything we voted for" policy this is the same as the on-chain remainder.
+                toEvacuate: EvacuationMap = currentEvacuationMap
+
+                _ <-
+                    if toEvacuate.isEmpty
+                    then
+                        EitherT.left(
+                          tracer.traceWith(EvacuationActorEvent.NoMoreEvacuations) >>
+                              IO.sleep(10.seconds) >>
+                              IO.pure(
+                                Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
+                              )
+                        )
+                    else
+                        EitherT.right(
+                          tracer.traceWith(
+                            EvacuationActorEvent.PayoutObligationsLeft(toEvacuate.size)
+                          )
+                        )
 
                 walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress()(using
                   config
@@ -156,23 +242,72 @@ case class EvacuationActor(
                   cardanoBackend.utxosAt(
                     address = walletAddress
                   )
+                ).leftSemiflatTap(e =>
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorFeeUtxos(e))
                 )
 
-                evacTx <- EvacuationTx
+                // Derive collateral from the fee wallet UTxOs.
+                collateralUtxo <- feeUtxos.headOption match {
+                    case None =>
+                        EitherT.left(
+                          tracer.traceWith(EvacuationActorEvent.NoFeeCollateralUtxo) >>
+                              IO.pure(Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
+                        )
+                    case Some((input, output)) =>
+                        EitherT.fromEither[IO](
+                          CollateralUtxo
+                              .parse(Utxo(input, output))
+                              .left
+                              .map(_ => Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
+                        )
+                }
+
+                evacBuilder = EvacuationTx
                     .Build(
-                      treasuryUtxo = treasuryUtxoAndDatum._1,
-                      evacuatees = toEvacuate,
-                      notEvacuatedYet = notEvacuatedYet,
+                      inputTreasuryUtxo = treasuryUtxoAndDatum._1,
+                      evacuateesToTryNext = toEvacuate,
+                      allRemainingEvacuatees = currentEvacuationMap,
                       feeUtxos = feeUtxos,
-                      collateralUtxo = ??? // Probably pick one from the wallet address?
+                      collateralUtxo = collateralUtxo
                     )
-                    .result match {
+
+                _ <- EitherT.liftF(
+                  tracer.traceWith(
+                    EvacuationActorEvent.BuildingEvacTx(
+                      treasuryUtxoAndDatum._1.treasuryOutput.value.toString,
+                      toEvacuate.size,
+                      toEvacuate.totalValue.toString
+                    )
+                  )
+                )
+                evacTx <- evacBuilder.result match {
+                    case Left(EvacuationTx.Build.Error.NoEvacuatees) =>
+                        // TODO: This is actually gated above and should not be reachable. We can refactor
+                        // EvacuationMap to be a NonEmptyMap underneath, perhaps, and then this duplicate check
+                        // goes away. But then we'd need to pass Option[EvacuationMap] at certain points....
+                        EitherT.left[EvacuationTx](
+                          IO.pure(Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors)
+                        )
                     case Left(e) =>
                         EitherT(IO.raiseError(Error.BuildError.EvacuationTxBuildError(e)))
                     case Right(tx) => EitherT.pure[IO, Error.RecoverableErrors](tx)
                 }
 
-                _ <- EitherT(cardanoBackend.submitTx(evacTx.tx))
+                _ <- (for {
+                    _ <- EitherT.liftF(
+                      tracer.traceWith(
+                        EvacuationActorEvent.SubmittingEvacTx(
+                          evacTx.evacuatedOutputs.size,
+                          ByteString.fromArray(evacTx.tx.toCbor).toHex
+                        )
+                      )
+                    )
+                    _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))
+                } yield ()).leftSemiflatTap(e =>
+                    tracer.traceWith(EvacuationActorEvent.BackendErrorSubmittingEvacTx(e))
+                )
+
+                _ <- EitherT.liftF(tracer.traceWith(EvacuationActorEvent.EvacTxSubmitted))
             } yield ()
         }
         et.value
@@ -182,14 +317,17 @@ case class EvacuationActor(
 
 object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
-        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section
+        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
+        HeadConfig.Bootstrap.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {
-        type Evacuate = Unit // Stub type, not sure if we'll need anything in the request
+        case object PreStart
 
-        type Request = Evacuate
+        case object Evacuate
+
+        type Request = Evacuate.type | PreStart.type
     }
 
     object Error {
@@ -198,61 +336,66 @@ object EvacuationActor {
         sealed trait Recoverable
 
         type UnrecoverableErrors = Unrecoverable | Membership.MembershipCheckError
-        sealed trait Unrecoverable extends Throwable
+        sealed trait Unrecoverable extends Exception
+
+        // The dispute resolution wrote a kzg commitment into the treasury that we did not
+        // pre-load as a candidate. The candidate set is supposed to be a superset of what peers
+        // can vote for, so this means our boot snapshot diverged from on-chain — escalate.
+        final case class UnknownResolvedKzg(resolvedKzg: KzgCommitment) extends Unrecoverable {
+            override def getMessage: String =
+                s"Resolved treasury commits to kzg $resolvedKzg, which is not in the candidate" +
+                    " evacuation map set loaded at boot."
+        }
 
         object QueryError {
             case object NoTreasuryFound extends Recoverable
+            // Nothing left for us to evacuate. The actor stays alive to handle potential rollbacks
+            // that would re-introduce work — so we keep polling rather than terminate.
+            case object NoEvacuateesRemaining extends Recoverable
         }
 
         object ParseError {
-            case class MultipleTreasuryTokensFound(utxoSetL1: Utxos) extends Unrecoverable
-
             case object TreasuryMissing extends Recoverable
+
+            case object TreasuryDeinitialized extends Recoverable
 
             case object TreasuryNotResolved extends Unrecoverable
 
-            case class TreasuryWithdrawRedeemerDataDeserializationFailure(wrapped: Throwable)
-                extends Unrecoverable
+            case class TreasuryEvacuationRedeemerParseError(wrapped: Throwable)
+                extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
 
-            case class RulesBasedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
-                extends Unrecoverable
+            case class TreasuryResolveRedeemerParseError(wrapped: Throwable) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
         }
 
         object BuildError {
             case class EvacuationTxBuildError(
                 wrapped: EvacuationTx.Build.Error
-            ) extends Unrecoverable
+            ) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
         }
 
     }
 
-    // NOTE: some duplication with the same function in DisputeActor
     def parseRBTreasury(
         utxos: Utxos
     )(using
         config: Config
     ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, Resolved)] =
+        import RuleBasedTreasuryUtxo.LookupError
         for {
-            utxo <- utxos.size match {
-                // May happen due to rollback, ignore and try again
-                case 0 => EitherT.left(IO.pure(Error.ParseError.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
-                case _ =>
-                    EitherT.liftF(
-                      IO.raiseError(Error.ParseError.MultipleTreasuryTokensFound(utxos))
-                    )
-            }
-
-            treasuryUtxo <- RuleBasedTreasuryUtxo
-                .parse(utxo) match {
-                case Left(e) =>
-                    EitherT.liftF(
-                      IO.raiseError(
-                        EvacuationActor.Error.ParseError.RulesBasedTreasuryParseError(e)
-                      )
-                    )
-                case Right(rbt) => EitherT.right(IO.pure(rbt))
-            }
+            treasuryUtxo <- EitherT(
+              IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
+                  case Right(u) => Right(u)
+                  case Left(LookupError.Missing) =>
+                      Left(Error.ParseError.TreasuryMissing: Error.RecoverableErrors)
+                  case Left(e) => throw e
+              }
+            )
             resolvedDatum <- treasuryUtxo.treasuryOutput.datum match {
                 case datum: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.right(IO.pure(datum))

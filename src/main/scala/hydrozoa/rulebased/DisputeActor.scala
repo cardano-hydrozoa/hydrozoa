@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.syntax.all.*
+import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
@@ -12,34 +13,30 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
-import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
+import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
+import hydrozoa.rulebased.DisputeActor.Requests.HandleDisputeRes
 import hydrozoa.rulebased.DisputeActor.{Error, *}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
-import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.{DatumOption, Transaction, TransactionOutput, Utxo, Utxos}
-import scalus.cardano.onchain.plutus.v3.PubKeyHash
-import scalus.uplc.builtin.Data.fromData
+import scalus.cardano.ledger.{Transaction, TransactionOutput, Utxo, Utxos}
+import scalus.utils.Pretty
 
 // TODO: relocate
 extension (tx: Transaction) {
-    def selfSigned(using config: Config): Transaction = config.ownHeadWallet.signTx(tx)
+    def selfSigned(using config: Config): Transaction = config.ownWallet.signTx(tx)
 }
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
   * tx, or dispute resolution tx. If none of these need to be submitted, it tells the rule-based
-  * regime manager to start liquidation.
+  * regime manager to start evacuation.
   *
   * This actor calls itself in a loop via an overridden [[preStart]] method.
   *
@@ -58,35 +55,85 @@ extension (tx: Transaction) {
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
-    sec: StandaloneEvacuationCommitment.Onchain,
+    action: RuleBasedRegimeManager.DisputeAction,
     cardanoBackend: CardanoBackend[IO],
-    signatures: List[BlockHeader.Minor.HeaderSignature],
+    tracer: ContraTracer[IO, DisputeActorEvent]
 )(using config: Config)
     extends Actor[IO, DisputeActor.Requests.Request] {
+
     private def handleCardanoBackendError[A](
         action: IO[Either[CardanoBackend.Error, A]]
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, A] =
         for {
             res <- EitherT.liftF(action)
             a <- res match {
-                case Left(e: Timeout) =>
-                    EitherT.left(IO.pure(Error.RecoverableCardanoBackendError(e)))
+                // All backend errors (Timeout, InvalidTx, etc.) are recoverable: swallow and retry on
+                // the next poll. We expect transient failures from UTxO contention, validity-interval
+                // mismatches (e.g. tally attempted before deadline), and rollbacks.
                 case Left(e) =>
-                    EitherT.liftF(IO.raiseError(Error.UnrecoverableCardanoBackendError(e)))
+                    EitherT.left(
+                      tracer
+                          .traceWith(DisputeActorEvent.CardanoBackendError(e))
+                          .as(Error.RecoverableCardanoBackendError(e))
+                    )
                 case Right(a) => EitherT.right[DisputeActor.Error.RecoverableErrors](IO.pure(a))
             }
         } yield a
 
-    private def signAndSubmitTx(
-        tx: Transaction
+    /** Build, log, sign, and submit one dispute-flow tx. Each arm of `handleDisputeRes` differs
+      * only in `label`, the lazy build result, and the per-tx-family error wrapper — this helper
+      * collapses the shared pattern.
+      */
+    private def buildAndSubmit[T <: Tx[T], E <: Throwable](
+        label: String,
+        result: => Either[E, T],
+        wrapError: E => Throwable,
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] =
-        handleCardanoBackendError(cardanoBackend.submitTx(tx.selfSigned))
+        for {
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.BuildingTx(label)))
+            tx <- result match {
+                case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
+                case Right(tx) => EitherT.right(IO.pure(tx))
+            }
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.SubmittingTxLabel(label)))
+            _ <- signAndSubmitTx[T](tx)
+        } yield ()
+
+    private def signAndSubmitTx[TxType <: Tx[TxType]](
+        tx: Tx[TxType],
+    ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
+        for {
+            _ <- EitherT.right(
+              tracer.traceWith(
+                DisputeActorEvent.SubmittingTxFamily(tx.transactionFamily, tx.tx.id.toString)
+              )
+            )
+            _ <- EitherT.right(
+              tracer.traceWith(
+                DisputeActorEvent.TxCbor(
+                  summon[Pretty[Transaction]].pretty(tx.tx).render(100),
+                  HexUtil.encodeHexString(tx.tx.toCbor)
+                )
+              )
+            )
+            res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
+            _ <- EitherT.right(
+              tracer.traceWith(
+                DisputeActorEvent.TxSubmitSuccess(tx.transactionFamily, tx.tx.id.toString)
+              )
+            )
+        } yield res
+    }
 
     private def getDisputeCollateral
-        : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] =
+        : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] = {
+        val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
         for {
+            _ <- EitherT.liftF(
+              tracer.traceWith(DisputeActorEvent.LookingForCollateral(peerAddr.toString))
+            )
             collateralCandidates <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(config.ownHeadWallet.exportVerificationKey.shelleyAddress())
+              cardanoBackend.utxosAt(peerAddr)
             )
             collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                 to.value.isOnlyAda
@@ -113,10 +160,16 @@ final case class DisputeActor(
                         )
                       )
                     )
-                case _ => EitherT.liftF(IO.raiseError(NoSuitableCollateralUtxosFound))
+                case _ =>
+                    EitherT.liftF(
+                      tracer
+                          .traceWith(DisputeActorEvent.NoCollateralFound(config.ownPeerLabel))
+                          .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
+                    )
             }
-
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.CollateralFound))
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
+    }
 
     def handleDisputeRes: IO[Either[DisputeActor.Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = for {
@@ -137,35 +190,54 @@ final case class DisputeActor(
                     (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
               )
             )
-            treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)
+            treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)(using config, tracer)
 
             _ <- disputeUtxos match {
-                // Cast Vote
-                case (Some(ownVoteUtxo), _) =>
-                    val builder = VoteTx.Build(
-                      uncastVoteUtxo = ownVoteUtxo,
-                      treasuryUtxo = treasuryUtxo,
-                      collateralUtxo = collateralUtxo,
-                      sec = sec,
-                      signatures = signatures,
-                    )
-                    for {
-                        voteTx <- builder.result match {
-                            case Left(e)   => EitherT.liftF(IO.raiseError(Error.BuildError.Vote(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- signAndSubmitTx(voteTx.tx)
-                    } yield ()
+                case DisputeUtxos.CastVote(ownBallotBox) =>
+                    action match {
+                        case RuleBasedRegimeManager.DisputeAction.Vote(
+                              sec,
+                              signatures,
+                              coilSignatures
+                            ) =>
+                            buildAndSubmit(
+                              label = "vote",
+                              result = VoteTx
+                                  .Build(
+                                    uncastBallotBox = ownBallotBox,
+                                    treasuryUtxo = treasuryUtxo,
+                                    collateralUtxo = collateralUtxo,
+                                    sec = sec,
+                                    signatures = signatures,
+                                    coilSignatures = coilSignatures,
+                                  )
+                                  .result,
+                              wrapError = Error.BuildError.Vote(_)
+                            )
 
-                // Tally
-                case (None, otherUtxos) if otherUtxos.length > 1 =>
+                        case RuleBasedRegimeManager.DisputeAction.Abstain =>
+                            buildAndSubmit(
+                              label = "abstain",
+                              result = AbstainTx
+                                  .Build(
+                                    uncastBallotBox = ownBallotBox,
+                                    collateralUtxo = collateralUtxo
+                                  )
+                                  .result,
+                              wrapError = Error.BuildError.Abstain(_)
+                            )
+                    }
+
+                case DisputeUtxos.Tally(otherUtxos) =>
                     // We must have that they key of the continuing input is less than the key of the removed input,
                     // so we sort here.
-                    val keySorted = otherUtxos.sortBy(_.voteOutput.key)
+                    val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
-                        removed <- keySorted.tail.find(voteUtxo =>
-                            voteUtxo.voteOutput.key == continuing.voteOutput.link
+                        _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.Tallying))
+
+                        removed <- keySorted.tail.find(ballotBox =>
+                            ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
                         ) match {
                             case None =>
                                 EitherT.liftF(
@@ -181,42 +253,37 @@ final case class DisputeActor(
                         // - Randomized or otherwise came up with an algorithm for peers to optimistically not
                         //   submit non-disjoint tallying transactions
                         // But right now I'm just doing the simplest thing
-                        builder = TallyTx.Build(
-                          continuingVoteUtxo = continuing,
-                          removedVoteUtxo = removed,
-                          treasuryUtxo = treasuryUtxo,
-                          collateralUtxo = collateralUtxo
+                        _ <- buildAndSubmit(
+                          label = "tally",
+                          result = TallyTx
+                              .Build(
+                                continuingBallotBox = continuing,
+                                removedBallotBox = removed,
+                                treasuryUtxo = treasuryUtxo,
+                                collateralUtxo = collateralUtxo
+                              )
+                              .result,
+                          wrapError = Error.BuildError.Tally(_)
                         )
-                        tallyTx <- builder.result match {
-                            case Left(e) => EitherT.liftF(IO.raiseError(Error.BuildError.Tally(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- signAndSubmitTx(tallyTx.tx)
                     } yield ()
 
-                // Resolve
-                case (None, lastVoteUtxo) if lastVoteUtxo.length == 1 =>
-                    for {
-                        resolutionTx <- ResolutionTx
-                            .Build(
-                              // FIXME: Partial, just doing this cast during a refactor
-                              talliedVoteUtxo = lastVoteUtxo.head.asInstanceOf[VoteUtxo[Voted]],
-                              treasuryUtxo = treasuryUtxo,
-                              collateralUtxo = collateralUtxo
-                            )
-                            .result match {
-                            case Left(e) =>
-                                EitherT.liftF(IO.raiseError(Error.BuildError.Resolution(e)))
-                            case Right(tx) => EitherT.right(IO.pure(tx))
-                        }
-                        _ <- signAndSubmitTx(resolutionTx.tx)
-                    } yield ()
+                case DisputeUtxos.Resolve(finalVoteUtxo) =>
+                    buildAndSubmit(
+                      label = "resolve",
+                      result = ResolutionTx
+                          .Build(
+                            talliedBallotBox = finalVoteUtxo,
+                            treasuryUtxo = treasuryUtxo,
+                            collateralUtxo = collateralUtxo
+                          )
+                          .result,
+                      wrapError = Error.BuildError.Resolution(_)
+                    )
 
-                // This should not be able to happen. If the treasury is unresolved,
-                // then there must be at least one vote according to the spec.
-                // If the treasury is resolved, we should short circuit with a left when the treasury
-                // utxo is parsed.
-                case (None, _) => EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
+                // Treasury was still unresolved when we read it above but the dispute address holds
+                // no vote utxos. Per the spec this state is unreachable, so escalate.
+                case DisputeUtxos.EmptyVotes =>
+                    EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
             }
 
         } yield ()
@@ -224,10 +291,15 @@ final case class DisputeActor(
     }
 
     override def preStart: IO[Unit] =
-        context.setReceiveTimeout(config.evacuationBotPollingPeriod, ())
+        context.self ! Requests.PreStart
 
-    override def receive: Receive[IO, Requests.Request] = { case _: Requests.HandleDisputeRes =>
-        handleDisputeRes
+    private def preStartLocal: IO[Unit] =
+        context.setReceiveTimeout(config.evacuationBotPollingPeriod, HandleDisputeRes)
+
+    override def receive: Receive[IO, Requests.Request] = {
+        case _: Requests.PreStart.type => preStartLocal
+        case _: Requests.HandleDisputeRes.type =>
+            handleDisputeRes
     }
 
     /** Queries the cardano backend for all utxos at the dispute resolution address, and then parses
@@ -245,83 +317,77 @@ final case class DisputeActor(
       *       - Each utxo has the correct vote token in it and sits at the correct adddress.
       *
       * @return
-      *   A tuple of [[VoteUtxoWithDatum]]. The first element is wrapped in an option, and is only
-      *   "Some" if the dispute actor still needs to cast a vote. The second element is all other
-      *   vote utxos with cast votes.
+      *   A [[DisputeUtxos]] describing the current state at the dispute address:
+      *   [[DisputeUtxos.CastVote]] when the peer's own empty vote utxo is still present,
+      *   [[DisputeUtxos.Tally]] when more than one cast-vote utxo remains, or
+      *   [[DisputeUtxos.Resolve]] when a single tallied vote utxo remains.
       */
     private def parseDisputeUtxos(utxos: Utxos)(using
         config: Config
-    ): IO[
-      (
-          Option[VoteUtxo[AwaitingVote]],
-          Seq[VoteUtxo[VoteStatus]]
-      )
-    ] =
+    ): IO[DisputeUtxos] = {
+        val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
         for {
-            voteUtxos <- utxos.toList.traverse((i, o) => utxoToVoteUtxo(Utxo(i, o)))
-
-            votePartition = voteUtxos.partition {
-                case VoteUtxo(_, VoteOutput(_, _, _, _, VoteStatus.AwaitingVote(peerPkh))) =>
-                    val ownPkh: PubKeyHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash
-                    peerPkh == ownPkh
-                case _ => false
+            // TODO: Collect parsing errors
+            parsed <- IO.fromEither(utxos.toList.traverse((i, o) => BallotBox.parse(Utxo(i, o))))
+            ownAwaiting = parsed.collectFirst {
+                case v if v.ballotBoxOutput.status match {
+                        case AwaitingVote(peer) => peer.hash == ownPkhHash
+                        case _                  => false
+                    } =>
+                    v.asInstanceOf[BallotBox[AwaitingVote]]
             }
-        } yield (
-          votePartition._1.headOption.map(_.asInstanceOf[VoteUtxo[AwaitingVote]]),
-          votePartition._2
-        )
-
-    // TODO: Move to `VoteUtxo`
-    private def utxoToVoteUtxo(
-        utxo: Utxo
-    )(using config: Config): IO[VoteUtxo[VoteStatus]] = {
-        for {
-            d1: DatumOption <- utxo._2.datumOption match {
-                case None    => IO.raiseError(DisputeActor.Error.ParseError.Vote.MissingDatum(utxo))
-                case Some(x) => IO.pure(x)
+            result <- ownAwaiting match {
+                case Some(own) => IO.pure(DisputeUtxos.CastVote(own))
+                case None =>
+                    parsed match {
+                        case Nil => IO.pure(DisputeUtxos.EmptyVotes)
+                        case x :: Nil =>
+                            x.ballotBoxOutput.status match {
+                                case _: Voted =>
+                                    IO.pure(
+                                      DisputeUtxos.Resolve(x.asInstanceOf[BallotBox[Voted]])
+                                    )
+                                case _ =>
+                                    IO.raiseError(
+                                      DisputeActor.Error.NonVotedUtxoAtResolve(x)
+                                    )
+                            }
+                        case xs => IO.pure(DisputeUtxos.Tally(xs))
+                    }
             }
-            d2: Inline <- d1 match {
-                case i: Inline => IO.pure(i)
-                case _ => IO.raiseError(DisputeActor.Error.ParseError.Vote.DatumNotInline(utxo))
-            }
-            d3: VoteDatum <- Try(fromData[VoteDatum](d2.data)) match {
-                case Success(d) => IO.pure(d)
-                case Failure(e) =>
-                    IO.raiseError(
-                      DisputeActor.Error.ParseError.Vote.DatumDeserializationError(utxo, e)
-                    )
-            }
-
-            // TODO: Partial. Should we throw an exception here? Should we ensure this is the only non-ada asset in
-            //   the utxo?
-            voteTokens =
-                utxo.output.value.assets
-                    .assets(config.headMultisigScript.policyId)(config.headTokenNames.voteTokenName)
-            voteUtxo = VoteUtxo(
-              input = utxo.input,
-              voteOutput = VoteOutput(
-                d3.key,
-                d3.link,
-                utxo.output.value.coin,
-                PositiveInt.unsafeApply(voteTokens.toInt),
-                d3.voteStatus
-              )
-            )
-        } yield voteUtxo
+        } yield result
     }
 
 }
 
 object DisputeActor {
+
+    /** The possible cases for (valid, parsed) utxos at the dispute resolution address.
+      *
+      * [[EmptyVotes]] should not be observed while the treasury is still unresolved (the spec
+      * guarantees at least one vote utxo in that state). It is reachable in practice when the
+      * dispute has already been resolved and the deinit transaction has consumed every vote utxo;
+      * the caller is expected to detect that situation via the treasury parse and short-circuit
+      * before matching here.
+      */
+    enum DisputeUtxos:
+        case CastVote(ownVoteUtxo: BallotBox[AwaitingVote])
+        case Tally(utxos: Seq[BallotBox[VoteStatus]])
+        case Resolve(finalVoteUtxo: BallotBox[Voted])
+        case EmptyVotes
+
     type Config = NodePrivateConfig.Section & HeadConfig.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 
     object Requests {
-        type Request = HandleDisputeRes
+
+        case object PreStart
+
+        type Request = HandleDisputeRes.type | PreStart.type
 
         // Placeholder, I'm not sure if we need any additional state here
-        type HandleDisputeRes = Unit
+        case object HandleDisputeRes
     }
 
     object Error {
@@ -332,13 +398,20 @@ object DisputeActor {
         ) extends Recoverable
 
         type UnrecoverableErrors = Unrecoverable
-        sealed trait Unrecoverable extends Throwable
+        sealed trait Unrecoverable extends Exception
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
-        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[VoteUtxo[VoteStatus]])
+        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[BallotBox[VoteStatus]])
             extends Unrecoverable {
             override def getMessage: String =
-                s"No compatible vote utxo with key ${voteUtxos.head._2.link} found. Datums found: " +
+                s"No compatible ballot box with key ${voteUtxos.head._2.link} found. Datums found: " +
                     s"${voteUtxos.map { _._2 }}"
+        }
+        // Treasury is unresolved, exactly one vote utxo remains, but its status isn't Voted.
+        // The spec says the final tally output is always Voted — Abstain/AwaitingVote here
+        // means the on-chain state has diverged from what we expect, so we escalate.
+        case class NonVotedUtxoAtResolve(voteUtxo: BallotBox[VoteStatus]) extends Unrecoverable {
+            override def getMessage: String =
+                s"Single remaining vote utxo at resolve time is not Voted: $voteUtxo"
         }
         case class UnrecoverableCardanoBackendError(
             wrapped: CardanoBackend.Error
@@ -366,21 +439,14 @@ object DisputeActor {
                 override def getMessage: String = wrapped.getMessage
             }
 
+            case class Abstain(wrapped: AbstainTx.Build.Error) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
         }
 
         sealed trait ParseError
         object ParseError {
-            object Vote {
-                case class MissingDatum(utxo: Utxo) extends Unrecoverable
-
-                case class DatumNotInline(utxo: Utxo) extends Unrecoverable
-
-                case class DatumDeserializationError(utxo: Utxo, e: Throwable) extends Unrecoverable
-            }
-
             object Treasury {
-                case class MultipleTreasuryTokensFound(utxos: Utxos) extends Unrecoverable
-
                 case class WrappedTreasuryParseError(wrapped: RuleBasedTreasuryOutput.ParseError)
                     extends Unrecoverable
 
@@ -400,26 +466,40 @@ object DisputeActor {
     // - If we get more than one treasury token or a parsing failure, thats an exception
     // - if we get zero treasury tokens, it may mean that the deinit has succeeded. But we keep trying, in case
     //   of rollbacks.
-    // TODO: Factor out. Its shared between this and the li
-    // obtained from the parameters to this class
     def parseRBTreasury(
         utxos: Utxos
-    )(using config: Config): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+    )(using
+        config: Config,
+        tracer: ContraTracer[IO, DisputeActorEvent]
+    ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+        import RuleBasedTreasuryUtxo.LookupError
         for {
-            utxo <- utxos.size match {
-                // May happen due to rollback, ignore and try again
-                case 0 => EitherT.left(IO.pure(Error.ParseError.Treasury.TreasuryMissing))
-                case 1 => EitherT.right(IO.pure(Utxo(utxos.head)))
-                case _ =>
-                    EitherT.liftF(
-                      IO.raiseError(Error.ParseError.Treasury.MultipleTreasuryTokensFound(utxos))
+            _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.ParsingTreasury))
+            treasuryUtxo <- EitherT(
+              IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
+                  case Right(u) => Right(u)
+                  case Left(LookupError.Missing) =>
+                      Left(Error.ParseError.Treasury.TreasuryMissing: Error.RecoverableErrors)
+                  case Left(e) => throw e
+              }
+            )
+            _ <- treasuryUtxo.treasuryOutput.datum match {
+                case _: RuleBasedTreasuryDatum.Unresolved =>
+                    EitherT.liftF[IO, Error.RecoverableErrors, Unit](
+                      tracer.traceWith(DisputeActorEvent.TreasuryIsUnresolved)
+                    )
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    EitherT.left[Unit](
+                      tracer
+                          .traceWith(DisputeActorEvent.TreasuryIsResolved)
+                          .as(TreasuryResolved: Error.RecoverableErrors)
                     )
             }
 
-            rbTreasuryOut <- EitherT.right(IO.fromEither(RuleBasedTreasuryOutput(utxo.output)))
-            unresolvedRbt <- rbTreasuryOut.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved => EitherT.right(IO.pure(rbTreasuryOut))
-                case _: RuleBasedTreasuryDatum.Resolved   => EitherT.left(IO.pure(TreasuryResolved))
-            }
-        } yield RuleBasedTreasuryUtxo(utxo.input, unresolvedRbt)
+            _ <- EitherT.liftF(
+              tracer.traceWith(
+                DisputeActorEvent.TreasuryFound(treasuryUtxo.treasuryOutput.value.toString)
+              )
+            )
+        } yield treasuryUtxo
 }

@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2.store
 
 import cats.effect.{IO, Ref, Resource}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import scala.collection.immutable.TreeMap
 
 /** In-memory [[L2Store]] for tests. Holds typed values directly — no serialization — so it

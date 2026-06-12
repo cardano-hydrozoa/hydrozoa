@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
-import cats.effect.{Deferred, IO, IOLocal}
+import cats.effect.{Deferred, IO}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
@@ -9,9 +9,9 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -53,6 +53,12 @@ class StackComposerRecoveryTest extends AnyFunSuite:
     private given CardanoNetwork.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
 
+    /** This node's head peer number (the fixture config is always a head node). */
+    private val ownNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) => fail("fixture config must be a head node")
+    }
+
     test("StackComposer bootstraps stack 0 on a cold store") {
         bootWith(_ => IO.unit) { gotHandoff =>
             gotHandoff.get
@@ -72,7 +78,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
       * (last block 3): the own hard-ack, the stack brief, the treasury, and the evacuation map.
       */
     private def seedRecoverable(p: Persistence[IO]): IO[Unit] =
-        val own = config.ownHeadPeerNum
+        val own = ownNum
         for {
             sb <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
             _ <- p.put(LaneKey.HardAck(own, HardAckNumber(0)))(
@@ -86,38 +92,34 @@ class StackComposerRecoveryTest extends AnyFunSuite:
     private def bootWith[A](
         seed: Persistence[IO] => IO[Unit]
     )(check: Deferred[IO, SlowConsensusActor.StackHandoff] => IO[A]): A =
-        (for {
-            tracerLocal <- Tracer.makeLocal
-            result <- {
-                given IOLocal[Tracer] = tracerLocal
-                InMemoryBackendStore.open.use(backend =>
-                    ActorSystem[IO]("sc-recovery").use(system =>
-                        for {
-                            persistence <- Persistence.fromBackend(backend)
-                            _ <- seed(persistence)
-                            gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
-                            probe <- system.actorOf(HandoffProbe(gotHandoff))
-                            jlSink <- system.actorOf(NoopSink[JointLedger.Requests.Request]())
-                            fcaSink <- system.actorOf(NoopSink[FastConsensusActor.Request]())
-                            _ <- system.actorOf(
-                              StackComposer(
-                                config,
-                                StackComposer.Connections(
-                                  jointLedger = jlSink,
-                                  fastConsensusActor = fcaSink,
-                                  slowConsensusActor = probe,
-                                  peerLiaisons = List()
-                                ),
-                                tracerLocal,
-                                persistence
-                              )
-                            )
-                            r <- check(gotHandoff)
-                        } yield r
-                    )
+        InMemoryBackendStore.open
+            .use(backend =>
+                ActorSystem[IO]("sc-recovery").use(system =>
+                    for {
+                        persistence <- Persistence.fromBackend(backend)
+                        _ <- seed(persistence)
+                        gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
+                        probe <- system.actorOf(HandoffProbe(gotHandoff))
+                        jlSink <- system.actorOf(NoopSink[JointLedger.Requests.Request]())
+                        fcaSink <- system.actorOf(NoopSink[FastConsensusActor.Request]())
+                        _ <- system.actorOf(
+                          StackComposer(
+                            config,
+                            StackComposer.Connections(
+                              jointLedger = jlSink,
+                              fastConsensusActor = fcaSink,
+                              slowConsensusActor = probe,
+                              headPeerLiaisons = List()
+                            ),
+                            ContraTracer.nullTracer[IO, StackComposerEvent],
+                            persistence
+                          )
+                        )
+                        r <- check(gotHandoff)
+                    } yield r
                 )
-            }
-        } yield result).unsafeRunSync()
+            )
+            .unsafeRunSync()
 
     // ---- fixtures (mirror RecoverSeamsTest) ----
 
@@ -133,7 +135,7 @@ class StackComposerRecoveryTest extends AnyFunSuite:
 
     private def hardAck(peer: Int, ackNum: Int, stack: Int): HardAck =
         HardAck(
-          ackId = HardAckId(HeadPeerNumber(peer), HardAckNumber(ackNum)),
+          ackId = HardAckId(PeerId.Head(HeadPeerNumber(peer)), HardAckNumber(ackNum)),
           stackNum = StackNumber(stack),
           payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
         )

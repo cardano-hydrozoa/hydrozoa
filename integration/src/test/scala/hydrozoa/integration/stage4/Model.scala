@@ -12,7 +12,6 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
-import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import io.bullet.borer.Cbor
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{TransactionInput, Utxos}
@@ -31,6 +30,8 @@ object Model {
           */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
+        /** Coil follower node configs (each hubbed by head 0). Empty for a pure-head run. */
+        coilNodeConfigs: List[NodeConfig] = List.empty,
     )
 
     /** A deposit that has been registered but whose L2 UTxOs are not yet available in the model

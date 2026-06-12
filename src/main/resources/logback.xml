@@ -22,7 +22,14 @@
         <appender-ref ref="LOG_FILE"/>
     </root>
     <logger name="CardanoLiaison" level="trace"/>
+    <logger name="PeerLiaison" level="trace"/>
+    <logger name="PeerLiaison.HeadToHead" level="trace"/>
+    <logger name="PeerLiaison.HubToCoil" level="trace"/>
+    <logger name="PeerLiaison.CoilToHub" level="trace"/>
     <logger name="JointLedger" level="trace"/>
+    <logger name="MultisigRegimeManager" level="trace"/>
+    <logger name="DisputeActor" level="trace"/>
+    <logger name="EvacuationActor" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
     <logger name="HydrozoaRoutes" level="trace"/>

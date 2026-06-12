@@ -65,6 +65,7 @@ object Codecs {
     given transactionEncoder: Encoder[Transaction] =
         Encoder.encodeString.contramap(tx => ByteString.fromArray(tx.toCbor).toHex)
 
+    // FIXME (maybe?): combine with `given Encoder[KeepRaw[TransactionOutput]]` in RemoteL2LedgerCodecs(?)
     given transactionOutputEncoder: Encoder[TransactionOutput] with {
 
         def apply(txOut: TransactionOutput): Json = {

@@ -11,9 +11,9 @@ import hydrozoa.config.head.peers.HeadPeers.headPeersDecoder
 import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
-import hydrozoa.multisig.consensus.peer.HeadPeerWallet
+import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 
 final case class NodeConfig private (
@@ -83,9 +83,13 @@ object NodeConfig {
 
         } yield NodeConfig(headConfig, privateConfig)
 
-    def apply(
+    /** Build a head node's config: the shared `headConfig` plus the private identity layer carrying
+      * an [[OwnHeadPeerPrivate]] (this head's wallet + its derived `HeadPeerNumber`). `None` if the
+      * wallet's key is not among the configured head peers.
+      */
+    def mkHeadConfig(
         headConfig: HeadConfig,
-        ownHeadWallet: HeadPeerWallet,
+        ownHeadWallet: PeerWallet,
         nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
         nodeOperationMultisigConfig: NodeOperationMultisigConfig,
         hydrozoaHost: String,
@@ -95,6 +99,30 @@ object NodeConfig {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownHeadPeerPrivate,
+          nodeOperationEvacuationConfig,
+          nodeOperationMultisigConfig,
+          hydrozoaHost,
+          hydrozoaPort,
+          blockfrostApiKey
+        )
+    } yield NodeConfig(headConfig, nodePrivateConfig)
+
+    /** Build a coil node's config: the same shared `headConfig` a head peer gets, with the private
+      * identity layer carrying an [[OwnCoilPeerPrivate]] (this coil's wallet + its derived
+      * `CoilPeerNumber`). `None` if the wallet's key is not among the configured coil peers.
+      */
+    def mkCoilConfig(
+        headConfig: HeadConfig,
+        ownCoilWallet: PeerWallet,
+        nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
+        nodeOperationMultisigConfig: NodeOperationMultisigConfig,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
+        blockfrostApiKey: String
+    ): Option[NodeConfig] = for {
+        ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeerVKeys)
+        nodePrivateConfig = NodePrivateConfig(
+          ownCoilPeerPrivate,
           nodeOperationEvacuationConfig,
           nodeOperationMultisigConfig,
           hydrozoaHost,

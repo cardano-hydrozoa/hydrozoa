@@ -1,8 +1,8 @@
 package hydrozoa.multisig.persistence.recovery
 
 import cats.data.NonEmptyList
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, IOLocal}
 import cats.syntax.all.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
@@ -11,14 +11,14 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.Tracer
-import hydrozoa.multisig.consensus.{CardanoLiaison, PeerLiaison, StackComposer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -34,9 +34,9 @@ import scalus.uplc.builtin.ByteString
 
 /** Tests for the R2-fast recover seams — the pure-over-store reconstruction of `JointLedger`'s and
   * `StackComposer`'s passive state after a crash. Each test seeds a store with the typed values the
-  * producers write (`persistOwnAckBundle` / `persistOwnStackClose` / `PeerLiaison.persistInbound`)
-  * and asserts the recovered state equals the crash-time value. Markers / `softAcked` are passed
-  * directly — the marker-derivation → recover wiring is R3.
+  * producers write (`persistOwnAckBundle` / `persistOwnStackClose` /
+  * `PeerLiaisonHeadToHead.persistInbound`) and asserts the recovered state equals the crash-time
+  * value. Markers / `softAcked` are passed directly — the marker-derivation → recover wiring is R3.
   */
 class RecoverSeamsTest extends AnyFunSuite:
 
@@ -54,6 +54,12 @@ class RecoverSeamsTest extends AnyFunSuite:
     private given CardanoNetwork.Section = config
 
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
+
+    /** This node's head peer number (the fixture config is always a head node). */
+    private val ownNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) => fail("fixture config must be a head node")
+    }
 
     // ---- JointLedger ----
 
@@ -277,7 +283,7 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    // ---- EventSequencer (request counter) ----
+    // ---- RequestSequencer (request counter) ----
 
     test("Markers.recoverNextRequestNumber returns RequestNumber(0) on an empty store") {
         withStore { p =>
@@ -332,23 +338,26 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    // ---- PeerLiaison (outbox restore) ----
+    // ---- PeerLiaisonHeadToHead (outbox restore) ----
 
-    test("PeerLiaison.recover over an empty store yields an empty outbox") {
+    test("PeerLiaisonHeadToHead.recover over an empty store yields an empty outbox") {
         withStore { p =>
-            PeerLiaison.recover(p, config.ownHeadPeerId).map { seed =>
-                assert(
-                  seed.qAck.isEmpty && seed.qBlock.isEmpty && seed.qRequest.isEmpty &&
-                      seed.qStackBrief.isEmpty && seed.qHardAck.isEmpty
-                )
-            }
+            PeerLiaisonHeadToHead
+                .recover(p, ownNum, config.canLeadFast, config.canLeadSlow)
+                .map { seed =>
+                    assert(
+                      seed.softAcks.isEmpty && seed.blocks.isEmpty && seed.requests.isEmpty &&
+                          seed.stacks.isEmpty && seed.hardAcks.isEmpty
+                    )
+                }
         }
     }
 
-    test("PeerLiaison.recover restores own satellites (per-peer) and own-led spines (filtered)") {
+    test(
+      "PeerLiaisonHeadToHead.recover restores own satellites (per-peer) and own-led spines " +
+          "(filtered)"
+    ) {
         withStore { p =>
-            val own = config.ownHeadPeerId
-            val ownNum = config.ownHeadPeerNum
             val other = HeadPeerNumber(1)
             val spineRange = (0 to 5).toList
             for
@@ -372,13 +381,14 @@ class RecoverSeamsTest extends AnyFunSuite:
                         p.put(LaneKey.Stack(StackNumber(n)))(LaneValue(stamp, s))
                     )
                 )
-                seed <- PeerLiaison.recover(p, own)
+                seed <- PeerLiaisonHeadToHead
+                    .recover(p, ownNum, config.canLeadFast, config.canLeadSlow)
             yield assert(
-              seed.qHardAck.map(_.hardAckNum) == List(0, 1, 2).map(HardAckNumber(_)) &&
-                  seed.qBlock
-                      .map(_.blockNum) == spineRange.map(BlockNumber(_)).filter(own.isLeader) &&
-                  seed.qStackBrief.map(_.stackNum) ==
-                  spineRange.map(StackNumber(_)).filter(own.isSlowLeader)
+              seed.hardAcks.map(_.hardAckNum) == List(0, 1, 2).map(HardAckNumber(_)) &&
+                  seed.blocks.map(_.blockNum) ==
+                  spineRange.map(BlockNumber(_)).filter(config.canLeadFast) &&
+                  seed.stacks.map(_.stackNum) ==
+                  spineRange.map(StackNumber(_)).filter(config.canLeadSlow)
             )
         }
     }
@@ -443,7 +453,7 @@ class RecoverSeamsTest extends AnyFunSuite:
       */
     private def hardAck(peer: Int, ackNum: Int, stack: Int): HardAck =
         HardAck(
-          ackId = HardAckId(HeadPeerNumber(peer), HardAckNumber(ackNum)),
+          ackId = HardAckId(PeerId.Head(HeadPeerNumber(peer)), HardAckNumber(ackNum)),
           stackNum = StackNumber(stack),
           payload = HardAck.Round2Payload.Regular(
             TxSignature(IArray.from(Array.fill[Byte](64)(0)))
@@ -451,12 +461,6 @@ class RecoverSeamsTest extends AnyFunSuite:
         )
 
     private def withStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
-        (for
-            tracerLocal <- Tracer.makeLocal
-            result <- {
-                given IOLocal[Tracer] = tracerLocal
-                InMemoryBackendStore.open.use(backend =>
-                    Persistence.fromBackend(backend).flatMap(prog)
-                )
-            }
-        yield result).unsafeRunSync()
+        InMemoryBackendStore.open
+            .use(backend => Persistence.fromBackend(backend).flatMap(prog))
+            .unsafeRunSync()

@@ -1,6 +1,6 @@
 package hydrozoa.multisig.ledger.eutxol2.store
 
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 
 /** The durable store backing `EutxoL2Ledger`'s crash recovery (§R2b).
   *

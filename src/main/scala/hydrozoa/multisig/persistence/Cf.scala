@@ -2,12 +2,12 @@ package hydrozoa.multisig.persistence
 
 /** The set of column families the persistence layer opens.
   *
-  * Fifteen CFs in total, grouped as:
+  * Seventeen CFs in total, grouped as:
   *
-  *   - **Lane CFs** (5) — one per lane type, with the CF acting as the lane-type discriminant
+  *   - **Lane CFs** (7) — one per lane type, with the CF acting as the lane-type discriminant
   *     (replaces a tag byte in the encoded key; see [[LaneKey]]). Lane values carry the 12-byte
   *     arrival-stamp prefix (§5.4).
-  *   - **Aggregator outputs + JL working data** (5) — `BlockResult` (JL per-block output, keyed by
+  *   - **Aggregator outputs + JL working data** (6) — `BlockResult` (JL per-block output, keyed by
   *     `blockNum`, written at ack time so `StackComposer` can rebuild `pending` from disk on
   *     restart); `SoftConfirmation` (`FastConsensusActor` aggregate, keyed by `blockNum`);
   *     `HardConfirmation` (`SlowConsensusActor` multisigned-effects record, keyed by `stackNum`);
@@ -31,7 +31,9 @@ package hydrozoa.multisig.persistence
   */
 enum Cf:
     // Lane CFs — single-writer-per-entry (rotating for spines, per-peer for satellites).
-    case Block, Stack, Request, SoftAck, HardAck
+    // `CoilHardAck` is a hub's raw inbound from each of its coil peers (per coil peer); `HubHardAck`
+    // is the re-sequenced per-hub lane that the head mesh and hub→coil links carry.
+    case Block, Stack, Request, SoftAck, HardAck, CoilHardAck, HubHardAck
     // Aggregator outputs + JL working data — keyed by spine index (blockNum / stackNum).
     case BlockResult, SoftConfirmation, HardConfirmation, RequestHighWater, L2CommandNumber,
         UnsignedStack

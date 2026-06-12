@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.eutxol2.store
 
 import cats.effect.{IO, Resource}
 import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.{realCommandCodec, snapshotCodec}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2CommandNumber}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
 import java.nio.ByteBuffer

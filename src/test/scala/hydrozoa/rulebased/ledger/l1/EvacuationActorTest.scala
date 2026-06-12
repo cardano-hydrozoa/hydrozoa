@@ -3,13 +3,15 @@ package hydrozoa.rulebased.ledger.l1
 import cats.*
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.rulebased.EvacuationActor
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import hydrozoa.rulebased.{EvacuationActor, EvacuationActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
@@ -58,11 +60,15 @@ object EvacuationActorTestHelpers {
               )
             )
 
+            tracer = Slf4jTracer.sink.contramap(
+              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+            )
+
         } yield EvacuationActor(
-          toEvacuate = subset,
+          candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
           cardanoBackend = cardanoBackend,
-          evacuationMapAtFallback = evacMapFull,
-          fallbackTxHash = fallbackTxHash
+          fallbackTxHash = fallbackTxHash,
+          tracer = tracer
         )(using
           env.nodeConfigs.head._2
         )
@@ -76,7 +82,7 @@ object EvacuationActorTest extends Properties("Evacuation Actor") {
     val _ = property("dispute actor (no actor system)") = run(
       initializer = PropertyM.pick(MultiNodeConfig.generate(TestPeersSpec.default)()),
       testM = for {
-          env <- ask
+          _ <- ask
       } yield true
     )
 }
