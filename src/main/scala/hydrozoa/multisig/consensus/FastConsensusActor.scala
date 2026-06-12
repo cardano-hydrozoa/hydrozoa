@@ -7,11 +7,11 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
@@ -51,15 +51,19 @@ object FastConsensusActor:
     // `& CardanoNetwork.Section`: the SoftConfirmation codec (Block.SoftConfirmed) is
     // `Section`-dependent; the full configs passed in already satisfy it (same ones that feed
     // JointLedger's `HeadConfig.Section`).
-    type Config = OwnHeadPeerPublic.Section & HeadPeers.Section & CardanoNetwork.Section
+    type Config = OwnPeerPublic.Section & HeadPeers.Section & CardanoNetwork.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        eventSequencer: EventSequencer.Handle,
-        peerLiaisons: List[PeerLiaison.Handle],
+        requestSequencer: RequestSequencer.Handle,
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
+        /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** soft-ack is sent here so the
+          * hub's coil peers receive it. `None` off a hub.
+          */
+        coilRelay: Option[CoilRelay.Handle] = None,
     )
 
     /** One cell per in-flight block number. A cell knows the block number it is collecting for, may
@@ -182,10 +186,11 @@ class FastConsensusActor(
                       // hydrozoa.multisig.consensus.limiter.Limiter).
                       blockWeaver = _connections.blockWeaverLimiter,
                       cardanoLiaison = _connections.cardanoLiaison,
-                      eventSequencer = _connections.eventSequencer,
-                      peerLiaisons = _connections.peerLiaisons,
+                      requestSequencer = _connections.requestSequencer,
+                      headPeerLiaisons = _connections.headPeerLiaisons,
                       jointLedger = _connections.jointLedger,
                       stackComposer = _connections.stackComposer,
+                      coilRelay = _connections.coilRelay,
                     )
                   )
                 )
@@ -209,7 +214,7 @@ class FastConsensusActor(
         withCell(brief.blockNum)(_.acceptBrief(brief))
 
     private def handleAck(ack: SoftAck): IO[Unit] = {
-        val isOwn = ack.peerNum == config.ownHeadPeerNum
+        val isOwn = config.ownPeerId == PeerId.Head(ack.peerNum)
         for {
             _ <- tracer.traceWith(
               FastConsensusActorEvent.AckReceived(ack.blockNum, ack.peerNum, "soft", isOwn)
@@ -229,7 +234,7 @@ class FastConsensusActor(
       * block's cell. See the [[FastConsensusActor]] class-level doc for postponed-ack semantics.
       */
     private def scheduleOwnAck(ack: SoftAck): IO[Unit] = for {
-        _ <- IO.raiseWhen(ack.peerNum != config.ownHeadPeerNum)(Error.AlienAckAnnouncement)
+        _ <- IO.raiseWhen(config.ownPeerId != PeerId.Head(ack.peerNum))(Error.AlienAckAnnouncement)
         state <- stateRef.get
         prevBlockNum = ack.blockNum match {
             case n if (n: Int) == 0 => None
@@ -301,9 +306,9 @@ class FastConsensusActor(
           WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(confirmed)
         )
 
-        // Fan out the soft-confirmed block.
+        // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the
+        // new lane protocol prunes per-reply, not on local confirmation.)
         _ <- conn.blockWeaver ! confirmed
-        _ <- (conn.peerLiaisons ! confirmed).parallel
         _ <- conn.jointLedger ! confirmed
         _ <- conn.stackComposer ! confirmed
 
@@ -327,8 +332,12 @@ class FastConsensusActor(
             }
             .void
 
+    // Broadcast this peer's own soft-ack to the head-peer mesh, and (on a hub) to CoilRelay so its
+    // coil peers receive it.
     private def announceAck(ack: SoftAck): IO[Unit] =
-        getConnections.flatMap(conn => (conn.peerLiaisons ! ack).parallel)
+        getConnections.flatMap(conn =>
+            (conn.headPeerLiaisons ! ack).parallel >> conn.coilRelay.traverse_(_ ! ack)
+        )
 
     private def mkSoftConfirmed(
         brief: BlockBrief.Next,

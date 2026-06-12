@@ -36,7 +36,7 @@ import scalus.|>
   *   - Treasury Utxo (1)
   *   - Collateral Utxos (n)
   *   - Peer Vote Utxos (n)
-  *   - Default Vote Utxo
+  *   - Public Vote Utxo
   */
 final case class FallbackTx(
     fallbackTxStartTime: FallbackTxStartTime,
@@ -47,7 +47,7 @@ final case class FallbackTx(
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos,
     // TODO type better
-    peerVoteUtxosProduced: NonEmptyList[Utxo]
+    peerBallotBoxesProduced: NonEmptyList[Utxo]
     // TODO
     // val collateralUtxos : Map[HeadPeerNumber, CollateralUtxo]
 ) extends MultisigTreasuryUtxo.Spent,
@@ -154,9 +154,8 @@ private object FallbackTxOps {
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                          // TODO: pull in N first elements of G2 CRS
-                          // KZG setup I think?
-                          setup = SList.empty
+                          // TODO: pull the onchain G2 prefix from the head's TrustedSetup
+                          setupG2 = SList.empty
                         )
                     }
 
@@ -171,9 +170,9 @@ private object FallbackTxOps {
                 }
 
                 object Votes {
-                    def apply(): NonEmptyList[Send] = Peers() :+ Default()
+                    def apply(): NonEmptyList[Send] = Peers() :+ Public()
 
-                    private def mkVoteUtxo(datum: Data, voteDeposit: Coin): TransactionOutput =
+                    private def mkBallotBox(datum: Data, voteDeposit: Coin): TransactionOutput =
                         Babbage(
                           address = config.ruleBasedDisputeResolutionAddress,
                           value = Value(
@@ -184,13 +183,13 @@ private object FallbackTxOps {
                           scriptRef = None
                         )
 
-                    private object Default {
+                    private object Public {
                         def apply() = Send(utxo)
 
-                        private val utxo = time("defaultVoteUtxo") {
-                            mkVoteUtxo(
-                              VD.default(treasuryUtxoSpent.datum.commit).toData,
-                              config.collectiveContingency.defaultVoteDeposit
+                        private val utxo = time("publicBallotBox") {
+                            mkBallotBox(
+                              VD.public(treasuryUtxoSpent.kzgCommitment).toData,
+                              config.collectiveContingency.publicVoteDeposit
                                   + config.collectiveContingency.minAdaForTreasury
                             )
                         }
@@ -199,15 +198,15 @@ private object FallbackTxOps {
                     object Peers {
                         def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                        private val utxos = time("peerVoteUtxos") {
+                        private val utxos = time("peerBallotBoxes") {
                             val datums = VD(
                               config.headPeerVKeys
                                   .map(x => PubKeyHash(blake2b_224(x)))
                             )
                             datums.map(datum =>
-                                mkVoteUtxo(
+                                mkBallotBox(
                                   datum.toData,
-                                  config.individualContingency.forVoteUtxo
+                                  config.individualContingency.forBallotBox
                                 )
                             )
                         }
@@ -276,8 +275,8 @@ private object FallbackTxOps {
                   // - Treasury (1)
                   // - Collateral  (n)
                   // - Peer votes (n)
-                  // - Default vote (1)
-                  peerVoteUtxosProduced = {
+                  // - Public vote (1)
+                  peerBallotBoxesProduced = {
                       val inputs = List
                           .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)
                           .map(idx => TransactionInput(txId, idx))

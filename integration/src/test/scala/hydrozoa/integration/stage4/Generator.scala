@@ -205,7 +205,7 @@ object CommandGenerators:
                   bodyHash = body.hash
                 )
 
-                userVk = config.nodeConfigs(peerNum).ownHeadWallet.exportVerificationKey
+                userVk = config.nodeConfigs(peerNum).ownWallet.exportVerificationKey
 
             } yield Some(
               L2TxCommand(
@@ -351,7 +351,7 @@ object CommandGenerators:
 
                                         userVk = config
                                             .nodeConfigs(peerNum)
-                                            .ownHeadWallet
+                                            .ownWallet
                                             .exportVerificationKey
 
                                         absorptionStartTime =

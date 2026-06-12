@@ -8,7 +8,7 @@ import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
@@ -56,7 +56,7 @@ object CardanoLiaison:
         IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer) {})
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
-        NodeOperationMultisigConfig.Section & OwnHeadPeerPublic.Section
+        NodeOperationMultisigConfig.Section & OwnPeerPublic.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle

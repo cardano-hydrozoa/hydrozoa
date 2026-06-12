@@ -2,10 +2,10 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.implicits.*
-import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.multisig.consensus.SlowConsensusActor.CellError
 import hydrozoa.multisig.consensus.ack.HardAck
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StandaloneEvacuationCommitment}
@@ -14,18 +14,39 @@ import scalus.cardano.ledger.Transaction
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, platform}
 
-/** Verifies a peer's hard-ack signatures against the locally-derived, partition-indexed effect
-  * bodies, with the signer's vkey resolved from `config`. A failed check is a critical consensus
-  * break: every peer derives byte-identical effects, so a bad signature means the signer derived
-  * different ones — [[SlowConsensusActor]] raises and halts. Pure given `config` + its inputs.
+/** Verifies the **signatures** carried in a peer's hard-ack against the locally-derived,
+  * partition-indexed effect bodies: each one is checked as a valid Ed25519 signature over the
+  * corresponding tx body hash (or evac-commitment header), with the signer's vkey resolved from
+  * `config` — head or coil.
+  *
+  * This owns only the second of three layers that together make a hard-confirmed effect tx valid:
+  *   1. **Body validity** (balanced, well-formed, scripts, fee) is established at *build time*,
+  *      when each peer deterministically derives the effect txs (the builders run every validator
+  *      except signature presence / validity). Hard-acks carry only signatures, never tx bodies, so
+  *      there is no foreign body to re-validate here.
+  *   2. **Signature validity** — THIS class: every collected signature is correct over the local
+  *      body. It does not re-check ledger validity; that is layer 1's job.
+  *   3. **Witness completeness** — that enough valid signatures are collected to satisfy the head
+  *      multisig script (all head peers + `coilQuorum` coil peers) — is enforced by
+  *      [[SlowConsensusActor]]'s saturation, not here.
+  *
+  * Each signature is checked against THIS peer's own deterministically-derived body, so a signature
+  * that fails to verify means the signer derived different effects — a critical, unrecoverable
+  * consensus break: [[SlowConsensusActor]] raises and halts, and the rule-based fallback takes
+  * over. Pure given `config` + its inputs.
   */
-final class HardAckVerifier(config: HeadPeers.Section) {
+final class HardAckSignatureVerifier(config: HeadConfig.Bootstrap.Section) {
 
-    /** Resolve a peer's head verification key from `config`, or fail with
+    /** Resolve a peer's verification key from `config` — head or coil — or fail with
       * [[CellError.UnknownPeer]].
       */
-    def resolvePeerVKey(peer: HeadPeerNumber): IO[VerificationKey] =
-        config.headPeerVKey(peer).liftTo[IO](CellError.UnknownPeer(peer))
+    def resolvePeerVKey(peer: PeerId): IO[VerificationKey] = {
+        val vk = peer match {
+            case PeerId.Head(n) => config.headPeerVKey(n)
+            case PeerId.Coil(n) => config.coilPeerVKey(n)
+        }
+        vk.liftTo[IO](CellError.UnknownPeer(peer))
+    }
 
     /** Verify a peer's round-1 ack against the locally-derived effects: each Regular partition's
       * round-1 slot (all its effects except the withheld unlock), or — for the Initial stack — the
@@ -33,7 +54,7 @@ final class HardAckVerifier(config: HeadPeers.Section) {
       */
     def verify2PhaseRound1(
         unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
+        peer: PeerId,
         p: HardAck.Payload.Round1
     ): IO[Unit] = (unsigned.effects, p) match {
         case (r: StackEffects.Unsigned.Regular, pr: HardAck.Round1Payload.Regular) =>
@@ -50,7 +71,7 @@ final class HardAckVerifier(config: HeadPeers.Section) {
       */
     def verify2PhaseRound2(
         unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
+        peer: PeerId,
         p: HardAck.Payload.Round2
     ): IO[Unit] = (unsigned.effects, p) match {
         case (r: StackEffects.Unsigned.Regular, pr: HardAck.Round2Payload.Regular) =>
@@ -79,7 +100,7 @@ final class HardAckVerifier(config: HeadPeers.Section) {
       */
     def verifySole(
         unsigned: Stack.Unsigned,
-        peer: HeadPeerNumber,
+        peer: PeerId,
         p: HardAck.SolePayload
     ): IO[Unit] = unsigned.effects match {
         case r: StackEffects.Unsigned.Regular =>
@@ -128,7 +149,7 @@ final class HardAckVerifier(config: HeadPeers.Section) {
       */
     private def verifyRound2Initial(
         i: StackEffects.Unsigned.Initial,
-        peer: HeadPeerNumber,
+        peer: PeerId,
         p: HardAck.Round2Payload.Initial
     ): IO[Unit] = for {
         vk <- resolvePeerVKey(peer)

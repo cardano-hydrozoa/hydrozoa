@@ -26,8 +26,8 @@ object DisputeActorEventFormat:
             case LookingForCollateral(addr) =>
                 debug(s"Looking for collateral utxos at address $addr")
             case CollateralFound => debug("Found collateral utxo")
-            case NoCollateralFound(peerNum2) =>
-                error(s"Could not find a collateral utxo for peer $peerNum2")
+            case NoCollateralFound(peerLabel) =>
+                error(s"Could not find a collateral utxo for peer $peerLabel")
             case Tallying             => info("Tallying...")
             case ParsingTreasury      => debug("parsing RuleBased Treasury")
             case TreasuryIsUnresolved => info("Treasury is Unresolved")

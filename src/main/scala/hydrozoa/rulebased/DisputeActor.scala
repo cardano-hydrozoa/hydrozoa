@@ -31,7 +31,7 @@ import scalus.utils.Pretty
 
 // TODO: relocate
 extension (tx: Transaction) {
-    def selfSigned(using config: Config): Transaction = config.ownHeadWallet.signTx(tx)
+    def selfSigned(using config: Config): Transaction = config.ownWallet.signTx(tx)
 }
 
 /** Pulls in vote/treasury utxo from cardano backend, and decides whether to submit a vote tx, tally
@@ -127,7 +127,7 @@ final case class DisputeActor(
 
     private def getDisputeCollateral
         : EitherT[IO, DisputeActor.Error.RecoverableErrors, CollateralUtxo] = {
-        val peerAddr = config.ownHeadWallet.exportVerificationKey.shelleyAddress()
+        val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
         for {
             _ <- EitherT.liftF(
               tracer.traceWith(DisputeActorEvent.LookingForCollateral(peerAddr.toString))
@@ -163,9 +163,7 @@ final case class DisputeActor(
                 case _ =>
                     EitherT.liftF(
                       tracer
-                          .traceWith(
-                            DisputeActorEvent.NoCollateralFound(config.ownHeadPeerNum: Int)
-                          )
+                          .traceWith(DisputeActorEvent.NoCollateralFound(config.ownPeerLabel))
                           .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
                     )
             }
@@ -195,18 +193,23 @@ final case class DisputeActor(
             treasuryUtxo <- parseRBTreasury(unparsedTreasuryUtxo)(using config, tracer)
 
             _ <- disputeUtxos match {
-                case DisputeUtxos.CastVote(ownVoteUtxo) =>
+                case DisputeUtxos.CastVote(ownBallotBox) =>
                     action match {
-                        case RuleBasedRegimeManager.DisputeAction.Vote(sec, signatures) =>
+                        case RuleBasedRegimeManager.DisputeAction.Vote(
+                              sec,
+                              signatures,
+                              coilSignatures
+                            ) =>
                             buildAndSubmit(
                               label = "vote",
                               result = VoteTx
                                   .Build(
-                                    uncastVoteUtxo = ownVoteUtxo,
+                                    uncastBallotBox = ownBallotBox,
                                     treasuryUtxo = treasuryUtxo,
                                     collateralUtxo = collateralUtxo,
                                     sec = sec,
                                     signatures = signatures,
+                                    coilSignatures = coilSignatures,
                                   )
                                   .result,
                               wrapError = Error.BuildError.Vote(_)
@@ -217,7 +220,7 @@ final case class DisputeActor(
                               label = "abstain",
                               result = AbstainTx
                                   .Build(
-                                    uncastVoteUtxo = ownVoteUtxo,
+                                    uncastBallotBox = ownBallotBox,
                                     collateralUtxo = collateralUtxo
                                   )
                                   .result,
@@ -228,13 +231,13 @@ final case class DisputeActor(
                 case DisputeUtxos.Tally(otherUtxos) =>
                     // We must have that they key of the continuing input is less than the key of the removed input,
                     // so we sort here.
-                    val keySorted = otherUtxos.sortBy(_.voteOutput.key)
+                    val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
                         _ <- EitherT.liftF(tracer.traceWith(DisputeActorEvent.Tallying))
 
-                        removed <- keySorted.tail.find(voteUtxo =>
-                            voteUtxo.voteOutput.key == continuing.voteOutput.link
+                        removed <- keySorted.tail.find(ballotBox =>
+                            ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
                         ) match {
                             case None =>
                                 EitherT.liftF(
@@ -254,8 +257,8 @@ final case class DisputeActor(
                           label = "tally",
                           result = TallyTx
                               .Build(
-                                continuingVoteUtxo = continuing,
-                                removedVoteUtxo = removed,
+                                continuingBallotBox = continuing,
+                                removedBallotBox = removed,
                                 treasuryUtxo = treasuryUtxo,
                                 collateralUtxo = collateralUtxo
                               )
@@ -269,7 +272,7 @@ final case class DisputeActor(
                       label = "resolve",
                       result = ResolutionTx
                           .Build(
-                            talliedVoteUtxo = finalVoteUtxo,
+                            talliedBallotBox = finalVoteUtxo,
                             treasuryUtxo = treasuryUtxo,
                             collateralUtxo = collateralUtxo
                           )
@@ -322,20 +325,16 @@ final case class DisputeActor(
     private def parseDisputeUtxos(utxos: Utxos)(using
         config: Config
     ): IO[DisputeUtxos] = {
-        val ownPkhHash = config.ownHeadWallet.exportVerificationKey.pubKeyHash.hash
+        val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
         for {
-            parsed <- utxos.toList.traverse { case (input, output) =>
-                VoteUtxo.parse(Utxo(input, output)) match {
-                    case Right(v) => IO.pure(v)
-                    case Left(e)  => IO.raiseError(e)
-                }
-            }
+            // TODO: Collect parsing errors
+            parsed <- IO.fromEither(utxos.toList.traverse((i, o) => BallotBox.parse(Utxo(i, o))))
             ownAwaiting = parsed.collectFirst {
-                case v if v.voteOutput.status match {
+                case v if v.ballotBoxOutput.status match {
                         case AwaitingVote(peer) => peer.hash == ownPkhHash
                         case _                  => false
                     } =>
-                    v.asInstanceOf[VoteUtxo[AwaitingVote]]
+                    v.asInstanceOf[BallotBox[AwaitingVote]]
             }
             result <- ownAwaiting match {
                 case Some(own) => IO.pure(DisputeUtxos.CastVote(own))
@@ -343,10 +342,10 @@ final case class DisputeActor(
                     parsed match {
                         case Nil => IO.pure(DisputeUtxos.EmptyVotes)
                         case x :: Nil =>
-                            x.voteOutput.status match {
+                            x.ballotBoxOutput.status match {
                                 case _: Voted =>
                                     IO.pure(
-                                      DisputeUtxos.Resolve(x.asInstanceOf[VoteUtxo[Voted]])
+                                      DisputeUtxos.Resolve(x.asInstanceOf[BallotBox[Voted]])
                                     )
                                 case _ =>
                                     IO.raiseError(
@@ -372,9 +371,9 @@ object DisputeActor {
       * before matching here.
       */
     enum DisputeUtxos:
-        case CastVote(ownVoteUtxo: VoteUtxo[AwaitingVote])
-        case Tally(utxos: Seq[VoteUtxo[VoteStatus]])
-        case Resolve(finalVoteUtxo: VoteUtxo[Voted])
+        case CastVote(ownVoteUtxo: BallotBox[AwaitingVote])
+        case Tally(utxos: Seq[BallotBox[VoteStatus]])
+        case Resolve(finalVoteUtxo: BallotBox[Voted])
         case EmptyVotes
 
     type Config = NodePrivateConfig.Section & HeadConfig.Section
@@ -401,16 +400,16 @@ object DisputeActor {
         type UnrecoverableErrors = Unrecoverable
         sealed trait Unrecoverable extends Exception
         case object TreasuryUnresolvedButNoVotes extends Unrecoverable
-        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[VoteUtxo[VoteStatus]])
+        case class NoCompatibleVoteForTallyingFound(voteUtxos: Seq[BallotBox[VoteStatus]])
             extends Unrecoverable {
             override def getMessage: String =
-                s"No compatible vote utxo with key ${voteUtxos.head._2.link} found. Datums found: " +
+                s"No compatible ballot box with key ${voteUtxos.head._2.link} found. Datums found: " +
                     s"${voteUtxos.map { _._2 }}"
         }
         // Treasury is unresolved, exactly one vote utxo remains, but its status isn't Voted.
         // The spec says the final tally output is always Voted — Abstain/AwaitingVote here
         // means the on-chain state has diverged from what we expect, so we escalate.
-        case class NonVotedUtxoAtResolve(voteUtxo: VoteUtxo[VoteStatus]) extends Unrecoverable {
+        case class NonVotedUtxoAtResolve(voteUtxo: BallotBox[VoteStatus]) extends Unrecoverable {
             override def getMessage: String =
                 s"Single remaining vote utxo at resolve time is not Voted: $voteUtxo"
         }

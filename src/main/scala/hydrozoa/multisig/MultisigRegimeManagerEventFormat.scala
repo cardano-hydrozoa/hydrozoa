@@ -2,9 +2,10 @@ package hydrozoa.multisig
 
 import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.MultisigRegimeManagerEvent.{BW, BWL, CL, ES, FCA, JL, PL, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
+import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, PeerLiaisonEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
 /** Top-level formatter delegating to each producer's per-event formatter. */
@@ -22,7 +23,7 @@ object MultisigRegimeManagerEventFormat:
             case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
             case ES(es)   => EventSequencerEventFormat.humanFormat(peerNum)(es)
             case PL(remotePeerId, pl) =>
-                PeerLiaisonEventFormat.humanFormat(peerNum, remotePeerId.peerNum)(pl)
+                PeerLiaisonEventFormat.humanFormat(PeerId.Head(peerNum), remotePeerId)(pl)
             case BWL(bwl)                  => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
             case SCL(scl)                  => LimiterEventFormat.humanFormat("StackComposer")(scl)
             case StartingActors            => info("Starting multisig actors...")

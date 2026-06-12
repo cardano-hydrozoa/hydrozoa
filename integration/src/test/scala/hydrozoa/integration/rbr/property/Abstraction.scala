@@ -6,7 +6,7 @@ import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.classification.{Classifier, Histogram}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{TransactionOutput, Utxo}
 import scalus.uplc.builtin.ByteString
@@ -69,9 +69,9 @@ class RBRClassifier(using env: MultiNodeConfig)
             (u: Utxo) =>
                 Option
                     .when(hasVoteToken(u.output) && !hasTreasuryToken(u.output))(u)
-                    .flatMap(VoteUtxo.parse(_)(using env.nodeConfigs.values.head).toOption)
+                    .flatMap(BallotBox.parse(_)(using env.nodeConfigs.values.head).toOption)
                     .map(vu =>
-                        if vu.voteOutput.status.isInstanceOf[VoteStatus.Voted] then VotedPlaceId
+                        if vu.ballotBoxOutput.status.isInstanceOf[VoteStatus.Voted] then VotedPlaceId
                         else UnvotedPlaceId
                     ),
             (u: Utxo) =>

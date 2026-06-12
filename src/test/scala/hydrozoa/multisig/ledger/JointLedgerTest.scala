@@ -166,7 +166,7 @@ object JointLedgerTestHelpers {
                   JointLedger.Connections(
                     fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
                     stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
-                    peerLiaisons = List()
+                    headPeerLiaisons = List()
                   ),
                   eutxoLedger,
                   Slf4jTracer.sink.contramap(
@@ -441,8 +441,7 @@ object JointLedgerTestHelpers {
 
                 userWallet = env.multiNodeConfig
                     .nodePrivateConfigs(HeadPeerNumber.zero)
-                    .ownHeadPeerPrivate
-                    .ownHeadWallet
+                    .ownWallet
 
                 userVk = userWallet.exportVerificationKey
 

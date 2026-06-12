@@ -6,10 +6,11 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
@@ -316,7 +317,8 @@ case class EvacuationActor(
 
 object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
-        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnHeadPeerPublic.Section
+        HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
+        HeadConfig.Bootstrap.Section
 
     type Handle = ActorRef[IO, Requests.Request]
 

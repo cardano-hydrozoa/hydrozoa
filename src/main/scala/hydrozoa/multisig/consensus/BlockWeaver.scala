@@ -7,7 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
@@ -19,6 +19,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockType
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
@@ -69,7 +70,7 @@ final case class BlockWeaver(
 }
 
 object BlockWeaver {
-    type Config = CardanoNetwork.Section & OwnHeadPeerPublic.Section &
+    type Config = CardanoNetwork.Section & OwnPeerPublic.Section &
         NodeOperationMultisigConfig.Section
 
     final case class Connections private[BlockWeaver] (
@@ -265,7 +266,7 @@ object BlockWeaver {
             override def act(config: Config): IO[Some[NextReactiveState]] = for {
                 _ <- logStateTransition
                 newState <-
-                    if config.ownHeadPeerId.isLeader(nextBlockNumber)
+                    if config.canLeadFast(nextBlockNumber)
                     then {
                         Leader.ProcessingReadyRequests(this, mempool, nextBlockNumber).act(config)
                     } else {
@@ -443,7 +444,13 @@ object BlockWeaver {
                 override val finalizationLocallyTriggered: LocalFinalizationTrigger,
                 override val mempool: Mempool,
                 reproducingBlockBrief: BlockBrief.Next,
-                incompleteExtraction: Mempool.Extraction.Incomplete
+                incompleteExtraction: Mempool.Extraction.Incomplete,
+                // Briefs for later blocks that arrived while we were blocked on this block's
+                // requests. The hub relays briefs faster than the requests they need, so a coil peer (or
+                // any follower) can see the next brief before finishing the current block. Buffer
+                // them in order and replay (re-send to self) once this block completes — they are
+                // then handled normally from the next AwaitingBlockBrief.
+                stashedBriefs: Queue[BlockBrief.Next] = Queue.empty
             ) extends Reactive,
                   WithMempool {
                 override transparent inline def stateName: String = "Follower.AwaitingRequest"
@@ -480,6 +487,12 @@ object BlockWeaver {
                                                         _ <- sendCompleteBlockAsFollower(
                                                           reproducingBlockBrief
                                                         )
+                                                        // Replay buffered later-block briefs in
+                                                        // order; they re-enter from the next
+                                                        // AwaitingBlockBrief.
+                                                        _ <- stashedBriefs.traverse_(
+                                                          connections.blockWeaver ! _
+                                                        )
                                                         newState <- DecidingRole(
                                                           this,
                                                           survivingMempool,
@@ -487,11 +500,12 @@ object BlockWeaver {
                                                         ).act(config)
                                                     } yield newState
                                                 case result: Mempool.Extraction.Incomplete =>
+                                                    // Still missing a request — keep waiting, but
+                                                    // carry the buffered briefs over.
                                                     pure(
-                                                      Follower.AwaitingRequest(
-                                                        this,
-                                                        reproducingBlockBrief,
-                                                        result
+                                                      copy(
+                                                        mempool = result.survivingMempool,
+                                                        incompleteExtraction = result
                                                       )
                                                     )
                                             }
@@ -526,6 +540,18 @@ object BlockWeaver {
                             ) >>
                                 pure(this)
 
+                        case bb: BlockBrief.Next =>
+                            // A later block's brief arrived while we're still blocked on this
+                            // block's requests (the hub relays briefs faster than the requests they
+                            // need). Buffer it; we replay it once this block completes.
+                            tracer.traceWith(
+                              BlockWeaverEvent.EarlyBriefBuffered(
+                                bb.blockNum,
+                                incompleteExtraction.awaitingRequestId,
+                                reproducingBlockBrief.blockNum
+                              )
+                            ) >> pure(copy(stashedBriefs = stashedBriefs :+ bb))
+
                         case unexpected: Unexpected =>
                             panicUnexpectedRequest(this, unexpected)
                     }
@@ -550,7 +576,7 @@ object BlockWeaver {
 
             private object AwaitingRequest {
                 type NextReactiveState = DecidingRole.NextReactiveState | Follower.AwaitingRequest
-                type Unexpected = PreStart.type | BlockBrief.Next
+                type Unexpected = PreStart.type
 
                 private[State] def apply(
                     state: State,

@@ -6,31 +6,29 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.owninfo.OwnHeadPeerPublic
+import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
-import hydrozoa.multisig.consensus.EventSequencer.*
-import hydrozoa.multisig.consensus.PeerLiaison.Handle
+import hydrozoa.multisig.consensus.RequestSequencer.*
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
-  * [[HydrozoaServer]]. Only one event sequencer is running per node, specifically to handle _only_
-  * the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
+  * [[HydrozoaServer]]. Only one request sequencer is running per node, specifically to handle
+  * _only_ the events that will be tagged with this Peer's [[HeadPeerNumber]] and sequential
   * [[RequestId]]s.
   *
-  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaison]]s.
-  *
-  * TODO: rename to RequestSequencer (and EventSequencer companion object accordingly).
+  * The messages are subsequently passed to the [[BlockWeaver]] and [[PeerLiaisonHeadToHead]]s.
   */
-trait EventSequencer(
+trait RequestSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | EventSequencer.Connections,
+    pendingConnections: MultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
-    private val connections = Ref.unsafe[IO, Option[EventSequencer.Connections]](None)
+    private val connections = Ref.unsafe[IO, Option[RequestSequencer.Connections]](None)
     private val state = State()
 
     /** `config` is a `CardanoNetwork.Section`; expose it as a given so the typed `Request`-lane
@@ -43,7 +41,7 @@ trait EventSequencer(
         conn <- mConn.fold(
           IO.raiseError(
             java.lang.Error(
-              "Event sequencer is missing its connections to other actors."
+              "Request sequencer is missing its connections to other actors."
             )
           )
         )(IO.pure)
@@ -57,21 +55,22 @@ trait EventSequencer(
                   Some(
                     Connections(
                       blockWeaver = _connections.blockWeaver,
-                      peerLiaisons = _connections.peerLiaisons
+                      headPeerLiaisons = _connections.headPeerLiaisons,
+                      coilRelay = _connections.coilRelay
                     )
                   )
                 )
             } yield ()
-        case x: EventSequencer.Connections => connections.set(Some(x))
+        case x: RequestSequencer.Connections => connections.set(Some(x))
     }
 
-    override def preStart: IO[Unit] = context.self ! EventSequencer.PreStart
+    override def preStart: IO[Unit] = context.self ! RequestSequencer.PreStart
 
     override def receive: Receive[IO, Request] =
         PartialFunction.fromFunction(receiveTotal)
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
-        case EventSequencer.PreStart => preStartLocal
+        case RequestSequencer.PreStart => preStartLocal
         case req: UserRequest.Sync =>
             req.request.handleSync(
               req,
@@ -79,7 +78,17 @@ trait EventSequencer(
                   for {
                       conn <- getConnections
                       newNum <- state.nextLedgerEventNum()
-                      newId = RequestId(config.ownHeadPeerId.peerNum, newNum)
+                      // The user-request surface is head-only, so the author is always a head peer.
+                      ownHeadPeerNum <- config.ownPeerId match {
+                          case PeerId.Head(n) => IO.pure(n)
+                          case PeerId.Coil(_) =>
+                              IO.raiseError(
+                                new IllegalStateException(
+                                  "RequestSequencer runs only on a head peer"
+                                )
+                              )
+                      }
+                      newId = RequestId(ownHeadPeerNum, newNum)
                       newRequestWithId = UserRequestWithId(
                         userRequest = userRequest,
                         requestId = newId
@@ -92,13 +101,16 @@ trait EventSequencer(
                       stamp <- persistence.arrivalStamp
                       _ <- persistence.write(
                         WriteBatch.start
-                            .put(LaneKey.Request(config.ownHeadPeerNum, newNum))(
+                            .put(LaneKey.Request(ownHeadPeerNum, newNum))(
                               LaneValue(stamp, newRequestWithId)
                             )
                       )
                       _ <- req.dResponse.complete(newId)
                       _ <- conn.blockWeaver ! newRequestWithId
-                      _ <- (conn.peerLiaisons ! newRequestWithId).parallel
+                      // To the head-peer mesh, and (on a hub) to CoilRelay so its coil peers get the
+                      // request content they need to reproduce block bodies.
+                      _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
+                      _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
                   } yield newId
             )
     }
@@ -113,25 +125,29 @@ trait EventSequencer(
     }
 }
 
-/** Event sequencer receives local submissions of users' requests (via an http server), assigns
+/** Request sequencer receives local submissions of users' requests (via an http server), assigns
   * ledger event ids and emits them sequentially into the consensus system.
   */
-object EventSequencer {
+object RequestSequencer {
     def apply(
         config: Config,
         pendingConnections: MultisigRegimeManager.PendingConnections,
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
-    ): IO[EventSequencer] =
-        IO(new EventSequencer(config, pendingConnections, tracer, persistence) {})
+    ): IO[RequestSequencer] =
+        IO(new RequestSequencer(config, pendingConnections, tracer, persistence) {})
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.
-    type Config = OwnHeadPeerPublic.Section & CardanoNetwork.Section
+    type Config = OwnPeerPublic.Section & CardanoNetwork.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        /** A hub's coil relay (§5.4) [doc-ref]: this peer's own requests are sent here so its coil
+          * peers get the request content. `None` off a hub.
+          */
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     type Handle = ActorRef[IO, Request]

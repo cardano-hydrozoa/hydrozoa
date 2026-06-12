@@ -31,6 +31,12 @@ object BlockWeaverEventFormat:
                 info(s"awaited request $requestId received")
             case WaitingForRequest(received, awaiting) =>
                 info(s"request $received received; still waiting for $awaiting")
+            case EarlyBriefBuffered(briefBlockNum, awaiting, reproducingBlockNum) =>
+                info(
+                  s"buffering early brief ${briefBlockNum: Int} while awaiting $awaiting " +
+                      s"for block ${reproducingBlockNum: Int}",
+                  "blockNum" -> s"${briefBlockNum: Int}"
+                )
             case MempoolExtracted(requestIds) =>
                 trace(s"extracted ${requestIds.size} requests from mempool")
             case RequestSentToJointLedger(requestId) =>

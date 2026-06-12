@@ -21,7 +21,9 @@ package hydrozoa.multisig.persistence
   */
 enum Cf:
     // Lane CFs — single-writer-per-entry (rotating for spines, per-peer for satellites).
-    case Block, Stack, Request, SoftAck, HardAck
+    // `CoilHardAck` is a hub's raw inbound from each of its coil peers (per coil peer); `HubHardAck`
+    // is the re-sequenced per-hub lane that the head mesh and hub→coil links carry.
+    case Block, Stack, Request, SoftAck, HardAck, CoilHardAck, HubHardAck
     // Aggregator outputs + JL working data — keyed by spine index (blockNum / stackNum).
     case BlockResult, SoftConfirmation, HardConfirmation
     // Per-side passive snapshots — one keyed blob each.

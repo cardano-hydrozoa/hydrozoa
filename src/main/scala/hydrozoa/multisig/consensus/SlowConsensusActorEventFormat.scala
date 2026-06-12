@@ -21,6 +21,11 @@ object SlowConsensusActorEventFormat:
                   s"stack $sn round-1 confirmed; releasing own round-2",
                   "stackNum" -> s"${sn: Int}"
                 )
+            case OwnHardAckEchoIgnored(sn) =>
+                debug(
+                  s"ignoring echo of own hard-ack for stack $sn",
+                  "stackNum" -> s"${sn: Int}"
+                )
             case StackHardConfirmed(stack) =>
                 val sn = stack.brief.stackNum
                 info(s"stack $sn HARD-CONFIRMED", "stackNum" -> s"${sn: Int}")

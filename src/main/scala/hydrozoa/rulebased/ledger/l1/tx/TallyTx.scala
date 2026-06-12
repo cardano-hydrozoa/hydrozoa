@@ -3,21 +3,19 @@ package hydrozoa.rulebased.ledger.l1.tx
 import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningNonValidityChecksValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -25,8 +23,8 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 
 final case class TallyTx(
-    continuingVoteUtxo: VoteUtxo[VoteStatus],
-    removedVoteUtxo: VoteUtxo[VoteStatus],
+    continuingBallotBox: BallotBox[VoteStatus],
+    removedBallotBox: BallotBox[VoteStatus],
     treasuryUtxo: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[TallyTx, Transaction] = Focus[TallyTx](_.tx),
@@ -40,8 +38,8 @@ object TallyTx {
 }
 
 object TallyTxOps {
-    type Config = CardanoNetwork.Section & ScriptReferenceUtxos.Section & HeadPeers.Section &
-        FallbackContingency.Section & HasTokenNames & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Bootstrap.Section & ScriptReferenceUtxos.Section &
+        FallbackContingency.Section & OwnPeerPrivate.Section
 
     object Build {
         enum Error extends Throwable:
@@ -87,34 +85,35 @@ object TallyTxOps {
         }
     }
 
-    private def tallyVoteUtxos(
-        continuing: VoteUtxo[VoteStatus],
-        removed: VoteUtxo[VoteStatus]
-    ): Either[Build.Error, VoteOutput[VoteStatus]] =
+    private def tallyBallotBoxes(
+        continuing: BallotBox[VoteStatus],
+        removed: BallotBox[VoteStatus]
+    ): Either[Build.Error, BallotBoxOutput[VoteStatus]] =
         for {
             talliedDatum <- tallyVoteDatums(
-              continuing.voteOutput.datum,
-              removed = removed.voteOutput.datum
+              continuing.ballotBoxOutput.datum,
+              removed = removed.ballotBoxOutput.datum
             )
-        } yield VoteOutput(
+        } yield BallotBoxOutput(
           key = talliedDatum.key,
           link = talliedDatum.link,
-          coin = continuing.voteOutput.coin + removed.voteOutput.coin,
-          voteTokens =
-              PositiveInt(continuing.voteOutput.voteTokens + removed.voteOutput.voteTokens).get,
+          coin = continuing.ballotBoxOutput.coin + removed.ballotBoxOutput.coin,
+          voteTokens = PositiveInt(
+            continuing.ballotBoxOutput.voteTokens + removed.ballotBoxOutput.voteTokens
+          ).get,
           status = talliedDatum.voteStatus
         )
 
     final case class Build(
-        continuingVoteUtxo: VoteUtxo[VoteStatus],
-        removedVoteUtxo: VoteUtxo[VoteStatus],
+        continuingBallotBox: BallotBox[VoteStatus],
+        removedBallotBox: BallotBox[VoteStatus],
         treasuryUtxo: RuleBasedTreasuryUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
 
         def result: Either[Build.Error, TallyTx] =
             for {
-                tallied <- tallyVoteUtxos(continuingVoteUtxo, removedVoteUtxo)
+                tallied <- tallyBallotBoxes(continuingBallotBox, removedBallotBox)
                 votingDeadline <- treasuryUtxo.parseVotingDeadline.left.map(
                   Build.Error.TreasuryParseError(_)
                 )
@@ -122,7 +121,7 @@ object TallyTxOps {
             } yield result
 
         private def buildTallyTx(
-            tallied: VoteOutput[VoteStatus],
+            tallied: BallotBoxOutput[VoteStatus],
             votingDeadline: Slot
         ): Either[SomeBuildError, TallyTx] = {
             val continuingRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Continuing)
@@ -134,35 +133,27 @@ object TallyTxOps {
 //              collateralUtxo.collateralOutput.addrKeyHash
 //            )
 
-            def isDecided(voteUtxo: VoteUtxo[?]): Boolean =
-                voteUtxo.voteOutput.status match
-                    case _: VoteStatus.Voted        => true
-                    case VoteStatus.Abstain         => true
-                    case _: VoteStatus.AwaitingVote => false
-
-            // The dispute script only requires the voting deadline to have elapsed when at least
-            // one tally input is still AwaitingVote. Voted and Abstain are both terminal/decided
-            // (see DisputeResolutionValidator.Tally's `isAwaiting` guard), so we can omit the
-            // ValidityStartSlot when both inputs are decided.
-            val validityStart =
-                if isDecided(continuingVoteUtxo) && isDecided(removedVoteUtxo)
-                then List.empty
-                else List(ValidityStartSlot(votingDeadline.slot))
-
+            // The dispute script always requires the voting deadline to have elapsed before any
+            // tally — the key=0 ballot box stays ratchet-able in the Open phase until the
+            // deadline, so per-input shortcuts can't speed up the global tally. We bump the
+            // validity-start slot by 1 because parseVotingDeadline uses `timeToSlot` (floors),
+            // so `slotToTime(deadline.slot) <= deadlinePosix` — the +1 guarantees the validity
+            // start is strictly past the deadline.
             for {
                 context <- contextualscalus.TransactionBuilder
                     .build(
                       List(
                         config.referenceDispute,
-                        // Spend the continuing vote utxo with tally redeemer
-                        continuingVoteUtxo.spend(continuingRedeemer),
-                        // Spend the removed vote utxo with tally redeemer
-                        removedVoteUtxo.spend(removedRedeemer),
+                        // Spend the continuing ballot box with tally redeemer
+                        continuingBallotBox.spend(continuingRedeemer),
+                        // Spend the removed ballot box with tally redeemer
+                        removedBallotBox.spend(removedRedeemer),
                         // Send back the continuing vote utxo (the removed one is consumed)
                         tallied.send,
                         treasuryUtxo.referenceOutput,
-                        collateralUtxo.add
-                      ) ++ validityStart
+                        collateralUtxo.add,
+                        ValidityStartSlot(votingDeadline.slot + 1)
+                      )
                     )
 
                 finalized <- context
@@ -172,8 +163,8 @@ object TallyTxOps {
                     )
 
             } yield TallyTx(
-              continuingVoteUtxo = continuingVoteUtxo,
-              removedVoteUtxo = removedVoteUtxo,
+              continuingBallotBox = continuingBallotBox,
+              removedBallotBox = removedBallotBox,
               treasuryUtxo = treasuryUtxo,
               tx = finalized.transaction
             )

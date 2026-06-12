@@ -68,7 +68,7 @@ def genTreasuryResolvedDatum(
     } yield Resolved(
       evacuationActive = utxosCommitment,
       version = version,
-      setup = setup
+      setupG2 = setup
     )
 
 /** Generator for EvacuationTx transaction recipe */
@@ -121,7 +121,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         // Generate validity slot
         validityEndSlot <- Gen.choose(100L, 1000L)
 
-        addr = config.nodeConfigs.head._2.ownHeadWallet.exportVerificationKey
+        addr = config.nodeConfigs.head._2.ownWallet.exportVerificationKey
             .shelleyAddress()(using config.headConfig)
 
         feeUtxo <-
@@ -188,7 +188,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
 
     val _ = property(
       "EvacuationTx builds successfully with valid recipe"
-    ) = runDefault(
+    ) = runWithCoil()(
       for {
           env <- ask
           builder <- pick(genEvacuationTxBuild(using env))

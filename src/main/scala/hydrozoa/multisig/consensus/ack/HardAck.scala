@@ -1,7 +1,7 @@
 package hydrozoa.multisig.consensus.ack
 
 import cats.data.NonEmptyList
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -44,13 +44,13 @@ final case class HardAck(
     payload: HardAck.Payload
 ) {
     final transparent inline def hardAckNum: HardAckNumber = ackId.hardAckNum
-    final transparent inline def peerNum: HeadPeerNumber = ackId.peerNum
+    final transparent inline def peerId: PeerId = ackId.peerId
 
     val toContext: Seq[(String, String)] =
         Seq(
           // The peer that *signed* this hard-ack — distinct from the local peer where the
           // log entry is produced.
-          "hardAckSigner" -> peerNum.toString,
+          "hardAckSigner" -> peerId.toString,
           // Disambiguate from a soft-ack id (ackId alone is ambiguous in mixed logs).
           "hardAckId" -> ackId.toString,
           "stackNum" -> stackNum.toString,

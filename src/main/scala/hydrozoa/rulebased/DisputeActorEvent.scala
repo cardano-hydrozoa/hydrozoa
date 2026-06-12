@@ -13,7 +13,7 @@ object DisputeActorEvent:
     final case class TxSubmitSuccess(family: String, txId: String) extends DisputeActorEvent
     final case class LookingForCollateral(addr: String) extends DisputeActorEvent
     case object CollateralFound extends DisputeActorEvent
-    final case class NoCollateralFound(peerNum: Int) extends DisputeActorEvent
+    final case class NoCollateralFound(peerLabel: String) extends DisputeActorEvent
     case object Tallying extends DisputeActorEvent
     case object ParsingTreasury extends DisputeActorEvent
     case object TreasuryIsUnresolved extends DisputeActorEvent

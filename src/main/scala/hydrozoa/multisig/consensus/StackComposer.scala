@@ -2,17 +2,19 @@ package hydrozoa.multisig.consensus
 
 import cats.data.NonEmptyList
 import cats.effect.{IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
+import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -127,6 +129,9 @@ final case class StackComposer(
 
     private def handleIncomingStackBrief(brief: StackBrief): IO[Unit] = for {
         _ <- state.update(_.withInboundLeaderBrief(brief))
+        // Stack briefs led by OTHER heads are relayed to CoilRelay by the hub's mesh liaisons, not
+        // here — so this actor relays only its OWN-led briefs (in tryCloseAsLeader). That keeps each
+        // brief relayed exactly once, in spine order.
         _ <- tryProgress
     } yield ()
 
@@ -147,8 +152,7 @@ final case class StackComposer(
     private def tryProgress: IO[Unit] = state.get.flatMap { s =>
         val nextStackNum = s.lastClosedStackNum.increment
         if !s.previousStackHardConfirmed then IO.unit
-        else if config.ownHeadPeerId.isSlowLeader(nextStackNum) then
-            tryCloseAsLeader(s, nextStackNum)
+        else if config.canLeadSlow(nextStackNum) then tryCloseAsLeader(s, nextStackNum)
         else tryCloseAsFollower(s, nextStackNum)
     }
 
@@ -176,7 +180,11 @@ final case class StackComposer(
                     conn <- getConnections
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
-                    _ <- (conn.peerLiaisons ! brief).parallel
+                    _ <- (conn.headPeerLiaisons ! brief).parallel
+                    // A hub relays its OWN-led stack brief to CoilRelay (§5.4) [doc-ref]; briefs led by other
+                    // heads are relayed by the hub's mesh liaisons, so each is relayed once, in spine
+                    // order. No-op off a hub.
+                    _ <- conn.coilRelay.traverse_(_ ! brief)
                     // Hand the unsigned stack + own pre-signed hard-acks to SlowConsensusActor
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
@@ -227,11 +235,16 @@ final case class StackComposer(
             // Own lane outputs: StackBrief (leader only — StackLane author) + this peer's HardAcks.
             laneBatch = {
                 val withBrief =
-                    if config.ownHeadPeerId.isSlowLeader(brief.stackNum) then
+                    if config.canLeadSlow(brief.stackNum) then
                         WriteBatch.start.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
                     else WriteBatch.start
                 ownAcks.foldLeft(withBrief)((b, ack) =>
-                    b.put(LaneKey.HardAck(ack.peerNum, ack.hardAckNum))(LaneValue(stamp, ack))
+                    ack.peerId match {
+                        case PeerId.Head(n) =>
+                            b.put(LaneKey.HardAck(n, ack.hardAckNum))(LaneValue(stamp, ack))
+                        case PeerId.Coil(c) =>
+                            b.put(LaneKey.CoilHardAck(c, ack.hardAckNum))(LaneValue(stamp, ack))
+                    }
                 )
             }
             // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
@@ -404,7 +417,7 @@ final case class StackComposer(
     ): IO[SlowConsensusActor.StackHandoff] =
         state.modify { s =>
             val stackNum = unsigned.brief.stackNum
-            val peer = config.ownHeadPeerNum
+            val peer: PeerId = config.ownPeerId
 
             val (acks, newNextOwnHardAckNum) = unsigned.effects match {
                 case i: StackEffects.Unsigned.Initial =>
@@ -471,7 +484,7 @@ final case class StackComposer(
       * inverse of [[HardAck.Round1Payload.Regular.asSlots]]).
       */
     private object EffectSigner {
-        private val wallet = config.ownHeadWallet
+        private val wallet = config.ownWallet
 
         /** Stack 0 round 1: sign the locally-derived fallback tx. */
         def mkInitialRound1Signatures(
@@ -652,7 +665,8 @@ final case class StackComposer(
                       jointLedger = c.jointLedger,
                       fastConsensusActor = c.consensusActor,
                       slowConsensusActor = c.slowConsensusActor,
-                      peerLiaisons = c.peerLiaisons
+                      headPeerLiaisons = c.headPeerLiaisons,
+                      coilRelay = c.coilRelay
                     )
                   )
                 )
@@ -664,13 +678,17 @@ final case class StackComposer(
 object StackComposer {
     type Handle = ActorRef[IO, Request]
 
-    type Config = HeadConfig.Section & OwnHeadPeerPrivate.Section
+    type Config = HeadConfig.Section & OwnPeerPrivate.Section
 
     final case class Connections(
         jointLedger: JointLedger.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        peerLiaisons: List[PeerLiaison.Handle]
+        headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
+        /** A hub's coil relay (§5.4) [doc-ref]: every stack brief (own-led and received) is sent
+          * here so the hub's coil peers get the whole stack spine. `None` off a hub.
+          */
+        coilRelay: Option[CoilRelay.Handle] = None
     )
 
     /** [[Stack.HardConfirmed]] is sent by [[SlowConsensusActor]] when stack reaches
@@ -840,9 +858,9 @@ object StackComposer {
           // actually hard-confirm before stack 1 may close. So the trigger starts DISARMED; the
           // stack-0 `Stack.HardConfirmed` arriving back from SlowConsensusActor arms it.
           previousStackHardConfirmed = false,
-          // Next hard-ack number to assign. 0-based: the PeerLiaison hard-ack
+          // Next hard-ack number to assign. 0-based: the PeerLiaisonHeadToHead hard-ack
           // lane is next-expected with an initial cursor of 0 (see the
-          // GetMsgBatch cursor protocol in PeerLiaison), so the first hard-ack
+          // GetMsgBatch cursor protocol in PeerLiaisonHeadToHead), so the first hard-ack
           // is number 0. The initial stack, once injected, takes 0 = round-1,
           // 1 = round-2.
           nextOwnHardAckNum = HardAckNumber.zero,

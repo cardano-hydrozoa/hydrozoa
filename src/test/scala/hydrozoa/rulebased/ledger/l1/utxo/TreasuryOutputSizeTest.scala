@@ -46,7 +46,7 @@ class TreasuryOutputSizeTest extends AnyFunSuite:
                 val datum = Unresolved(
                   deadlineVoting = BigInt(2_000_000_000L),
                   versionMajor = BigInt(1),
-                  setup = setup
+                  setupG2 = setup
                 )
                 // Upcast to TransactionOutput so the scalus Encoder[TransactionOutput] is resolved
                 val output: TransactionOutput =

@@ -111,7 +111,8 @@ object StoreDump:
       */
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
-            case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck =>
+            case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck | Cf.CoilHardAck |
+                Cf.HubHardAck =>
                 try LaneKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation =>

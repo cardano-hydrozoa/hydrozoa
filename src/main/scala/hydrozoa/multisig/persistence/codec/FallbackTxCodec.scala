@@ -48,7 +48,7 @@ object FallbackTxCodec:
               "multisigRegimeUtxoSpent" -> t.multisigRegimeUtxoSpent.asJson,
               "tx" -> t.tx.asJson,
               "resolvedUtxos" -> t.resolvedUtxos.asJson,
-              "peerVoteUtxosProduced" -> t.peerVoteUtxosProduced.asJson
+              "peerBallotBoxesProduced" -> t.peerBallotBoxesProduced.asJson
             )
         }
 
@@ -61,7 +61,7 @@ object FallbackTxCodec:
                 mrus <- c.downField("multisigRegimeUtxoSpent").as[MultisigRegimeUtxo]
                 tx <- c.downField("tx").as[Transaction]
                 ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
-                pvu <- c.downField("peerVoteUtxosProduced").as[NonEmptyList[Utxo]]
+                pbbs <- c.downField("peerBallotBoxesProduced").as[NonEmptyList[Utxo]]
             yield FallbackTx(
               fallbackTxStartTime = fst,
               treasurySpent = ts,
@@ -69,6 +69,6 @@ object FallbackTxCodec:
               multisigRegimeUtxoSpent = mrus,
               tx = tx,
               resolvedUtxos = ru,
-              peerVoteUtxosProduced = pvu
+              peerBallotBoxesProduced = pbbs
             )
         }

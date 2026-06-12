@@ -26,7 +26,7 @@ import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, EventSequencer, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, StackComposer}
+import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -455,7 +455,8 @@ case class Suite(
 
             _ <- Slf4jTracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
-            nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+            headPeerNum = HeadPeerNumber.zero
+            nodeConfig = multiNodeConfig.nodeConfigs(headPeerNum)
 
             // Actor system
             system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
@@ -495,15 +496,15 @@ case class Suite(
             cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
 
             fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
+                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(headPeerNum))
             clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(nodeConfig.ownHeadPeerNum))
+                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
 
             // Weaver stub — emits leader_started for tracing
             blockWeaver <- system.actorOf(
               new BlockWeaverMock(
                 fcaTracer,
-                nodeConfig.ownHeadPeerNum,
+                headPeerNum,
                 nodeConfig.headPeers.nHeadPeers: Int
               )
             )
@@ -518,9 +519,9 @@ case class Suite(
               )
             )
 
-            // Event sequencer stub
-            eventSequencerStub <- system.actorOf(new Actor[IO, EventSequencer.Request] {
-                override def receive: Receive[IO, EventSequencer.Request] = _ => IO.pure(())
+            // Request sequencer stub
+            requestSequencerStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
+                override def receive: Receive[IO, RequestSequencer.Request] = _ => IO.pure(())
             })
 
             // Agent actor
@@ -537,7 +538,7 @@ case class Suite(
             jointLedgerConnections = JointLedger.Connections(
               fastConsensusActor = agent,
               stackComposer = stackComposerStub,
-              peerLiaisons = List(),
+              headPeerLiaisons = List(),
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
@@ -564,8 +565,8 @@ case class Suite(
             consensusConnections = FastConsensusActor.Connections(
               blockWeaver = blockWeaver,
               cardanoLiaison = cardanoLiaison,
-              eventSequencer = eventSequencerStub,
-              peerLiaisons = List.empty,
+              requestSequencer = requestSequencerStub,
+              headPeerLiaisons = List.empty,
               jointLedger = jointLedger,
               stackComposer = stackComposerStub,
             )

@@ -61,7 +61,7 @@ object EvacuationActorTestHelpers {
             )
 
             tracer = Slf4jTracer.sink.contramap(
-              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._2.ownHeadPeerNum)
+              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
         } yield EvacuationActor(

@@ -3,7 +3,9 @@ package hydrozoa.config.node
 import cats.data.Kleisli.liftF
 import cats.data.{NonEmptyList, ReaderT}
 import cats.effect.unsafe.IORuntime
-import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.{HeadConfig, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfigGen, generateNodeOperationEvacuationConfig}
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate
@@ -26,19 +28,24 @@ import test.{GenWithTestPeers, TestM, TestMFixedEnv, TestPeers, TestPeersSpec, g
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
     override val headConfig: HeadConfig,
+    coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet] = List.empty,
 ) extends HeadConfig.Section {
     lazy val nodeConfigs: Map[HeadPeerNumber, NodeConfig] =
         nodePrivateConfigs.map((n, pc) =>
             n ->
-                NodeConfig(
-                  headConfig = headConfig,
-                  ownHeadWallet = pc.ownHeadWallet,
-                  nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
-                  nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
-                  pc.hydrozoaHost,
-                  pc.hydrozoaPort,
-                  pc.blockfrostApiKey
-                ).get
+                NodeConfig
+                    .mkHeadConfig(
+                      headConfig = headConfig,
+                      // This fixture builds head nodes; mkHeadConfig derives the head identity from the
+                      // wallet's key.
+                      ownHeadWallet = pc.ownWallet,
+                      nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
+                      nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
+                      pc.hydrozoaHost,
+                      pc.hydrozoaPort,
+                      pc.blockfrostApiKey
+                    )
+                    .get
         )
 
     override def headConfigBootstrap: HeadConfig.Bootstrap = headConfig.headConfigBootstrap
@@ -48,7 +55,7 @@ case class MultiNodeConfig private (
 
     def mkVKeyWitnesses(tx: Transaction): NonEmptyList[VKeyWitness] =
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkVKeyWitness(tx)).toList
+          nodePrivateConfigs.map(_._2.ownWallet.mkVKeyWitness(tx)).toList
         )
 
     def multisignHeader(
@@ -56,19 +63,31 @@ case class MultiNodeConfig private (
     ): NonEmptyList[BlockHeader.Minor.HeaderSignature] =
         val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
         NonEmptyList.fromListUnsafe(
-          nodePrivateConfigs.map(_._2.ownHeadWallet.mkHeaderSignature(serialized)).toList
+          nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
         )
+
+    /** Signs `blockHeader` with the first `coilQuorum` coil wallets and returns `None` for the
+      * rest, producing the sparse list expected by the on-chain coil multisig check.
+      */
+    def multisignHeaderCoil(
+        blockHeader: StandaloneEvacuationCommitment.Onchain
+    ): List[Option[BlockHeader.Minor.HeaderSignature]] =
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
+        val quorum = headConfig.coilQuorum
+        coilWallets.zipWithIndex.map { (w, i) =>
+            if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
+        }
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
-    ).ownHeadWallet.exportVerificationKey.shelleyAddress()(using headConfig)
+    ).ownWallet.exportVerificationKey.shelleyAddress()(using headConfig)
 
     def addrKeyHashOf(peerNumber: HeadPeerNumber): AddrKeyHash =
-        AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownHeadWallet.exportVerificationKey))
+        AddrKeyHash(blake2b_224(nodeConfigs(peerNumber).ownWallet.exportVerificationKey))
 
     def signTxAs(peerNumber: HeadPeerNumber): Transaction => Transaction = nodeConfigs(
       peerNumber
-    ).ownHeadWallet.signTx
+    ).ownWallet.signTx
 
     // TODO: are we fine with having that here? Better place?
     def pickPeer: Gen[HeadPeerNumber] =
@@ -90,6 +109,12 @@ object MultiNodeConfig {
     ): Prop =
         run(initializer = PropertyM.pick(generateDefault), testM = testM)
 
+    def runWithCoil[A](nCoil: Int = 5, quorum: Int = 3)(testM: MultiNodeConfigTestM[A])(using
+        toProp: A => Prop,
+        ioRuntime: IORuntime
+    ): Prop =
+        run(initializer = PropertyM.pick(generateWithCoil(nCoil, quorum)), testM = testM)
+
     def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 
     def generate(spec: TestPeersSpec)(
@@ -107,6 +132,32 @@ object MultiNodeConfig {
           generateNodeOperationMultisigConfig
         ).run(testPeers)
     } yield ret
+
+    def generateWithCoil(nCoil: Int = 5, quorum: Int = 3): Gen[MultiNodeConfig] =
+        for {
+            testPeers <- TestPeers.generate(TestPeersSpec.default)
+            allPeers = TestPeers(
+              testPeers.seedPhrase,
+              testPeers.cardanoNetwork,
+              testPeers.peersNumber + nCoil
+            )
+            coilWallets = (0 until nCoil).toList.map(i =>
+                allPeers.walletFor(
+                  hydrozoa.multisig.consensus.peer.HeadPeerNumber(testPeers.peersNumber + i)
+                )
+            )
+            hubNum = HeadPeerNumber(0)
+            mnc <- generateForTestPeers(
+              generateHeadConfig = generateHeadConfig(
+                genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                  generateHeadParams = generateHeadParameters().map(_.copy(coilQuorum = quorum)),
+                  coilPeers = CoilPeers.indexed(
+                    coilWallets.map(w => CoilPeerData(w.exportVerificationKey, hubNum))
+                  )
+                )
+              )
+            ).run(testPeers)
+        } yield mnc.copy(coilWallets = coilWallets)
 
     /** Generate MultiNodeConfig using an existing TestPeers instance. This is useful when you need
       * to use a specific TestPeers (e.g., from test environment) rather than generating a new one.
@@ -151,7 +202,7 @@ object MultiNodeConfig {
                             noec <- generateNodeOperationEvacuationConfig(ohpp.ownHeadWallet)
 
                         } yield peerId._1 -> NodePrivateConfig(
-                          ownHeadPeerPrivate = ohpp,
+                          ownPeerPrivate = ohpp,
                           // Re-using the same wallet for now, don't know if this will work
                           nodeOperationEvacuationConfig = noec,
                           nodeOperationMultisigConfig = nomc,
@@ -164,7 +215,8 @@ object MultiNodeConfig {
                 )
         } yield new MultiNodeConfig(
           nodePrivateConfigs = nodePrivateConfigs.toMap,
-          headConfig = headConfig
+          headConfig = headConfig,
+          coilWallets = List.empty
         )
 }
 

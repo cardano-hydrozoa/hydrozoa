@@ -6,7 +6,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
@@ -23,7 +23,7 @@ import org.scalacheck.commands.SutCommand
 private[stage4] case class PeerStack(
     blockWeaver: BlockWeaver.Handle,
     cardanoLiaison: CardanoLiaison.Handle,
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
     jointLedger: JointLedger.Handle,
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
@@ -46,7 +46,7 @@ private[stage4] case class PeerStack(
 
 /** Per-peer actor handles exposed to SUT commands. */
 case class Stage4PeerHandle(
-    eventSequencer: EventSequencer.Handle,
+    requestSequencer: RequestSequencer.Handle,
 )
 
 case class Stage4Sut(
@@ -68,23 +68,32 @@ case class Stage4Sut(
     // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
     // `analyzeBlockBriefs` to assert the slow side covered every observed block.
     stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA ContraTracer sink
+    // (same mechanism as `stacks` on the head side). Empty for a pure-head run. Used to assert
+    // the coil peer participates in the slow cycle.
+    coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     tracerLocal: IOLocal[Slf4jTracer],
+    // Cleanup hooks for resources allocated outside the actor system (currently the
+    // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
+    // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
+    transportCleanup: IO[Unit] = IO.unit,
 )
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
   *
-  *   - [[Direct]] (default) — every peer's [[PeerLiaison]] gets the actual remote handle from the
-  *     corresponding peer's actor system. In-process, no network. Compatible with
-  *     [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every peer runs its own [[PeerWsTransport]] bound to localhost on a distinct
-  *     port. Cross-peer communication happens over real WebSocket connections. Forces
-  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
-  *     Ports start at [[basePort]] and increase by `peerNum`.
+  *   - [[Direct]] (default) — every peer's liaison gets the actual remote handle from the
+  *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
+  *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
+  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
+  *     on a distinct port, mounting `/head` for the head mesh and (on a hub) `/hub` for its coil
+  *     peers; each coil dials its hub's `/hub`. Cross-peer communication happens over real
+  *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
+  *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
   */
 enum TransportMode:
     case Direct
@@ -103,27 +112,27 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's EventSequencer.
+    // L2 tx: submit directly to the peer's RequestSequencer.
     // Result is always Valid (trivial); oracle check in shutdownSut compares model
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
                 _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with EventSequencer AND submit the signed deposit tx to the shared
+    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                reqId <- sut.peers(cmd.peerNum).eventSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
                 _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)

@@ -10,6 +10,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -209,7 +210,7 @@ object Main extends IOApp {
             // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
             // actor topology consumes.
             backendStore <- RocksDbBackendStore.open(
-              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownHeadPeerNum: Int}/rocksdb")
+              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb")
             )
             persistence <- Resource.eval(Persistence.fromBackend(backendStore))
 
@@ -218,7 +219,7 @@ object Main extends IOApp {
               logger.info("Hydrozoa node shut down, running janitor...") *>
                   Janitor.cleanUp(
                     backend = backend,
-                    headPeerWallet = nodeConfig.ownHeadWallet,
+                    peerWallet = nodeConfig.ownWallet,
                     config = nodeConfig.headConfig,
                     faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
                     tokenRecoveryAddress = env.tokenRecoveryAddress
@@ -227,9 +228,13 @@ object Main extends IOApp {
         } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system)
 
         resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system) =>
+            // Main runs a head node (Bootstrap builds the config via NodeConfig.mkHeadConfig),
+            // so the peer index is this node's head peer number.
             val mrmTracer =
                 Slf4jTracer.sink.contramap(
-                  MultisigRegimeManagerEventFormat.humanFormat(nodeConfig.ownHeadPeerNum)
+                  MultisigRegimeManagerEventFormat.humanFormat(
+                    HeadPeerNumber(nodeConfig.ownPeerIndex)
+                  )
                 )
             for {
                 mrm <- MultisigRegimeManager.apply(
@@ -242,7 +247,7 @@ object Main extends IOApp {
                 _ <- system.actorOf(mrm, "MultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 
-                // Start HTTP server once EventSequencer is available
+                // Start HTTP server once RequestSequencer is available
                 _ <- mrm.connectionsDeferred.get.flatMap { connections =>
                     val serverConfig = HydrozoaServer.Config(
                       host = host"0.0.0.0",
@@ -253,7 +258,7 @@ object Main extends IOApp {
                     logger.info("Starting HTTP server...") *>
                         HydrozoaServer
                             .create(
-                              connections.eventSequencer,
+                              connections.requestSequencer,
                               connections.blockWeaver,
                               nodeConfig.headConfig,
                               serverConfig

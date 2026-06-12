@@ -69,7 +69,7 @@ object CommonGenerators {
     def genTreasuryUnresolvedDatum(
         versionMajor: BigInt
     )(using
-        config: CardanoNetwork.Section & HeadPeers.Section & HasTokenNames
+        config: hydrozoa.config.head.HeadConfig.Section
     ): Gen[Unresolved] =
         for {
             deadlineVoting <- Gen
@@ -82,7 +82,7 @@ object CommonGenerators {
         } yield Unresolved(
           deadlineVoting = deadlineVoting,
           versionMajor = versionMajor,
-          setup = setup
+          setupG2 = setup
         )
 
     def genRuleBasedTreasuryUtxo(
@@ -126,15 +126,14 @@ object CommonGenerators {
           )
         )
 
-    def genOnchainBlockHeader(versionMajor: BigInt): Gen[StandaloneEvacuationCommitment.Onchain] =
+    def genOnchainBlockHeader(versionMajor: BigInt)(using
+        config: HasTokenNames
+    ): Gen[StandaloneEvacuationCommitment.Onchain] =
         for {
-            blockNum <- Gen.choose(10L, 20L).map(BigInt(_))
-            timeCreation <- Gen.choose(1591566491L, 1760000000L).map(BigInt(_))
             versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
             commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
         } yield StandaloneEvacuationCommitment.Onchain(
-          blockNum = blockNum,
-          startTime = timeCreation,
+          headId = config.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
           versionMinor = versionMinor,
           commitment = commitment

@@ -13,7 +13,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{VoteOutput, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -35,17 +35,17 @@ def genTalliedVoteDatum(
       voteStatus = VoteStatus.Voted(commitment, versionMinor)
     )
 
-def genResolutionTallyVoteUtxo(
+def genResolutionTallyBallotBox(
     fallbackTxId: TransactionHash,
     outputIndex: Int,
     voteDatum: VoteDatum,
     voter: AddrKeyHash,
 )(using
     config: HeadPeers.Section & HasTokenNames & CardanoNetwork.Section
-): Gen[VoteUtxo[Voted]] = {
+): Gen[BallotBox[Voted]] = {
     val txId = TransactionInput(fallbackTxId, outputIndex)
 
-    val voteOutput: VoteOutput[Voted] = VoteOutput(
+    val ballotBoxOutput: BallotBoxOutput[Voted] = BallotBoxOutput(
       key = voteDatum.key,
       link = voteDatum.link,
       coin = Coin(10_000_000),
@@ -54,7 +54,7 @@ def genResolutionTallyVoteUtxo(
     )
 
     Gen.const(
-      VoteUtxo(input = txId, voteOutput)
+      BallotBox(input = txId, ballotBoxOutput)
     )
 }
 
@@ -81,8 +81,8 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
           link = 2 // Links to next peer
         )
 
-        // Generate tallied vote utxo
-        talliedVoteUtxo <- genResolutionTallyVoteUtxo(
+        // Generate tallied ballot box
+        talliedBallotBox <- genResolutionTallyBallotBox(
           fallbackTxId,
           1, // Output index 1
           talliedVoteDatum,
@@ -94,7 +94,7 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
         )
 
     } yield ResolutionTx.Build(
-      talliedVoteUtxo = talliedVoteUtxo,
+      talliedBallotBox = talliedBallotBox,
       treasuryUtxo = treasuryUtxo,
       collateralUtxo = collateralUtxo,
     )(using multiNodeConfig.nodeConfigs.head._2)
@@ -110,7 +110,10 @@ object ResolutionTxTest extends Properties("Resolution Tx Test") {
                 builder <- pick(genResolutionTxBuilder)
                 tx <- failLeft(builder.result)
                 // Basic smoke test assertions
-                _ <- assertWith(tx.talliedVoteUtxo != null, "Tallied vote UTXO should not be null")
+                _ <- assertWith(
+                  tx.talliedBallotBox != null,
+                  "Tallied ballot box should not be null"
+                )
                 _ <- assertWith(
                   tx.treasuryUnresolvedUtxoSpent != null,
                   "Treasury unresolved UTXO spent should not be null"

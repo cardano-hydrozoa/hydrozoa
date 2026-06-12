@@ -21,7 +21,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo, VoteUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
@@ -41,7 +41,7 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 object DisputeActorTestHelpers {
     import MultiNodeConfig.*
 
-    def mkVoteUtxo(
+    def mkBallotBoxUtxo(
         key: BigInt,
         link: BigInt,
         voteStatus: VoteStatus,
@@ -84,7 +84,7 @@ object DisputeActorTestHelpers {
               deadlineVoting = votingDeadline,
               versionMajor = versionMajor,
               // this is cribbed from the CommonGenerators.scala test
-              setup = TrustedSetup
+              setupG2 = TrustedSetup
                   .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
                   .map(p2 => G2Element(p2).toCompressedByteString)
             )
@@ -131,7 +131,7 @@ object DisputeActorTestHelpers {
 
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
-                env.nodePrivateConfigs.head._2.ownHeadWallet.exportVerificationKey.addrKeyHash
+                env.nodePrivateConfigs.head._2.ownWallet.exportVerificationKey.addrKeyHash
               )(using env.headConfig)
                   .label("collateral utxo")
             )
@@ -142,8 +142,7 @@ object DisputeActorTestHelpers {
             currentSlot = now.toSlot
 
             blockHeader = StandaloneEvacuationCommitment.Onchain(
-              blockNum = 1,
-              startTime = now.toPosixTime,
+              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = versionMinor,
               commitment = initialCommitment
@@ -179,13 +178,14 @@ object DisputeActorTestHelpers {
               )
             )
             tracer = Slf4jTracer.sink.contramap(
-              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._2.ownHeadPeerNum)
+              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
             disputeActor = DisputeActor(
               action = RuleBasedRegimeManager.DisputeAction.Vote(
                 sec = blockHeader,
-                signatures = env.multisignHeader(blockHeader).toList
+                signatures = env.multisignHeader(blockHeader).toList,
+                coilSignatures = env.multisignHeaderCoil(blockHeader)
               ),
               cardanoBackend = cardanoBackend,
               tracer = tracer
@@ -236,7 +236,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         res <- lift(disputeActor.handleDisputeRes.attempt)
         _ <- {
             val expectedError = Left(
-              VoteUtxo.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
+              BallotBox.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
             )
             assertWith(
               msg = "Missing vote datum throws",
@@ -284,10 +284,10 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         ownWallet =
-            env.nodePrivateConfigs.head._2.ownHeadWallet
+            env.nodePrivateConfigs.head._2.ownWallet
 
         // One vote awaiting a vote with our pkh
-        ownVoteUtxo <- mkVoteUtxo(
+        ownVoteUtxo <- mkBallotBoxUtxo(
           1,
           2,
           VoteStatus.AwaitingVote(ownWallet.exportVerificationKey.pubKeyHash),
@@ -295,14 +295,14 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         )
 
         // One vote awaiting a vote with a different pkh
-        otherVoteUtxo <- mkVoteUtxo(
+        otherVoteUtxo <- mkBallotBoxUtxo(
           2,
           3,
           VoteStatus.AwaitingVote(
             peer = env.nodePrivateConfigs.values
-                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+                .filter(_.ownWallet.exportVerificationKey != ownWallet.exportVerificationKey)
                 .head
-                .ownHeadWallet
+                .ownWallet
                 .exportVerificationKey
                 .pubKeyHash
           ),
@@ -388,13 +388,13 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //        )
 //
 //        ownWallet =
-//            env.nodePrivateConfigs.head._2.ownHeadWallet
+//            env.nodePrivateConfigs.head._2.ownWallet
 //
 //        // NOTE: This can conflict with the other txids and cause strange failures. We should probably
 //        // Keep a running "ResolvedUtxos" in the TestM state to avoid this.
 //        continuingVoteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
 //        // One vote awaiting a vote with our pkh
-//        continuingVoteUtxo <- mkVoteUtxo(
+//        continuingVoteUtxo <- mkBallotBoxUtxo(
 //          0,
 //          1,
 //          VoteStatus.Voted(evacMap.kzgCommitment, 2),
@@ -402,14 +402,14 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //        )
 //
 //        // One vote awaiting a vote with a different pkh
-//        otherVoteUtxo <- mkVoteUtxo(
+//        otherVoteUtxo <- mkBallotBoxUtxo(
 //          1,
 //          0,
 //          VoteStatus.AwaitingVote(
 //            peer = env.nodePrivateConfigs.values
-//                .filter(_.ownHeadVKey != ownWallet.exportVerificationKey)
+//                .filter(_.ownWallet.exportVerificationKey != ownWallet.exportVerificationKey)
 //                .head
-//                .ownHeadWallet
+//                .ownWallet
 //                .exportVerificationKey
 //                .pubKeyHash
 //          ),
@@ -451,7 +451,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))
 
         voteTxId <- pick(Arbitrary.arbitrary[TransactionHash])
-        finalVoteUtxo <- mkVoteUtxo(
+        finalVoteUtxo <- mkBallotBoxUtxo(
           0,
           1,
           voteStatus = Voted(evacMap.kzgCommitment, 1),
@@ -499,7 +499,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    val _ = property("dispute actor (no actor system)") = runDefault(
+    val _ = property("dispute actor (no actor system)") = runWithCoil()(
       for {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow

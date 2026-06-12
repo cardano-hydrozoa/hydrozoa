@@ -39,6 +39,15 @@ object BlockWeaverEvent:
     final case class WaitingForRequest(received: RequestId, awaiting: RequestId)
         extends BlockWeaverEvent
 
+    /** A later block's brief arrived while a follower is still awaiting a request for the block it
+      * is reproducing; the brief is buffered and replayed once the current block completes.
+      */
+    final case class EarlyBriefBuffered(
+        briefBlockNum: BlockNumber,
+        awaiting: RequestId,
+        reproducingBlockNum: BlockNumber
+    ) extends BlockWeaverEvent
+
     final case class MempoolExtracted(requestIds: List[RequestId]) extends BlockWeaverEvent
 
     final case class RequestSentToJointLedger(requestId: RequestId) extends BlockWeaverEvent

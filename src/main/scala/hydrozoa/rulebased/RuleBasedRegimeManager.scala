@@ -8,6 +8,7 @@ import com.suprnation.actor.Actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -66,7 +67,18 @@ case class RuleBasedRegimeManager(
       */
     private def loadRuleBasedState: IO[RuleBasedRegimeManager.State] =
         for {
-            markers <- Markers.derive(backend, config.ownHeadPeerNum)
+            // Rule-based recovery via the head-peer markers is head-only; coil-side recovery lands
+            // with the coil-persistence workstream.
+            ownHeadPeerNum <- config.ownPeerId match {
+                case PeerId.Head(n) => IO.pure(n)
+                case PeerId.Coil(_) =>
+                    IO.raiseError(
+                      new IllegalStateException(
+                        "rule-based recovery via Markers.derive is head-only (coil recovery deferred)"
+                      )
+                    )
+            }
+            markers <- Markers.derive(backend, ownHeadPeerNum)
             stackNum <- markers.hardConfirmed.liftTo[IO](
               RuleBasedRegimeManager.MissingState("no hard-confirmed stack on disk")
             )
@@ -108,7 +120,8 @@ case class RuleBasedRegimeManager(
                             case Some(multiSec) =>
                                 DisputeAction.Vote(
                                   sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment),
-                                  signatures = multiSec.headerMultiSigned
+                                  signatures = multiSec.headerMultiSigned,
+                                  coilSignatures = Nil // coil-side recovery is deferred
                                 )
                         }
                         // Default-vote map — what the multisig treasury was committed to at
@@ -180,7 +193,8 @@ object RuleBasedRegimeManager {
     enum DisputeAction:
         case Vote(
             sec: StandaloneEvacuationCommitment.Onchain,
-            signatures: List[BlockHeader.Minor.HeaderSignature]
+            signatures: List[BlockHeader.Minor.HeaderSignature],
+            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
         )
         case Abstain
 

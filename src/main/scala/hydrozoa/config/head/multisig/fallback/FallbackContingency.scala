@@ -46,11 +46,11 @@ object FallbackContingency {
       * necessary.
       */
     final case class Collective(
-        defaultVoteDeposit: Coin,
+        publicVoteDeposit: Coin,
         fallbackTxFee: Coin,
         minAdaForTreasury: Coin
     ) {
-        lazy val total: Coin = defaultVoteDeposit + fallbackTxFee + minAdaForTreasury
+        lazy val total: Coin = publicVoteDeposit + fallbackTxFee + minAdaForTreasury
     }
 
     /** This amount is collected from each peer in the initialization tx.
@@ -75,12 +75,12 @@ object FallbackContingency {
           */
         lazy val forCollateralUtxo: Coin = collateralDeposit + tallyTxFee
 
-        /** The ADA that should be put into the vote utxo, which includes both the min-ADA and the
+        /** The ADA that should be put into the ballot box, which includes both the min-ADA and the
           * vote tx fee.
           */
-        lazy val forVoteUtxo: Coin = voteDeposit + voteTxFee
+        lazy val forBallotBox: Coin = voteDeposit + voteTxFee
 
-        lazy val total: Coin = forCollateralUtxo + forVoteUtxo
+        lazy val total: Coin = forCollateralUtxo + forBallotBox
     }
 
     trait Section {
@@ -126,7 +126,7 @@ object FallbackContingency {
         )
 
         def mkCollectiveContingencyWithDefaults: Collective = Collective(
-          defaultVoteDeposit = voteUtxoMinLovelace,
+          publicVoteDeposit = ballotBoxMinLovelace,
           minAdaForTreasury = noLiabilitesTreasuryMinLovelace,
           fallbackTxFee = fallbackTxFee
         )
@@ -137,7 +137,7 @@ object FallbackContingency {
         ): Individual = Individual(
           collateralDeposit = collateralDeposit(tallyTxFee = tallyTxFee, voteTxFee = voteTxFee),
           tallyTxFee = tallyTxFee,
-          voteDeposit = voteUtxoMinLovelace,
+          voteDeposit = ballotBoxMinLovelace,
           voteTxFee = voteTxFee
         )
 
@@ -163,16 +163,16 @@ object FallbackContingency {
         private def collateralUtxoMinLovelace: Coin =
             config.babbageUtxoMinLovelace(Assumptions.adaOnlyBaseAddressUtxoBytes)
 
-        private def voteUtxoMinLovelace: Coin =
-            config.babbageUtxoMinLovelace(Assumptions.maxVoteUtxoBytes)
+        private def ballotBoxMinLovelace: Coin =
+            config.babbageUtxoMinLovelace(Assumptions.maxBallotBoxBytes)
     }
 
     object Assumptions {
         // Serialized size of ADA-only utxo at the base address (with staking and payment credentials)
         val adaOnlyBaseAddressUtxoBytes: PositiveInt = PositiveInt.unsafeApply(67)
 
-        // Max serialized size of a vote utxo (with/without vote)
-        val maxVoteUtxoBytes: PositiveInt = PositiveInt.unsafeApply(155)
+        // Max serialized size of a ballot box (with/without vote)
+        val maxBallotBoxBytes: PositiveInt = PositiveInt.unsafeApply(155)
 
         // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
         // (see TreasuryOutputSizeTest)
