@@ -33,6 +33,11 @@ trait MultisigRegimeManager(
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
     tracer: ContraTracer[IO, MultisigRegimeManagerEvent],
+    // TODO: This should be context => IO[RemoteActorProxies]
+    //   This either gives you the:
+    //   - Websockets, via `main`/`PeerWsTransport`
+    //   - Process-local actor-refs for TestControl-compatible integration tests (which will be something like
+    //     `integrationMain`). This will need an IntegrationActor that spawns MRMs
     wsTransport: PeerWsTransport,
 ) extends Actor[IO, Request] {
 
