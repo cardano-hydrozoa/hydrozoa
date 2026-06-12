@@ -13,7 +13,7 @@ recover seams (2026-06-02): `RequestHighWater` write; per-block `Cf.L2CommandNum
 its `persistOwnAckBundle` write; `JointLedger.State.recover`/`recoverState` (+ L2 co-anchor via
 `restoreTo`); `StackComposer.State.recover`; `BlockResultScan` — all pure-over-store and
 unit-tested, with the actor wiring deferred to R3. · R2-bnd (boundary restores, 2026-06-04):
-`Markers.recoverNextRequestNumber` (EventSequencer counter), `CardanoLiaison.State.recover`
+`Markers.recoverNextRequestNumber` (RequestSequencer counter), `CardanoLiaison.State.recover`
 (`HardConfirmation` fold via `HardConfirmationScan`), `PeerLiaison.recover` → `OutboxSeed` — all
 pure-over-store and unit-tested, wiring deferred to R3. · R3a (recover wiring + bootstrap skip,
 2026-06-04): each snapshot/boundary actor's `PreStart` self-derives `Markers` and restores via its
@@ -40,7 +40,7 @@ timing-budget abort is deferred runtime hardening).
 | StackComposer | own stack brief, own hard-acks, treasury, per-committed-block evac map | `Stack`, `HardAck`, `Treasury`, `EvacuationMap` |
 | FastConsensusActor | soft-confirmation record (CR4, before fan-out) | `SoftConfirmation` |
 | SlowConsensusActor | hard-confirmation record in full (R10 floor) | `HardConfirmation` |
-| EventSequencer | assigned request (CR1) | `Request` |
+| RequestSequencer | assigned request (CR1) | `Request` |
 | PeerLiaison | inbound remote lane entries, arrival-stamped (CR8) | all lane CFs |
 
 **Foundation — done.** `BackendStore` (InMemory + RocksDb) with `cursor(cf,
@@ -59,7 +59,7 @@ fromInclusive)` range-scan, `lastKey`, `lastKeyWithPrefix`; typed `Persistence`;
 - No indices algorithm (§5.3), no total-order merge (§5.4), no `ReplayActor`.
 - No boot sequence (§8) in `MultisigRegimeManager.preStartLocal` (it spawns all
   actors and completes one `PendingConnections` barrier — nothing recovery-aware).
-- ~~No boundary restore~~ **Done (R2-bnd, 2026-06-04):** EventSequencer counter
+- ~~No boundary restore~~ **Done (R2-bnd, 2026-06-04):** RequestSequencer counter
   (`Markers.recoverNextRequestNumber`), CardanoLiaison `HardConfirmation` fold + live L1 re-sample
   (`CardanoLiaison.State.recover`), PeerLiaison own-produced outbox (`PeerLiaison.recover` →
   `OutboxSeed`). Pure-over-store; actor wiring is R3.
@@ -150,7 +150,7 @@ and change cold init to **"non-empty store → recovered; empty store → bootst
 **Sub-tracks.** R2 splits into loosely-coupled sub-tracks:
 
   1. **R2-fast — JointLedger + StackComposer recover + the `RequestHighWater` write.**
-  2. **R2-bnd — boundary restores (EventSequencer / PeerLiaison / CardanoLiaison).**
+  2. **R2-bnd — boundary restores (RequestSequencer / PeerLiaison / CardanoLiaison).**
   3. **R2b — EUTXO L2 persistence** (own section; parallelizable).
 
 The **rule-based read path (R10 custody floor)** is **out of scope for this plan —
@@ -232,7 +232,7 @@ gap.
 
 #### R2-bnd — boundary restores (restore only, no replay) — LANDED 2026-06-04
 
-- **EventSequencer:** `next = max(own Request) + 1` (its `nLedgerEvent`
+- **RequestSequencer:** `next = max(own Request) + 1` (its `nLedgerEvent`
   `Ref[RequestNumber]`, cold-init 0). **CR1 is already satisfied** — current code
   persists the assigned request to the `Request` lane *before*
   `dResponse.complete(id)` (verified: `persistence.write(...)` precedes
@@ -436,7 +436,7 @@ R2 `recover`, gated on a non-empty store; cold start is unchanged. StackComposer
 `recoverOrBootstrap` skips `bootstrapInitialStack` when `recover` returns `Some`.
 JointLedger recovers `Done(softAcked)` + co-anchors L2. CardanoLiaison gained a
 `persistence` param (ctor/factory/MRM) and folds `HardConfirmation` on boot.
-EventSequencer (`State.seedNextRequestNumber`) + PeerLiaison (`State.seedFromOutbox`)
+RequestSequencer (`State.seedNextRequestNumber`) + PeerLiaison (`State.seedFromOutbox`)
 got small seed seams. `StackComposerRecoveryTest` boots the actor against a seeded
 store and asserts the observable: cold ⇒ a stack-0 `StackHandoff` reaches
 `SlowConsensusActor`, non-empty ⇒ none.
