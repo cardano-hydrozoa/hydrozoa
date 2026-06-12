@@ -15,6 +15,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.Tx
+import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
@@ -74,7 +75,7 @@ case class TestPeers private (
 
         val headPeerVKeys: NonEmptyList[VerificationKey] = helper(verificationKeyFor)
 
-        val headPeersAddresses: NonEmptyList[String] = helper(webSocketAddressFor)
+        val headPeersAddresses: NonEmptyList[Uri] = helper(webSocketAddressFor)
 
         headPeerVKeys
             .zip(headPeersAddresses)
@@ -90,13 +91,13 @@ case class TestPeers private (
 
     }
 
-    def webSocketAddressFor(peerNumber: HeadPeerNumber): String =
+    def webSocketAddressFor(peerNumber: HeadPeerNumber): Uri =
         webSocketAddressFor(TestPeerName.fromOrdinal(peerNumber))
 
     // TODO: What do we want here?
-    def webSocketAddressFor(peer: TestPeerName): String = {
+    def webSocketAddressFor(peer: TestPeerName): Uri = {
         _require(peer)
-        s"ws://localhost/${peer.name}"
+        Uri.unsafeFromString(s"ws://localhost/${peer.name}")
     }
 
     def verificationKeyFor(peerNumber: HeadPeerNumber): VerificationKey =

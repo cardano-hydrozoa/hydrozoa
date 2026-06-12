@@ -3,7 +3,8 @@ package hydrozoa.multisig.consensus.transport
 import cats.effect.{IO, Resource}
 import cats.syntax.semigroupk.*
 import com.comcast.ip4s.{Host, Port}
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.consensus.transport.NodeWsServerEvent.Bound
 import org.http4s.HttpRoutes
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.implicits.*
@@ -23,9 +24,9 @@ object NodeWsServer {
     def resource(
         bindHost: Host,
         bindPort: Port,
-        routes: List[WebSocketBuilder2[IO] => HttpRoutes[IO]]
-    ): Resource[IO, Server] = {
-        val logger = Logging.loggerIO(s"NodeWsServer.$bindHost:$bindPort")
+        routes: List[WebSocketBuilder2[IO] => HttpRoutes[IO]],
+        tracer: ContraTracer[IO, NodeWsServerEvent],
+    ): Resource[IO, Server] =
         EmberServerBuilder
             .default[IO]
             .withHost(bindHost)
@@ -42,6 +43,5 @@ object NodeWsServer {
                     .orNotFound
             )
             .build
-            .evalTap(_ => logger.info(s"WS server bound at ws://$bindHost:$bindPort"))
-    }
+            .evalTap(_ => tracer.traceWith(Bound(bindHost, bindPort)))
 }

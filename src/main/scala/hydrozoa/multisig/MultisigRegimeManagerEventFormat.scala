@@ -1,10 +1,11 @@
 package hydrozoa.multisig
 
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.MultisigRegimeManagerEvent.{BW, BWL, CL, ES, FCA, JL, PL, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
+import hydrozoa.multisig.MultisigRegimeManagerEvent.*
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.transport.{NodeWsServerEventFormat, PeerWsTransportEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
@@ -26,6 +27,8 @@ object MultisigRegimeManagerEventFormat:
                 PeerLiaisonEventFormat.humanFormat(PeerId.Head(peerNum), remotePeerId)(pl)
             case BWL(bwl)                  => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
             case SCL(scl)                  => LimiterEventFormat.humanFormat("StackComposer")(scl)
+            case PWT(pwt)                  => PeerWsTransportEventFormat.humanFormat(peerNum)(pwt)
+            case NWS(nws)                  => NodeWsServerEventFormat.humanFormat(peerNum)(nws)
             case StartingActors            => info("Starting multisig actors...")
             case WatchingActors            => info("Watching multisig actors...")
             case TerminatedActor(actor)    => warn(s"Terminated $actor actor")

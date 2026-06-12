@@ -4,7 +4,7 @@ import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import com.comcast.ip4s.{host, port}
+import com.comcast.ip4s.{Host, Port, host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -45,6 +45,8 @@ object Main extends IOApp {
         signingKey: SigningKey,
         minEquity: Coin,
         blockfrostApiKey: String,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
         sugarRushHost: String,
         sugarRushPort: String,
         tokenRecoveryAddress: Option[ShelleyAddress],
@@ -122,6 +124,9 @@ object Main extends IOApp {
                   .map(Coin.apply)
             )
 
+            hydrozoaHost <- getOptionalEnvVar("HYDROZOA_HOST", "0.0.0.0")
+            hydrozoaPort <- getOptionalEnvVar("HYDROZOA_PORT", "9001")
+
             sugarRushHost <- getOptionalEnvVar("SUGAR_RUSH_HOST", "localhost")
             sugarRushPort <- getOptionalEnvVar("SUGAR_RUSH_PORT", "3001")
 
@@ -160,6 +165,8 @@ object Main extends IOApp {
           signingKey = sKey,
           minEquity = minEquity,
           blockfrostApiKey = blockfrostKey,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
           sugarRushHost = sugarRushHost,
           sugarRushPort = sugarRushPort,
           tokenRecoveryAddress = tokenRecoveryAddressOpt,
@@ -182,7 +189,9 @@ object Main extends IOApp {
             nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
               vKey = env.verificationKey,
               sKey = env.signingKey,
-              minEquity = env.minEquity
+              minEquity = env.minEquity,
+              hydrozoaHost = env.hydrozoaHost,
+              hydrozoaPort = env.hydrozoaPort,
             )
             _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
             _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
@@ -225,25 +234,35 @@ object Main extends IOApp {
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system)
 
-        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system) =>
             // Main runs a head node (Bootstrap builds the config via NodeConfig.mkHeadConfig),
             // so the peer index is this node's head peer number.
-            val mrmTracer =
-                Slf4jTracer.sink.contramap(
-                  MultisigRegimeManagerEventFormat.humanFormat(
-                    HeadPeerNumber(nodeConfig.ownPeerIndex)
-                  )
+            mrmTracer = Slf4jTracer.sink.contramap(
+              MultisigRegimeManagerEventFormat.humanFormat(HeadPeerNumber(nodeConfig.ownPeerIndex))
+            )
+            bindHost = Host
+                .fromString(env.hydrozoaHost)
+                .getOrElse(
+                  throw new IllegalArgumentException(s"Invalid HYDROZOA_HOST: ${env.hydrozoaHost}")
                 )
+            bindPort = Port
+                .fromString(env.hydrozoaPort)
+                .getOrElse(
+                  throw new IllegalArgumentException(s"Invalid HYDROZOA_PORT: ${env.hydrozoaPort}")
+                )
+            mrm <- MultisigRegimeManager.resource(
+              nodeConfig,
+              backend,
+              remoteL2Ledger,
+              persistence,
+              mrmTracer,
+              bindHost,
+              bindPort,
+            )
+        } yield (env, nodeConfig, system, mrm)
+
+        resource.use { case (env, nodeConfig, system, mrm) =>
             for {
-                mrm <- MultisigRegimeManager.apply(
-                  nodeConfig,
-                  backend,
-                  remoteL2Ledger,
-                  persistence,
-                  mrmTracer
-                )
                 _ <- system.actorOf(mrm, "MultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 

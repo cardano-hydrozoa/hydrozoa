@@ -37,6 +37,7 @@ import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
+import org.http4s.Uri
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
@@ -94,6 +95,8 @@ object Bootstrap:
         vKey: VerificationKey,
         sKey: SigningKey,
         minEquity: Coin,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
     ): IO[NodeConfig] = for {
         _ <- IO.pure(())
 
@@ -215,7 +218,12 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
-        headPeers = HeadPeers(NonEmptyMap.one(HeadPeerNumber.zero, HeadPeerData(vKey, "FIXME"))).get
+        headPeers = HeadPeers(
+          NonEmptyMap.one(
+            HeadPeerNumber.zero,
+            HeadPeerData(vKey, Uri.unsafeFromString(s"ws://$hydrozoaHost:$hydrozoaPort"))
+          )
+        ).get
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -314,8 +322,8 @@ object Bootstrap:
                 // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
                 evacuationWallet = ownHeadWallet
               ),
-              hydrozoaHost = ???,
-              hydrozoaPort = ???,
+              hydrozoaHost = hydrozoaHost,
+              hydrozoaPort = hydrozoaPort,
               blockfrostApiKey = ???,
               nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
             )
