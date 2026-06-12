@@ -364,7 +364,7 @@ case class Stage4Suite(
                             val plTracer: ContraTracer[IO, PeerLiaisonEvent] =
                                 Slf4jTracer.sink.contramap(
                                   PeerLiaisonEventFormat
-                                      .humanFormat(peerNum, PeerId.Head(remotePeerNum))
+                                      .humanFormat(PeerId.Head(peerNum), PeerId.Head(remotePeerNum))
                                 )
                             system
                                 .actorOf(
@@ -476,11 +476,13 @@ case class Stage4Suite(
                         Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(labelNum))
                     val coilPlTracer: ContraTracer[IO, PeerLiaisonEvent] =
                         Slf4jTracer.sink.contramap(
-                          PeerLiaisonEventFormat.humanFormat(labelNum, PeerId.Head(hubNum))
+                          PeerLiaisonEventFormat
+                              .humanFormat(PeerId.Coil(coilNum), PeerId.Head(hubNum))
                         )
                     val hubPlTracer: ContraTracer[IO, PeerLiaisonEvent] =
                         Slf4jTracer.sink.contramap(
-                          PeerLiaisonEventFormat.humanFormat(hubNum, PeerId.Coil(coilNum))
+                          PeerLiaisonEventFormat
+                              .humanFormat(PeerId.Head(hubNum), PeerId.Coil(coilNum))
                         )
                     for
                         coilPending <- Deferred[IO, MultisigRegimeManager.Connections]

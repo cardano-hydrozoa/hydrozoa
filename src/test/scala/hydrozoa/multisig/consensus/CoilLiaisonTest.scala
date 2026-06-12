@@ -172,9 +172,6 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                           "coil config is not a coil peer"
                                         )
                                 }
-                                // The format renderers label peers by number; coil peer i logs
-                                // as nHeadPeers + i, matching its wallet index in `genConfigs`.
-                                val coilLabelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
                                 for {
                                     pending <- Deferred[IO, MultisigRegimeManager.Connections]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
@@ -187,7 +184,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         pending,
                                         Slf4jTracer.sink.contramap(
                                           PeerLiaisonEventFormat
-                                              .humanFormat(coilLabelNum, PeerId.Head(hubNum))
+                                              .humanFormat(
+                                                PeerId.Coil(coilNum),
+                                                PeerId.Head(hubNum)
+                                              )
                                         ),
                                         persistence
                                       )
@@ -199,7 +199,10 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         headPending,
                                         Slf4jTracer.sink.contramap(
                                           PeerLiaisonEventFormat
-                                              .humanFormat(hubNum, PeerId.Coil(coilNum))
+                                              .humanFormat(
+                                                PeerId.Head(hubNum),
+                                                PeerId.Coil(coilNum)
+                                              )
                                         ),
                                         persistence
                                       )

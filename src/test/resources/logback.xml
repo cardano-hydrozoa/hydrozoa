@@ -12,6 +12,9 @@
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
     <logger name="PeerLiaison" level="warn"/>
+    <logger name="PeerLiaison.HeadToHead" level="warn"/>
+    <logger name="PeerLiaison.HubToCoil" level="warn"/>
+    <logger name="PeerLiaison.CoilToHub" level="warn"/>
     <logger name="InitializationTxSeq" level="warn"/>
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>

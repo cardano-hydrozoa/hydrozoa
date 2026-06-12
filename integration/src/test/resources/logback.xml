@@ -81,6 +81,9 @@
     <logger name="EvacuationActor" level="info"/>
     <logger name="Limiter" level="debug"/>
     <logger name="PeerLiaison" level="debug"/>
+    <logger name="PeerLiaison.HeadToHead" level="debug"/>
+    <logger name="PeerLiaison.HubToCoil" level="debug"/>
+    <logger name="PeerLiaison.CoilToHub" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
     <logger name="PeerWsTransport" level="debug"/>
     <logger name="Persistence" level="info"/>
