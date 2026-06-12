@@ -22,6 +22,7 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import hydrozoa.multisig.{MultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
+import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 import test.{SeedPhrase, TestPeers, genMonad}
 
 /** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§5 of `design/coil-network.md`)
@@ -242,15 +243,24 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                     .flatMap(c.pending.complete)
                             }
 
-                            // Let the initial population/own-hard-ack handshakes settle,
-                            // inject each coil peer's hard-acks in order, then let the
-                            // up-relay-down cascade settle.
+                            // Let the initial population/own-hard-ack handshakes settle, then
+                            // inject each coil peer's hard-acks in order.
                             _ <- system.waitForIdle()
                             acksByCoil = mkAcks(coilPeers.map(_.coilNum))
                             _ <- coilPeers.zip(acksByCoil).traverse_ { case (c, acks) =>
                                 acks.traverse_(c.coilLiaison ! _)
                             }
-                            _ <- system.waitForIdle()
+                            // The up-relay-down cascade is pull-driven (GetMsgBatch round-trips
+                            // plus resend ticks), so mailbox idleness does not imply delivery
+                            // finished — settle on the recorders instead. Every recorder should
+                            // end up with every injected ack (each coil hears its own echo too).
+                            expected = acksByCoil.map(_.size).sum
+                            _ <- settleOn(
+                              for {
+                                  hub <- hubSeen.get
+                                  perCoil <- coilPeers.traverse(_.coilSeen.get)
+                              } yield hub.size >= expected && perCoil.forall(_.size >= expected)
+                            )
 
                             hub <- hubSeen.get
                             perCoil <- coilPeers.traverse(_.coilSeen.get)
@@ -259,6 +269,19 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 }
             }
             .unsafeRunSync()
+    }
+
+    /** Poll until `isSettled` holds (50 ms period, 15 s budget). Budget exhaustion returns normally
+      * — the caller's property then fails with its own labels showing the shortfall.
+      */
+    private def settleOn(isSettled: IO[Boolean]): IO[Unit] = {
+        val pollPeriod = 50.millis
+        def go(remaining: FiniteDuration): IO[Unit] =
+            isSettled.flatMap { settled =>
+                if settled || remaining <= Duration.Zero then IO.unit
+                else IO.sleep(pollPeriod) >> go(remaining - pollPeriod)
+            }
+        go(15.seconds)
     }
 
     private def peerIdsOf(acks: Vector[HardAck]): Set[PeerId] = acks.map(_.ackId.peerId).toSet
