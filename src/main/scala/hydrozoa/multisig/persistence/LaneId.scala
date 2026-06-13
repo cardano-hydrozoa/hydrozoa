@@ -25,8 +25,8 @@ enum LaneId:
     def cf: Cf = this match
         case BlockSpine     => Cf.Block
         case StackSpine     => Cf.Stack
-        case Request(_)     => Cf.Request
-        case SoftAck(_)     => Cf.SoftAck
-        case HardAck(_)     => Cf.HardAck
-        case CoilHardAck(_) => Cf.CoilHardAck
-        case HubHardAck(_)  => Cf.HubHardAck
+        case Request(p)     => Cf.Request(p)
+        case SoftAck(p)     => Cf.SoftAck(p)
+        case HardAck(p)     => Cf.HardAck(p)
+        case CoilHardAck(c) => Cf.CoilHardAck(c)
+        case HubHardAck(h)  => Cf.HubHardAck(h)

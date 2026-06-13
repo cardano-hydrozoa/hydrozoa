@@ -15,8 +15,8 @@ class StoreKeyTest extends AnyFunSuite:
         val cases: List[(StoreKey, Cf)] = List(
           LaneKey.Block(BlockNumber(0)) -> Cf.Block,
           LaneKey.Stack(StackNumber(0)) -> Cf.Stack,
-          LaneKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck,
-          LaneKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)) -> Cf.HardAck,
+          LaneKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck(HeadPeerNumber(0)),
+          LaneKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)) -> Cf.HardAck(HeadPeerNumber(0)),
           StoreKey.BlockResult(BlockNumber(0)) -> Cf.BlockResult,
           StoreKey.SoftConfirmation(BlockNumber(0)) -> Cf.SoftConfirmation,
           StoreKey.HardConfirmation(StackNumber(0)) -> Cf.HardConfirmation,

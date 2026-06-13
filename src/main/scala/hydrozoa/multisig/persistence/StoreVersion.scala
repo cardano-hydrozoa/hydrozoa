@@ -9,8 +9,13 @@ import java.nio.ByteBuffer
   * better fail-safe than silently misread (CR6 / §7 versioning note).
   */
 object StoreVersion:
-    /** Current on-disk schema version. */
-    val current: Int = 1
+    /** Current on-disk schema version.
+      *
+      * v2: per-author satellite CF split (§7.1) — satellite CFs are now one-per-author with the
+      * author embedded in the CF name and dropped from the key; incompatible with v1's combined
+      * author-prefixed satellite CFs.
+      */
+    val current: Int = 2
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")

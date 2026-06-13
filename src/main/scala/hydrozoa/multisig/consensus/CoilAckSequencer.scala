@@ -173,7 +173,7 @@ object CoilAckSequencer {
       */
     def recover(persistence: Persistence[IO], hub: HeadPeerNumber): IO[Recovered] =
         persistence.backend
-            .lastKeyWithPrefix(Cf.HubHardAck, hubPrefix(hub))
+            .lastKey(Cf.HubHardAck(hub))
             .flatMap {
                 case None => IO.pure(Recovered(HubHardAckNumber.zero, Map.empty))
                 case Some(lastKeyBytes) =>
@@ -204,19 +204,13 @@ object CoilAckSequencer {
                 )
         }
 
-    /** The own-hub scan prefix `[hub:1]` for the `HubHardAck` family (mirrors the family's
-      * `[hub:1][seqNum:4]` key layout, §7.1).
-      */
-    private def hubPrefix(hub: HeadPeerNumber): Array[Byte] =
-        Array(((hub: Int) & 0xff).toByte)
-
-    /** Decode a `HubHardAckNumber` from a `[hub:1][seqNum:4]` key — skip the hub byte. */
+    /** Decode a `HubHardAckNumber` from a per-author `[seqNum:4]` key (the CF is the hub, §7.1). */
     private def decodeSeq(bytes: Array[Byte]): HubHardAckNumber =
-        if bytes.length != 1 + 4 then
+        if bytes.length != 4 then
             throw new IllegalArgumentException(
-              s"HubHardAck key expected ${1 + 4} bytes, got ${bytes.length}"
+              s"HubHardAck key expected 4 bytes, got ${bytes.length}"
             )
-        HubHardAckNumber(ByteBuffer.wrap(bytes, 1, 4).getInt)
+        HubHardAckNumber(ByteBuffer.wrap(bytes).getInt)
 
     final case class Connections(
         liaisons: List[liaison.PeerLiaisonHeadToHead.Handle],

@@ -12,8 +12,8 @@ import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
-import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
+import hydrozoa.multisig.persistence.{Cf, Persistence}
 import hydrozoa.multisig.server.HydrozoaServer
 import hydrozoa.multisig.{MultisigRegimeManager, MultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
@@ -210,7 +210,12 @@ object Main extends IOApp {
             // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
             // actor topology consumes.
             backendStore <- RocksDbBackendStore.open(
-              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb")
+              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+              Cf.all(
+                headPeers = nodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              )
             )
             persistence <- Resource.eval(Persistence.fromBackend(backendStore))
 

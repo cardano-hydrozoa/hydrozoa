@@ -145,6 +145,12 @@ class PersistenceTest extends AnyFunSuite:
 
     // ---- helpers ----
 
+    /** The config-derived CF set (§7.1) — head peers 0..3, no coil; covers every CF these tests
+      * touch (fixed CFs plus a few per-author satellites).
+      */
+    private val testCfs: List[Cf] =
+        Cf.all((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
+
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
         try
@@ -152,7 +158,7 @@ class PersistenceTest extends AnyFunSuite:
                 tracerLocal <- Slf4jTracer.makeLocal
                 result <- {
                     RocksDbBackendStore
-                        .open(tempDir)
+                        .open(tempDir, testCfs)
                         .use(backend => Persistence.fromBackend(backend).flatMap(prog))
                 }
             yield result).unsafeRunSync()

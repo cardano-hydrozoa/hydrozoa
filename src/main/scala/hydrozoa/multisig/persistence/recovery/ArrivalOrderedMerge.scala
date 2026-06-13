@@ -72,12 +72,13 @@ object ArrivalOrderedMerge:
             i += 1
         if cmp != 0 then math.signum(cmp) else a.length - b.length
 
-    /** `(generation, monotonicNanos, cf-ordinal)` then unsigned key bytes — see
-      * [[ArrivalOrderedMerge]].
+    /** `(generation, monotonicNanos, cf-name)` then unsigned key bytes — see
+      * [[ArrivalOrderedMerge]]. The CF name is the stable per-CF tiebreaker (the per-author split
+      * made `Cf` a sealed trait without an enum `ordinal`, §7.1).
       */
     private val entryOrdering: Ordering[RawLaneEntry] =
         Ordering
-            .by[RawLaneEntry, (Int, Long, Int)](e =>
-                (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.ordinal)
+            .by[RawLaneEntry, (Int, Long, String)](e =>
+                (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name)
             )
             .orElse(Ordering.by[RawLaneEntry, Array[Byte]](_.key.encode)(unsignedBytesOrdering))

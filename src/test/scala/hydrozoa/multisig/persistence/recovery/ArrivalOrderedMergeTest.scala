@@ -39,8 +39,8 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
         yield RawLaneEntry(key, stamp, LaneValue.frame(stamp, payload))
 
     /** A stable projection for multiset / order comparison (Array has no structural equality). */
-    private def project(e: RawLaneEntry): (Int, Long, Int, Vector[Byte]) =
-        (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.ordinal, e.key.encode.toVector)
+    private def project(e: RawLaneEntry): (Int, Long, String, Vector[Byte]) =
+        (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name, e.key.encode.toVector)
 
     test("merge output is non-decreasing by (generation, monotonicNanos)") {
         forAll(Gen.listOf(genEntry)) { entries =>
@@ -101,11 +101,11 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("tiebreak: identical stamp in different CFs orders by cf.ordinal") {
         val stamp = ArrivalStamp(1, 42L)
         // Stack.ordinal > Block.ordinal in the Cf enum, so Block must come first regardless of input
-        // order — the (gen, mono, cf.ordinal) tuple, not insertion order, decides.
+        // order — the (gen, mono, cf.name) tuple, not insertion order, decides.
         val block = entryAt(LaneKey.Block(BlockNumber(0)), stamp)
         val stack = entryAt(LaneKey.Stack(StackNumber(0)), stamp)
         assert(
-          block.key.cf.ordinal < stack.key.cf.ordinal,
+          block.key.cf.name < stack.key.cf.name,
           "precondition: Block sorts before Stack"
         )
         assert(

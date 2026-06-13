@@ -54,11 +54,11 @@ class LaneKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
             val expected = key match
                 case LaneKey.Block(_)          => 4
                 case LaneKey.Stack(_)          => 4
-                case LaneKey.Request(_, _)     => 1 + 8
-                case LaneKey.SoftAck(_, _)     => 1 + 4
-                case LaneKey.HardAck(_, _)     => 1 + 4
-                case LaneKey.CoilHardAck(_, _) => 1 + 4
-                case LaneKey.HubHardAck(_, _)  => 1 + 4
+                case LaneKey.Request(_, _)     => 8
+                case LaneKey.SoftAck(_, _)     => 4
+                case LaneKey.HardAck(_, _)     => 4
+                case LaneKey.CoilHardAck(_, _) => 4
+                case LaneKey.HubHardAck(_, _)  => 4
             assert(key.encode.length == expected, s"width mismatch for $key")
         }
     }
@@ -78,11 +78,11 @@ class LaneKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
             val expected = key match
                 case _: LaneKey.Block       => Cf.Block
                 case _: LaneKey.Stack       => Cf.Stack
-                case _: LaneKey.Request     => Cf.Request
-                case _: LaneKey.SoftAck     => Cf.SoftAck
-                case _: LaneKey.HardAck     => Cf.HardAck
-                case _: LaneKey.CoilHardAck => Cf.CoilHardAck
-                case _: LaneKey.HubHardAck  => Cf.HubHardAck
+                case k: LaneKey.Request     => Cf.Request(k.peer)
+                case k: LaneKey.SoftAck     => Cf.SoftAck(k.peer)
+                case k: LaneKey.HardAck     => Cf.HardAck(k.peer)
+                case k: LaneKey.CoilHardAck => Cf.CoilHardAck(k.coil)
+                case k: LaneKey.HubHardAck  => Cf.HubHardAck(k.hub)
             assert(cf == expected)
         }
     }

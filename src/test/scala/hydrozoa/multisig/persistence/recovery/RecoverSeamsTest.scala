@@ -297,17 +297,18 @@ class RecoverSeamsTest extends AnyFunSuite:
         withStore { p =>
             val own = HeadPeerNumber(1)
             // Seed own requests (incl. one > 2^32 to exercise the 8-byte index decode), plus a
-            // different peer at a higher number that must NOT raise own's counter (prefix scoping).
+            // different peer at a higher number that must NOT raise own's counter (per-author CF
+            // isolation — a different author is a different CF).
             for
                 _ <- List(0L, 1L, 2L, 5_000_000_000L).traverse_(k =>
                     p.backend.put(
-                      Cf.Request,
+                      Cf.Request(own),
                       LaneKey.Request(own, RequestNumber(k)).encode,
                       Array[Byte](0)
                     )
                 )
                 _ <- p.backend.put(
-                  Cf.Request,
+                  Cf.Request(HeadPeerNumber(2)),
                   LaneKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
                   Array[Byte](0)
                 )

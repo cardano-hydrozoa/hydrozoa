@@ -17,20 +17,19 @@ import java.nio.ByteBuffer
   *
   *   - `Block` → `[blockNum : 4]`
   *   - `Stack` → `[stackNum : 4]`
-  *   - `Request` → `[peer : 1][requestNum : 8]`
-  *   - `SoftAck` → `[peer : 1][softAckNum : 4]`
-  *   - `HardAck` → `[peer : 1][hardAckNum : 4]`
-  *   - `CoilHardAck` → `[coil : 1][hardAckNum : 4]`
-  *   - `HubHardAck` → `[hub : 1][hubHardAckNum : 4]`
+  *   - `Request` → `[requestNum : 8]`
+  *   - `SoftAck` → `[softAckNum : 4]`
+  *   - `HardAck` → `[hardAckNum : 4]`
+  *   - `CoilHardAck` → `[hardAckNum : 4]`
+  *   - `HubHardAck` → `[hubHardAckNum : 4]`
   *
-  * The lane-type discriminant is the column family ([[Cf]]) — no tag byte in the key.
+  * Both the lane-type **and the author** are the column family ([[Cf]], split one CF per author,
+  * §3.1) — the key carries neither a type tag nor an author prefix, only the within-author index.
   *
-  * **Satellite CFs are peer-major.** Because the `peer` byte **leads** the key, the store's
-  * unsigned-lex key order groups all of one author's entries together (ascending by index), then
-  * the next author's, and so on. So within a satellite CF a single peer's lane is a **contiguous**
-  * run — the property [[recovery.LaneScan]] relies on to bound a per-peer scan (stop at the first
-  * key whose `peer` differs). The spine CFs carry no peer byte, so the whole CF is one
-  * index-ordered lane.
+  * **Each satellite CF is one author's lane.** With the per-author split the whole CF is a single
+  * author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole lane —
+  * [[recovery.LaneScan]] needs no peer-prefix bounding. The author is recovered from the CF on
+  * [[decode]] (the cursor passes the per-author [[Cf]] it scanned).
   *
   * Each case's `Value` is a [[LaneValue]] wrapping that lane's wire payload (the wire codec from
   * `consensus.transport.Codecs`, reused under the 12-byte arrival-stamp prefix via
@@ -67,7 +66,7 @@ object LaneKey:
         type Value = LaneValue[UserRequestWithId]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[UserRequestWithId]
         def laneId: LaneId = LaneId.Request(peer)
-        def encode: Array[Byte] = peerByte(peer) ++ longBytes(num)
+        def encode: Array[Byte] = longBytes(num)
 
     /** Soft-ack satellite (per author): a peer's soft-ack signature, keyed by `(peer, softAckNum)`.
       */
@@ -75,7 +74,7 @@ object LaneKey:
         type Value = LaneValue[SoftAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[SoftAckMsg]
         def laneId: LaneId = LaneId.SoftAck(peer)
-        def encode: Array[Byte] = peerByte(peer) ++ intBytes(num)
+        def encode: Array[Byte] = intBytes(num)
 
     /** Hard-ack satellite (per author): a peer's hard-ack signature, keyed by `(peer, hardAckNum)`.
       */
@@ -83,7 +82,7 @@ object LaneKey:
         type Value = LaneValue[HardAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
         def laneId: LaneId = LaneId.HardAck(peer)
-        def encode: Array[Byte] = peerByte(peer) ++ intBytes(num)
+        def encode: Array[Byte] = intBytes(num)
 
     /** Coil-hard-ack receive lane (per coil peer): a hub's raw inbound hard-ack from one of its
       * coil peers, keyed by `(coil, hardAckNum)`. Persisted by `PeerLiaisonHubToCoil` on receipt so
@@ -93,7 +92,7 @@ object LaneKey:
         type Value = LaneValue[HardAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
         def laneId: LaneId = LaneId.CoilHardAck(coil)
-        def encode: Array[Byte] = coilByte(coil) ++ intBytes(num)
+        def encode: Array[Byte] = intBytes(num)
 
     /** Hub-hard-ack lane (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
       * the head mesh and the hub→coil links, keyed by `(hub, hubHardAckNum)`.
@@ -102,7 +101,7 @@ object LaneKey:
         type Value = LaneValue[HardAckWithId]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckWithId]
         def laneId: LaneId = LaneId.HubHardAck(hub)
-        def encode: Array[Byte] = peerByte(hub) ++ intBytes(num)
+        def encode: Array[Byte] = intBytes(num)
 
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed
       * payload (interpreted as store corruption — fail safe).
@@ -114,21 +113,21 @@ object LaneKey:
         case Cf.Stack =>
             requireLen(cf, bytes, 4)
             Stack(StackNumber(readIntBE(bytes, 0)))
-        case Cf.Request =>
-            requireLen(cf, bytes, 1 + 8)
-            Request(HeadPeerNumber(readPeer(bytes, 0)), RequestNumber(readLongBE(bytes, 1)))
-        case Cf.SoftAck =>
-            requireLen(cf, bytes, 1 + 4)
-            SoftAck(HeadPeerNumber(readPeer(bytes, 0)), SoftAckNumber(readIntBE(bytes, 1)))
-        case Cf.HardAck =>
-            requireLen(cf, bytes, 1 + 4)
-            HardAck(HeadPeerNumber(readPeer(bytes, 0)), HardAckNumber(readIntBE(bytes, 1)))
-        case Cf.CoilHardAck =>
-            requireLen(cf, bytes, 1 + 4)
-            CoilHardAck(CoilPeerNumber(readPeer(bytes, 0)), HardAckNumber(readIntBE(bytes, 1)))
-        case Cf.HubHardAck =>
-            requireLen(cf, bytes, 1 + 4)
-            HubHardAck(HeadPeerNumber(readPeer(bytes, 0)), HubHardAckNumber(readIntBE(bytes, 1)))
+        case Cf.Request(peer) =>
+            requireLen(cf, bytes, 8)
+            Request(peer, RequestNumber(readLongBE(bytes, 0)))
+        case Cf.SoftAck(peer) =>
+            requireLen(cf, bytes, 4)
+            SoftAck(peer, SoftAckNumber(readIntBE(bytes, 0)))
+        case Cf.HardAck(peer) =>
+            requireLen(cf, bytes, 4)
+            HardAck(peer, HardAckNumber(readIntBE(bytes, 0)))
+        case Cf.CoilHardAck(coil) =>
+            requireLen(cf, bytes, 4)
+            CoilHardAck(coil, HardAckNumber(readIntBE(bytes, 0)))
+        case Cf.HubHardAck(hub) =>
+            requireLen(cf, bytes, 4)
+            HubHardAck(hub, HubHardAckNumber(readIntBE(bytes, 0)))
         case Cf.BlockResult | Cf.SoftConfirmation | Cf.HardConfirmation | Cf.DepositMap |
             Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.L2CommandNumber |
             Cf.UnsignedStack | Cf.Meta =>
@@ -144,22 +143,11 @@ object LaneKey:
     private[persistence] def longBytes(n: Long): Array[Byte] =
         ByteBuffer.allocate(8).putLong(n).array()
 
-    /** Encode a `HeadPeerNumber` (constrained `< 2⁸`) as a single byte. */
-    private[persistence] def peerByte(peer: HeadPeerNumber): Array[Byte] =
-        Array(((peer: Int) & 0xff).toByte)
-
-    /** Encode a `CoilPeerNumber` (constrained `< 2⁸`) as a single byte. */
-    private[persistence] def coilByte(coil: CoilPeerNumber): Array[Byte] =
-        Array(((coil: Int) & 0xff).toByte)
-
     private def readIntBE(bytes: Array[Byte], offset: Int): Int =
         ByteBuffer.wrap(bytes, offset, 4).getInt
 
     private def readLongBE(bytes: Array[Byte], offset: Int): Long =
         ByteBuffer.wrap(bytes, offset, 8).getLong
-
-    private def readPeer(bytes: Array[Byte], offset: Int): Int =
-        bytes(offset) & 0xff
 
     private def requireLen(cf: Cf, bytes: Array[Byte], expected: Int): Unit =
         if bytes.length != expected then

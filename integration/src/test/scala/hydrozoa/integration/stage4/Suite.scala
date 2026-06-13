@@ -300,7 +300,14 @@ case class Stage4Suite(
             // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
             // every producer (RequestSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
             // one per-peer store; `analyzePersistence` reads it back.
-            openPeerBackend(peerNum).evalMap { backendStore =>
+            openPeerBackend(
+              peerNum,
+              Cf.all(
+                headPeers = multiNodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              )
+            ).evalMap { backendStore =>
                 for
                     persistence <- {
                         given CardanoNetwork.Section = nodeConfig
@@ -443,7 +450,16 @@ case class Stage4Suite(
             for {
                 coilAckSequencer <-
                     if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
-                    else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
+                    else
+                        system
+                            .actorOf(
+                              CoilAckSequencer(
+                                hubConfig,
+                                peerStackMap(hubNum).persistence,
+                                hubPending
+                              )
+                            )
+                            .map(Some(_))
 
                 coilRelay <-
                     if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
@@ -1143,9 +1159,11 @@ case class Stage4Suite(
                     blockResults <- countEntries(backend, Cf.BlockResult)
                     softConfirmations <- countEntries(backend, Cf.SoftConfirmation)
                     depositMaps <- countEntries(backend, Cf.DepositMap)
-                    softAcks <- countEntries(backend, Cf.SoftAck)
-                    hardAcks <- countEntries(backend, Cf.HardAck)
-                    requests <- countEntries(backend, Cf.Request)
+                    // Satellites are split one CF per author (§7.1); count across every head peer's
+                    // own-author CF (each peer holds all peers' entries — own + inbound).
+                    softAcks <- countAcross(backend, sortedPeers.toList.map(Cf.SoftAck(_)))
+                    hardAcks <- countAcross(backend, sortedPeers.toList.map(Cf.HardAck(_)))
+                    requests <- countAcross(backend, sortedPeers.toList.map(Cf.Request(_)))
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
@@ -1191,13 +1209,16 @@ case class Stage4Suite(
       * allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until a
       * stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
       */
-    private def openPeerBackend(peerNum: HeadPeerNumber): Resource[IO, BackendStore[IO]] =
+    private def openPeerBackend(
+        peerNum: HeadPeerNumber,
+        cfs: List[Cf]
+    ): Resource[IO, BackendStore[IO]] =
         backendMode match
             case BackendMode.InMemory => InMemoryBackendStore.open
             case BackendMode.RocksDb(root) =>
                 val dir = root.resolve(s"peer-${peerNum: Int}")
                 Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
-                    RocksDbBackendStore.open(dir)
+                    RocksDbBackendStore.open(dir, cfs)
 
     private def countEntries(
         backend: BackendStore[IO],
@@ -1211,6 +1232,12 @@ case class Stage4Suite(
                 }
             loop(0)
         }
+
+    /** Sum entry counts across a set of (per-author) CFs — e.g. every head peer's `SoftAck` CF, now
+      * that satellites are split one CF per author (§7.1).
+      */
+    private def countAcross(backend: BackendStore[IO], cfs: List[Cf]): IO[Int] =
+        cfs.traverse(countEntries(backend, _)).map(_.sum)
 
     /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coil peers' acks, so
       * [[propStackCoverage]] already proves coil participation on the head side. This additionally

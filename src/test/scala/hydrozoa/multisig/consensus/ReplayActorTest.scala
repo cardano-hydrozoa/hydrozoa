@@ -187,7 +187,7 @@ class ReplayActorTest extends AnyFunSuite:
               Array[Byte](0)
             )
             _ <- p.backend.put(
-              Cf.SoftAck,
+              Cf.SoftAck(own),
               LaneKey.SoftAck(own, SoftAckNumber(2)).encode,
               Array[Byte](0)
             )

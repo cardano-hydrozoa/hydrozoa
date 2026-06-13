@@ -63,9 +63,12 @@ object StoreDump:
         private def padRight(s: String, w: Int): String =
             if s.length >= w then s else s + " " * (w - s.length)
 
-    /** Walk every CF and tally entry counts + key/value byte totals. */
-    def stats(p: BackendStore[IO]): IO[Stats] =
-        Cf.all.traverse(statsFor(p, _)).map(Stats.apply)
+    /** Walk every CF in `cfs` and tally entry counts + key/value byte totals. With the per-author
+      * split the CF set is config-derived (§7.1), so the caller supplies it (e.g.
+      * `Cf.all(headPeers, coilPeers, hubs)`).
+      */
+    def stats(p: BackendStore[IO], cfs: List[Cf]): IO[Stats] =
+        cfs.traverse(statsFor(p, _)).map(Stats.apply)
 
     private def statsFor(p: BackendStore[IO], cf: Cf): IO[CfStats] =
         p.cursor(cf, Array.emptyByteArray).use { c =>
@@ -78,11 +81,12 @@ object StoreDump:
             loop(0L, 0L, 0L)
         }
 
-    /** Full dump — every CF, every entry, one line per entry. Pretty-prints keys where the CF's
-      * schema allows it; falls back to a hex render otherwise.
+    /** Full dump — every CF in `cfs`, every entry, one line per entry. Pretty-prints keys where the
+      * CF's schema allows it; falls back to a hex render otherwise. The caller supplies the
+      * config-derived CF set (§7.1).
       */
-    def dump(p: BackendStore[IO]): IO[String] =
-        Cf.all
+    def dump(p: BackendStore[IO], cfs: List[Cf]): IO[String] =
+        cfs
             .traverse(cf =>
                 dumpCf(p, cf).map(section => if section.isEmpty then None else Some(section))
             )
@@ -111,8 +115,8 @@ object StoreDump:
       */
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
-            case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck | Cf.CoilHardAck |
-                Cf.HubHardAck =>
+            case Cf.Block | Cf.Stack | Cf.Request(_) | Cf.SoftAck(_) | Cf.HardAck(_) |
+                Cf.CoilHardAck(_) | Cf.HubHardAck(_) =>
                 try LaneKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |

@@ -16,7 +16,7 @@ import org.scalatest.funsuite.AnyFunSuite
 /** Byte-level smoke tests for the RocksDB [[BackendStore]] implementation (P1).
   *
   * Each test gets its own fresh temp directory. Tests focus on the backend contract — open/close,
-  * put/get, atomic `RawWriteBatch` across CFs, range-scan, `lastKey` / `lastKeyWithPrefix`,
+  * put/get, atomic `RawWriteBatch` across CFs, range-scan, `lastKey`, per-author CF isolation,
   * durability across reopen, and the version-mismatch refusal. The typed actor-facing API
   * ([[Persistence]] + [[WriteBatch]]) is exercised in `PersistenceTest`.
   */
@@ -53,16 +53,17 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
     test("RawWriteBatch lands atomically across multiple CFs") {
         withFreshStore { p =>
             val blockKey = LaneKey.Block(BlockNumber(1)).encode
-            val softKey = LaneKey.SoftAck(HeadPeerNumber(2), SoftAckNumber(1)).encode
+            val softPeer = HeadPeerNumber(2)
+            val softKey = LaneKey.SoftAck(softPeer, SoftAckNumber(1)).encode
             val batch =
                 RawWriteBatch.start
                     .put(Cf.Block, blockKey, Array[Byte](0xaa.toByte))
-                    .put(Cf.SoftAck, softKey, Array[Byte](0xbb.toByte))
+                    .put(Cf.SoftAck(softPeer), softKey, Array[Byte](0xbb.toByte))
                     .put(Cf.DepositMap, "snap-key".getBytes("UTF-8"), Array[Byte](0xcc.toByte))
             for
                 _ <- p.write(batch)
                 a <- p.get(Cf.Block, blockKey)
-                b <- p.get(Cf.SoftAck, softKey)
+                b <- p.get(Cf.SoftAck(softPeer), softKey)
                 c <- p.get(Cf.DepositMap, "snap-key".getBytes("UTF-8"))
             yield assert(
               a.map(_.head) == Some(0xaa.toByte) &&
@@ -79,8 +80,8 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val keys = nums.map(n => LaneKey.HardAck(peer, n))
             val seekFrom = LaneKey.HardAck(peer, HardAckNumber(1)).encode
             for
-                _ <- keys.traverse(k => p.put(Cf.HardAck, k.encode, Array[Byte](1)))
-                read <- p.cursor(Cf.HardAck, seekFrom).use { c =>
+                _ <- keys.traverse(k => p.put(Cf.HardAck(peer), k.encode, Array[Byte](1)))
+                read <- p.cursor(Cf.HardAck(peer), seekFrom).use { c =>
                     def loop(
                         acc: List[(Array[Byte], Array[Byte])]
                     ): IO[List[(Array[Byte], Array[Byte])]] =
@@ -90,7 +91,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                         }
                     loop(Nil)
                 }
-                got = read.map(kv => LaneKey.decode(Cf.HardAck, kv._1))
+                got = read.map(kv => LaneKey.decode(Cf.HardAck(peer), kv._1))
             yield
                 val expected = List(1, 2, 5, 10)
                     .map(n => LaneKey.HardAck(peer, HardAckNumber(n)))
@@ -105,14 +106,14 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val value = "durable".getBytes("UTF-8")
             // First session: write.
             RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, testCfs)
                 .use { p =>
                     p.put(Cf.Block, k, value)
                 }
                 .unsafeRunSync()
             // Second session: read back.
             val got = RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, testCfs)
                 .use { p =>
                     p.get(Cf.Block, k)
                 }
@@ -137,45 +138,34 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         }
     }
 
-    test("lastKeyWithPrefix returns the highest key under the prefix") {
+    test("per-author CFs isolate each author's lane; an unwritten author's CF is empty") {
+        // The per-author split (§7.1) replaces prefix scoping: each author's SoftAck lane is its own
+        // CF, so `lastKey(Cf.SoftAck(peer))` returns only that author's high-water, and an author
+        // never written to has an empty CF.
         withFreshStore { p =>
             val peer0 = HeadPeerNumber(0)
             val peer1 = HeadPeerNumber(1)
-            val peer2 = HeadPeerNumber(2)
-            val keys = List(
-              LaneKey.SoftAck(peer0, SoftAckNumber(3)),
-              LaneKey.SoftAck(peer1, SoftAckNumber(1)),
-              LaneKey.SoftAck(peer1, SoftAckNumber(99)),
-              LaneKey.SoftAck(peer1, SoftAckNumber(7)),
-              LaneKey.SoftAck(peer2, SoftAckNumber(5))
-            )
-            for
-                _ <- keys.traverse(k => p.put(Cf.SoftAck, k.encode, Array[Byte](1)))
-                got1 <- p.lastKeyWithPrefix(Cf.SoftAck, LaneKey.peerByte(peer1))
-            yield
-                val expected = LaneKey.SoftAck(peer1, SoftAckNumber(99)).encode
-                assert(
-                  got1.exists(java.util.Arrays.equals(_, expected)),
-                  s"expected last(peer1)=SoftAck(peer1, 99), got $got1"
-                )
-        }
-    }
-
-    test("lastKeyWithPrefix returns None when no key matches the prefix") {
-        withFreshStore { p =>
-            val peer0 = HeadPeerNumber(0)
             val peer5 = HeadPeerNumber(5)
             for
-                // Populate only peer-0 entries.
-                _ <- List(1, 2, 3).traverse(n =>
-                    p.put(
-                      Cf.SoftAck,
-                      LaneKey.SoftAck(peer0, SoftAckNumber(n)).encode,
-                      Array[Byte](1)
-                    )
+                _ <- List(SoftAckNumber(3)).traverse(n =>
+                    p.put(Cf.SoftAck(peer0), LaneKey.SoftAck(peer0, n).encode, Array[Byte](1))
                 )
-                missing <- p.lastKeyWithPrefix(Cf.SoftAck, LaneKey.peerByte(peer5))
-            yield assert(missing.isEmpty, s"expected None, got $missing")
+                _ <- List(SoftAckNumber(1), SoftAckNumber(99), SoftAckNumber(7)).traverse(n =>
+                    p.put(Cf.SoftAck(peer1), LaneKey.SoftAck(peer1, n).encode, Array[Byte](1))
+                )
+                got1 <- p.lastKey(Cf.SoftAck(peer1))
+                got0 <- p.lastKey(Cf.SoftAck(peer0))
+                missing <- p.lastKey(Cf.SoftAck(peer5))
+            yield assert(
+              got1.exists(
+                java.util.Arrays.equals(_, LaneKey.SoftAck(peer1, SoftAckNumber(99)).encode)
+              ) &&
+                  got0.exists(
+                    java.util.Arrays.equals(_, LaneKey.SoftAck(peer0, SoftAckNumber(3)).encode)
+                  ) &&
+                  missing.isEmpty,
+              s"got1=$got1, got0=$got0, missing=$missing"
+            )
         }
     }
 
@@ -183,10 +173,10 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             // First open seeds the current version.
-            RocksDbBackendStore.open(tempDir).use(_ => IO.unit).unsafeRunSync()
+            RocksDbBackendStore.open(tempDir, testCfs).use(_ => IO.unit).unsafeRunSync()
             // Tamper: rewrite the version key with a bogus value.
             RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, testCfs)
                 .use { p =>
                     p.put(
                       Cf.Meta,
@@ -197,7 +187,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                 .unsafeRunSync()
             // Reopen — must fail.
             val outcome =
-                RocksDbBackendStore.open(tempDir).use(_ => IO.unit).attempt.unsafeRunSync()
+                RocksDbBackendStore.open(tempDir, testCfs).use(_ => IO.unit).attempt.unsafeRunSync()
             assert(
               outcome.left.toOption
                   .exists(_.getMessage.contains("schema version mismatch")),
@@ -208,10 +198,17 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     // ---- helpers ----
 
+    /** The config-derived CF set these tests open over (§7.1, the per-author split): the fixed CFs
+      * plus per-author satellites for head peers 0..5 — covering every author the tests touch. The
+      * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
+      */
+    private val testCfs: List[Cf] =
+        Cf.all((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
+
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
-        try RocksDbBackendStore.open(tempDir).use(prog).unsafeRunSync()
+        try RocksDbBackendStore.open(tempDir, testCfs).use(prog).unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =

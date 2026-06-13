@@ -45,23 +45,11 @@ trait BackendStore[F[_]]:
       *   - `hardConfirmed = lastKey(Cf.HardConfirmation)`
       *
       * Implementation note: RocksDB serves `seekToLast` in O(1) — the LSM index pinpoints the
-      * largest key across the MemTable + every SSTable level without a full scan.
+      * largest key across the MemTable + every SSTable level without a full scan. With the
+      * per-author CF split (§7.1) each satellite CF holds exactly one author's lane, so `lastKey`
+      * of the own-author CF *is* that author's high-water — no prefix scan needed.
       */
     def lastKey(cf: Cf): F[Option[Array[Byte]]]
-
-    /** The highest-keyed entry in `cf` whose encoded bytes start with `prefix`, or `None` if no
-      * such entry exists.
-      *
-      * Used by the `Markers` module to derive the acked-side markers from the own-peer prefix of
-      * `SoftAck` / `HardAck` (§5.2):
-      *   - `softAcked = lastKeyWithPrefix(Cf.SoftAck, [ownPeer:1])`
-      *   - `hardAcked = lastKeyWithPrefix(Cf.HardAck, [ownPeer:1])`
-      *
-      * Implementation note: backed by RocksDB `seekForPrev` over `prefix ++ 0xFF…`, which lands on
-      * the largest key `≤` that upper bound in O(log n); a single byte-prefix check confirms we're
-      * still inside the requested prefix.
-      */
-    def lastKeyWithPrefix(cf: Cf, prefix: Array[Byte]): F[Option[Array[Byte]]]
 
 object BackendStore:
     /** A range-scan cursor over one column family. Stateful; pull entries with [[next]] until
