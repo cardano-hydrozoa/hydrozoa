@@ -13,11 +13,12 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.recovery.LaneScan
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `design/coil-network.md`)
@@ -41,6 +42,13 @@ abstract class PeerLiaisonCoilToHub(
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
+
+    // The coil→hub uplink runs only on a coil peer; its own-hard-ack outbox is keyed by this number.
+    private val ownCoil: CoilPeerNumber = config.ownPeerId match {
+        case PeerId.Coil(c) => c
+        case PeerId.Head(_) =>
+            throw new IllegalStateException("PeerLiaisonCoilToHub runs only on a coil peer")
+    }
 
     /** Resolve connections — projected from the shared regime `Connections` (the hub's `HubToCoil`
       * handle from `remoteHubLiaison`) or supplied directly.
@@ -293,6 +301,12 @@ abstract class PeerLiaisonCoilToHub(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            // Refill the own-hard-ack outbox from this coil peer's own CoilHardAck family so the hub
+            // can re-pull the acks it missed during our crash (the Server half answers the hub's
+            // OwnHardAck.Get from this lane). An empty store seeds it empty — a cold boot is
+            // unaffected.
+            ownAcks <- PeerLiaisonCoilToHub.recover(persistence, ownCoil)
+            _ <- ownHardAckLane.seed(ownAcks)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -316,6 +330,19 @@ object PeerLiaisonCoilToHub {
         OwnPeerPublic.Section & NodeOperationMultisigConfig.Section & HeadConfig.Bootstrap.Section
 
     type Handle = ActorRef[IO, LiaisonProtocol.CoilToHubRequest]
+
+    /** Reconstruct this coil peer's own-hard-ack outbox after a crash — the acks the hub pulls from
+      * us via `OwnHardAck.Get`. The coil peer's own hard-acks live in its own `CoilHardAck` family
+      * (written by `StackComposer.persistOwnStackClose`), keyed `(coil, hardAckNum)`; we read them
+      * ascending. The family is gap-free in `hardAckNum` (only the *stack* coverage is gappy, §2),
+      * so the contiguous outbox lane seeds cleanly. **Inbound is not restored** — the population is
+      * re-pulled live from the hub. Pure over the store; `preStartLocal` does the seeding.
+      */
+    def recover(persistence: Persistence[IO], coil: CoilPeerNumber)(using
+        CardanoNetwork.Section
+    ): IO[List[HardAck]] =
+        val k = LaneKey.CoilHardAck(coil, HardAckNumber.zero)
+        LaneScan.scan(persistence.backend, k).map(_.map(e => k.decodeValue(e.framed).payload))
 
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.

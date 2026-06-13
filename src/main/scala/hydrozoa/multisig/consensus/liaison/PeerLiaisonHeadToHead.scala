@@ -293,15 +293,16 @@ abstract class PeerLiaisonHeadToHead(
 
     /** Seed the outbound lanes from a recovered [[PeerLiaisonHeadToHead.OutboxSeed]] (R3): refill
       * each lane's queue and set its high-water to its last entry's number — the state the live
-      * appends would have left. The hub-hard-ack lane stays cold: own `HardAckWithId` production is
-      * not persisted (see `CoilAckSequencer`).
+      * appends would have left. The hub-hard-ack lane seeds on a **hub** head peer (its own
+      * `HubHardAck` is persisted by `CoilAckSequencer`); it is empty on a non-hub.
       */
     private def seedOutbox(seed: PeerLiaisonHeadToHead.OutboxSeed): IO[Unit] =
         blockLane.seedOutbox(seed.blocks) >>
             stackLane.seedOutbox(seed.stacks) >>
             requestLane.seedOutbox(seed.requests) >>
             softAckLane.seedOutbox(seed.softAcks) >>
-            hardAckLane.seedOutbox(seed.hardAcks)
+            hardAckLane.seedOutbox(seed.hardAcks) >>
+            hubHardAckLane.seedOutbox(seed.hubHardAcks)
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -374,18 +375,19 @@ object PeerLiaisonHeadToHead {
         coilRelay: Option[CoilRelay.Handle] = None
     )
 
-    /** This peer's own-produced outbox restored from the store on boot — the five recoverable
-      * lanes' own entries in ascending number order. [[recover]] rebuilds it; `preStartLocal` seeds
-      * the outbound lanes from it (each lane's high-water is its last entry's number; the cold
-      * value is all empty). The hub-hard-ack lane is absent: own `HardAckWithId` production is not
-      * persisted (see `CoilAckSequencer`).
+    /** This peer's own-produced outbox restored from the store on boot — the recoverable lanes' own
+      * entries in ascending number order. [[recover]] rebuilds it; `preStartLocal` seeds the
+      * outbound lanes from it (each lane's high-water is its last entry's number; the cold value is
+      * all empty). `hubHardAcks` is this peer's own `HubHardAck` production (persisted by
+      * `CoilAckSequencer` on a hub; empty on a non-hub).
       */
     final case class OutboxSeed(
         blocks: List[BlockBrief.Next],
         stacks: List[StackBrief],
         requests: List[UserRequestWithId],
         softAcks: List[SoftAck],
-        hardAcks: List[HardAck]
+        hardAcks: List[HardAck],
+        hubHardAcks: List[HardAckWithId]
     )
 
     /** Reconstruct this peer's own-produced outbox after a crash — the entries the remote pulls
@@ -409,6 +411,7 @@ object PeerLiaisonHeadToHead {
         val kHardAck = LaneKey.HardAck(ownNum, HardAckNumber.zero)
         val kBlock = LaneKey.Block(BlockNumber.zero)
         val kStack = LaneKey.Stack(StackNumber.zero)
+        val kHubHardAck = LaneKey.HubHardAck(ownNum, HubHardAckNumber.zero)
         for {
             softAcks <- LaneScan
                 .scan(backend, kSoftAck)
@@ -431,11 +434,15 @@ object PeerLiaisonHeadToHead {
                   _.map(e => kStack.decodeValue(e.framed).payload)
                       .filter(s => canLeadSlow(s.stackNum))
                 )
+            hubHardAcks <- LaneScan
+                .scan(backend, kHubHardAck)
+                .map(_.map(e => kHubHardAck.decodeValue(e.framed).payload))
         } yield OutboxSeed(
           blocks = blocks,
           stacks = stacks,
           requests = requests,
           softAcks = softAcks,
-          hardAcks = hardAcks
+          hardAcks = hardAcks,
+          hubHardAcks = hubHardAcks
         )
 }

@@ -18,6 +18,7 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.recovery.LaneScan
 import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
@@ -278,11 +279,38 @@ abstract class PeerLiaisonHubToCoil(
             appendArtifact(artifact) >> server.afterAppend
     }
 
+    /** Seed every population outbox lane from a recovered [[PeerLiaisonHubToCoil.OutboxSeed]]:
+      * refill each lane's queue + high-water so the coil peer can re-pull the pre-crash prefix the
+      * moment it reconnects, rather than waiting for `CoilRelay` to refill the lanes from live
+      * production.
+      */
+    private def seedOutbox(seed: PeerLiaisonHubToCoil.OutboxSeed): IO[Unit] =
+        blockLane.seed(seed.blocks) >>
+            stackLane.seed(seed.stacks) >>
+            requestLanes.toList.traverse_ { case (h, l) =>
+                l.seed(seed.requests.getOrElse(h, Nil))
+            } >>
+            softAckLanes.toList.traverse_ { case (h, l) =>
+                l.seed(seed.softAcks.getOrElse(h, Nil))
+            } >>
+            headHardAckLanes.toList.traverse_ { case (h, l) =>
+                l.seed(seed.headHardAcks.getOrElse(h, Nil))
+            } >>
+            coilHardAckLanes.toList.traverse_ { case (h, l) =>
+                l.seed(seed.coilHardAcks.getOrElse(h, Nil))
+            }
+
     private def preStartLocal: IO[Unit] =
         for {
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            // Refill the population outbox from the store (the full population the hub already holds
+            // as a head-mesh member). The Server half answers the coil peer's Population.Get from
+            // these lanes; a cold outbox could not serve a catch-up until CoilRelay refilled it. An
+            // empty store seeds empty lanes, so a cold boot is unaffected.
+            seed <- PeerLiaisonHubToCoil.recover(persistence, headPeerNums, hubNums)
+            _ <- seedOutbox(seed)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -316,4 +344,74 @@ object PeerLiaisonHubToCoil {
         coilAckSequencer: CoilAckSequencer.Handle,
         remote: LiaisonProtocol.CoilToHubHandle
     )
+
+    /** The hub's full-population outbox restored from the store on boot — every author's entries in
+      * ascending number order. [[recover]] rebuilds it; `preStartLocal` seeds the outbox lanes from
+      * it (the cold value is all empty).
+      */
+    final case class OutboxSeed(
+        blocks: List[BlockBrief.Next],
+        stacks: List[StackBrief],
+        requests: Map[HeadPeerNumber, List[UserRequestWithId]],
+        softAcks: Map[HeadPeerNumber, List[SoftAck]],
+        headHardAcks: Map[HeadPeerNumber, List[HardAck]],
+        coilHardAcks: Map[HeadPeerNumber, List[HardAckWithId]]
+    )
+
+    /** Reconstruct the hub's full-population outbox after a crash — the population it serves a coil
+      * peer via `Population.Get`. Unlike a head-mesh liaison (which serves only its own
+      * production), a hub serves **every** author's entries, all of which it already persists as a
+      * head-mesh member (own-produced via its producers; remote via
+      * `PeerLiaisonHeadToHead.persistInbound`; its own `HubHardAck` via `CoilAckSequencer`; other
+      * hubs' via the mesh). So no `canLead` filter — each family is read in full from its first
+      * served index. **Inbound is not restored** — the coil peer's own hard-ack is re-pulled live.
+      * Pure over the store; `preStartLocal` seeds.
+      */
+    def recover(
+        persistence: Persistence[IO],
+        headPeerNums: List[HeadPeerNumber],
+        hubNums: List[HeadPeerNumber]
+    )(using CardanoNetwork.Section): IO[OutboxSeed] =
+        val backend = persistence.backend
+        val kBlock = LaneKey.Block(BlockNumber(1))
+        val kStack = LaneKey.Stack(StackNumber(1))
+        for {
+            blocks <- LaneScan
+                .scan(backend, kBlock)
+                .map(_.map(e => kBlock.decodeValue(e.framed).payload))
+            stacks <- LaneScan
+                .scan(backend, kStack)
+                .map(_.map(e => kStack.decodeValue(e.framed).payload))
+            requests <- headPeerNums.traverse { h =>
+                val k = LaneKey.Request(h, RequestNumber.zero)
+                LaneScan
+                    .scan(backend, k)
+                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
+            }
+            softAcks <- headPeerNums.traverse { h =>
+                val k = LaneKey.SoftAck(h, SoftAckNumber.zero)
+                LaneScan
+                    .scan(backend, k)
+                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
+            }
+            headHardAcks <- headPeerNums.traverse { h =>
+                val k = LaneKey.HardAck(h, HardAckNumber.zero)
+                LaneScan
+                    .scan(backend, k)
+                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
+            }
+            coilHardAcks <- hubNums.traverse { h =>
+                val k = LaneKey.HubHardAck(h, HubHardAckNumber.zero)
+                LaneScan
+                    .scan(backend, k)
+                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
+            }
+        } yield OutboxSeed(
+          blocks = blocks,
+          stacks = stacks,
+          requests = requests.toMap,
+          softAcks = softAcks.toMap,
+          headHardAcks = headHardAcks.toMap,
+          coilHardAcks = coilHardAcks.toMap
+        )
 }
