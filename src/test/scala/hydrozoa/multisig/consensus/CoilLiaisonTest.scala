@@ -161,7 +161,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
-                              CoilAckSequencer(hubConfig, headPending)
+                              CoilAckSequencer(hubConfig, persistence, headPending)
                             )
                             coilRelay <- system.actorOf(CoilRelay(headPending))
 

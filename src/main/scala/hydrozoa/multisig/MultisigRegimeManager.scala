@@ -161,7 +161,10 @@ trait MultisigRegimeManager(
             // Non-hub head peers spawn none.
             coilAckSequencer <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
-                else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
+                else
+                    context
+                        .actorOf(CoilAckSequencer(config, persistence, pendingConnections))
+                        .map(Some(_))
 
             coilRelay <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilRelay.Handle]
