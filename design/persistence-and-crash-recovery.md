@@ -1849,7 +1849,7 @@ peers).
 | — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
 | P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + idempotency index (Q12); `PeerLiaison{HubToCoil,CoilToHub}` outbox recovery (Q11). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
-| P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | 🚧 |
+| P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
 | P13 | **Coil boot replay (Q10):** `Markers`/`ReplayCursors`/`ReplayActor` PeerId-aware (route `CoilHardAck`→SCA, `HubHardAck`→slow aggregation, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ⬜ |
 
 ---
