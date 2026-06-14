@@ -109,6 +109,44 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
+    test("JointLedger.recoverCoil returns None for an empty store (no BlockResult)") {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                recovered <- JointLedger.State.recoverCoil(p, ledger, None)
+            yield assert(recovered.isEmpty)
+        }
+    }
+
+    test(
+      "JointLedger.recoverCoil rebuilds Done from the coilBlockMark BlockResult + deposits, " +
+          "co-anchoring the L2 ledger"
+    ) {
+        withStore { p =>
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                // Advance the live ledger past the crash boundary (to command number 3).
+                _ <- (1 to 3).toList.traverse_(i =>
+                    ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                )
+                // Coil crash boundary: coilBlockMark = block 2, recorded at L2 command number 2. A
+                // coil peer writes no own SoftAck/Block lane, so its header comes from BlockResult.
+                br <- blockResult(2)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br)
+                _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
+                recovered <- JointLedger.State.recoverCoil(p, ledger, Some(BlockNumber(2)))
+                anchored <- ledger.currentCommandNumber
+            yield assert(
+              recovered.exists(d =>
+                  d.previousBlockHeader == br.brief.header && d.deposits == DepositsMap.empty
+              ) && anchored == L2CommandNumber(2L)
+            )
+        }
+    }
+
     // ---- StackComposer ----
 
     test("StackComposer.recover returns None for an empty store (no own hard-ack)") {
@@ -318,6 +356,18 @@ class RecoverSeamsTest extends AnyFunSuite:
     }
 
     // ---- CardanoLiaison (HardConfirmation fold) ----
+
+    test("Markers.recoverCoilBlockMark returns None for an empty store, else max(BlockResult)") {
+        withStore { p =>
+            for
+                empty <- Markers.recoverCoilBlockMark(p.backend)
+                _ <- List(2, 5, 3).traverse_(n =>
+                    blockResult(n).flatMap(br => p.put(StoreKey.BlockResult(BlockNumber(n)))(br))
+                )
+                mark <- Markers.recoverCoilBlockMark(p.backend)
+            yield assert(empty.isEmpty && mark.contains(BlockNumber(5)))
+        }
+    }
 
     test("HardConfirmationScan.scanFrom over an empty CF yields no entries") {
         withStore { p =>

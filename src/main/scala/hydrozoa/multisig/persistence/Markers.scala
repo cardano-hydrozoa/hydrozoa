@@ -56,6 +56,14 @@ object Markers:
             .lastKey(Cf.Request(own))
             .map(_.fold(RequestNumber(0))(decodeSatelliteNumRequest(_).increment))
 
+    /** The coil fast-side anchor: `coilBlockMark = max(BlockResult.key)`, the highest block a coil
+      * peer durably finalized, or `None` for an empty store. A coil peer authors no soft-ack, so it
+      * has no `softAcked`; the `BlockResult` CF — written every block by every peer (§6) — is its
+      * fast anchor. `JointLedger`'s coil recover reads it on boot.
+      */
+    def recoverCoilBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
+        backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
+
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =
         requireWidth(bytes, 4, "BlockNumber")
