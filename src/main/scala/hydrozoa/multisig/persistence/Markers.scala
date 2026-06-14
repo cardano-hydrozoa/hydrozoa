@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.syntax.functor.*
 import cats.syntax.parallel.*
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -63,6 +63,25 @@ object Markers:
       */
     def recoverCoilBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
+
+    /** The coil slow-side anchor: `hardAcked = max(own CoilHardAck.key)` — the coil peer's last own
+      * hard-ack number, or `None` for an empty store. A coil peer's own hard-acks live in its
+      * `CoilHardAck` CF (not `HardAck`); recovery otherwise mirrors a head peer's, unpacking the
+      * stack number from the hard-ack value (§6 `StackComposer`).
+      */
+    def recoverCoilHardAcked(
+        backend: BackendStore[IO],
+        coil: CoilPeerNumber
+    ): IO[Option[HardAckNumber]] =
+        backend.lastKey(Cf.CoilHardAck(coil)).map(_.map(decodeSatelliteNumHard))
+
+    /** `hardConfirmed = max(HardConfirmation.key)` — shared across peer types (the
+      * `HardConfirmation` CF is keyed by `StackNumber`, written at confirmation by every peer, §6
+      * `SlowConsensusActor`). Exposed standalone so a coil peer can derive it without the head-only
+      * [[derive]] (which scans the head `HardAck` lane).
+      */
+    def recoverHardConfirmed(backend: BackendStore[IO]): IO[Option[StackNumber]] =
+        backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum))
 
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =

@@ -13,7 +13,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
@@ -242,6 +242,77 @@ class RecoverSeamsTest extends AnyFunSuite:
               recovered.exists { s =>
                   s.pending.keySet == Set(BlockNumber(4), BlockNumber(5)) &&
                   !s.previousStackHardConfirmed
+              }
+            )
+        }
+    }
+
+    test("StackComposer.recoverCoil returns None for an empty store (no own coil hard-ack)") {
+        withStore { p =>
+            StackComposer.State
+                .recoverCoil(p, None, None, CoilPeerNumber(0))
+                .map(r => assert(r.isEmpty))
+        }
+    }
+
+    test(
+      "StackComposer.recoverCoil rebuilds counters + snapshots from the last own CoilHardAck; " +
+          "lastBlockNum comes from the UnsignedStack, not a Stack lane"
+    ) {
+        withStore { p =>
+            val coil = CoilPeerNumber(0)
+            val hardAckNum = 5
+            val stackN = 2
+            val lastBlock = 7
+            val sec = StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(lastBlock),
+              blockVersion = BlockVersion.Full(0, 0),
+              kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
+                Array.fill[Byte](32)(7)
+              )
+            )
+            for
+                sb <- stackBrief(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
+                // A coil peer has no own Stack lane; the closing stack's lastBlockNum comes from the
+                // UnsignedStack it persists on every close.
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(
+                  Stack.Unsigned(
+                    sb,
+                    StackEffects.Unsigned.Regular(
+                      NonEmptyList.one[PartitionEffects[StandaloneEvacuationCommitment]](
+                        PartitionEffects.Minor(sec, List.empty)
+                      )
+                    )
+                  )
+                )
+                // The last own hard-ack number is 5, belonging to stack 2 — the stack number comes
+                // from the CoilHardAck VALUE, and the ack lives in CoilHardAck (not HardAck).
+                _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(hardAckNum)))(
+                  LaneValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
+                )
+                _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
+                _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
+                // A stale BlockResult at the last closed block is excluded (scan is exclusive).
+                br7 <- blockResult(7)
+                br8 <- blockResult(8)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(7)))(br7)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(8)))(br8)
+                recovered <- StackComposer.State.recoverCoil(
+                  p,
+                  Some(HardAckNumber(hardAckNum)),
+                  Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
+                  coil
+                )
+            yield assert(
+              recovered.exists { s =>
+                  s.lastClosedStackNum == StackNumber(stackN) &&
+                  s.lastClosedBlockNum == BlockNumber(lastBlock) &&
+                  s.nextOwnHardAckNum == HardAckNumber(hardAckNum + 1) &&
+                  s.previousStackHardConfirmed &&
+                  s.treasury == TreasuryFixture.sampleTreasury &&
+                  s.evacuationMap == EvacuationMap.empty &&
+                  s.pending.keySet == Set(BlockNumber(8))
               }
             )
         }
