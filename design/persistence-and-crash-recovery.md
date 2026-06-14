@@ -480,15 +480,15 @@ but the head quorum has not yet soft-confirmed" — the coil peer is not a
 confirmation input, so the band closes purely as head-peer acks arrive, exactly as
 it would for a non-leading head follower.
 
-> **Code reality (2026-06).** The derivation entry points — `Markers.derive`,
-> `ReplayActor.replay`, `ReplayCursors.derive` — are statically typed on
-> `HeadPeerNumber`; `Markers.derive` scans the own head `SoftAck` / `HardAck` author
-> and `ReplayActor` **no-ops** `CoilHardAck` / `HubHardAck` routing. So the coil
-> marker/cursor derivations specified here are **not yet wired**: the fast side needs
-> `coilBlockMark = max(BlockResult)` (no `SoftAck` change — a coil peer authors none),
-> and the slow side needs `CoilHardAck` admitted to the derivation. Open seam: a
-> `PeerId`-parameterized derivation vs a parallel coil path (§10 Q10). The *design*
-> is the table above; the seam choice is open.
+> **Code reality (2026-06).** The seam choice is settled — a **parallel coil path**
+> (the head `Markers.derive` / `ReplayActor.replay` / `ReplayCursors.derive` stay
+> `HeadPeerNumber`-typed). Landed: `Markers.recover{SoftConfirmed, CoilBlockMark,
+> CoilHardAcked, HardConfirmed}`, `CoilReplayCursors.deriveCoil` (fast anchor
+> `coilBlockMark = max(BlockResult)`, slow anchor `max(own CoilHardAck)`, plus the
+> hubs' `HubHardAck` + the coil peer's own `CoilHardAck`), and
+> `ReplayActor.replayCoil` — run inline by `CoilMultisigRegimeManager`. `route` now
+> feeds `CoilHardAck` / `HubHardAck` to SCA. **Remaining:** a *head* peer does not yet
+> scan `HubHardAck` (head `ReplayCursors` unchanged) — see §10 Q10.
 
 **Each marker is the conceptual anchor for one consensus actor**, even though no
 marker key is stored:
@@ -670,9 +670,10 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   deferred (§10 Q9).
 - **Hub hard acks** (and a coil peer's own **coil hard acks**) — like `HardAck`,
   indexed by a `HardAckNumber` (per hub / per coil), with no marker-findable
-  `StackNumber` floor, so recovery scans each such family **from 0**. The head
-  `ReplayActor` currently no-ops these families (the open Q10 coil work, §6); the
-  floor-tightening is the same hard-ack indexing gap (§10 Q9).
+  `StackNumber` floor, so recovery scans each such family **from 0**.
+  `ReplayActor.replayCoil` scans + routes these (the head `ReplayActor` does not yet
+  scan `HubHardAck` — §6, §10 Q10); the floor-tightening is the same hard-ack indexing
+  gap (§10 Q9).
 
 So the cursors split into **dual-floor spines + single-floor satellites** (`4 + 3N`
 floors over the `2 + 3N` head families, plus single-floor `H` hub + coil hard-ack
@@ -1115,10 +1116,12 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   (`PeerLiaisonCoilToHub`) rather than across the mesh — but `StackComposer` has
   already persisted it (next section) before the handoff, so the write-before-send
   barrier (CR4) holds on the uplink unchanged.
-  - ⚠ **Finding (current code):** `ReplayActor` **no-ops** `HubHardAck` (and
-    `CoilHardAck`) during routing, so the coil-quorum acks are not yet fed to SCA on
-    replay — the in-flight slow-side cell would rebuild without them until they
-    arrive live (§10 Q10).
+  - **Implemented (coil path):** `ReplayActor.route` now feeds `CoilHardAck` (→ SCA)
+    and `HubHardAck` (→ SCA via its `.ack`), and `ReplayActor.replayCoil` scans both
+    (the coil peer's own `CoilHardAck` + the hubs' `HubHardAck`) so the coil quorum
+    rebuilds the in-flight slow-side cell on replay. **Remaining:** a *head* peer does
+    not yet scan `HubHardAck` (its `ReplayCursors` is unchanged), so a head peer in a
+    coil head re-feeds the coil quorum only as it arrives live — a follow-up (§10 Q10).
 
 #### `StackComposer`  *(snapshot-bearing)*
 
@@ -1850,7 +1853,8 @@ peers).
 | P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + idempotency index (Q12); `PeerLiaison{HubToCoil,CoilToHub}` outbox recovery (Q11). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
 | P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
-| P13 | **Coil boot replay (Q10):** `Markers`/`ReplayCursors`/`ReplayActor` PeerId-aware (route `CoilHardAck`→SCA, `HubHardAck`→slow aggregation, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ⬜ |
+| P13 | **Coil boot replay (Q10):** parallel `CoilReplayCursors`/`ReplayActor.replayCoil` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ — head-peer `HubHardAck` replay a follow-up |
+| P14 | **Head-peer `HubHardAck` replay** (follow-up to P13): add `HubHardAck` to the head `ReplayCursors` + `replay` so a head peer in a coil head re-feeds the coil quorum on recovery (`route` already handles it). | ⬜ |
 
 ---
 
