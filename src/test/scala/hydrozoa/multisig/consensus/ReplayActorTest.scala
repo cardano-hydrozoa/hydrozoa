@@ -79,6 +79,13 @@ class ReplayActorTest extends AnyFunSuite:
         )
     }
 
+    test("ReplayActor (head) replays the hubs' HubHardAck to SCA (coil-quorum recovery, P14)") {
+        val c = runReplay(seedHubHardAck, hubs = List(HeadPeerNumber(1)))
+        assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        // The hub's HubHardAck, unwrapped to its `.ack`, reaches SlowConsensusActor.
+        assert(c.sca.count(_.isInstanceOf[HardAck]) == 1, "SCA gets the hub-relayed ack")
+    }
+
     test(
       "ReplayActor.replayCoil routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
     ) {
@@ -114,7 +121,10 @@ class ReplayActorTest extends AnyFunSuite:
     /** Boot four probe targets + a mock L1, seed the store, run `replay`, settle, and capture both
       * each probe's received messages and the replay outcome.
       */
-    private def runReplay(seed: Persistence[IO] => IO[Unit]): Captured =
+    private def runReplay(
+        seed: Persistence[IO] => IO[Unit],
+        hubs: List[HeadPeerNumber] = Nil
+    ): Captured =
         val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
         val treasuryAddress = config.initializationTx.treasuryProduced.address
@@ -140,6 +150,7 @@ class ReplayActorTest extends AnyFunSuite:
                               ReplayActor.Targets(bw, fca, sca, sc),
                               own,
                               peers,
+                              hubs,
                               treasuryAddress
                             )
                             .attempt
@@ -301,6 +312,15 @@ class ReplayActorTest extends AnyFunSuite:
             _ <- p.put(LaneKey.Stack(StackNumber(1)))(LaneValue(stamp, s1))
             _ <- p.put(LaneKey.Stack(StackNumber(2)))(LaneValue(stamp, s2))
         } yield ()
+
+    /** A single hub's `HubHardAck` (a coil peer's ack re-sequenced by hub 1) — the only durable
+      * datum, so a head peer's replay (with hub 1 in `hubs`) scans it and feeds its `.ack` to SCA,
+      * exercising head-peer coil-quorum recovery (P14).
+      */
+    private def seedHubHardAck(p: Persistence[IO]): IO[Unit] =
+        p.put(LaneKey.HubHardAck(HeadPeerNumber(1), HubHardAckNumber(0)))(
+          LaneValue(stamp, hubHardAck(1, 0, coilHardAck(0, 0, 1)))
+        )
 
     // ---- fixtures (mirror RecoverSeamsTest) ----
 

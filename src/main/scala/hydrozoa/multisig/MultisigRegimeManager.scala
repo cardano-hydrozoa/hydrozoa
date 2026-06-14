@@ -216,6 +216,7 @@ trait MultisigRegimeManager(
               ),
               own = ownHeadNum,
               peers = config.headPeerIds.map(_.peerNum).toList,
+              hubs = config.hubHeadPeerNumbers,
               treasuryAddress = config.initializationTx.treasuryProduced.address
             )(using config)
 

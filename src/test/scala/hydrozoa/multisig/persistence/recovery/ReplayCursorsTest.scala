@@ -1,6 +1,6 @@
 package hydrozoa.multisig.persistence.recovery
 
-import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId.*
@@ -69,7 +69,7 @@ class ReplayCursorsTest extends AnyFunSuite:
         )
         val hw = Map(HeadPeerNumber(0) -> RequestNumber(7), HeadPeerNumber(1) -> RequestNumber(2))
         val cursors =
-            ReplayCursors.derive(markers, peers, hw, hardAckedStack = Some(StackNumber(4)))
+            ReplayCursors.derive(markers, peers, Nil, hw, hardAckedStack = Some(StackNumber(4)))
 
         // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = softAcked + 1.
         assert(
@@ -117,7 +117,13 @@ class ReplayCursorsTest extends AnyFunSuite:
           hardAcked = Some(HardAckNumber(5))
         )
         val cursors =
-            ReplayCursors.derive(markers, peers, Map.empty, hardAckedStack = Some(StackNumber(2)))
+            ReplayCursors.derive(
+              markers,
+              peers,
+              Nil,
+              Map.empty,
+              hardAckedStack = Some(StackNumber(2))
+            )
         assert(cursors.blockSpineForAggregator == LaneKey.Block(BlockNumber(0)))
         assert(cursors.blockSpineForLedger == LaneKey.Block(BlockNumber(6)), "softAcked 5 + 1")
         assert(cursors.stackSpineForAggregator == LaneKey.Stack(StackNumber(0)))
@@ -130,7 +136,7 @@ class ReplayCursorsTest extends AnyFunSuite:
 
     test("derive: empty store (all None, no acked stack) yields index-0 floors everywhere") {
         val markers = Markers(None, None, None, None)
-        val cursors = ReplayCursors.derive(markers, peers, Map.empty, hardAckedStack = None)
+        val cursors = ReplayCursors.derive(markers, peers, Nil, Map.empty, hardAckedStack = None)
 
         assert(cursors.blockSpineForAggregator == LaneKey.Block(BlockNumber(0)))
         assert(cursors.blockSpineForLedger == LaneKey.Block(BlockNumber(0)))
@@ -143,11 +149,23 @@ class ReplayCursorsTest extends AnyFunSuite:
         }
     }
 
-    test("scanFloors enumerates exactly 2 + 3N lanes (spines collapse to the confirmed floor)") {
+    test("scanFloors enumerates exactly 2 + 3N lanes (no hubs; spines collapse to confirmed)") {
         val cursors =
-            ReplayCursors.derive(Markers(None, None, None, None), peers, Map.empty, None)
+            ReplayCursors.derive(Markers(None, None, None, None), peers, Nil, Map.empty, None)
         assert(cursors.scanFloors.size == 2 + 3 * peers.size)
         // The spines in scanFloors are the lower (aggregator) floor, not the ledger one.
         assert(cursors.scanFloors.contains(cursors.blockSpineForAggregator))
         assert(cursors.scanFloors.contains(cursors.stackSpineForAggregator))
+    }
+
+    test("derive: hub HubHardAck cursors scan from 0; scanFloors grows to 2 + 3N + H") {
+        val hubs = List(HeadPeerNumber(0), HeadPeerNumber(1))
+        val cursors =
+            ReplayCursors.derive(Markers(None, None, None, None), peers, hubs, Map.empty, None)
+        hubs.foreach(h =>
+            assert(cursors.hubHardAcks(h) == LaneKey.HubHardAck(h, HubHardAckNumber.zero))
+        )
+        assert(cursors.hubHardAcks.size == hubs.size)
+        assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
+        hubs.foreach(h => assert(cursors.scanFloors.contains(cursors.hubHardAcks(h))))
     }

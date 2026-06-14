@@ -105,6 +105,7 @@ class LaneScanTest extends AnyFunSuite:
                 ReplayCursors.derive(
                   markers,
                   peers,
+                  Nil,
                   highWater,
                   hardAckedStack = Some(StackNumber(1))
                 )

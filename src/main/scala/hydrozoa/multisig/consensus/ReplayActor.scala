@@ -31,11 +31,11 @@ import scalus.cardano.address.ShelleyAddress
   *      "crash mid-stack" case) — from its persisted `Stack.Unsigned` + this peer's hard-acks, and
   *      hand it to `SlowConsensusActor` so it re-forms its cell and re-aggregates. StackComposer
   *      stays out of the acked band (its recover treats acked stacks as closed).
-  *   3. Derive the `2 + 3N` [[ReplayCursors]], scan every lane from its floor, total-order the tail
-  *      by arrival stamp ([[ArrivalOrderedMerge]]), and route each entry into the reading actor's
-  *      mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck → SlowConsensusActor,
-  *      Block spine → FCA at `softConfirmed+1` and BlockWeaver at `softAcked+1`, Stack spine →
-  *      StackComposer at `hardAcked+1`).
+  *   3. Derive the `2 + 3N + H` [[ReplayCursors]], scan every lane from its floor, total-order the
+  *      tail by arrival stamp ([[ArrivalOrderedMerge]]), and route each entry into the reading
+  *      actor's mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck
+  *      → SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
+  *      `softAcked+1`, Stack spine → StackComposer at `hardAcked+1`).
   *
   * Inbound is not restored from PeerLiaisonHeadToHead (it forwards, holds no inbound queue); this
   * is the single place that re-feeds the consensus actors from the persisted lane tail.
@@ -51,8 +51,9 @@ object ReplayActor:
     )
 
     /** Run the boot replay (see the object docstring). Pure over the store + a one-shot L1 read;
-      * all effects are mailbox sends to `targets`. `peers` is every head peer (own included); `own`
-      * and `treasuryAddress` come from the node config.
+      * all effects are mailbox sends to `targets`. `peers` is every head peer (own included),
+      * `hubs` every hub head peer (their `HubHardAck` families carry the coil quorum SCA
+      * aggregates); `own` and `treasuryAddress` come from the node config.
       */
     def replay(
         persistence: Persistence[IO],
@@ -60,6 +61,7 @@ object ReplayActor:
         targets: Targets,
         own: HeadPeerNumber,
         peers: List[HeadPeerNumber],
+        hubs: List[HeadPeerNumber],
         treasuryAddress: ShelleyAddress
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
@@ -77,7 +79,7 @@ object ReplayActor:
                 .flatMap(_.traverse_(targets.slowConsensusActor ! _))
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
             highWater <- recoverHighWater(persistence, markers.softAcked)
-            cursors = ReplayCursors.derive(markers, peers, highWater, hardAckedStack)
+            cursors = ReplayCursors.derive(markers, peers, hubs, highWater, hardAckedStack)
             perLane <- LaneScan.scanLanes(backend, cursors)
             _ <- ArrivalOrderedMerge
                 .merge(perLane)
@@ -306,8 +308,9 @@ object ReplayActor:
       * `≥ blockLedgerFloor`; stacks to StackComposer only `≥ stackComposerFloor` (the acked band's
       * single stack is handled by the reconstructed handoff, not its brief). The coil-quorum
       * families route to `SlowConsensusActor`: `CoilHardAck` carries a `HardAck` directly,
-      * `HubHardAck` carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`. A head peer
-      * never scans the coil families, so those cases are reached only on the coil path.
+      * `HubHardAck` carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`.
+      * `HubHardAck` is scanned by every peer (head and coil) for the coil quorum; `CoilHardAck` is
+      * own-keyed, so that arm is reached only on the coil path.
       */
     private def route(
         entry: RawLaneEntry,

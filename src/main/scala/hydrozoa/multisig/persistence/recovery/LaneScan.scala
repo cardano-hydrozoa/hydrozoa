@@ -40,9 +40,9 @@ object LaneScan:
             loop(Nil)
         }
 
-    /** Scan every lane named by `cursors` (the `2 + 3N` scan floors; §5.3 — the spines collapse to
-      * their lower `confirmed` floor here, see [[ReplayCursors.scanFloors]]), returning one entry
-      * list per lane. The caller flattens + merges these by arrival stamp
+    /** Scan every lane named by `cursors` (the `2 + 3N + H` scan floors; §5.3 — the spines collapse
+      * to their lower `confirmed` floor here, see [[ReplayCursors.scanFloors]]), returning one
+      * entry list per lane. The caller flattens + merges these by arrival stamp
       * ([[ArrivalOrderedMerge]]), then (R3) slices each spine's `acked` consumer feed from the
       * merged tail.
       */

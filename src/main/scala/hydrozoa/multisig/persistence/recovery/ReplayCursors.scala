@@ -1,6 +1,6 @@
 package hydrozoa.multisig.persistence.recovery
 
-import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId.*
@@ -8,8 +8,9 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{LaneKey, Markers}
 
-/** The recovery scan / feed cursors — `4 + 3N` (§5.3): the two spines carry **two cursors each**
-  * (one per consumer role), and there are three **single-cursor satellites** per head peer.
+/** The recovery scan / feed cursors — `4 + 3N + H` (§5.3): the two spines carry **two cursors
+  * each** (one per consumer role), three **single-cursor satellites** per head peer, and one
+  * **`HubHardAck`** cursor per hub (read by every peer's SlowConsensusActor for the coil quorum).
   *
   * **Why two cursors per spine.** Each spine (BlockSpine, StackSpine) is read by **two** roles at
   * **two** different floors:
@@ -49,6 +50,8 @@ import hydrozoa.multisig.persistence.{LaneKey, Markers}
   *     floor: the hard-ack lane is `HardAckNumber`-indexed, not `StackNumber`, and no marker gives
   *     the `StackNumber → HardAckNumber` correspondence. Scanning from 0 is correct, not minimal —
   *     defer a tight floor to R3 (§10 Q9 / §6 StackComposer).
+  *   - **HubHardAck[h]** — `0` for every hub (SlowConsensusActor reads them for the coil quorum,
+  *     §3.1 — the `+ H`); same `HubHardAckNumber`-indexed scan-from-0 as `HardAck`.
   *
   * See `design/persistence-and-crash-recovery.md` §5.3 and `design/recovery-implementation-plan.md`
   * R1.
@@ -60,30 +63,32 @@ final case class ReplayCursors(
     stackSpineForComposer: LaneKey.Stack,
     requests: Map[HeadPeerNumber, LaneKey.Request],
     softAcks: Map[HeadPeerNumber, LaneKey.SoftAck],
-    hardAcks: Map[HeadPeerNumber, LaneKey.HardAck]
+    hardAcks: Map[HeadPeerNumber, LaneKey.HardAck],
+    hubHardAcks: Map[HeadPeerNumber, LaneKey.HubHardAck]
 ):
     /** The lanes to **scan**, each from its lowest floor (the widest tail any consumer needs): the
       * two spines from their aggregator (`*Confirmed + 1`) cursor — the lower of each spine's two,
-      * since `confirmed ≤ acked` — then the satellites. Exactly `2 + 3N` entries (one scan per
-      * lane). The ledger consumer's `acked` slicing happens at feed time in the `ReplayActor` (R3),
-      * not at scan time. Spine order is fixed; satellite order is unspecified (hashed by
-      * `HeadPeerNumber`) and washed out by [[ArrivalOrderedMerge]]'s stamp re-sort — do not rely on
-      * it.
+      * since `confirmed ≤ acked` — then the satellites and the hubs' `HubHardAck` families. Exactly
+      * `2 + 3N + H` entries (one scan per lane). The ledger consumer's `acked` slicing happens at
+      * feed time in the `ReplayActor` (R3), not at scan time. Spine order is fixed; satellite order
+      * is unspecified (hashed by `HeadPeerNumber`) and washed out by [[ArrivalOrderedMerge]]'s
+      * stamp re-sort — do not rely on it.
       */
     def scanFloors: List[LaneKey] =
         List[LaneKey](blockSpineForAggregator, stackSpineForAggregator) ++
-            requests.values ++ softAcks.values ++ hardAcks.values
+            requests.values ++ softAcks.values ++ hardAcks.values ++ hubHardAcks.values
 
 object ReplayCursors:
 
-    /** Derive all `4 + 3N` cursors. Pure — the caller (R3) supplies the three values it must read
-      * itself: the recovery [[Markers]] (CF scans), the per-peer request high-water (the persisted
-      * counter), and `hardAckedStack` (the acked stack, unpacked from the last own `HardAck` value;
-      * see the class docstring).
+    /** Derive all `4 + 3N + H` cursors. Pure — the caller (R3) supplies the three values it must
+      * read itself: the recovery [[Markers]] (CF scans), the per-peer request high-water (the
+      * persisted counter), and `hardAckedStack` (the acked stack, unpacked from the last own
+      * `HardAck` value; see the class docstring).
       */
     def derive(
         markers: Markers,
         peers: List[HeadPeerNumber],
+        hubs: List[HeadPeerNumber],
         highestIncludedRequest: Map[HeadPeerNumber, RequestNumber],
         hardAckedStack: Option[StackNumber]
     ): ReplayCursors =
@@ -111,7 +116,8 @@ object ReplayCursors:
               p -> LaneKey.Request(p, floor)
           }.toMap,
           softAcks = peers.map(p => p -> LaneKey.SoftAck(p, softAckFloor)).toMap,
-          hardAcks = peers.map(p => p -> LaneKey.HardAck(p, HardAckNumber(0))).toMap
+          hardAcks = peers.map(p => p -> LaneKey.HardAck(p, HardAckNumber(0))).toMap,
+          hubHardAcks = hubs.map(h => h -> LaneKey.HubHardAck(h, HubHardAckNumber.zero)).toMap
         )
 
     /** Fold a stream of `RequestId`s to the max `RequestNumber` per author. The kernel that
