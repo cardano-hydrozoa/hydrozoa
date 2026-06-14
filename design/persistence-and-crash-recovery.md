@@ -519,7 +519,7 @@ the band's briefs + acks.
   `nextBlockNumber` from the replay tail starting at `softAcked + 1` (driven by
   `JointLedger`'s signed timeline, not by confirmations).
 
-The `2 + 3N` per-family resume cursors that the `ReplayActor` uses to seek into
+The `2 + 3N + H` per-family resume cursors that the `ReplayActor` uses to seek into
 the store **derive from the markers** — which derive from CF scans — with no
 extra per-family or per-marker storage (§5.3).
 
@@ -620,12 +620,14 @@ confirmations themselves complete in the **aggregators**
 peers' late acks — the aggregators sign nothing, so they can re-acquire and
 re-aggregate the band freely, unlike the signers (§10 Q9).
 
-### 5.3 The indices algorithm: deriving the 2 + 3N family cursors
+### 5.3 The indices algorithm: deriving the 2 + 3N + H family cursors
 
 To replay, the `ReplayActor` needs an initial cursor for each family: **2** for
-the shared spines (one BlockSpine, one StackSpine) **+ 3 per head peer** (its
-Request / Soft-ack / Hard-ack satellites) = **2 + 3N** (§3.1). Every one of
-them **derives from the markers** via Hydrozoa's monotonicity invariants:
+the shared spines (one BlockSpine, one StackSpine), **+ 3 per head peer** (its
+Request / Soft-ack / Hard-ack satellites), **+ 1 per hub** (its `HubHardAck`
+family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
+(§3.1); a coil peer also replays its own `CoilHardAck` family. Every one of them
+**derives from the markers** via Hydrozoa's monotonicity invariants:
 
 - **Requests** — monotonic per peer: *if a block includes Peer A's Request `N`,
   the next block includes only A's requests `> N`.* So A's Request family cursor is
@@ -666,11 +668,17 @@ them **derives from the markers** via Hydrozoa's monotonicity invariants:
   floor. Recovery scans each peer's HardAck family **from 0** (correct, not minimal).
   Tightening needs a per-peer hard-ack marker or a stack-indexed hard-ack family;
   deferred (§10 Q9).
+- **Hub hard acks** (and a coil peer's own **coil hard acks**) — like `HardAck`,
+  indexed by a `HardAckNumber` (per hub / per coil), with no marker-findable
+  `StackNumber` floor, so recovery scans each such family **from 0**. The head
+  `ReplayActor` currently no-ops these families (the open Q10 coil work, §6); the
+  floor-tightening is the same hard-ack indexing gap (§10 Q9).
 
 So the cursors split into **dual-floor spines + single-floor satellites** (`4 + 3N`
-floors over `2 + 3N` families). All derive from the markers + the request high-water
-counter, except the slow-side acked stack and the HardAck floor (the hard-ack-family
-indexing gap, §10 Q9). None of the cursors is stored.
+floors over the `2 + 3N` head families, plus single-floor `H` hub + coil hard-ack
+families). All derive from the markers + the request high-water counter, except the
+slow-side acked stack and the hard-ack floors (the hard-ack-family indexing gap,
+§10 Q9). None of the cursors is stored.
 
 **The deposits map is the exception — and it is not a family**, so it has no cursor
 to derive. The pending-deposits map mutates on *any* block (a request *adds* a
@@ -682,7 +690,7 @@ own soft ack — the one place a snapshot is unavoidable on the fast side.
 ### 5.4 Total order of the replayed streams
 
 Within a family, order is intrinsic — the family's own index (RequestNumber;
-Block/StackNumber; ack index). To order entries *across* the `2 + 3N` streams,
+Block/StackNumber; ack index). To order entries *across* the `2 + 3N + H` streams,
 **every persisted family value carries a 12-byte big-endian `ArrivalStamp` prefix**
 — a `(generation, monotonic)` pair (receipt time for inbound entries, creation for
 own ones — §7.1); merging by stamp yields a fixed, durable interleaving — "not
@@ -1822,19 +1830,27 @@ With that durable, a crashed peer can always fall back, vote, and evacuate even 
 nothing else is restored. Everything after it is liveness / performance and may be
 built **in any order**.
 
-| Step | Deliverable |
-|---|---|
-| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `LaneId`/`LaneKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. |
-| **P2 — first priority** | **The rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside (§6 `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 (§10 Q6). Custody-safe in isolation — needs no replay, no fast-side state. |
-| *the rest — any order* | |
-| Pa | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each family value (§5.4). |
-| Pb | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. |
-| Pc | Fast-side per-block persistence (`JointLedger`): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` (§6 `JointLedger`); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2); `RequestHighWater` feeds the Request family recovery cursors (§5.3). |
-| Pd | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence (§5.5). |
-| Pe | L1 reconciliation + live re-sample in `CardanoLiaison` (§5.5, §8 step 6 — post-barrier). |
-| Pf | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). |
-| Pg | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). |
-| — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). |
+Status legend: ✅ done · 🚧 done, uncommitted · 📋 scoped, not started · ⬜ pending.
+Steps below renumbered (the old letter scheme `Pa–Pg` is now `P3–P9`); `P1`/`P2` are
+unchanged. `P10–P13` are the coil workstream (§2, §6 — the head plan threaded onto coil
+peers).
+
+| Step | Deliverable | Status |
+|---|---|---|
+| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `LaneId`/`LaneKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
+| P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside (§6 `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 (§10 Q6). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** (Q6) |
+| P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each family value (§5.4). | ✅ |
+| P4 | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. | ✅ |
+| P5 | Fast-side per-block persistence (`JointLedger`): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` (§6 `JointLedger`); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2); `RequestHighWater` feeds the Request family recovery cursors (§5.3). | ✅ — soft-ack pruning **deferred** (keep-all) |
+| P6 | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence (§5.5). | ✅ — suspend barrier reuses the `Connections` barrier (Q4) |
+| P7 | L1 reconciliation + live re-sample in `CardanoLiaison` (§5.5, §8 step 6 — post-barrier). | ✅ |
+| P8 | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
+| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped (R4) |
+| — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
+| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + idempotency index (Q12); `PeerLiaison{HubToCoil,CoilToHub}` outbox recovery (Q11). | ✅ |
+| P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
+| P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | 🚧 |
+| P13 | **Coil boot replay (Q10):** `Markers`/`ReplayCursors`/`ReplayActor` PeerId-aware (route `CoilHardAck`→SCA, `HubHardAck`→slow aggregation, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ⬜ |
 
 ---
 
