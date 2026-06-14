@@ -12,10 +12,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, LaneKey, LaneValue, Persistence, StoreKey}
@@ -78,6 +79,28 @@ class ReplayActorTest extends AnyFunSuite:
         )
     }
 
+    test(
+      "ReplayActor.replayCoil routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
+    ) {
+        val c = runReplayCoil(seedRecoverableCoil)
+        assert(c.outcome.isRight, s"replayCoil failed: ${c.outcome}")
+        // BlockWeaver: first PollResults + the block brief (>= coilBlockMark+1 = 3).
+        assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
+        assert(hasBlock(c.bw, 5), "BW block 5")
+        // FastConsensusActor: the block brief (aggregator floor softConfirmed+1 = 0).
+        assert(hasBlock(c.fca, 5), "FCA block 5")
+        // SlowConsensusActor: the reconstructed in-flight handoff + every coil-quorum hard-ack —
+        // this coil peer's own two CoilHardAcks (stack 1) routed back, plus the hub's HubHardAck
+        // (unwrapped to its `.ack`).
+        assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
+        assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
+        // StackComposer: only stack >= coilHardAckedStack+1 = 2 (stack 1 is the in-flight band).
+        assert(
+          c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
+          "SC only stack 2"
+        )
+    }
+
     // ---- harness ----
 
     private final case class Captured(
@@ -117,6 +140,49 @@ class ReplayActorTest extends AnyFunSuite:
                               ReplayActor.Targets(bw, fca, sca, sc),
                               own,
                               peers,
+                              treasuryAddress
+                            )
+                            .attempt
+                        _ <- IO.sleep(1.second) // let the probe fibers drain their mailboxes
+                        bwMsgs <- bwSink.get
+                        fcaMsgs <- fcaSink.get
+                        scaMsgs <- scaSink.get
+                        scMsgs <- scSink.get
+                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, outcome)
+                )
+            )
+            .unsafeRunSync()
+
+    /** Coil counterpart of [[runReplay]]: boot four probes + a mock L1, seed, run `replayCoil` with
+      * coil params (own coil 0, all head peers, a single hub head peer 1), settle, capture.
+      */
+    private def runReplayCoil(seed: Persistence[IO] => IO[Unit]): Captured =
+        val peers = config.headPeerIds.map(_.peerNum).toList
+        val hubs = List(HeadPeerNumber(1))
+        val treasuryAddress = config.initializationTx.treasuryProduced.address
+        InMemoryBackendStore.open
+            .use(backend =>
+                ActorSystem[IO]("replay-coil-test").use(system =>
+                    for {
+                        persistence <- Persistence.fromBackend(backend)
+                        cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
+                        bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
+                        fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
+                        scaSink <- Ref.of[IO, Vector[SlowConsensusActor.Request]](Vector.empty)
+                        scSink <- Ref.of[IO, Vector[StackComposer.Request]](Vector.empty)
+                        bw <- system.actorOf(Recorder[BlockWeaver.Request](bwSink))
+                        fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
+                        sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
+                        sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
+                        _ <- seed(persistence)
+                        outcome <- ReplayActor
+                            .replayCoil(
+                              persistence,
+                              cardanoBackend,
+                              ReplayActor.Targets(bw, fca, sca, sc),
+                              CoilPeerNumber(0),
+                              peers,
+                              hubs,
                               treasuryAddress
                             )
                             .attempt
@@ -193,6 +259,49 @@ class ReplayActorTest extends AnyFunSuite:
             )
         } yield ()
 
+    /** Coil store: stack 0 hard-confirmed (`hardConfirmed = 0`); stack 1 acked-not-confirmed via
+      * the coil peer's own two `CoilHardAck`s + its `UnsignedStack`; the hub's `HubHardAck`
+      * carrying a second coil peer's stack-1 ack; a `BlockResult` (the coil fast anchor
+      * `coilBlockMark = 2`) + its `RequestHighWater`; a block brief; and two stack briefs (1 + 2)
+      * for the composer floor.
+      */
+    private def seedRecoverableCoil(p: Persistence[IO]): IO[Unit] =
+        val coil = CoilPeerNumber(0)
+        val hub = HeadPeerNumber(1)
+        for {
+            _ <- p.backend.put(
+              Cf.HardConfirmation,
+              StoreKey.HardConfirmation(StackNumber(0)).encode,
+              Array[Byte](0)
+            )
+            // Own coil hard-acks for stack 1 → coilHardAcked = 1, coilHardAckedStack = 1 (> 0).
+            _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(0)))(
+              LaneValue(stamp, coilHardAck(0, 0, 1))
+            )
+            _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(1)))(
+              LaneValue(stamp, coilHardAck(0, 1, 1))
+            )
+            // The hub's re-sequenced coil-quorum ack (another coil peer's stack-1 ack) → SCA via
+            // its `.ack`.
+            _ <- p.put(LaneKey.HubHardAck(hub, HubHardAckNumber(0)))(
+              LaneValue(stamp, hubHardAck(1, 0, coilHardAck(1, 0, 1)))
+            )
+            unsigned <- unsignedStack(1)
+            _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(unsigned)
+            // The coil fast anchor: max(BlockResult) = 2, with its request high-water.
+            br <- blockResult(2)
+            _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br)
+            _ <- p.put(StoreKey.RequestHighWater(BlockNumber(2)))(
+              Map.empty[HeadPeerNumber, RequestNumber]
+            )
+            block5 <- blockBrief(5)
+            _ <- p.put(LaneKey.Block(BlockNumber(5)))(LaneValue(stamp, block5))
+            s1 <- stackBrief(1, 0, 0)
+            s2 <- stackBrief(2, 1, 1)
+            _ <- p.put(LaneKey.Stack(StackNumber(1)))(LaneValue(stamp, s1))
+            _ <- p.put(LaneKey.Stack(StackNumber(2)))(LaneValue(stamp, s2))
+        } yield ()
+
     // ---- fixtures (mirror RecoverSeamsTest) ----
 
     private def unsignedStack(stack: Int): IO[Stack.Unsigned] =
@@ -249,4 +358,28 @@ class ReplayActorTest extends AnyFunSuite:
           ackId = HardAckId(PeerId.Head(HeadPeerNumber(peer)), HardAckNumber(ackNum)),
           stackNum = StackNumber(stack),
           payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
+        )
+
+    private def coilHardAck(coil: Int, ackNum: Int, stack: Int): HardAck =
+        HardAck(
+          ackId = HardAckId(PeerId.Coil(CoilPeerNumber(coil)), HardAckNumber(ackNum)),
+          stackNum = StackNumber(stack),
+          payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
+        )
+
+    private def hubHardAck(hub: Int, seq: Int, ack: HardAck): HardAckWithId =
+        HardAckWithId(hubPeer = HeadPeerNumber(hub), seqNum = HubHardAckNumber(seq), ack = ack)
+
+    private def blockResult(blockNum: Int): IO[BlockResult] =
+        for {
+            brief <- blockBrief(blockNum)
+            now <- realTimeQuantizedInstant(headConfig.slotConfig)
+        } yield BlockResult(
+          brief = brief,
+          evacuationMapDiff = Nil,
+          payoutObligations = Nil,
+          postDatedRefundTxs = Nil,
+          absorbedDeposits = Nil,
+          competingFallbackTxTime =
+              headConfig.txTiming.newFallbackStartTime(BlockCreationEndTime(now + 1.second))
         )

@@ -83,6 +83,15 @@ object Markers:
     def recoverHardConfirmed(backend: BackendStore[IO]): IO[Option[StackNumber]] =
         backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum))
 
+    /** `softConfirmed = max(SoftConfirmation.key)` — shared across peer types (the
+      * `SoftConfirmation` CF is keyed by `blockNum`, written by every peer's `FastConsensusActor`,
+      * including a coil peer's aggregator-only one). Exposed standalone so a coil peer can derive
+      * it without the head-only [[derive]] (which also scans the head `SoftAck` lane a coil peer
+      * never authors).
+      */
+    def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
+        backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum))
+
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =
         requireWidth(bytes, 4, "BlockNumber")

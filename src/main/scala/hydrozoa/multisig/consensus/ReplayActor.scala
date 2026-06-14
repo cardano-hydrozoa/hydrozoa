@@ -5,12 +5,12 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, LaneScan, RawLaneEntry, ReplayCursors}
+import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, CoilReplayCursors, LaneScan, RawLaneEntry, ReplayCursors}
 import hydrozoa.multisig.persistence.{LaneKey, Markers, Persistence, StoreKey}
 import scalus.cardano.address.ShelleyAddress
 
@@ -79,7 +79,80 @@ object ReplayActor:
             highWater <- recoverHighWater(persistence, markers.softAcked)
             cursors = ReplayCursors.derive(markers, peers, highWater, hardAckedStack)
             perLane <- LaneScan.scanLanes(backend, cursors)
-            _ <- ArrivalOrderedMerge.merge(perLane).traverse_(route(_, cursors, targets))
+            _ <- ArrivalOrderedMerge
+                .merge(perLane)
+                .traverse_(
+                  route(
+                    _,
+                    cursors.blockSpineForLedger.num,
+                    cursors.stackSpineForComposer.num,
+                    targets
+                  )
+                )
+        yield ()
+
+    /** The coil counterpart of [[replay]] (§10 Q10), run inline by
+      * [[hydrozoa.multisig.CoilMultisigRegimeManager]] before its start barrier. A coil peer
+      * differs in its anchors and the extra coil-quorum families (see [[CoilReplayCursors]]): the
+      * fast side resumes from `coilBlockMark = max(BlockResult)` (it authors no soft-ack), the slow
+      * side from the last own `CoilHardAck`, and the replay tail additionally carries the hubs'
+      * `HubHardAck` families + this coil peer's own `CoilHardAck`. `peers` is every head peer;
+      * `hubs` every hub.
+      */
+    def replayCoil(
+        persistence: Persistence[IO],
+        cardanoBackend: CardanoBackend[IO],
+        targets: Targets,
+        own: CoilPeerNumber,
+        peers: List[HeadPeerNumber],
+        hubs: List[HeadPeerNumber],
+        treasuryAddress: ShelleyAddress
+    )(using CardanoNetwork.Section): IO[Unit] =
+        val backend = persistence.backend
+        for
+            softConfirmed <- Markers.recoverSoftConfirmed(backend)
+            hardConfirmed <- Markers.recoverHardConfirmed(backend)
+            coilBlockMark <- Markers.recoverCoilBlockMark(backend)
+            coilHardAcked <- Markers.recoverCoilHardAcked(backend, own)
+            coilHardAckedStack <- coilHardAcked.traverse(n =>
+                persistence.getOrFail(LaneKey.CoilHardAck(own, n)).map(_.payload.stackNum)
+            )
+            _ <- validateInvariantsCoil(
+              softConfirmed,
+              hardConfirmed,
+              coilBlockMark,
+              coilHardAckedStack
+            )
+            // 1. First L1 sample → BlockWeaver (a coil peer follows blocks, like a head follower).
+            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
+            // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA, with
+            //    its own acks read from CoilHardAck.
+            _ <- reconstructInflightHandoffCoil(persistence, own, hardConfirmed, coilHardAckedStack)
+                .flatMap(_.traverse_(targets.slowConsensusActor ! _))
+            // 3. Derive coil cursors, scan all lanes (head families + hubs' HubHardAck + own
+            //    CoilHardAck), total-order, route the tail into mailboxes.
+            highWater <- recoverHighWaterCoil(persistence, coilBlockMark)
+            cursors = CoilReplayCursors.deriveCoil(
+              softConfirmed,
+              hardConfirmed,
+              coilBlockMark,
+              coilHardAckedStack,
+              peers,
+              hubs,
+              own,
+              highWater
+            )
+            perLane <- LaneScan.scanLanes(backend, cursors.scanFloors)
+            _ <- ArrivalOrderedMerge
+                .merge(perLane)
+                .traverse_(
+                  route(
+                    _,
+                    cursors.blockSpineForLedger.num,
+                    cursors.stackSpineForComposer.num,
+                    targets
+                  )
+                )
         yield ()
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
@@ -163,15 +236,85 @@ object ReplayActor:
             case None      => IO.pure(Map.empty)
             case Some(ack) => persistence.getOrFail(StoreKey.RequestHighWater(ack.blockNum))
 
-    /** Route one decoded lane entry into the reading actor's mailbox. Spines fan out to two roles,
-      * sliced by the ledger floor (the aggregator already gets everything scanned from its lower
-      * floor): blocks to FastConsensusActor always (scanned from `softConfirmed+1`) and to
-      * BlockWeaver only `≥ softAcked+1`; stacks to StackComposer only `≥ hardAcked+1` (the acked
-      * band's single stack is handled by the reconstructed handoff, not its brief).
+    /** Coil counterpart of [[validateInvariants]]: a confirmed mark must not exceed the coil peer's
+      * anchors (`softConfirmed ≤ coilBlockMark`, `hardConfirmed ≤ coilHardAckedStack`).
       */
-    private def route(entry: RawLaneEntry, cursors: ReplayCursors, targets: Targets)(using
-        CardanoNetwork.Section
+    private def validateInvariantsCoil(
+        softConfirmed: Option[BlockNumber],
+        hardConfirmed: Option[StackNumber],
+        coilBlockMark: Option[BlockNumber],
+        coilHardAckedStack: Option[StackNumber]
     ): IO[Unit] =
+        val softOk = (softConfirmed, coilBlockMark) match
+            case (Some(confirmed), Some(acked)) => Ordering[BlockNumber].lteq(confirmed, acked)
+            case _                              => true
+        val hardOk = (hardConfirmed, coilHardAckedStack) match
+            case (Some(confirmed), Some(acked)) => Ordering[StackNumber].lteq(confirmed, acked)
+            case _                              => true
+        IO.raiseUnless(softOk && hardOk)(
+          new IllegalStateException(
+            s"Coil recovery refused: store inconsistency (confirmed > acked). " +
+                s"softConfirmed=$softConfirmed coilBlockMark=$coilBlockMark " +
+                s"hardConfirmed=$hardConfirmed coilHardAckedStack=$coilHardAckedStack"
+          )
+        )
+
+    /** Coil counterpart of [[reconstructInflightHandoff]]: the in-flight stack's own acks come from
+      * the coil peer's `CoilHardAck` lane (not `HardAck`); everything else is identical.
+      */
+    private def reconstructInflightHandoffCoil(
+        persistence: Persistence[IO],
+        own: CoilPeerNumber,
+        hardConfirmed: Option[StackNumber],
+        coilHardAckedStack: Option[StackNumber]
+    )(using CardanoNetwork.Section): IO[Option[SlowConsensusActor.StackHandoff]] =
+        coilHardAckedStack match
+            case Some(stackNum) if hardConfirmed.forall(Ordering[StackNumber].lt(_, stackNum)) =>
+                for
+                    unsigned <- persistence.getOrFail(StoreKey.UnsignedStack(stackNum))
+                    ownAcks <- ownCoilHardAcksForStack(persistence, own, stackNum)
+                yield Some(SlowConsensusActor.StackHandoff(unsigned, ownAcks))
+            case _ => IO.pure(None)
+
+    /** This coil peer's persisted hard-acks for `stackNum`, from its own-keyed `CoilHardAck` lane.
+      */
+    private def ownCoilHardAcksForStack(
+        persistence: Persistence[IO],
+        own: CoilPeerNumber,
+        stackNum: StackNumber
+    )(using CardanoNetwork.Section): IO[List[HardAck]] =
+        val k = LaneKey.CoilHardAck(own, HardAckNumber.zero)
+        LaneScan
+            .scan(persistence.backend, k)
+            .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
+
+    /** The per-peer request high-water at `coilBlockMark` (the coil fast anchor), or empty for a
+      * cold store — the coil counterpart of [[recoverHighWater]] (which keys on `softAcked`).
+      */
+    private def recoverHighWaterCoil(
+        persistence: Persistence[IO],
+        coilBlockMark: Option[BlockNumber]
+    )(using CardanoNetwork.Section): IO[Map[HeadPeerNumber, RequestNumber]] =
+        coilBlockMark match
+            case None    => IO.pure(Map.empty)
+            case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
+
+    /** Route one decoded lane entry into the reading actor's mailbox. Family-agnostic (shared by
+      * the head [[replay]] and the coil [[replayCoil]]): spines fan out to two roles, sliced by the
+      * ledger floor (the aggregator already gets everything scanned from its lower floor): blocks
+      * to FastConsensusActor always (scanned from `softConfirmed+1`) and to BlockWeaver only
+      * `≥ blockLedgerFloor`; stacks to StackComposer only `≥ stackComposerFloor` (the acked band's
+      * single stack is handled by the reconstructed handoff, not its brief). The coil-quorum
+      * families route to `SlowConsensusActor`: `CoilHardAck` carries a `HardAck` directly,
+      * `HubHardAck` carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`. A head peer
+      * never scans the coil families, so those cases are reached only on the coil path.
+      */
+    private def route(
+        entry: RawLaneEntry,
+        blockLedgerFloor: BlockNumber,
+        stackComposerFloor: StackNumber,
+        targets: Targets
+    )(using CardanoNetwork.Section): IO[Unit] =
         entry.key match
             case k: LaneKey.Request =>
                 targets.blockWeaver ! k.decodeValue(entry.framed).payload
@@ -182,15 +325,16 @@ object ReplayActor:
             case k: LaneKey.Block =>
                 val brief = k.decodeValue(entry.framed).payload
                 val toLedger =
-                    if Ordering[BlockNumber].gteq(brief.blockNum, cursors.blockSpineForLedger.num)
+                    if Ordering[BlockNumber].gteq(brief.blockNum, blockLedgerFloor)
                     then targets.blockWeaver ! brief
                     else IO.unit
                 (targets.fastConsensusActor ! brief) >> toLedger
             case k: LaneKey.Stack =>
                 val brief = k.decodeValue(entry.framed).payload
-                if Ordering[StackNumber].gteq(brief.stackNum, cursors.stackSpineForComposer.num)
+                if Ordering[StackNumber].gteq(brief.stackNum, stackComposerFloor)
                 then targets.stackComposer ! brief
                 else IO.unit
-            // Coil lanes are not replayed: replay is head-shaped (`ReplayCursors.scanLanes` never
-            // includes them); coil-peer recovery is a separate workstream.
-            case _: LaneKey.CoilHardAck | _: LaneKey.HubHardAck => IO.unit
+            case k: LaneKey.CoilHardAck =>
+                targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
+            case k: LaneKey.HubHardAck =>
+                targets.slowConsensusActor ! k.decodeValue(entry.framed).payload.ack

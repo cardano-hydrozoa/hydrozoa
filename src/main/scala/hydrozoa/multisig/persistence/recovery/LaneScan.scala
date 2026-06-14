@@ -47,4 +47,11 @@ object LaneScan:
       * merged tail.
       */
     def scanLanes(backend: BackendStore[IO], cursors: ReplayCursors): IO[List[List[RawLaneEntry]]] =
-        cursors.scanFloors.traverse(scan(backend, _))
+        scanLanes(backend, cursors.scanFloors)
+
+    /** Scan every lane named by `floors`, returning one entry list per lane — the family-agnostic
+      * core used by both the head [[ReplayCursors.scanFloors]] and the coil
+      * [[CoilReplayCursors.scanFloors]].
+      */
+    def scanLanes(backend: BackendStore[IO], floors: List[LaneKey]): IO[List[List[RawLaneEntry]]] =
+        floors.traverse(scan(backend, _))
