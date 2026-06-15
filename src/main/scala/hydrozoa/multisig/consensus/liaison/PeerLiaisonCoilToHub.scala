@@ -44,7 +44,7 @@ abstract class PeerLiaisonCoilToHub(
     private given CardanoNetwork.Section = config
 
     // The coil→hub uplink runs only on a coil peer; its own-hard-ack outbox is keyed by this number.
-    private val ownCoil: CoilPeerNumber = config.ownPeerId match {
+    private val ownCoilPeerNumber: CoilPeerNumber = config.ownPeerId match {
         case PeerId.Coil(c) => c
         case PeerId.Head(_) =>
             throw new IllegalStateException("PeerLiaisonCoilToHub runs only on a coil peer")
@@ -309,7 +309,7 @@ abstract class PeerLiaisonCoilToHub(
             // can re-pull the acks it missed during our crash (the Server half answers the hub's
             // OwnHardAck.Get from this lane). An empty store seeds it empty — a cold boot is
             // unaffected.
-            ownAcks <- PeerLiaisonCoilToHub.recover(persistence, ownCoil)
+            ownAcks <- PeerLiaisonCoilToHub.recover(persistence, ownCoilPeerNumber)
             _ <- ownHardAckLane.seed(ownAcks)
             _ <- puller.start
             _ <- startResendTimer
