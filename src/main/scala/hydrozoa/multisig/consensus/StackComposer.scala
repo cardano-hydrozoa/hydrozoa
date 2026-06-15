@@ -959,7 +959,7 @@ object StackComposer {
                         stackBrief <- persistence.getOrFail(FamilyKey.Stack(hardAckedStack))
                         lastBlockNum = stackBrief.payload.lastBlockNum
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
-                        blockResults <- BlockResultScan.scanFrom(persistence.backend, lastBlockNum)
+                        blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
                     } yield Some(
                       blockResults.foldLeft(
                         State(
@@ -1004,7 +1004,7 @@ object StackComposer {
                         )
                         lastBlockNum = unsignedStack.brief.lastBlockNum
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
-                        blockResults <- BlockResultScan.scanFrom(persistence.backend, lastBlockNum)
+                        blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
                     } yield Some(
                       blockResults.foldLeft(
                         State(

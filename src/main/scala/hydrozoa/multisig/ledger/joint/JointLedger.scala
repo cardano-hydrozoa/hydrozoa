@@ -773,7 +773,7 @@ final case class JointLedger(
             // so recover can co-anchor the L2 ledger to the fast anchor via restoreTo.
             commandNumber <- l2Ledger.currentCommandNumber
         } yield WriteBatch.start
-            .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
+            .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
             .put(StoreKey.DepositMap)(deposits)
             .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
             .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
@@ -1007,10 +1007,11 @@ object JointLedger {
                 case Some(ackNum) => doneAt(persistence, ackNum.blockNum).map(Some(_))
 
         /** Build `Done` from the brief persisted at `blockNum` (its header) and the deposits
-          * snapshot. Both are present in any non-empty store — the brief via `persistOwnAckBundle`
-          * (if this peer led) or `PeerLiaisonHeadToHead.persistInbound` (if it received), the
-          * deposits via `persistOwnAckBundle` — so a missing entry is store corruption (fail-safe
-          * throw).
+          * snapshot. Both are present in any non-empty store — the brief in the `Block` family via
+          * `persistOwnAckBundle` (if this peer led), `PeerLiaisonHeadToHead.persistInbound` (a head
+          * peer that received it), or `PeerLiaisonCoilToHub.persistInbound` (a coil peer's inbound
+          * population); the deposits via the per-block snapshot bundle — so a missing entry is
+          * store corruption (fail-safe throw).
           */
         private def doneAt(persistence: Persistence[IO], blockNum: BlockNumber)(using
             CardanoNetwork.Section
@@ -1021,8 +1022,9 @@ object JointLedger {
             } yield Done(brief.payload.header, deposits)
 
         /** Coil counterpart of [[recover]]: a coil peer authors no soft-ack, so it anchors on
-          * `coilBlockMark = max(BlockResult)` and rebuilds `Done` from that block's `BlockResult`
-          * (whose `brief` carries the header) + the `DepositMap` snapshot, then co-anchors the L2
+          * `coilBlockMark = max(BlockResult)`. It then rebuilds `Done` exactly as a head peer does
+          * — the brief comes from the `Block` family, which a coil peer holds inbound (via
+          * `PeerLiaisonCoilToHub.persistInbound`), so [[doneAt]] is shared — and co-anchors the L2
           * ledger to `L2CommandNumber[coilBlockMark]`. `None` for an empty store (no
           * `BlockResult`).
           */
@@ -1035,23 +1037,10 @@ object JointLedger {
                 case None => IO.pure(None)
                 case Some(blockNum) =>
                     for {
-                        done <- doneAtFromBlockResult(persistence, blockNum)
+                        done <- doneAt(persistence, blockNum)
                         commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
                         _ <- l2Ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
                     } yield Some(done)
-
-        /** Build `Done` from the `BlockResult` persisted at `blockNum` (its `brief` carries the
-          * header) and the deposits snapshot — the coil header source, since a coil peer has no own
-          * `Block` lane entry (it never leads). A missing entry in a non-empty store is corruption
-          * (fail-safe throw via `getOrFail`).
-          */
-        private def doneAtFromBlockResult(persistence: Persistence[IO], blockNum: BlockNumber)(using
-            CardanoNetwork.Section
-        ): IO[Done] =
-            for {
-                blockResult <- persistence.getOrFail(StoreKey.BlockResult(blockNum))
-                deposits <- persistence.getOrFail(StoreKey.DepositMap)
-            } yield Done(blockResult.brief.header, deposits)
     }
 
     final case class Done private[JointLedger] (

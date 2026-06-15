@@ -69,7 +69,7 @@ object StoreKey:
 
     /** Key for [[Cf.BlockResult]] — the per-block JL output, keyed by `blockNum`. */
     final case class BlockResult(num: BlockNumber) extends StoreKey:
-        type Value = LedgerBlockResult
+        type Value = LedgerBlockResult.Persisted
         import BlockResultCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockResult

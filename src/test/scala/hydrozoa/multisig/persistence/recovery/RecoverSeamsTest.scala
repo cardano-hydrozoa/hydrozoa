@@ -131,10 +131,12 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- (1 to 3).toList.traverse_(i =>
                     ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                 )
-                // Coil crash boundary: coilBlockMark = block 2, recorded at L2 command number 2. A
-                // coil peer writes no own SoftAck/Block family, so its header comes from BlockResult.
+                // Coil crash boundary: coilBlockMark = block 2 (max BlockResult), recorded at L2
+                // command number 2. The persisted BlockResult holds only the deltas; the header is
+                // read from the Block family (a coil peer has it inbound), so seed Block(2) too.
                 br <- blockResult(2)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)
+                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, br.brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 recovered <- JointLedger.State.recoverCoil(p, ledger, Some(BlockNumber(2)))
@@ -220,12 +222,16 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block must be excluded (scan is exclusive).
+                // Persisted BlockResults hold only the deltas; recover rehydrates each brief from the
+                // Block family, so seed Block(4)/Block(5) for the two scanned blocks.
                 br3 <- blockResult(3)
                 br4 <- blockResult(4)
                 br5 <- blockResult(5)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(3)))(br3)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(4)))(br4)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(5)))(br5)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(3)))(br3.persisted)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(4)))(br4.persisted)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(5)))(br5.persisted)
+                _ <- p.put(FamilyKey.Block(BlockNumber(4)))(FamilyValue(stamp, br4.brief))
+                _ <- p.put(FamilyKey.Block(BlockNumber(5)))(FamilyValue(stamp, br5.brief))
                 markers = Markers(
                   softConfirmed = None,
                   hardConfirmed = Some(StackNumber(0)), // below stack 1 → gate disarmed
@@ -294,10 +300,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block is excluded (scan is exclusive).
+                // Persisted BlockResults hold only the deltas; the brief is rehydrated from the
+                // Block family, so seed Block(8) for the one scanned block.
                 br7 <- blockResult(7)
                 br8 <- blockResult(8)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(7)))(br7)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(8)))(br8)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(7)))(br7.persisted)
+                _ <- p.put(StoreKey.BlockResult(BlockNumber(8)))(br8.persisted)
+                _ <- p.put(FamilyKey.Block(BlockNumber(8)))(FamilyValue(stamp, br8.brief))
                 recovered <- StackComposer.State.recoverCoil(
                   p,
                   Some(HardAckNumber(hardAckNum)),
@@ -433,7 +442,9 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 empty <- Markers.recoverCoilBlockMark(p.backend)
                 _ <- List(2, 5, 3).traverse_(n =>
-                    blockResult(n).flatMap(br => p.put(StoreKey.BlockResult(BlockNumber(n)))(br))
+                    blockResult(n).flatMap(br =>
+                        p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
+                    )
                 )
                 mark <- Markers.recoverCoilBlockMark(p.backend)
             yield assert(empty.isEmpty && mark.contains(BlockNumber(5)))

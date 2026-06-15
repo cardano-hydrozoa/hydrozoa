@@ -305,7 +305,7 @@ Structural facts:
 | User requests + assigned `RequestId`                                              | `RequestSequencer` (own), `PeerLiaison*` (remote) | replayed; own assignments authoritative (CR1) |
 | Block briefs                                                                      | `JointLedger` (own/leader), `PeerLiaison*` (remote) | replayed; own leader briefs authoritative |
 | Soft acks (sig over header, `SoftAck` family, one CF per **head** peer)            | signed + persisted by `JointLedger` (**head peers only**) at creation (own `SoftAck` lane, before the handoff — CR4); announced by `FastConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Each head peer has its own `SoftAck` CF keyed by `SoftAckNumber`; `softAcked = max(own SoftAck CF)`. A coil peer authors none (it anchors its fast side on `BlockResult`, §6 `JointLedger`). |
-| **Block result** (`BlockResult` CF)                                               | `JointLedger` | per-block JL output (state delta, deposit changes); keyed by `blockNum`. Lets `StackComposer` rebuild `pending` from disk on restart without JL re-running the band. Written on **every** peer (head and coil); on a coil peer `max(BlockResult.key)` is also the fast-side recovery anchor (`coilBlockMark`, §6 `JointLedger`). |
+| **Block result** (`BlockResult` CF)                                               | `JointLedger` | per-block JL **deltas** (evac-map diff, payouts, refunds, absorbed deposits, fallback time); keyed by `blockNum`. The `brief` is **not** stored here — it already lives in the `Block` family, rehydrated from there at recovery (`BlockResult.fromPersisted`), so it is not duplicated across two families; the live `JL → StackComposer` message still carries it. Lets `StackComposer` rebuild `pending` from disk on restart without JL re-running the band. Written on **every** peer (head and coil); on a coil peer `max(BlockResult.key)` is also the fast-side recovery anchor (`coilBlockMark`, §6 `JointLedger`). |
 | **Soft confirmation** (`SoftConfirmation` CF)                                     | `FastConsensusActor` | header + aggregated multisig over the soft-acks, written at confirmation time, keyed by `blockNum`. `softConfirmed` **derives** as `max(SoftConfirmation.key)` — no marker key. Prunes soft-acks. Aggregates **head-peer** acks only (the coil quorum sits on the slow side). |
 | Stack briefs                                                                      | `StackComposer` (own/leader), `PeerLiaison*` (remote) | replayed; own cut authoritative |
 | Hard acks (per-effect, round-1/2/sole)                                            | signed + persisted by `StackComposer` at creation (own `HardAck` lane + `UnsignedStack`, before the handoff — CR4); announced + aggregated by `SlowConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Head-peer acks ride `HardAck`; a coil peer's own ride `CoilHardAck` (next rows). |
@@ -984,10 +984,12 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
 - **Persists:** when `JointLedger` finalizes a block it writes a per-block bundle in
   one atomic `WriteBatch` (CR4/CR6/CR8). The **fast-side snapshot** part fires on
   **every** peer (head and coil), keyed by `blockNum`:
-    - the per-block **`BlockResult`** → **`BlockResult`** CF — so `StackComposer`
-      can rebuild its `pending` map from disk on restart by loading
+    - the per-block **`BlockResult` deltas** → **`BlockResult`** CF (the `brief` is
+      **not** stored — it already lives in the `Block` family and is rehydrated from
+      there at recovery, so it is not duplicated across two families; §3.2) — so
+      `StackComposer` can rebuild its `pending` map from disk on restart by loading
       `(StackSpine[hardAcked].lastBlockNum, head]` directly, instead of relying on
-      `JointLedger` to re-emit results below the fast anchor (§3.2),
+      `JointLedger` to re-emit results below the fast anchor,
     - the current **deposits snapshot** → **`DepositMap`** CF (single keyed blob;
       overwrites the previous snapshot),
     - the cumulative **request high-water** → **`RequestHighWater`** CF (keyed by
@@ -1006,9 +1008,10 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   recovers from a per-peer mark. A head peer's is `softAcked = max(own SoftAck)`. A
   coil peer authors no soft-ack, so its mark is
   **`coilBlockMark = max(BlockResult.key)`** — the highest block it durably finalized.
-  Both index the *identical* per-block bundle, so `JointLedger`'s `recover` (deposits +
-  L2 co-anchor + the `BlockResult`-driven `pending` rebuild) is the same routine off
-  whichever mark applies. No marker key is written — both marks derive from a
+  Both rebuild `Done` the **same way** (`doneAt`: the header from the `Block` family —
+  present on every peer, leader-written or inbound via `persistInbound` — plus the
+  `DepositMap`, then the L2 co-anchor), off whichever mark applies; head `recover` and
+  coil `recoverCoil` share `doneAt`. No marker key is written — both marks derive from a
   single-CF scan (§5.1). Soft-**confirmation** is *not* written here — that is
   `FastConsensusActor`'s job (below). The own soft-ack's equivocation guard is a
   `PeerLiaison*`-boundary fact per CR2; `JointLedger` computes the signature.
@@ -1023,9 +1026,12 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
     `persistOwnAckBundle` adds its own `Block` (leader) + `SoftAck` lanes on top, a coil
     peer's `persistCoilBlockBundle` writes only the subset (the brief broadcast + own-ack
     → `FastConsensusActor` stay head-only). A coil `JointLedger` recovers from
-    `coilBlockMark = max(BlockResult)` (`Markers.recoverCoilBlockMark` →
-    `State.recoverCoil`): `Done` from that `BlockResult`'s header + the `DepositMap`, and
-    the L2 ledger co-anchored via `L2CommandNumber[coilBlockMark]`.
+    `coilBlockMark = max(BlockResult.key)` (`Markers.recoverCoilBlockMark` →
+    `State.recoverCoil`), which shares head `recover`'s `doneAt`: the header from the
+    `Block` family (a coil peer holds it inbound) + the `DepositMap`, and the L2 ledger
+    co-anchored via `L2CommandNumber[coilBlockMark]`. The persisted `BlockResult` holds
+    only the deltas — its `brief` is rehydrated from the `Block` family at recovery
+    (`BlockResult.fromPersisted`), not stored twice.
 - **L2 co-anchoring (keyed by an L2 command number — *not* by any ack).**
   `Producing.l2LedgerState` is WIP; the committed L2 state lives in the `L2Ledger`
   black box (its own persistence). That black box **knows nothing of acks, blocks,

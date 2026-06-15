@@ -299,9 +299,10 @@ class ReplayActorTest extends AnyFunSuite:
             )
             unsigned <- unsignedStack(1)
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(unsigned)
-            // The coil fast anchor: max(BlockResult) = 2, with its request high-water.
+            // The coil fast anchor: max(BlockResult) = 2 (replayCoil reads only the key), with its
+            // request high-water.
             br <- blockResult(2)
-            _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br)
+            _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)
             _ <- p.put(StoreKey.RequestHighWater(BlockNumber(2)))(
               Map.empty[HeadPeerNumber, RequestNumber]
             )
