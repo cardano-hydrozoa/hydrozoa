@@ -1,11 +1,9 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
-import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
 import monocle.Focus.focus
@@ -21,19 +19,6 @@ object InitializationTxSeq {
 
 private object InitializationTxSeqOps {
     type Config = HeadConfig.Bootstrap.Section
-
-    private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("InitializationTxSeq"))
-            .natTracer(Slf4jTracer.ioToId)
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        log.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
-        result
-    }
 
     object Build {
         enum Error extends Throwable {
@@ -132,7 +117,7 @@ private object InitializationTxSeqOps {
             val fallbackTx = transactionSequence._2
 
             for {
-                iTx <- time("InitializationTx.build") {
+                iTx <- {
                     InitializationTx
                         .Parse(config)(
                           blockCreationEndTime = blockCreationEndTime,
@@ -163,7 +148,7 @@ private object InitializationTxSeqOps {
                           )
                         )
 
-                expectedFallbackTx <- time("FallbackTx.build") {
+                expectedFallbackTx <- {
                     FallbackTx
                         .Build(
                           config.txTiming.newFallbackStartTime(blockCreationEndTime),

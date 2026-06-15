@@ -1,10 +1,8 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyVector
-import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -44,19 +42,6 @@ object SettlementTxSeq {
 
 private object SettlementTxSeqOps {
     type Config = HeadConfig.Section
-
-    private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("SettlementTxSeq"))
-            .natTracer(Slf4jTracer.ioToId)
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        log.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
-        result
-    }
 
     object Build {
         enum Error:
@@ -208,7 +193,7 @@ private object SettlementTxSeqOps {
                 case None =>
 
                     for {
-                        settlementTx <- time("SettlementTx.NoPayouts.Build") {
+                        settlementTx <- {
                             SettlementTx.Build
                                 .NoPayouts(config)(
                                   kzgCommitment,
@@ -222,7 +207,7 @@ private object SettlementTxSeqOps {
                                 .map(Build.Error.SettlementError(_))
                         }
 
-                        fallbackTx <- time("FallbackTx.Build") {
+                        fallbackTx <- {
                             FallbackTx
                                 .Build(
                                   newFallbackValidityEnd,
@@ -238,7 +223,7 @@ private object SettlementTxSeqOps {
                 case Some(nePayouts) =>
 
                     for {
-                        rolloutTxSeqPartial <- time("RolloutTxSeq.Build.partialResult") {
+                        rolloutTxSeqPartial <- {
                             RolloutTxSeq
                                 .Build(config)(nePayouts)
                                 .partialResult
@@ -246,7 +231,7 @@ private object SettlementTxSeqOps {
                                 .map(Error.RolloutSeqError(_))
                         }
 
-                        settlementTxRes <- time("SettlementTx.WithPayouts.Build") {
+                        settlementTxRes <- {
                             SettlementTx.Build
                                 .WithPayouts(config)(
                                   kzgCommitment,
@@ -261,7 +246,7 @@ private object SettlementTxSeqOps {
                                 .map(Error.SettlementError(_))
                         }
 
-                        fallbackTx <- time("FallbackTx.Build") {
+                        fallbackTx <- {
                             FallbackTx
                                 .Build(
                                   newFallbackValidityEnd,

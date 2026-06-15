@@ -31,6 +31,7 @@
     <logger name="RemoteL2Ledger" level="warn"/>
     <logger name="BlockHeader" level="warn"/>
     <logger name="TxTiming" level="warn"/>
+    <logger name="DepositsMap" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>

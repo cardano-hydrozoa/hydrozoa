@@ -1,7 +1,5 @@
 package hydrozoa.multisig.consensus.mempool
 
-import cats.implicits.toContravariantOps
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.event.RequestId
 import scala.annotation.tailrec
@@ -19,11 +17,6 @@ final case class Mempool(
     requests: Map[RequestId, UserRequestWithId] = Map.empty,
     arrivalOrder: Vector[RequestId] = Vector.empty
 ) {
-
-    private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("Mempool"))
-            .natTracer(Slf4jTracer.ioToId)
 
     def isEmpty: Boolean = requests.isEmpty
 
@@ -121,11 +114,10 @@ final case class Mempool(
             .map(requestId => {
                 requests.getOrElse(
                   requestId, {
-                      val msg =
-                          s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
-                              " is missing from the mempool's `requests` map."
-                      log.error(msg)
-                      throw RuntimeException(msg)
+                      throw RuntimeException(
+                        s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
+                            " is missing from the mempool's `requests` map."
+                      )
                   }
                 )
             })

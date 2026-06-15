@@ -20,7 +20,6 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
@@ -172,11 +171,6 @@ object HeadConfig {
                 }
             } yield hc
         }
-
-    private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("HeadConfig"))
-            .natTracer(Slf4jTracer.ioToId)
 
     type HeadConfigError = InitializationTxSeq.Build.Error | HeadConfigBootstrapError
 
@@ -548,13 +542,8 @@ object HeadConfig {
             ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
-                case Valid(()) => Valid(headConfigBootstrap)
-                case x @ Invalid(errors) => {
-                    // We log in the constructor rather than the pattern match. If this causes spurious errors,
-                    // it can be removed.
-                    errors.toList.foreach(e => log.error(e))
-                    Invalid(errors)
-                }
+                case Valid(())           => Valid(headConfigBootstrap)
+                case x @ Invalid(errors) => Invalid(errors)
             }
         }
 

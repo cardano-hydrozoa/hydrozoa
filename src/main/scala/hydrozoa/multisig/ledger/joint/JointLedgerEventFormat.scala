@@ -4,6 +4,7 @@ import hydrozoa.config.head.multisig.timing.TxTimingEventFormat
 import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeaderEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent.*
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEventFormat
 
 /** Renderers from [[JointLedgerEvent]] to [[LogEvent]]. Lives separately from the event ADT so the
   * type itself stays pure data.
@@ -83,7 +84,8 @@ object JointLedgerEventFormat:
                       s"  Block brief: $brief",
                   "blockNum" -> s"${brief.blockNum: Int}"
                 )
-            case HeaderEvent(bhe) => BlockHeaderEventFormat.humanFormat(bhe)
-            case TimingEvent(tme) => TxTimingEventFormat.humanFormat(tme)
+            case HeaderEvent(bhe)   => BlockHeaderEventFormat.humanFormat(bhe)
+            case TimingEvent(tme)   => TxTimingEventFormat.humanFormat(tme)
+            case DepositsEvent(dme) => DepositsMapEventFormat.humanFormat(dme)
         }
     }

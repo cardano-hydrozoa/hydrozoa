@@ -1,13 +1,11 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
-import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
@@ -70,19 +68,6 @@ object FallbackTx {
 
 private object FallbackTxOps {
     type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
-
-    private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("FallbackTx"))
-            .natTracer(Slf4jTracer.ioToId)
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        log.trace(f"\t\t⏱️ $label: $elapsed%.2f ms")
-        result
-    }
 
     // TODO: Distribute equity
     final case class Build(
@@ -153,7 +138,7 @@ private object FallbackTxOps {
                 object Treasury {
                     def apply(): Send = output.send
 
-                    val datum: Unresolved = time("newTreasuryDatum") {
+                    val datum: Unresolved = {
                         Unresolved(
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
@@ -191,7 +176,7 @@ private object FallbackTxOps {
                     private object Public {
                         def apply() = Send(utxo)
 
-                        private val utxo = time("publicBallotBox") {
+                        private val utxo = {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
@@ -203,7 +188,7 @@ private object FallbackTxOps {
                     object Peers {
                         def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                        private val utxos = time("peerBallotBoxes") {
+                        private val utxos = {
                             val datums = VD(
                               config.headPeerVKeys
                                   .map(x => PubKeyHash(blake2b_224(x)))

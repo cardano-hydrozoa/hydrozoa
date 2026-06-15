@@ -39,6 +39,7 @@
     <logger name="Persistence" level="info"/>
     <logger name="BlockHeader" level="info"/>
     <logger name="TxTiming" level="info"/>
+    <logger name="DepositsMap" level="debug"/>
     <logger name="hydrozoa" level="trace"/>
     <logger name="scalus" level="trace"/>
 </configuration>

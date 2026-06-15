@@ -28,7 +28,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
-import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
+import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -63,6 +63,8 @@ final case class JointLedger(
         tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
     private val tmTracer: ContraTracer[IO, TxTimingEvent] =
         tracer.contramap(JointLedgerEvent.TimingEvent.apply)
+    private val dmTracer: ContraTracer[IO, DepositsMapEvent] =
+        tracer.contramap(JointLedgerEvent.DepositsEvent.apply)
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -442,13 +444,14 @@ final case class JointLedger(
     ): IO[Unit] = {
         import args.*
         unsafeGetProducing.flatMap { p =>
-            val partition = p.deposits.partition(
-              blockCreationEndTime = blockCreationEndTime,
-              settlementTxEndTime = config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
-              pollResults = pollResults
-            )
-            val split = partition.split(maxDepositsAbsorbedPerBlock)
             for {
+                partition <- p.deposits.partition(dmTracer)(
+                  blockCreationEndTime = blockCreationEndTime,
+                  settlementTxEndTime =
+                      config.txTiming.newSettlementEndTime(p.competingFallbackTxTime),
+                  pollResults = pollResults
+                )
+                split = partition.split(maxDepositsAbsorbedPerBlock)
                 _ <- tracer.traceWith(
                   JointLedgerEvent.BlockCompleting(
                     p.nextBlockNumber,

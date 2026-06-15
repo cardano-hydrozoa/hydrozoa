@@ -25,9 +25,45 @@ final class MyActor(tracer: ContraTracer[IO, MyEvent]) extends Actor[IO, Request
 
 This gives:
 - **Typed contexts.** Each variant carries the data it needs; the format produces the string.
-- **Composition.** A `ContraTracer` is `A => IO[Unit]`. Combine via `|+|` (`Semigroup`): 
-  one sink can write the human-readable line, another captures into a `Ref` for inspection during test, and a third  
-  can log to a telemetry server. 
+- **Composition.** A `ContraTracer` is `A => F[Unit]` for some `F[_]: Monad`. Combine via `|+|`
+  (`Semigroup`): one sink can write the human-readable line, another captures into a `Ref` for
+  inspection during test, and a third can log to a telemetry server.
+
+## Default to polymorphic `F[_]: Monad`
+
+When a function takes a `ContraTracer` as a parameter, default to keeping `F` polymorphic:
+
+```scala
+def step[F[_]: Monad](tracer: ContraTracer[F, MyEvent])(in: Input): F[Result] = ...
+```
+
+Specialize the type parameter to a concrete `F` (almost always `IO`) only when the surrounding
+code is intrinsically tied to that monad — e.g. inside `Actor[IO, ...]`, a `Resource[IO, ...]`
+constructor, or a class that already holds `Ref[IO, ...]`/`IO.realTime`/etc. In those cases the
+field type is `ContraTracer[IO, MyEvent]` because the whole class is IO-bound, not because the
+tracer needs IO.
+
+The polymorphic shape has two compounding benefits:
+
+- **`nullTracer` is free.** `ContraTracer[F, X]`'s `Monoid.empty` instantiates the whole arrow
+  as `Squelching`, so the upstream `contramapM`/`squelchUnlessM`/payload-construction work in
+  the chain is never run — see `src/test/scala/hydrozoa/lib/logging/ContraTracerDemo.scala`
+  (Demo 5) for the proof.
+- **Pure callers don't need IO.** A `Gen[A]` body, a synchronous tx builder, or any other
+  `F = Id`/`F = Eval` context can call the same function and get back `Id[Result] = Result`.
+  No `IO.unsafeRunSync`, no rewiring.
+
+The two existing tracer flavours plug straight into this shape:
+
+- **Typed event ADT** (the per-actor pattern): `def step[F[_]: Monad](tracer: ContraTracer[F,
+  MyEvent])`. IO callers pass a `ContraTracer[IO, MyEvent]`; pure callers lift the SLF4J sink
+  through `Slf4jTracer.ioToId` (an `IO ~> Id` natural transformation) via `.natTracer(...)`.
+- **`Slf4jMsg`** (the `log.info(...)` pattern): the extension methods (`info`, `warn`, …) are
+  already declared `extension [F[_]: Monad](t: ContraTracer[F, Slf4jMsg])`, so call sites work
+  in any `F` without further plumbing — see `Slf4jMsg.scala:54`.
+
+See [`Polymorphic effect: end-to-end`](#polymorphic-effect-end-to-end) below for a worked
+example showing the same function consumed from an IO actor and from a synchronous `Gen`.
 
 ## Core types
 
@@ -115,10 +151,10 @@ server, the WS transports created in `MultisigRegimeManager.resource`) takes its
 `ContraTracer[IO, …Event]` directly — built by the call site as
 `Slf4jTracer.sink.contramap(…EventFormat.humanFormat)`.
 
-## Pure code: polymorphic `ContraTracer[F, MyEvent]`
+## Polymorphic effect: end-to-end
 
-Functions called from both IO actors and pure code (Stage 1 Model `Gen`, etc.) polymorphize on
-`F[_]: Monad` and take an explicit tracer parameter:
+Worked example of the default from above. `TxTiming.blockCanStayMinor` is polymorphic on `F`
+and emits one `TxTimingEvent` per call:
 
 ```scala
 def blockCanStayMinor[F[_]: Monad](
@@ -126,28 +162,33 @@ def blockCanStayMinor[F[_]: Monad](
 )(end: BlockCreationEndTime, fallback: FallbackTxStartTime): F[Boolean]
 ```
 
-- IO callers (`JointLedger`) build a sub-tracer from the actor's typed tracer:
+- **IO callers** (`JointLedger`, an `Actor[IO, ...]`) build a sub-tracer from the actor's typed
+  tracer and instantiate `F = IO`:
   ```scala
   private val tmTracer: ContraTracer[IO, TxTimingEvent] =
       tracer.contramap(JointLedgerEvent.TimingEvent.apply)
   ```
-  Then call `txTiming.blockCanStayMinor(tmTracer)(...)` — returns `IO[Boolean]`.
-- Pure callers lift the same IO sink through `Slf4jTracer.ioToId`, an `IO ~> Id` natural
-  transformation, via [[ContraTracer.natTracer]]:
+  Then `txTiming.blockCanStayMinor(tmTracer)(...)` returns `IO[Boolean]`, threaded into the
+  surrounding `for` comprehension.
+- **Synchronous callers** (Stage 1 Model `Gen` bodies, tx builders) lift the same SLF4J sink
+  through `Slf4jTracer.ioToId` (an `IO ~> Id` natural transformation) via
+  [[ContraTracer.natTracer]] and instantiate `F = Id`:
   ```scala
   private val tmTracer: ContraTracer[cats.Id, TxTimingEvent] =
       Slf4jTracer.sink
           .contramap(TxTimingEventFormat.humanFormat)
           .natTracer(Slf4jTracer.ioToId)
   ```
-  Then call `txTiming.blockCanStayMinor(tmTracer)(...)` — returns `Boolean` (because
+  Then `txTiming.blockCanStayMinor(tmTracer)(...)` returns `Boolean` directly (because
   `Id[Boolean] = Boolean`). The events reach the same SLF4J back-end as the IO path.
 
 There is **one** sink (`Slf4jTracer.sink: ContraTracer[IO, LogEvent]`). Synchronous code
 reaches it through the NT. Don't silence at the call site with `ContraTracer.nullTracer` —
 silence at the Logback level instead (`<logger name="X" level="off"/>`).
 
-The same shape is used for `BlockHeader.nextHeader*` (typed events: `BlockHeaderEvent`).
+The same shape is used for `BlockHeader.nextHeader*` (typed events: `BlockHeaderEvent`) and
+for the `Slf4jMsg` extension methods (`log.info(...)` etc., which are declared
+`extension [F[_]: Monad](t: ContraTracer[F, Slf4jMsg])`).
 
 ## Logger-like logging without a typed event ADT: `Slf4jMsg`
 
