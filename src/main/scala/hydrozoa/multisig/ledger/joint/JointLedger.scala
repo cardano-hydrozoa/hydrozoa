@@ -34,7 +34,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -793,11 +793,13 @@ final case class JointLedger(
             common <- snapshotBundleBatch(brief, blockResult)
             withLeaderBrief =
                 if config.canLeadFast(brief.blockNum) then
-                    common.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
+                    common.put(FamilyKey.Block(brief.blockNum))(FamilyValue(stamp, brief))
                 else common
             _ <- persistence.write(
               withLeaderBrief
-                  .put(LaneKey.SoftAck(softAck.peerNum, softAck.ackNum))(LaneValue(stamp, softAck))
+                  .put(FamilyKey.SoftAck(softAck.peerNum, softAck.ackNum))(
+                    FamilyValue(stamp, softAck)
+                  )
             )
         } yield ()
 
@@ -1014,7 +1016,7 @@ object JointLedger {
             CardanoNetwork.Section
         ): IO[Done] =
             for {
-                brief <- persistence.getOrFail(LaneKey.Block(blockNum))
+                brief <- persistence.getOrFail(FamilyKey.Block(blockNum))
                 deposits <- persistence.getOrFail(StoreKey.DepositMap)
             } yield Done(brief.payload.header, deposits)
 

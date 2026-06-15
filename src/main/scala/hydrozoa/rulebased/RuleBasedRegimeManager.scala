@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{BackendStore, Cf, LaneKey, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, FamilyKey, Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
 import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.Data
@@ -106,7 +106,7 @@ case class RuleBasedRegimeManager(
                     // helper once SC's recovery routine lands (open draft PR on another branch);
                     // both readers want `EvacuationMap[StackLane[hardAcked].lastBlockNum]` per
                     // design/persistence-and-crash-recovery.md §5.2 / §6.
-                    val stackKey = LaneKey.Stack(stackNum)
+                    val stackKey = FamilyKey.Stack(stackNum)
                     for {
                         fallbackTx <- RuleBasedRegimeManager
                             .lastFallback(r.partitions)

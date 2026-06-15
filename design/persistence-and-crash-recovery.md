@@ -198,9 +198,8 @@ requests is imposed downstream by fast consensus (block briefs), not by the fami
 > order (blocks, stacks). The word **lane** is reserved for the *peer-liaison
 > transport* view — what a `PeerLiaison*` pulls and serves over `GetMsgBatch`
 > (`LaneOutbound` / `LaneInbound`). A liaison serves a family's entries to a remote
-> *as a lane*; on disk that same sequence is a *family*. (Code still names the
-> persistence types `LaneId` / `LaneKey` / `LaneScan` / `LaneValue`; a `Family*`
-> rename is pending — §10 Q13.)
+> *as a lane*; on disk that same sequence is a *family* — and the persistence types are
+> named accordingly: `FamilyId` / `FamilyKey` / `FamilyScan` / `FamilyValue` (§10 Q13).
 
 ### 3.1 The families — one CF per author
 
@@ -1375,10 +1374,9 @@ of the committed bytes in our CFs, we rebuild actor state from there.
 
 **How we use it.**
 
-- **Families** = key `LaneKey` (a `LaneId` + the within-author index; §7.1) ⇒ replay
+- **Families** = key `FamilyKey` (a `FamilyId` + the within-author index; §7.1) ⇒ replay
   is a **range scan from a cursor**, RocksDB's sweet spot; the access pattern is
-  range-scan-by-family, not ad-hoc SQL. (Code names the types `LaneKey` / `LaneId`;
-  `Family*` rename pending, §10 Q13.)
+  range-scan-by-family, not ad-hoc SQL.
 - **Durability barriers** = one atomic **`WriteBatch`** spanning every CF the
   step touches + WAL sync ⇒ clean CR4/CR8/CR6.
 - **Confirmation-driven ack-pruning** = at confirmation, the aggregator writes
@@ -1480,16 +1478,14 @@ Notes / decisions:
 
 ### 7.1 Key layout — family IDs
 
-Two types, kept distinct: a **`LaneId`** names a family (the CF to scan); a
-**`LaneKey`** is a full addressable entry (`LaneId` + the within-author index).
-`LaneId` is the cursor/scan unit — §5.3 derives exactly one resume cursor per family.
-(The type names are still `LaneId` / `LaneKey` in code; `FamilyId` / `FamilyKey`
-rename pending, §10 Q13.)
+Two types, kept distinct: a **`FamilyId`** names a family (the CF to scan); a
+**`FamilyKey`** is a full addressable entry (`FamilyId` + the within-author index).
+`FamilyId` is the cursor/scan unit — §5.3 derives exactly one resume cursor per family.
 
 ```scala
 /** Identifies one single-writer family = the CF to scan.
   * Spines are head-global (no author); satellites are per author. */
-enum LaneId:
+enum FamilyId:
     case BlockSpine                       // the one block spine
     case StackSpine                       // the one stack spine
     case Request(peer: HeadPeerNumber)    // → CF "Request:<peer>"
@@ -1498,8 +1494,8 @@ enum LaneId:
     case CoilHardAck(coil: CoilPeerNumber)// → CF "CoilHardAck:<coil>"
     case HubHardAck(hub: HeadPeerNumber)  // → CF "HubHardAck:<hub>"
 
-/** A full entry key = LaneId + within-author index. */
-enum LaneKey:
+/** A full entry key = FamilyId + within-author index. */
+enum FamilyKey:
     case Block      (num: BlockNumber)
     case Stack      (num: StackNumber)
     case Request    (peer: HeadPeerNumber, num: RequestNumber)
@@ -1508,18 +1504,18 @@ enum LaneKey:
     case CoilHardAck(coil: CoilPeerNumber, num: HardAckNumber)
     case HubHardAck (hub: HeadPeerNumber, num: HubHardAckNumber)
 
-    def laneId: LaneId = this match
-        case Block(_)          => LaneId.BlockSpine
-        case Stack(_)          => LaneId.StackSpine
-        case Request(p, _)     => LaneId.Request(p)
-        case SoftAck(p, _)     => LaneId.SoftAck(p)
-        case HardAck(p, _)     => LaneId.HardAck(p)
-        case CoilHardAck(c, _) => LaneId.CoilHardAck(c)
-        case HubHardAck(h, _)  => LaneId.HubHardAck(h)
+    def familyId: FamilyId = this match
+        case Block(_)          => FamilyId.BlockSpine
+        case Stack(_)          => FamilyId.StackSpine
+        case Request(p, _)     => FamilyId.Request(p)
+        case SoftAck(p, _)     => FamilyId.SoftAck(p)
+        case HardAck(p, _)     => FamilyId.HardAck(p)
+        case CoilHardAck(c, _) => FamilyId.CoilHardAck(c)
+        case HubHardAck(h, _)  => FamilyId.HubHardAck(h)
 ```
 
 **Each family is its own column family — one CF per spine, one CF per satellite
-author** (§3.1). The `LaneId` maps to a CF handle (the CF *name* encodes
+author** (§3.1). The `FamilyId` maps to a CF handle (the CF *name* encodes
 kind + author; the handle map is built from head config at store-open), so the
 **author is the CF, not part of the on-disk key**. The encoded byte key is just the
 **within-author index**, big-endian fixed-width, so lexicographic byte order matches
@@ -1543,8 +1539,8 @@ compaction), the decisive property at the request rate (§7); it also drops the
 `[peer:1]` prefix the old multiplexed layout carried.
 
 **Range scan / cursor.** Each scan is the whole of one author's CF in index order.
-To replay a family from its cursor, pick the CF (`LaneId` → handle) and position an
-iterator at `[cursorBE]`. Each replay cursor (§5.3) is a `LaneKey` — its `laneId`
+To replay a family from its cursor, pick the CF (`FamilyId` → handle) and position an
+iterator at `[cursorBE]`. Each replay cursor (§5.3) is a `FamilyKey` — its `familyId`
 picks the CF, the index gives the seek key.
 
 **Values.** Family values are framed as `[arrivalStamp : 12][wirePayload …]` — the
@@ -1557,11 +1553,11 @@ prefix.
 
 > **Code reality (2026-06).** The per-author split above **is implemented**: `Cf` is
 > a sealed trait with per-author satellite cases (`Cf.Request(peer)` …), the
-> `BackendStore` opens a config-derived CF set, and `LaneKey.encode` carries only the
+> `BackendStore` opens a config-derived CF set, and `FamilyKey.encode` carries only the
 > within-author index (no prefix). `SoftAck` is keyed by `HeadPeerNumber` and stays
 > head-only (a coil peer anchors its fast side on `BlockResult`, not a soft-ack — §6
-> `JointLedger`). The code types are still named `LaneId` / `LaneKey`; the
-> `Family*` rename is the one remaining piece (§10 Q13).
+> `JointLedger`). The code types are named `FamilyId` / `FamilyKey` (the `Lane*` →
+> `Family*` rename landed, §10 Q13).
 
 ---
 
@@ -1805,11 +1801,12 @@ committed state is observationally equivalent to the no-crash run.*
     "no marker CF") vs. a small explicit index blob (cheaper boot, one more datum).
     The scan reads every `HubHardAck` value; pick the blob if a hub sequences high
     volume.
-13. **`Lane*` → `Family*` rename.** "Lane" is now reserved for the peer-liaison
-    transport (§3 vocabulary); the persistence types `LaneId` / `LaneKey` /
-    `LaneScan` / `LaneValue` should rename to `FamilyId` / `FamilyKey` / … . Mechanical
-    rename, **still pending** (the per-author split landed without it to keep that
-    change reviewable).
+13. ~~**`Lane*` → `Family*` rename.**~~ **Resolved.** "Lane" is reserved for the
+    peer-liaison transport (§3 vocabulary, `LaneOutbound` / `LaneInbound`); the
+    persistence types were renamed `LaneId` / `LaneKey` / `LaneScan` / `LaneValue` /
+    `RawLaneEntry` → `FamilyId` / `FamilyKey` / `FamilyScan` / `FamilyValue` /
+    `RawFamilyEntry` (+ `laneId` → `familyId`, `scanLanes` → `scanFamilies`), with the
+    source files renamed to match.
 14. ~~**Per-author family split — migration mechanics.**~~ **Resolved / implemented.**
     Each satellite family is now **one CF per author** (drop the `[author:1]` key
     prefix; the CF *is* the author), making each CF an append-only stream — decisive at
@@ -1840,7 +1837,7 @@ peers).
 
 | Step | Deliverable | Status |
 |---|---|---|
-| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `LaneId`/`LaneKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
+| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `FamilyId`/`FamilyKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
 | P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside (§6 `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 (§10 Q6). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** (Q6) |
 | P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each family value (§5.4). | ✅ |
 | P4 | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. | ✅ |

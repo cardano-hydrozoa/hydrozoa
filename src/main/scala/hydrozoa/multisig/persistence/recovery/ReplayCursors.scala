@@ -6,7 +6,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId.*
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{LaneKey, Markers}
+import hydrozoa.multisig.persistence.{FamilyKey, Markers}
 
 /** The recovery scan / feed cursors — `4 + 3N + H` (§5.3): the two spines carry **two cursors
   * each** (one per consumer role), three **single-cursor satellites** per head peer, and one
@@ -28,7 +28,7 @@ import hydrozoa.multisig.persistence.{LaneKey, Markers}
   * always — we confirm only what we have acked.) The satellites each have exactly one consumer, so
   * one cursor each.
   *
-  * Per-lane floors (from [[Markers]] + the acked stack + the request high-water; §5.3):
+  * Per-family floors (from [[Markers]] + the acked stack + the request high-water; §5.3):
   *
   *   - **BlockSpine** — `blockSpineForAggregator = softConfirmed + 1` (FastConsensusActor),
   *     `blockSpineForLedger = softAcked + 1` (BlockWeaver → JointLedger). `softAcked` is a
@@ -38,7 +38,7 @@ import hydrozoa.multisig.persistence.{LaneKey, Markers}
   *     `stackSpineForComposer = hardAckedStack + 1` (StackComposer). The acked **stack** is *not*
   *     in [[Markers]] (`Markers.hardAcked` is the author's `HardAckNumber` counter, not a
   *     `StackNumber`); the caller supplies it, sourced by unpacking the stack id from the last own
-  *     `HardAck` entry's value — the same slow-side hard-ack-lane indexing gap as the HardAck
+  *     `HardAck` entry's value — the same slow-side hard-ack-family indexing gap as the HardAck
   *     satellite floor below (§10 Q9).
   *   - **Request[p]** — high-water `+ 1` (BlockWeaver), from the persisted per-peer counter
   *     (maintained with [[maxRequestNumberPerPeer]]; not brief-folded — see that method). Single
@@ -47,9 +47,9 @@ import hydrozoa.multisig.persistence.{LaneKey, Markers}
   *     The soft-ack index coincides with the block number (§3.1), so the fast-side confirmed mark
   *     is the floor.
   *   - **HardAck[p]** — `0` for every peer (SlowConsensusActor aggregates them). ⚠ no derivable
-  *     floor: the hard-ack lane is `HardAckNumber`-indexed, not `StackNumber`, and no marker gives
-  *     the `StackNumber → HardAckNumber` correspondence. Scanning from 0 is correct, not minimal —
-  *     defer a tight floor to R3 (§10 Q9 / §6 StackComposer).
+  *     floor: the hard-ack family is `HardAckNumber`-indexed, not `StackNumber`, and no marker
+  *     gives the `StackNumber → HardAckNumber` correspondence. Scanning from 0 is correct, not
+  *     minimal — defer a tight floor to R3 (§10 Q9 / §6 StackComposer).
   *   - **HubHardAck[h]** — `0` for every hub (SlowConsensusActor reads them for the coil quorum,
   *     §3.1 — the `+ H`); same `HubHardAckNumber`-indexed scan-from-0 as `HardAck`.
   *
@@ -57,25 +57,25 @@ import hydrozoa.multisig.persistence.{LaneKey, Markers}
   * R1.
   */
 final case class ReplayCursors(
-    blockSpineForAggregator: LaneKey.Block,
-    blockSpineForLedger: LaneKey.Block,
-    stackSpineForAggregator: LaneKey.Stack,
-    stackSpineForComposer: LaneKey.Stack,
-    requests: Map[HeadPeerNumber, LaneKey.Request],
-    softAcks: Map[HeadPeerNumber, LaneKey.SoftAck],
-    hardAcks: Map[HeadPeerNumber, LaneKey.HardAck],
-    hubHardAcks: Map[HeadPeerNumber, LaneKey.HubHardAck]
+    blockSpineForAggregator: FamilyKey.Block,
+    blockSpineForLedger: FamilyKey.Block,
+    stackSpineForAggregator: FamilyKey.Stack,
+    stackSpineForComposer: FamilyKey.Stack,
+    requests: Map[HeadPeerNumber, FamilyKey.Request],
+    softAcks: Map[HeadPeerNumber, FamilyKey.SoftAck],
+    hardAcks: Map[HeadPeerNumber, FamilyKey.HardAck],
+    hubHardAcks: Map[HeadPeerNumber, FamilyKey.HubHardAck]
 ):
-    /** The lanes to **scan**, each from its lowest floor (the widest tail any consumer needs): the
-      * two spines from their aggregator (`*Confirmed + 1`) cursor — the lower of each spine's two,
-      * since `confirmed ≤ acked` — then the satellites and the hubs' `HubHardAck` families. Exactly
-      * `2 + 3N + H` entries (one scan per lane). The ledger consumer's `acked` slicing happens at
-      * feed time in the `ReplayActor` (R3), not at scan time. Spine order is fixed; satellite order
-      * is unspecified (hashed by `HeadPeerNumber`) and washed out by [[ArrivalOrderedMerge]]'s
-      * stamp re-sort — do not rely on it.
+    /** The families to **scan**, each from its lowest floor (the widest tail any consumer needs):
+      * the two spines from their aggregator (`*Confirmed + 1`) cursor — the lower of each spine's
+      * two, since `confirmed ≤ acked` — then the satellites and the hubs' `HubHardAck` families.
+      * Exactly `2 + 3N + H` entries (one scan per family). The ledger consumer's `acked` slicing
+      * happens at feed time in the `ReplayActor` (R3), not at scan time. Spine order is fixed;
+      * satellite order is unspecified (hashed by `HeadPeerNumber`) and washed out by
+      * [[ArrivalOrderedMerge]]'s stamp re-sort — do not rely on it.
       */
-    def scanFloors: List[LaneKey] =
-        List[LaneKey](blockSpineForAggregator, stackSpineForAggregator) ++
+    def scanFloors: List[FamilyKey] =
+        List[FamilyKey](blockSpineForAggregator, stackSpineForAggregator) ++
             requests.values ++ softAcks.values ++ hardAcks.values ++ hubHardAcks.values
 
 object ReplayCursors:
@@ -107,17 +107,17 @@ object ReplayCursors:
             markers.softConfirmed.map(b => SoftAckNumber((b: Int) + 1)).getOrElse(SoftAckNumber(0))
 
         ReplayCursors(
-          blockSpineForAggregator = LaneKey.Block(softConfirmedFloor),
-          blockSpineForLedger = LaneKey.Block(softAckedFloor),
-          stackSpineForAggregator = LaneKey.Stack(hardConfirmedFloor),
-          stackSpineForComposer = LaneKey.Stack(hardAckedFloor),
+          blockSpineForAggregator = FamilyKey.Block(softConfirmedFloor),
+          blockSpineForLedger = FamilyKey.Block(softAckedFloor),
+          stackSpineForAggregator = FamilyKey.Stack(hardConfirmedFloor),
+          stackSpineForComposer = FamilyKey.Stack(hardAckedFloor),
           requests = peers.map { p =>
               val floor = highestIncludedRequest.get(p).map(_.increment).getOrElse(RequestNumber(0))
-              p -> LaneKey.Request(p, floor)
+              p -> FamilyKey.Request(p, floor)
           }.toMap,
-          softAcks = peers.map(p => p -> LaneKey.SoftAck(p, softAckFloor)).toMap,
-          hardAcks = peers.map(p => p -> LaneKey.HardAck(p, HardAckNumber(0))).toMap,
-          hubHardAcks = hubs.map(h => h -> LaneKey.HubHardAck(h, HubHardAckNumber.zero)).toMap
+          softAcks = peers.map(p => p -> FamilyKey.SoftAck(p, softAckFloor)).toMap,
+          hardAcks = peers.map(p => p -> FamilyKey.HardAck(p, HardAckNumber(0))).toMap,
+          hubHardAcks = hubs.map(h => h -> FamilyKey.HubHardAck(h, HubHardAckNumber.zero)).toMap
         )
 
     /** Fold a stream of `RequestId`s to the max `RequestNumber` per author. The kernel that

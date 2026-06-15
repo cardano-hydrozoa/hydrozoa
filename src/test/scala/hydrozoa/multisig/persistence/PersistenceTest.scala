@@ -21,8 +21,8 @@ import org.scalatest.funsuite.AnyFunSuite
   * `Array[Byte]` at the call sites, just typed [[StoreKey]] + path-dependent `key.Value`.
   *
   * CFs with a real `Value` type round-trip their typed payload (e.g. `DepositMap` →
-  * [[DepositsMap]], `Treasury` → `MultisigTreasuryUtxo`, `EvacuationMap`); lane CFs carry a
-  * [[LaneValue]] (`StoreCodec.laneValue` framing, exercised end-to-end by stage1/stage4) and only
+  * [[DepositsMap]], `Treasury` → `MultisigTreasuryUtxo`, `EvacuationMap`); family CFs carry a
+  * [[FamilyValue]] (`StoreCodec.laneValue` framing, exercised end-to-end by stage1/stage4) and only
   * `Meta` stays on the `Array[Byte]` passthrough.
   */
 class PersistenceTest extends AnyFunSuite:
@@ -78,7 +78,7 @@ class PersistenceTest extends AnyFunSuite:
 
     test("typed WriteBatch lands a 4-CF bundle atomically across distinct CFs") {
         // Atomic multi-CF write, using the CFs with easy fixtures (typed snapshots + Meta bytes).
-        // Lane-CF (`LaneValue`) round-trips are exercised end-to-end by the stage1/stage4 runs;
+        // Family-CF (`FamilyValue`) round-trips are exercised end-to-end by the stage1/stage4 runs;
         // the framing itself is covered below.
         withTypedStore { p =>
             val treasury = TreasuryFixture.sampleTreasury
@@ -132,14 +132,14 @@ class PersistenceTest extends AnyFunSuite:
         }
     }
 
-    test("LaneValue framing round-trips ArrivalStamp + payload bytes") {
+    test("FamilyValue framing round-trips ArrivalStamp + payload bytes") {
         val stamp = ArrivalStamp(generation = 7, monotonicNanos = 0x0102030405060708L)
         val payload = Array[Byte](0xaa.toByte, 0xbb.toByte, 0xcc.toByte)
-        val framed = LaneValue.frame(stamp, payload)
+        val framed = FamilyValue.frame(stamp, payload)
         assert(
-          LaneValue.stamp(framed) == stamp &&
-              java.util.Arrays.equals(LaneValue.payload(framed), payload) &&
-              framed.length == LaneValue.stampWidth + payload.length
+          FamilyValue.stamp(framed) == stamp &&
+              java.util.Arrays.equals(FamilyValue.payload(framed), payload) &&
+              framed.length == FamilyValue.stampWidth + payload.length
         )
     }
 

@@ -33,7 +33,7 @@ final case class Markers(
 
 object Markers:
     /** Read all four markers from `backend`, scoping the `*Acked` derivations to `own`. With the
-      * per-author CF split each satellite CF holds exactly one author's lane, so the own `*Acked`
+      * per-author CF split each satellite CF holds exactly one author's family, so the own `*Acked`
       * marks are just `lastKey` of the own-author CF — no prefix scan (§7.1).
       */
     def derive(backend: BackendStore[IO], own: HeadPeerNumber): IO[Markers] =
@@ -78,7 +78,7 @@ object Markers:
     /** `hardConfirmed = max(HardConfirmation.key)` — shared across peer types (the
       * `HardConfirmation` CF is keyed by `StackNumber`, written at confirmation by every peer, §6
       * `SlowConsensusActor`). Exposed standalone so a coil peer can derive it without the head-only
-      * [[derive]] (which scans the head `HardAck` lane).
+      * [[derive]] (which scans the head `HardAck` family).
       */
     def recoverHardConfirmed(backend: BackendStore[IO]): IO[Option[StackNumber]] =
         backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum))
@@ -86,7 +86,7 @@ object Markers:
     /** `softConfirmed = max(SoftConfirmation.key)` — shared across peer types (the
       * `SoftConfirmation` CF is keyed by `blockNum`, written by every peer's `FastConsensusActor`,
       * including a coil peer's aggregator-only one). Exposed standalone so a coil peer can derive
-      * it without the head-only [[derive]] (which also scans the head `SoftAck` lane a coil peer
+      * it without the head-only [[derive]] (which also scans the head `SoftAck` family a coil peer
       * never authors).
       */
     def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
@@ -112,7 +112,7 @@ object Markers:
         requireWidth(bytes, 4, "HardAck key")
         HardAckNumber(ByteBuffer.wrap(bytes).getInt)
 
-    /** Decode `RequestNumber` from a per-author Request key `[requestNum:8]` — the Request lane
+    /** Decode `RequestNumber` from a per-author Request key `[requestNum:8]` — the Request family
       * uses an 8-byte index, unlike the 4-byte soft/hard-ack indices.
       */
     private def decodeSatelliteNumRequest(bytes: Array[Byte]): RequestNumber =

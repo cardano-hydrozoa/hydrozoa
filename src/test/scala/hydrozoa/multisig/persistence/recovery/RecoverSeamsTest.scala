@@ -25,7 +25,7 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, LaneKey, LaneValue, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, FamilyKey, FamilyValue, Markers, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
@@ -78,7 +78,7 @@ class RecoverSeamsTest extends AnyFunSuite:
         withStore { p =>
             for
                 brief <- blockBrief(4)
-                _ <- p.put(LaneKey.Block(BlockNumber(4)))(LaneValue(stamp, brief))
+                _ <- p.put(FamilyKey.Block(BlockNumber(4)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 done <- JointLedger.State.recoverState(p, Some(SoftAckNumber(4)))
             yield assert(
@@ -100,7 +100,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 // Crash boundary: softAcked = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
-                _ <- p.put(LaneKey.Block(BlockNumber(2)))(LaneValue(stamp, brief))
+                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 done <- JointLedger.State.recover(p, ledger, Some(SoftAckNumber(2)))
@@ -132,7 +132,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                     ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                 )
                 // Coil crash boundary: coilBlockMark = block 2, recorded at L2 command number 2. A
-                // coil peer writes no own SoftAck/Block lane, so its header comes from BlockResult.
+                // coil peer writes no own SoftAck/Block family, so its header comes from BlockResult.
                 br <- blockResult(2)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br)
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
@@ -170,10 +170,10 @@ class RecoverSeamsTest extends AnyFunSuite:
             val lastBlock = 7
             for
                 sb <- stackBrief(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
-                _ <- p.put(LaneKey.HardAck(own, HardAckNumber(hardAckNum)))(
-                  LaneValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
+                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(hardAckNum)))(
+                  FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
-                _ <- p.put(LaneKey.Stack(StackNumber(stackN)))(LaneValue(stamp, sb))
+                _ <- p.put(FamilyKey.Stack(StackNumber(stackN)))(FamilyValue(stamp, sb))
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 markers = Markers(
@@ -213,10 +213,10 @@ class RecoverSeamsTest extends AnyFunSuite:
             val lastBlock = 3
             for
                 sb <- stackBrief(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
-                _ <- p.put(LaneKey.HardAck(own, HardAckNumber(0)))(
-                  LaneValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
+                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+                  FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
                 )
-                _ <- p.put(LaneKey.Stack(StackNumber(stackN)))(LaneValue(stamp, sb))
+                _ <- p.put(FamilyKey.Stack(StackNumber(stackN)))(FamilyValue(stamp, sb))
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block must be excluded (scan is exclusive).
@@ -257,7 +257,7 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     test(
       "StackComposer.recoverCoil rebuilds counters + snapshots from the last own CoilHardAck; " +
-          "lastBlockNum comes from the UnsignedStack, not a Stack lane"
+          "lastBlockNum comes from the UnsignedStack, not a Stack family"
     ) {
         withStore { p =>
             val coil = CoilPeerNumber(0)
@@ -274,7 +274,7 @@ class RecoverSeamsTest extends AnyFunSuite:
             )
             for
                 sb <- stackBrief(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
-                // A coil peer has no own Stack lane; the closing stack's lastBlockNum comes from the
+                // A coil peer has no own Stack family; the closing stack's lastBlockNum comes from the
                 // UnsignedStack it persists on every close.
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(
                   Stack.Unsigned(
@@ -288,8 +288,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 // The last own hard-ack number is 5, belonging to stack 2 — the stack number comes
                 // from the CoilHardAck VALUE, and the ack lives in CoilHardAck (not HardAck).
-                _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(hardAckNum)))(
-                  LaneValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
+                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(hardAckNum)))(
+                  FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
@@ -335,7 +335,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 brief <- blockBrief(2)
-                _ <- p.put(LaneKey.Block(BlockNumber(2)))(LaneValue(stamp, brief))
+                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
                 r <- JointLedger.State.recover(p, ledger, Some(SoftAckNumber(2))).attempt
@@ -348,10 +348,10 @@ class RecoverSeamsTest extends AnyFunSuite:
             val own = HeadPeerNumber(0)
             for
                 sb <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
-                _ <- p.put(LaneKey.HardAck(own, HardAckNumber(0)))(
-                  LaneValue(stamp, hardAck(peer = 0, ackNum = 0, stack = 1))
+                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+                  FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = 1))
                 )
-                _ <- p.put(LaneKey.Stack(StackNumber(1)))(LaneValue(stamp, sb))
+                _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, sb))
                 // Treasury intentionally not written
                 markers = Markers(None, Some(StackNumber(1)), None, Some(HardAckNumber(0)))
                 r <- StackComposer.State
@@ -412,13 +412,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- List(0L, 1L, 2L, 5_000_000_000L).traverse_(k =>
                     p.backend.put(
                       Cf.Request(own),
-                      LaneKey.Request(own, RequestNumber(k)).encode,
+                      FamilyKey.Request(own, RequestNumber(k)).encode,
                       Array[Byte](0)
                     )
                 )
                 _ <- p.backend.put(
                   Cf.Request(HeadPeerNumber(2)),
-                  LaneKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
+                  FamilyKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
                   Array[Byte](0)
                 )
                 n <- Markers.recoverNextRequestNumber(p.backend, own)
@@ -485,22 +485,22 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 // own HardAcks 0..2 + another peer's at 5 (must be excluded by the per-peer scan).
                 _ <- List(0, 1, 2).traverse_(k =>
-                    p.put(LaneKey.HardAck(ownNum, HardAckNumber(k)))(
-                      LaneValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
+                    p.put(FamilyKey.HardAck(ownNum, HardAckNumber(k)))(
+                      FamilyValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
                     )
                 )
-                _ <- p.put(LaneKey.HardAck(other, HardAckNumber(5)))(
-                  LaneValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
+                _ <- p.put(FamilyKey.HardAck(other, HardAckNumber(5)))(
+                  FamilyValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
                 )
                 // Block + Stack spines carry every leader's brief; recover keeps only own-led.
                 _ <- spineRange.traverse_(n =>
                     blockBrief(n).flatMap(b =>
-                        p.put(LaneKey.Block(BlockNumber(n)))(LaneValue(stamp, b))
+                        p.put(FamilyKey.Block(BlockNumber(n)))(FamilyValue(stamp, b))
                     )
                 )
                 _ <- spineRange.traverse_(n =>
                     stackBrief(stack = n, firstBlock = 0, lastBlock = n).flatMap(s =>
-                        p.put(LaneKey.Stack(StackNumber(n)))(LaneValue(stamp, s))
+                        p.put(FamilyKey.Stack(StackNumber(n)))(FamilyValue(stamp, s))
                     )
                 )
                 seed <- PeerLiaisonHeadToHead

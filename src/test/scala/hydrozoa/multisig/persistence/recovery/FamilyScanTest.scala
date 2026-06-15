@@ -12,24 +12,24 @@ import hydrozoa.multisig.persistence.*
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Unit tests for [[LaneScan]] — that it returns a lane's tail in index order from the cursor,
+/** Unit tests for [[FamilyScan]] — that it returns a family's tail in index order from the cursor,
   * recovers the arrival stamp, and stops at the satellite peer boundary (the §7.1 multiplexing).
   */
-class LaneScanTest extends AnyFunSuite:
+class FamilyScanTest extends AnyFunSuite:
 
     private def stampN(n: Int): ArrivalStamp = ArrivalStamp(1, n.toLong)
 
-    /** Put a framed lane value (`[stamp : 12][payload …]`) at `key` with an arbitrary payload. */
-    private def putLane(backend: BackendStore[IO], key: LaneKey, stamp: ArrivalStamp): IO[Unit] =
-        val framed = LaneValue.frame(stamp, s"payload-$key".getBytes("UTF-8"))
+    /** Put a framed family value (`[stamp : 12][payload …]`) at `key` with an arbitrary payload. */
+    private def putLane(backend: BackendStore[IO], key: FamilyKey, stamp: ArrivalStamp): IO[Unit] =
+        val framed = FamilyValue.frame(stamp, s"payload-$key".getBytes("UTF-8"))
         backend.put(key.cf, key.encode, framed)
 
-    test("scan returns a spine lane from the cursor (inclusive) to the end, in index order") {
+    test("scan returns a spine family from the cursor (inclusive) to the end, in index order") {
         withStore { backend =>
-            val keys = List(0, 1, 2, 3).map(n => LaneKey.Block(BlockNumber(n)))
+            val keys = List(0, 1, 2, 3).map(n => FamilyKey.Block(BlockNumber(n)))
             for
                 _ <- keys.traverse(k => putLane(backend, k, stampN(k.num)))
-                entries <- LaneScan.scan(backend, LaneKey.Block(BlockNumber(1)))
+                entries <- FamilyScan.scan(backend, FamilyKey.Block(BlockNumber(1)))
             yield
                 assert(entries.map(_.key) == keys.drop(1))
                 assert(entries.map(_.stamp) == List(1, 2, 3).map(stampN))
@@ -40,43 +40,43 @@ class LaneScanTest extends AnyFunSuite:
         withStore { backend =>
             val peer0 = HeadPeerNumber(0)
             val peer1 = HeadPeerNumber(1)
-            val p0Keys = List(0, 1, 2).map(n => LaneKey.HardAck(peer0, HardAckNumber(n)))
-            val p1Keys = List(0, 1).map(n => LaneKey.HardAck(peer1, HardAckNumber(n)))
+            val p0Keys = List(0, 1, 2).map(n => FamilyKey.HardAck(peer0, HardAckNumber(n)))
+            val p1Keys = List(0, 1).map(n => FamilyKey.HardAck(peer1, HardAckNumber(n)))
             for
                 _ <- (p0Keys ++ p1Keys).traverse(k => putLane(backend, k, stampN(0)))
-                fromP0 <- LaneScan.scan(backend, LaneKey.HardAck(peer0, HardAckNumber(0)))
-                fromP1 <- LaneScan.scan(backend, LaneKey.HardAck(peer1, HardAckNumber(0)))
+                fromP0 <- FamilyScan.scan(backend, FamilyKey.HardAck(peer0, HardAckNumber(0)))
+                fromP1 <- FamilyScan.scan(backend, FamilyKey.HardAck(peer1, HardAckNumber(0)))
             yield
                 assert(fromP0.map(_.key) == p0Keys, "peer 0 scan must stop before peer 1")
                 assert(fromP1.map(_.key) == p1Keys)
         }
     }
 
-    test("scan from a mid-lane cursor skips earlier indices") {
+    test("scan from a mid-family cursor skips earlier indices") {
         withStore { backend =>
             val peer = HeadPeerNumber(2)
-            val keys = List(0, 1, 5, 9).map(n => LaneKey.HardAck(peer, HardAckNumber(n)))
+            val keys = List(0, 1, 5, 9).map(n => FamilyKey.HardAck(peer, HardAckNumber(n)))
             for
                 _ <- keys.traverse(k => putLane(backend, k, stampN(0)))
-                entries <- LaneScan.scan(backend, LaneKey.HardAck(peer, HardAckNumber(2)))
+                entries <- FamilyScan.scan(backend, FamilyKey.HardAck(peer, HardAckNumber(2)))
             yield assert(
-              entries.map(_.key) == List(5, 9).map(n => LaneKey.HardAck(peer, HardAckNumber(n)))
+              entries.map(_.key) == List(5, 9).map(n => FamilyKey.HardAck(peer, HardAckNumber(n)))
             )
         }
     }
 
-    test("scan of an empty lane is empty") {
+    test("scan of an empty family is empty") {
         withStore { backend =>
-            LaneScan.scan(backend, LaneKey.Block(BlockNumber(0))).map(e => assert(e.isEmpty))
+            FamilyScan.scan(backend, FamilyKey.Block(BlockNumber(0))).map(e => assert(e.isEmpty))
         }
     }
 
     test("payloadBytes round-trips the framed wire payload") {
         withStore { backend =>
-            val key = LaneKey.Block(BlockNumber(0))
+            val key = FamilyKey.Block(BlockNumber(0))
             for
                 _ <- putLane(backend, key, stampN(7))
-                entries <- LaneScan.scan(backend, key)
+                entries <- FamilyScan.scan(backend, key)
             yield
                 assert(entries.size == 1)
                 assert(new String(entries.head.payloadBytes, "UTF-8") == s"payload-$key")
@@ -84,7 +84,7 @@ class LaneScanTest extends AnyFunSuite:
         }
     }
 
-    test("round-trip: derive -> scanLanes -> merge over a full multi-peer multi-lane store") {
+    test("round-trip: derive -> scanFamilies -> merge over a full multi-peer multi-family store") {
         withStore { backend =>
             // Three peers, including a high byte (200 = 0xC8, negative as a signed byte) to catch
             // any signed-vs-unsigned peer-byte slip at the satellite scan boundary.
@@ -99,7 +99,7 @@ class LaneScanTest extends AnyFunSuite:
               HeadPeerNumber(0) -> RequestNumber(4), // request floor 5
               HeadPeerNumber(200) -> RequestNumber(1) // request floor 2; peer 1 absent -> floor 0
             )
-            // scanLanes uses the lower (confirmed) spine floors, so the acked stack is irrelevant
+            // scanFamilies uses the lower (confirmed) spine floors, so the acked stack is irrelevant
             // to this round-trip; pass an arbitrary present value.
             val cursors =
                 ReplayCursors.derive(
@@ -110,32 +110,32 @@ class LaneScanTest extends AnyFunSuite:
                   hardAckedStack = Some(StackNumber(1))
                 )
 
-            // For each lane: a few indices below its floor (must be skipped) and a few at/above it
+            // For each family: a few indices below its floor (must be skipped) and a few at/above it
             // (must be returned). Stamp generation alternates per entry so the merge's cross-process
             // ordering (generation dominates monotonicNanos) is exercised on real scanned entries.
-            val below: List[LaneKey] = List(
-              LaneKey.Block(BlockNumber(0)),
-              LaneKey.Block(BlockNumber(2)),
-              LaneKey.Stack(StackNumber(0)),
-              LaneKey.Request(HeadPeerNumber(0), RequestNumber(4)),
-              LaneKey.Request(HeadPeerNumber(200), RequestNumber(1)),
-              LaneKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(2)),
-              LaneKey.SoftAck(HeadPeerNumber(200), SoftAckNumber(2))
+            val below: List[FamilyKey] = List(
+              FamilyKey.Block(BlockNumber(0)),
+              FamilyKey.Block(BlockNumber(2)),
+              FamilyKey.Stack(StackNumber(0)),
+              FamilyKey.Request(HeadPeerNumber(0), RequestNumber(4)),
+              FamilyKey.Request(HeadPeerNumber(200), RequestNumber(1)),
+              FamilyKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(2)),
+              FamilyKey.SoftAck(HeadPeerNumber(200), SoftAckNumber(2))
             )
-            val above: List[LaneKey] = List(
-              LaneKey.Block(BlockNumber(3)),
-              LaneKey.Block(BlockNumber(4)),
-              LaneKey.Stack(StackNumber(2)),
-              LaneKey.Stack(StackNumber(3)),
-              LaneKey.Request(HeadPeerNumber(0), RequestNumber(5)),
-              LaneKey.Request(HeadPeerNumber(1), RequestNumber(0)),
-              LaneKey.Request(HeadPeerNumber(200), RequestNumber(2)),
-              LaneKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(3)),
-              LaneKey.SoftAck(HeadPeerNumber(1), SoftAckNumber(3)),
-              LaneKey.SoftAck(HeadPeerNumber(200), SoftAckNumber(4)),
-              LaneKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)),
-              LaneKey.HardAck(HeadPeerNumber(1), HardAckNumber(1)),
-              LaneKey.HardAck(HeadPeerNumber(200), HardAckNumber(0))
+            val above: List[FamilyKey] = List(
+              FamilyKey.Block(BlockNumber(3)),
+              FamilyKey.Block(BlockNumber(4)),
+              FamilyKey.Stack(StackNumber(2)),
+              FamilyKey.Stack(StackNumber(3)),
+              FamilyKey.Request(HeadPeerNumber(0), RequestNumber(5)),
+              FamilyKey.Request(HeadPeerNumber(1), RequestNumber(0)),
+              FamilyKey.Request(HeadPeerNumber(200), RequestNumber(2)),
+              FamilyKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(3)),
+              FamilyKey.SoftAck(HeadPeerNumber(1), SoftAckNumber(3)),
+              FamilyKey.SoftAck(HeadPeerNumber(200), SoftAckNumber(4)),
+              FamilyKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)),
+              FamilyKey.HardAck(HeadPeerNumber(1), HardAckNumber(1)),
+              FamilyKey.HardAck(HeadPeerNumber(200), HardAckNumber(0))
             )
             // Stamp gen alternates 1/2 across the combined seed list while monotonic increases, so
             // some gen-1 entries get a higher monotonic than some gen-2 ones — a mono-only sort
@@ -145,16 +145,16 @@ class LaneScanTest extends AnyFunSuite:
             }
             for
                 _ <- seed.traverse { case (k, stamp) =>
-                    backend.put(k.cf, k.encode, LaneValue.frame(stamp, s"v-$k".getBytes("UTF-8")))
+                    backend.put(k.cf, k.encode, FamilyValue.frame(stamp, s"v-$k".getBytes("UTF-8")))
                 }
-                perLane <- LaneScan.scanLanes(backend, cursors)
+                perLane <- FamilyScan.scanFamilies(backend, cursors)
                 merged = ArrivalOrderedMerge.merge(perLane)
             yield
                 val gotKeys = merged.map(_.key)
                 // (a) exactly the above-floor keys: no below-floor leak, no cross-peer bleed.
                 assert(gotKeys.toSet == above.toSet, s"got ${gotKeys.toSet}")
                 // (b)+(d) nothing dropped or duplicated: count matches both the expected set and the
-                // sum of per-lane tail sizes.
+                // sum of per-family tail sizes.
                 assert(gotKeys.size == above.size)
                 assert(merged.size == perLane.map(_.size).sum)
                 // (c) merged stream is exactly arrival-stamp ordered (generation, then monotonic).

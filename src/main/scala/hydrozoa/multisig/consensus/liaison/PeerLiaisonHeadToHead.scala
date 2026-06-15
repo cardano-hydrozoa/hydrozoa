@@ -18,8 +18,8 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, 
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.LaneScan
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -179,29 +179,31 @@ abstract class PeerLiaisonHeadToHead(
       */
     private def persistInbound(m: Mesh.New): IO[Unit] =
         persistence.arrivalStamp.flatMap { stamp =>
-            def lv[P](payload: P): LaneValue[P] = LaneValue(stamp, payload)
+            def lv[P](payload: P): FamilyValue[P] = FamilyValue(stamp, payload)
             val puts: List[WriteBatch => WriteBatch] =
                 List(
-                  m.block.map(b => (wb: WriteBatch) => wb.put(LaneKey.Block(b.blockNum))(lv(b))),
-                  m.stack.map(s => (wb: WriteBatch) => wb.put(LaneKey.Stack(s.stackNum))(lv(s))),
+                  m.block.map(b => (wb: WriteBatch) => wb.put(FamilyKey.Block(b.blockNum))(lv(b))),
+                  m.stack.map(s => (wb: WriteBatch) => wb.put(FamilyKey.Stack(s.stackNum))(lv(s))),
                   m.softAck.map(a =>
-                      (wb: WriteBatch) => wb.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                      (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                   ),
                   m.headHardAck.flatMap(a =>
                       a.peerId match {
                           case PeerId.Head(n) =>
                               Some((wb: WriteBatch) =>
-                                  wb.put(LaneKey.HardAck(n, a.hardAckNum))(lv(a))
+                                  wb.put(FamilyKey.HardAck(n, a.hardAckNum))(lv(a))
                               )
                           case PeerId.Coil(_) => None
                       }
                   ),
                   m.hubHardAck.map(h =>
-                      (wb: WriteBatch) => wb.put(LaneKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                      (wb: WriteBatch) => wb.put(FamilyKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
                   )
                 ).flatten ++ m.requests.map(r =>
                     (wb: WriteBatch) =>
-                        wb.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(lv(r))
+                        wb.put(FamilyKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                          lv(r)
+                        )
                 )
             val full = puts.foldLeft(WriteBatch.start)((wb, put) => put(wb))
             IO.whenA(full.size > 0)(persistence.write(full))
@@ -406,35 +408,35 @@ object PeerLiaisonHeadToHead {
         canLeadSlow: StackNumber => Boolean
     )(using CardanoNetwork.Section): IO[OutboxSeed] =
         val backend = persistence.backend
-        val kSoftAck = LaneKey.SoftAck(ownNum, SoftAckNumber.zero)
-        val kRequest = LaneKey.Request(ownNum, RequestNumber.zero)
-        val kHardAck = LaneKey.HardAck(ownNum, HardAckNumber.zero)
-        val kBlock = LaneKey.Block(BlockNumber.zero)
-        val kStack = LaneKey.Stack(StackNumber.zero)
-        val kHubHardAck = LaneKey.HubHardAck(ownNum, HubHardAckNumber.zero)
+        val kSoftAck = FamilyKey.SoftAck(ownNum, SoftAckNumber.zero)
+        val kRequest = FamilyKey.Request(ownNum, RequestNumber.zero)
+        val kHardAck = FamilyKey.HardAck(ownNum, HardAckNumber.zero)
+        val kBlock = FamilyKey.Block(BlockNumber.zero)
+        val kStack = FamilyKey.Stack(StackNumber.zero)
+        val kHubHardAck = FamilyKey.HubHardAck(ownNum, HubHardAckNumber.zero)
         for {
-            softAcks <- LaneScan
+            softAcks <- FamilyScan
                 .scan(backend, kSoftAck)
                 .map(_.map(e => kSoftAck.decodeValue(e.framed).payload))
-            requests <- LaneScan
+            requests <- FamilyScan
                 .scan(backend, kRequest)
                 .map(_.map(e => kRequest.decodeValue(e.framed).payload))
-            hardAcks <- LaneScan
+            hardAcks <- FamilyScan
                 .scan(backend, kHardAck)
                 .map(_.map(e => kHardAck.decodeValue(e.framed).payload))
-            blocks <- LaneScan
+            blocks <- FamilyScan
                 .scan(backend, kBlock)
                 .map(
                   _.map(e => kBlock.decodeValue(e.framed).payload)
                       .filter(b => canLeadFast(b.blockNum))
                 )
-            stacks <- LaneScan
+            stacks <- FamilyScan
                 .scan(backend, kStack)
                 .map(
                   _.map(e => kStack.decodeValue(e.framed).payload)
                       .filter(s => canLeadSlow(s.stackNum))
                 )
-            hubHardAcks <- LaneScan
+            hubHardAcks <- FamilyScan
                 .scan(backend, kHubHardAck)
                 .map(_.map(e => kHubHardAck.decodeValue(e.framed).payload))
         } yield OutboxSeed(

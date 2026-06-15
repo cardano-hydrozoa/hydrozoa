@@ -18,8 +18,8 @@ import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsens
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.LaneScan
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -210,34 +210,38 @@ abstract class PeerLiaisonCoilToHub(
       */
     private def persistInbound(pop: Population.New): IO[Unit] =
         persistence.arrivalStamp.flatMap { stamp =>
-            def lv[P](payload: P): LaneValue[P] = LaneValue(stamp, payload)
+            def lv[P](payload: P): FamilyValue[P] = FamilyValue(stamp, payload)
             val spinePuts: List[WriteBatch => WriteBatch] =
                 List(
-                  pop.block.map(b => (wb: WriteBatch) => wb.put(LaneKey.Block(b.blockNum))(lv(b))),
-                  pop.stack.map(s => (wb: WriteBatch) => wb.put(LaneKey.Stack(s.stackNum))(lv(s)))
+                  pop.block.map(b =>
+                      (wb: WriteBatch) => wb.put(FamilyKey.Block(b.blockNum))(lv(b))
+                  ),
+                  pop.stack.map(s => (wb: WriteBatch) => wb.put(FamilyKey.Stack(s.stackNum))(lv(s)))
                 ).flatten
             val requestPuts: List[WriteBatch => WriteBatch] =
                 pop.requests.values.flatten.toList.map(r =>
                     (wb: WriteBatch) =>
-                        wb.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(lv(r))
+                        wb.put(FamilyKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                          lv(r)
+                        )
                 )
             val softAckPuts: List[WriteBatch => WriteBatch] =
                 pop.softAcks.values.flatten.toList.map(a =>
-                    (wb: WriteBatch) => wb.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                    (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                 )
             val headHardAckPuts: List[WriteBatch => WriteBatch] =
                 pop.headHardAcks.values.flatten.toList.flatMap(a =>
                     a.peerId match {
                         case PeerId.Head(n) =>
                             Some((wb: WriteBatch) =>
-                                wb.put(LaneKey.HardAck(n, a.hardAckNum))(lv(a))
+                                wb.put(FamilyKey.HardAck(n, a.hardAckNum))(lv(a))
                             )
                         case PeerId.Coil(_) => None
                     }
                 )
             val coilHardAckPuts: List[WriteBatch => WriteBatch] =
                 pop.coilHardAcks.values.flatten.toList.map(h =>
-                    (wb: WriteBatch) => wb.put(LaneKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                    (wb: WriteBatch) => wb.put(FamilyKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
                 )
             val full =
                 (spinePuts ++ requestPuts ++ softAckPuts ++ headHardAckPuts ++ coilHardAckPuts)
@@ -341,8 +345,8 @@ object PeerLiaisonCoilToHub {
     def recover(persistence: Persistence[IO], coil: CoilPeerNumber)(using
         CardanoNetwork.Section
     ): IO[List[HardAck]] =
-        val k = LaneKey.CoilHardAck(coil, HardAckNumber.zero)
-        LaneScan.scan(persistence.backend, k).map(_.map(e => k.decodeValue(e.framed).payload))
+        val k = FamilyKey.CoilHardAck(coil, HardAckNumber.zero)
+        FamilyScan.scan(persistence.backend, k).map(_.map(e => k.decodeValue(e.framed).payload))
 
     /** The local actors a verified population reply routes to, plus the send path to the hub's
       * counterpart liaison.

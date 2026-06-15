@@ -8,7 +8,7 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, LaneKey, LaneValue, Persistence}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -78,7 +78,7 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
     private def putHubAck(p: Persistence[IO], seq: Int, coil: Int, hardAckNum: Int): IO[Unit] =
         val ack = coilHardAck(coil, hardAckNum)
         val hubAck = HardAckWithId(hubPeer = hub, seqNum = HubHardAckNumber(seq), ack = ack)
-        p.put(LaneKey.HubHardAck(hub, HubHardAckNumber(seq)))(LaneValue(stamp, hubAck))
+        p.put(FamilyKey.HubHardAck(hub, HubHardAckNumber(seq)))(FamilyValue(stamp, hubAck))
 
     /** A coil-authored hard-ack fixture (signature contents are irrelevant to sequencing). */
     private def coilHardAck(coil: Int, hardAckNum: Int): HardAck =

@@ -9,12 +9,12 @@ import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
-/** Property-based round-trip tests for [[LaneKey]] encode / decode.
+/** Property-based round-trip tests for [[FamilyKey]] encode / decode.
   *
-  * Verifies the §7.1 invariant: bytes written can be parsed back to the same `LaneKey` for every
-  * lane case across the full legal index range.
+  * Verifies the §7.1 invariant: bytes written can be parsed back to the same `FamilyKey` for every
+  * family case across the full legal index range.
   */
-class LaneKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
+class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
 
     private val peer: Gen[HeadPeerNumber] =
         Gen.choose(0, (1 << 8) - 1).map(HeadPeerNumber(_))
@@ -31,34 +31,34 @@ class LaneKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     private val reqNum: Gen[RequestNumber] =
         Gen.choose(0L, (1L << 40) - 1L).map(RequestNumber(_))
 
-    private val laneKey: Gen[LaneKey] = Gen.oneOf(
-      blockNum.map(LaneKey.Block(_)),
-      stackNum.map(LaneKey.Stack(_)),
-      for p <- peer; n <- reqNum yield LaneKey.Request(p, n),
-      for p <- peer; n <- softNum yield LaneKey.SoftAck(p, n),
-      for p <- peer; n <- hardNum yield LaneKey.HardAck(p, n),
-      for c <- coilPeer; n <- hardNum yield LaneKey.CoilHardAck(c, n),
-      for p <- peer; n <- hubHardNum yield LaneKey.HubHardAck(p, n)
+    private val laneKey: Gen[FamilyKey] = Gen.oneOf(
+      blockNum.map(FamilyKey.Block(_)),
+      stackNum.map(FamilyKey.Stack(_)),
+      for p <- peer; n <- reqNum yield FamilyKey.Request(p, n),
+      for p <- peer; n <- softNum yield FamilyKey.SoftAck(p, n),
+      for p <- peer; n <- hardNum yield FamilyKey.HardAck(p, n),
+      for c <- coilPeer; n <- hardNum yield FamilyKey.CoilHardAck(c, n),
+      for p <- peer; n <- hubHardNum yield FamilyKey.HubHardAck(p, n)
     )
 
-    test("encode then decode is identity for every LaneKey case") {
+    test("encode then decode is identity for every FamilyKey case") {
         forAll(laneKey) { key =>
             val bytes = key.encode
-            val back = LaneKey.decode(key.laneId.cf, bytes)
+            val back = FamilyKey.decode(key.familyId.cf, bytes)
             assert(back == key, s"round-trip failed for $key")
         }
     }
 
-    test("encoded width matches §7.1 spec for each lane") {
+    test("encoded width matches §7.1 spec for each family") {
         forAll(laneKey) { key =>
             val expected = key match
-                case LaneKey.Block(_)          => 4
-                case LaneKey.Stack(_)          => 4
-                case LaneKey.Request(_, _)     => 8
-                case LaneKey.SoftAck(_, _)     => 4
-                case LaneKey.HardAck(_, _)     => 4
-                case LaneKey.CoilHardAck(_, _) => 4
-                case LaneKey.HubHardAck(_, _)  => 4
+                case FamilyKey.Block(_)          => 4
+                case FamilyKey.Stack(_)          => 4
+                case FamilyKey.Request(_, _)     => 8
+                case FamilyKey.SoftAck(_, _)     => 4
+                case FamilyKey.HardAck(_, _)     => 4
+                case FamilyKey.CoilHardAck(_, _) => 4
+                case FamilyKey.HubHardAck(_, _)  => 4
             assert(key.encode.length == expected, s"width mismatch for $key")
         }
     }
@@ -66,23 +66,23 @@ class LaneKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("lexicographic byte order matches numeric index order within a spine") {
         // Big-endian fixed-width is what makes range scans correct.
         forAll(Gen.choose(0, Int.MaxValue - 1)) { (n: Int) =>
-            val a = LaneKey.Block(BlockNumber(n)).encode
-            val b = LaneKey.Block(BlockNumber(n + 1)).encode
+            val a = FamilyKey.Block(BlockNumber(n)).encode
+            val b = FamilyKey.Block(BlockNumber(n + 1)).encode
             assert(compareBytes(a, b) < 0, s"$n bytes should be < ${n + 1} bytes")
         }
     }
 
-    test("LaneKey.laneId picks the right Cf") {
+    test("FamilyKey.familyId picks the right Cf") {
         forAll(laneKey) { key =>
-            val cf = key.laneId.cf
+            val cf = key.familyId.cf
             val expected = key match
-                case _: LaneKey.Block       => Cf.Block
-                case _: LaneKey.Stack       => Cf.Stack
-                case k: LaneKey.Request     => Cf.Request(k.peer)
-                case k: LaneKey.SoftAck     => Cf.SoftAck(k.peer)
-                case k: LaneKey.HardAck     => Cf.HardAck(k.peer)
-                case k: LaneKey.CoilHardAck => Cf.CoilHardAck(k.coil)
-                case k: LaneKey.HubHardAck  => Cf.HubHardAck(k.hub)
+                case _: FamilyKey.Block       => Cf.Block
+                case _: FamilyKey.Stack       => Cf.Stack
+                case k: FamilyKey.Request     => Cf.Request(k.peer)
+                case k: FamilyKey.SoftAck     => Cf.SoftAck(k.peer)
+                case k: FamilyKey.HardAck     => Cf.HardAck(k.peer)
+                case k: FamilyKey.CoilHardAck => Cf.CoilHardAck(k.coil)
+                case k: FamilyKey.HubHardAck  => Cf.HubHardAck(k.hub)
             assert(cf == expected)
         }
     }

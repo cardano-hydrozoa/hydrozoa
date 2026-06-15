@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
   *
   * `CardanoLiaison.State.recover` folds the full sequence (from `StackNumber.zero`) through the
   * same kernels the live `Stack.HardConfirmed` path uses, rebuilding its submission index.
-  * `HardConfirmation` is a non-lane CF — entries carry no arrival-stamp prefix, so the raw value
+  * `HardConfirmation` is a non-family CF — entries carry no arrival-stamp prefix, so the raw value
   * bytes decode directly. See `design/recovery-implementation-plan.md` R2-bnd.
   */
 object HardConfirmationScan:

@@ -13,7 +13,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, LaneKey, LaneValue, Persistence}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -40,11 +40,11 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
         val coil = CoilPeerNumber(0)
         val acks = run { p =>
             for {
-                _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(0)))(
-                  LaneValue(stamp, coilHardAck(coil, 0, stack = 1))
+                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
+                  FamilyValue(stamp, coilHardAck(coil, 0, stack = 1))
                 )
-                _ <- p.put(LaneKey.CoilHardAck(coil, HardAckNumber(1)))(
-                  LaneValue(stamp, coilHardAck(coil, 1, stack = 2))
+                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
+                  FamilyValue(stamp, coilHardAck(coil, 1, stack = 2))
                 )
             } yield ()
         }(PeerLiaisonCoilToHub.recover(_, coil))
@@ -64,16 +64,16 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                 // Two blocks on the spine — recover keeps BOTH regardless of leader (no canLead).
                 b1 <- blockBrief(1)
                 b2 <- blockBrief(2)
-                _ <- p.put(LaneKey.Block(BlockNumber(1)))(LaneValue(stamp, b1))
-                _ <- p.put(LaneKey.Block(BlockNumber(2)))(LaneValue(stamp, b2))
+                _ <- p.put(FamilyKey.Block(BlockNumber(1)))(FamilyValue(stamp, b1))
+                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, b2))
                 s1 <- stackBrief(1, 1, 2)
-                _ <- p.put(LaneKey.Stack(StackNumber(1)))(LaneValue(stamp, s1))
+                _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
                 // A head peer's hard-acks + a hub's relay lane.
-                _ <- p.put(LaneKey.HardAck(h0, HardAckNumber(0)))(
-                  LaneValue(stamp, headHardAck(h0, 0, stack = 1))
+                _ <- p.put(FamilyKey.HardAck(h0, HardAckNumber(0)))(
+                  FamilyValue(stamp, headHardAck(h0, 0, stack = 1))
                 )
-                _ <- p.put(LaneKey.HubHardAck(hub0, HubHardAckNumber(0)))(
-                  LaneValue(
+                _ <- p.put(FamilyKey.HubHardAck(hub0, HubHardAckNumber(0)))(
+                  FamilyValue(
                     stamp,
                     HardAckWithId(hub0, HubHardAckNumber(0), coilHardAck(CoilPeerNumber(0), 0, 1))
                   )

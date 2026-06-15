@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
 
 /** Stack composer.
   *
@@ -291,14 +291,14 @@ final case class StackComposer(
                 val base = WriteBatch.start.put(StoreKey.UnsignedStack(brief.stackNum))(unsigned)
                 val withBrief =
                     if config.canLeadSlow(brief.stackNum) then
-                        base.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
+                        base.put(FamilyKey.Stack(brief.stackNum))(FamilyValue(stamp, brief))
                     else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
                     ack.peerId match {
                         case PeerId.Head(n) =>
-                            b.put(LaneKey.HardAck(n, ack.hardAckNum))(LaneValue(stamp, ack))
+                            b.put(FamilyKey.HardAck(n, ack.hardAckNum))(FamilyValue(stamp, ack))
                         case PeerId.Coil(c) =>
-                            b.put(LaneKey.CoilHardAck(c, ack.hardAckNum))(LaneValue(stamp, ack))
+                            b.put(FamilyKey.CoilHardAck(c, ack.hardAckNum))(FamilyValue(stamp, ack))
                     }
                 )
             }
@@ -953,10 +953,10 @@ object StackComposer {
                 case None => IO.pure(None)
                 case Some(hardAckNum) =>
                     for {
-                        lastHardAck <- persistence.getOrFail(LaneKey.HardAck(own, hardAckNum))
+                        lastHardAck <- persistence.getOrFail(FamilyKey.HardAck(own, hardAckNum))
                         hardAckedStack = lastHardAck.payload.stackNum
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
-                        stackBrief <- persistence.getOrFail(LaneKey.Stack(hardAckedStack))
+                        stackBrief <- persistence.getOrFail(FamilyKey.Stack(hardAckedStack))
                         lastBlockNum = stackBrief.payload.lastBlockNum
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
                         blockResults <- BlockResultScan.scanFrom(persistence.backend, lastBlockNum)
@@ -994,7 +994,9 @@ object StackComposer {
                 case None => IO.pure(None)
                 case Some(hardAckNum) =>
                     for {
-                        lastHardAck <- persistence.getOrFail(LaneKey.CoilHardAck(coil, hardAckNum))
+                        lastHardAck <- persistence.getOrFail(
+                          FamilyKey.CoilHardAck(coil, hardAckNum)
+                        )
                         hardAckedStack = lastHardAck.payload.stackNum
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
                         unsignedStack <- persistence.getOrFail(

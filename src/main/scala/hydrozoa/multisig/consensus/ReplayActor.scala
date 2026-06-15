@@ -10,8 +10,8 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, CoilReplayCursors, LaneScan, RawLaneEntry, ReplayCursors}
-import hydrozoa.multisig.persistence.{LaneKey, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, CoilReplayCursors, FamilyScan, RawFamilyEntry, ReplayCursors}
+import hydrozoa.multisig.persistence.{FamilyKey, Markers, Persistence, StoreKey}
 import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
@@ -68,7 +68,7 @@ object ReplayActor:
         for
             markers <- Markers.derive(backend, own)
             hardAckedStack <- markers.hardAcked.traverse(n =>
-                persistence.getOrFail(LaneKey.HardAck(own, n)).map(_.payload.stackNum)
+                persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
             )
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
             _ <- validateInvariants(markers, hardAckedStack)
@@ -80,7 +80,7 @@ object ReplayActor:
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
             highWater <- recoverHighWater(persistence, markers.softAcked)
             cursors = ReplayCursors.derive(markers, peers, hubs, highWater, hardAckedStack)
-            perLane <- LaneScan.scanLanes(backend, cursors)
+            perLane <- FamilyScan.scanFamilies(backend, cursors)
             _ <- ArrivalOrderedMerge
                 .merge(perLane)
                 .traverse_(
@@ -117,7 +117,7 @@ object ReplayActor:
             coilBlockMark <- Markers.recoverCoilBlockMark(backend)
             coilHardAcked <- Markers.recoverCoilHardAcked(backend, own)
             coilHardAckedStack <- coilHardAcked.traverse(n =>
-                persistence.getOrFail(LaneKey.CoilHardAck(own, n)).map(_.payload.stackNum)
+                persistence.getOrFail(FamilyKey.CoilHardAck(own, n)).map(_.payload.stackNum)
             )
             _ <- validateInvariantsCoil(
               softConfirmed,
@@ -144,7 +144,7 @@ object ReplayActor:
               own,
               highWater
             )
-            perLane <- LaneScan.scanLanes(backend, cursors.scanFloors)
+            perLane <- FamilyScan.scanFamilies(backend, cursors.scanFloors)
             _ <- ArrivalOrderedMerge
                 .merge(perLane)
                 .traverse_(
@@ -222,8 +222,8 @@ object ReplayActor:
         own: HeadPeerNumber,
         stackNum: StackNumber
     )(using CardanoNetwork.Section): IO[List[HardAck]] =
-        val k = LaneKey.HardAck(own, HardAckNumber.zero)
-        LaneScan
+        val k = FamilyKey.HardAck(own, HardAckNumber.zero)
+        FamilyScan
             .scan(persistence.backend, k)
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
@@ -285,8 +285,8 @@ object ReplayActor:
         own: CoilPeerNumber,
         stackNum: StackNumber
     )(using CardanoNetwork.Section): IO[List[HardAck]] =
-        val k = LaneKey.CoilHardAck(own, HardAckNumber.zero)
-        LaneScan
+        val k = FamilyKey.CoilHardAck(own, HardAckNumber.zero)
+        FamilyScan
             .scan(persistence.backend, k)
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
@@ -313,31 +313,31 @@ object ReplayActor:
       * own-keyed, so that arm is reached only on the coil path.
       */
     private def route(
-        entry: RawLaneEntry,
+        entry: RawFamilyEntry,
         blockLedgerFloor: BlockNumber,
         stackComposerFloor: StackNumber,
         targets: Targets
     )(using CardanoNetwork.Section): IO[Unit] =
         entry.key match
-            case k: LaneKey.Request =>
+            case k: FamilyKey.Request =>
                 targets.blockWeaver ! k.decodeValue(entry.framed).payload
-            case k: LaneKey.SoftAck =>
+            case k: FamilyKey.SoftAck =>
                 targets.fastConsensusActor ! k.decodeValue(entry.framed).payload
-            case k: LaneKey.HardAck =>
+            case k: FamilyKey.HardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
-            case k: LaneKey.Block =>
+            case k: FamilyKey.Block =>
                 val brief = k.decodeValue(entry.framed).payload
                 val toLedger =
                     if Ordering[BlockNumber].gteq(brief.blockNum, blockLedgerFloor)
                     then targets.blockWeaver ! brief
                     else IO.unit
                 (targets.fastConsensusActor ! brief) >> toLedger
-            case k: LaneKey.Stack =>
+            case k: FamilyKey.Stack =>
                 val brief = k.decodeValue(entry.framed).payload
                 if Ordering[StackNumber].gteq(brief.stackNum, stackComposerFloor)
                 then targets.stackComposer ! brief
                 else IO.unit
-            case k: LaneKey.CoilHardAck =>
+            case k: FamilyKey.CoilHardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
-            case k: LaneKey.HubHardAck =>
+            case k: FamilyKey.HubHardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload.ack

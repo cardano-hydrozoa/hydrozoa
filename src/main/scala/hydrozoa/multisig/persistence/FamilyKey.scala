@@ -9,8 +9,8 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import java.nio.ByteBuffer
 
-/** A full addressable entry key in the persistence layer — a [[LaneId]] paired with the within-lane
-  * index.
+/** A full addressable entry key in the persistence layer — a [[FamilyId]] paired with the
+  * within-family index.
   *
   * Encoded byte form (per §7.1, big-endian fixed-width so lexicographic byte order matches numeric
   * index order, the property that makes range scans correct):
@@ -23,90 +23,90 @@ import java.nio.ByteBuffer
   *   - `CoilHardAck` → `[hardAckNum : 4]`
   *   - `HubHardAck` → `[hubHardAckNum : 4]`
   *
-  * Both the lane-type **and the author** are the column family ([[Cf]], split one CF per author,
+  * Both the family-type **and the author** are the column family ([[Cf]], split one CF per author,
   * §3.1) — the key carries neither a type tag nor an author prefix, only the within-author index.
   *
-  * **Each satellite CF is one author's lane.** With the per-author split the whole CF is a single
-  * author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole lane —
-  * [[recovery.LaneScan]] needs no peer-prefix bounding. The author is recovered from the CF on
+  * **Each satellite CF is one author's family.** With the per-author split the whole CF is a single
+  * author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole family —
+  * [[recovery.FamilyScan]] needs no peer-prefix bounding. The author is recovered from the CF on
   * [[decode]] (the cursor passes the per-author [[Cf]] it scanned).
   *
-  * Each case's `Value` is a [[LaneValue]] wrapping that lane's wire payload (the wire codec from
-  * `consensus.transport.Codecs`, reused under the 12-byte arrival-stamp prefix via
+  * Each case's `Value` is a [[FamilyValue]] wrapping that family's wire payload (the wire codec
+  * from `consensus.transport.Codecs`, reused under the 12-byte arrival-stamp prefix via
   * [[StoreCodec.laneValue]]; §5.4, §7.1). A sealed trait (not an `enum`) so each case can declare
   * its own path-dependent `Value` + codec.
   */
-sealed trait LaneKey extends StoreKey:
-    /** The lane this key belongs to (and therefore the column family — see [[LaneId.cf]]). */
-    def laneId: LaneId
+sealed trait FamilyKey extends StoreKey:
+    /** The family this key belongs to (and therefore the column family — see [[FamilyId.cf]]). */
+    def familyId: FamilyId
 
-    /** The column family this lane key lives in — delegates through [[LaneId.cf]]. Satisfies the
-      * [[StoreKey]] contract.
+    /** The column family this family key lives in — delegates through [[FamilyId.cf]]. Satisfies
+      * the [[StoreKey]] contract.
       */
-    final def cf: Cf = laneId.cf
+    final def cf: Cf = familyId.cf
 
-object LaneKey:
+object FamilyKey:
 
     /** Block spine: the block brief, keyed by `blockNum`. */
-    final case class Block(num: BlockNumber) extends LaneKey:
-        type Value = LaneValue[BlockBrief.Next]
+    final case class Block(num: BlockNumber) extends FamilyKey:
+        type Value = FamilyValue[BlockBrief.Next]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[BlockBrief.Next]
-        def laneId: LaneId = LaneId.BlockSpine
+        def familyId: FamilyId = FamilyId.BlockSpine
         def encode: Array[Byte] = intBytes(num)
 
     /** Stack spine: the stack brief, keyed by `stackNum`. */
-    final case class Stack(num: StackNumber) extends LaneKey:
-        type Value = LaneValue[StackBrief]
+    final case class Stack(num: StackNumber) extends FamilyKey:
+        type Value = FamilyValue[StackBrief]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[StackBrief]
-        def laneId: LaneId = LaneId.StackSpine
+        def familyId: FamilyId = FamilyId.StackSpine
         def encode: Array[Byte] = intBytes(num)
 
     /** Request satellite (per author): the assigned user request, keyed by `(peer, requestNum)`. */
-    final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends LaneKey:
-        type Value = LaneValue[UserRequestWithId]
+    final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends FamilyKey:
+        type Value = FamilyValue[UserRequestWithId]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[UserRequestWithId]
-        def laneId: LaneId = LaneId.Request(peer)
+        def familyId: FamilyId = FamilyId.Request(peer)
         def encode: Array[Byte] = longBytes(num)
 
     /** Soft-ack satellite (per author): a peer's soft-ack signature, keyed by `(peer, softAckNum)`.
       */
-    final case class SoftAck(peer: HeadPeerNumber, num: SoftAckNumber) extends LaneKey:
-        type Value = LaneValue[SoftAckMsg]
+    final case class SoftAck(peer: HeadPeerNumber, num: SoftAckNumber) extends FamilyKey:
+        type Value = FamilyValue[SoftAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[SoftAckMsg]
-        def laneId: LaneId = LaneId.SoftAck(peer)
+        def familyId: FamilyId = FamilyId.SoftAck(peer)
         def encode: Array[Byte] = intBytes(num)
 
     /** Hard-ack satellite (per author): a peer's hard-ack signature, keyed by `(peer, hardAckNum)`.
       */
-    final case class HardAck(peer: HeadPeerNumber, num: HardAckNumber) extends LaneKey:
-        type Value = LaneValue[HardAckMsg]
+    final case class HardAck(peer: HeadPeerNumber, num: HardAckNumber) extends FamilyKey:
+        type Value = FamilyValue[HardAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
-        def laneId: LaneId = LaneId.HardAck(peer)
+        def familyId: FamilyId = FamilyId.HardAck(peer)
         def encode: Array[Byte] = intBytes(num)
 
-    /** Coil-hard-ack receive lane (per coil peer): a hub's raw inbound hard-ack from one of its
+    /** Coil-hard-ack receive family (per coil peer): a hub's raw inbound hard-ack from one of its
       * coil peers, keyed by `(coil, hardAckNum)`. Persisted by `PeerLiaisonHubToCoil` on receipt so
       * a coil peer's ack survives a hub crash before `CoilAckSequencer` re-sequences it.
       */
-    final case class CoilHardAck(coil: CoilPeerNumber, num: HardAckNumber) extends LaneKey:
-        type Value = LaneValue[HardAckMsg]
+    final case class CoilHardAck(coil: CoilPeerNumber, num: HardAckNumber) extends FamilyKey:
+        type Value = FamilyValue[HardAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
-        def laneId: LaneId = LaneId.CoilHardAck(coil)
+        def familyId: FamilyId = FamilyId.CoilHardAck(coil)
         def encode: Array[Byte] = intBytes(num)
 
-    /** Hub-hard-ack lane (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
+    /** Hub-hard-ack family (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
       * the head mesh and the hub→coil links, keyed by `(hub, hubHardAckNum)`.
       */
-    final case class HubHardAck(hub: HeadPeerNumber, num: HubHardAckNumber) extends LaneKey:
-        type Value = LaneValue[HardAckWithId]
+    final case class HubHardAck(hub: HeadPeerNumber, num: HubHardAckNumber) extends FamilyKey:
+        type Value = FamilyValue[HardAckWithId]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckWithId]
-        def laneId: LaneId = LaneId.HubHardAck(hub)
+        def familyId: FamilyId = FamilyId.HubHardAck(hub)
         def encode: Array[Byte] = intBytes(num)
 
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed
       * payload (interpreted as store corruption — fail safe).
       */
-    def decode(cf: Cf, bytes: Array[Byte]): LaneKey = cf match
+    def decode(cf: Cf, bytes: Array[Byte]): FamilyKey = cf match
         case Cf.Block =>
             requireLen(cf, bytes, 4)
             Block(BlockNumber(readIntBE(bytes, 0)))
@@ -132,7 +132,7 @@ object LaneKey:
             Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.L2CommandNumber |
             Cf.UnsignedStack | Cf.Meta =>
             throw new IllegalArgumentException(
-              s"$cf is not a lane CF; LaneKey.decode is undefined for it"
+              s"$cf is not a family CF; FamilyKey.decode is undefined for it"
             )
 
     /** Encode a non-negative `Int` as 4 big-endian bytes. */

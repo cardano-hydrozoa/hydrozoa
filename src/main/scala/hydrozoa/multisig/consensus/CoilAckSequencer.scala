@@ -11,7 +11,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.persistence.{Cf, LaneKey, LaneValue, Persistence}
+import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Persistence}
 import java.nio.ByteBuffer
 import org.typelevel.log4cats.Logger
 
@@ -114,7 +114,7 @@ trait CoilAckSequencer(
         val hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
         persistence.arrivalStamp.flatMap(stamp =>
             persistence
-                .put(LaneKey.HubHardAck(hubPeerNum, seq))(LaneValue(stamp, hubAck))
+                .put(FamilyKey.HubHardAck(hubPeerNum, seq))(FamilyValue(stamp, hubAck))
                 .as(hubAck)
         )
 
@@ -181,7 +181,7 @@ object CoilAckSequencer {
                     (0 to last).toList
                         .traverse { i =>
                             val seq = HubHardAckNumber(i)
-                            persistence.getOrFail(LaneKey.HubHardAck(hub, seq)).map { value =>
+                            persistence.getOrFail(FamilyKey.HubHardAck(hub, seq)).map { value =>
                                 indexEntry(value.payload, seq)
                             }
                         }

@@ -43,7 +43,8 @@ trait Persistence[F[_]]:
     def write(batch: WriteBatch): F[Unit]
 
     /** A fresh [[ArrivalStamp]] for an entry admitted *now*: `(this process's generation, current
-      * monotonic)`. Used to stamp lane values (§5.4) — own entries at creation, inbound at receipt.
+      * monotonic)`. Used to stamp family values (§5.4) — own entries at creation, inbound at
+      * receipt.
       */
     def arrivalStamp: F[ArrivalStamp]
 

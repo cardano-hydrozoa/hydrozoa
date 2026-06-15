@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.LaneKey
+import hydrozoa.multisig.persistence.FamilyKey
 
 /** A coil peer's recovery scan / feed cursors — the coil counterpart of [[ReplayCursors]] (§5.3,
   * §10 Q10). The head primitives are rigidly `HeadPeerNumber`-typed and anchor the fast/slow sides
@@ -26,23 +26,23 @@ import hydrozoa.multisig.persistence.LaneKey
   * aggregates head hard-acks just like a head peer's).
   */
 final case class CoilReplayCursors(
-    blockSpineForAggregator: LaneKey.Block,
-    blockSpineForLedger: LaneKey.Block,
-    stackSpineForAggregator: LaneKey.Stack,
-    stackSpineForComposer: LaneKey.Stack,
-    requests: Map[HeadPeerNumber, LaneKey.Request],
-    softAcks: Map[HeadPeerNumber, LaneKey.SoftAck],
-    hardAcks: Map[HeadPeerNumber, LaneKey.HardAck],
-    hubHardAcks: Map[HeadPeerNumber, LaneKey.HubHardAck],
-    ownCoilHardAck: LaneKey.CoilHardAck
+    blockSpineForAggregator: FamilyKey.Block,
+    blockSpineForLedger: FamilyKey.Block,
+    stackSpineForAggregator: FamilyKey.Stack,
+    stackSpineForComposer: FamilyKey.Stack,
+    requests: Map[HeadPeerNumber, FamilyKey.Request],
+    softAcks: Map[HeadPeerNumber, FamilyKey.SoftAck],
+    hardAcks: Map[HeadPeerNumber, FamilyKey.HardAck],
+    hubHardAcks: Map[HeadPeerNumber, FamilyKey.HubHardAck],
+    ownCoilHardAck: FamilyKey.CoilHardAck
 ):
-    /** The lanes to scan, each from its lowest floor — the spines from their aggregator
+    /** The families to scan, each from its lowest floor — the spines from their aggregator
       * (`*Confirmed + 1`) cursor, then the head satellites, the hub `HubHardAck` families, and the
       * coil peer's own `CoilHardAck` family. The composer's `acked` slicing happens at feed time in
       * [[ReplayActor]], not at scan time.
       */
-    def scanFloors: List[LaneKey] =
-        List[LaneKey](blockSpineForAggregator, stackSpineForAggregator) ++
+    def scanFloors: List[FamilyKey] =
+        List[FamilyKey](blockSpineForAggregator, stackSpineForAggregator) ++
             requests.values ++ softAcks.values ++ hardAcks.values ++ hubHardAcks.values ++
             List(ownCoilHardAck)
 
@@ -78,16 +78,16 @@ object CoilReplayCursors:
             softConfirmed.map(b => SoftAckNumber((b: Int) + 1)).getOrElse(SoftAckNumber(0))
 
         CoilReplayCursors(
-          blockSpineForAggregator = LaneKey.Block(softConfirmedFloor),
-          blockSpineForLedger = LaneKey.Block(coilBlockFloor),
-          stackSpineForAggregator = LaneKey.Stack(hardConfirmedFloor),
-          stackSpineForComposer = LaneKey.Stack(coilComposerFloor),
+          blockSpineForAggregator = FamilyKey.Block(softConfirmedFloor),
+          blockSpineForLedger = FamilyKey.Block(coilBlockFloor),
+          stackSpineForAggregator = FamilyKey.Stack(hardConfirmedFloor),
+          stackSpineForComposer = FamilyKey.Stack(coilComposerFloor),
           requests = peers.map { p =>
               val floor = highestIncludedRequest.get(p).map(_.increment).getOrElse(RequestNumber(0))
-              p -> LaneKey.Request(p, floor)
+              p -> FamilyKey.Request(p, floor)
           }.toMap,
-          softAcks = peers.map(p => p -> LaneKey.SoftAck(p, softAckFloor)).toMap,
-          hardAcks = peers.map(p => p -> LaneKey.HardAck(p, HardAckNumber(0))).toMap,
-          hubHardAcks = hubs.map(h => h -> LaneKey.HubHardAck(h, HubHardAckNumber.zero)).toMap,
-          ownCoilHardAck = LaneKey.CoilHardAck(own, HardAckNumber.zero)
+          softAcks = peers.map(p => p -> FamilyKey.SoftAck(p, softAckFloor)).toMap,
+          hardAcks = peers.map(p => p -> FamilyKey.HardAck(p, HardAckNumber(0))).toMap,
+          hubHardAcks = hubs.map(h => h -> FamilyKey.HubHardAck(h, HubHardAckNumber.zero)).toMap,
+          ownCoilHardAck = FamilyKey.CoilHardAck(own, HardAckNumber.zero)
         )

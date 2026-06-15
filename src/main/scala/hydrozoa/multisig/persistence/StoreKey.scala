@@ -15,9 +15,9 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, R
   *
   * Every column family ([[Cf]]) has exactly one **key shape** and exactly one **value type** — a
   * corresponding `StoreKey` subtype captures both, so actor code addresses entries by name and
-  * exchanges typed values, never raw bytes. The 5 lane CFs are reached through [[LaneKey]] (which
-  * extends `StoreKey`); the 10 non-lane CFs are covered by the cases declared in the companion
-  * below:
+  * exchanges typed values, never raw bytes. The 5 family CFs are reached through [[FamilyKey]]
+  * (which extends `StoreKey`); the 10 non-family CFs are covered by the cases declared in the
+  * companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
   *     `Cf.BlockResult`, keyed by `blockNum`. [[StoreKey.SoftConfirmation]] —
@@ -73,7 +73,7 @@ object StoreKey:
         import BlockResultCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockResult
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.SoftConfirmation]] — FCA aggregate (header + multisig), keyed by `blockNum`.
       * `softConfirmed` derives as the last key in this CF (§5.2).
@@ -83,7 +83,7 @@ object StoreKey:
         import SoftConfirmationCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.SoftConfirmation
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.HardConfirmation]] — SCA multisigned effects / SECs / fallbacks, keyed by
       * `stackNum`. `hardConfirmed` derives as the last key in this CF (§5.2). The R10 evacuation
@@ -98,7 +98,7 @@ object StoreKey:
         import StackEffectsCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.HardConfirmation
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:
@@ -140,7 +140,7 @@ object StoreKey:
         import JointEvacuationMap.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.RequestHighWater]] — JointLedger's cumulative per-peer request high-water
       * `Map[HeadPeerNumber, RequestNumber]` **as of block `num`** (the highest request number from
@@ -155,7 +155,7 @@ object StoreKey:
         import RequestHighWaterCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.RequestHighWater
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.L2CommandNumber]] — the L2 ledger's commit counter
       * ([[hydrozoa.multisig.ledger.l2.L2CommandNumber]]) reached after block `num`'s L2 commits.
@@ -169,14 +169,14 @@ object StoreKey:
         import LedgerL2CommandNumber.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.L2CommandNumber
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.UnsignedStack]] — the `Stack.Unsigned` (brief + locally-derived effects)
       * StackComposer closed for `stackNum`, persisted **before** the handoff to
       * `SlowConsensusActor` (CR4/CR8: durable before the own ack crosses the peer boundary via
       * SCA's broadcast). On recovery the `ReplayActor` reads the in-flight stack's value and the
-      * own acks (HardAck lane) to reconstruct the handoff into SCA — a `HardAck` signs the effects,
-      * which a `StackBrief` alone does not carry, so the effects must be durable. Keyed by
+      * own acks (HardAck family) to reconstruct the handoff into SCA — a `HardAck` signs the
+      * effects, which a `StackBrief` alone does not carry, so the effects must be durable. Keyed by
       * `stackNum`.
       */
     final case class UnsignedStack(num: StackNumber) extends StoreKey:
@@ -184,7 +184,7 @@ object StoreKey:
         import UnsignedStackCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.UnsignedStack
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = FamilyKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */
     final case class Meta(name: String) extends StoreKey:

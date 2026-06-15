@@ -13,7 +13,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Markers, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one request sequencer is running per node, specifically to handle
@@ -101,8 +101,8 @@ trait RequestSequencer(
                       stamp <- persistence.arrivalStamp
                       _ <- persistence.write(
                         WriteBatch.start
-                            .put(LaneKey.Request(ownHeadPeerNum, newNum))(
-                              LaneValue(stamp, newRequestWithId)
+                            .put(FamilyKey.Request(ownHeadPeerNum, newNum))(
+                              FamilyValue(stamp, newRequestWithId)
                             )
                       )
                       _ <- req.dResponse.complete(newId)

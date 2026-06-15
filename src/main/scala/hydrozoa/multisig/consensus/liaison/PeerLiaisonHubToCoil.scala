@@ -18,8 +18,8 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.LaneScan
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
@@ -230,7 +230,7 @@ abstract class PeerLiaisonHubToCoil(
             }
         }
 
-    /** Persist the coil peer's inbound hard-ack to its [[LaneKey.CoilHardAck]] receive lane,
+    /** Persist the coil peer's inbound hard-ack to its [[FamilyKey.CoilHardAck]] receive lane,
       * receipt- stamped, before the cursor advances. A missing ack is a no-op.
       */
     private def persistInbound(own: OwnHardAck.New): IO[Unit] =
@@ -238,7 +238,7 @@ abstract class PeerLiaisonHubToCoil(
             persistence.arrivalStamp.flatMap { stamp =>
                 persistence.write(
                   WriteBatch.start
-                      .put(LaneKey.CoilHardAck(coil, ack.hardAckNum))(LaneValue(stamp, ack))
+                      .put(FamilyKey.CoilHardAck(coil, ack.hardAckNum))(FamilyValue(stamp, ack))
                 )
             }
         }
@@ -373,36 +373,36 @@ object PeerLiaisonHubToCoil {
         hubNums: List[HeadPeerNumber]
     )(using CardanoNetwork.Section): IO[OutboxSeed] =
         val backend = persistence.backend
-        val kBlock = LaneKey.Block(BlockNumber(1))
-        val kStack = LaneKey.Stack(StackNumber(1))
+        val kBlock = FamilyKey.Block(BlockNumber(1))
+        val kStack = FamilyKey.Stack(StackNumber(1))
         for {
-            blocks <- LaneScan
+            blocks <- FamilyScan
                 .scan(backend, kBlock)
                 .map(_.map(e => kBlock.decodeValue(e.framed).payload))
-            stacks <- LaneScan
+            stacks <- FamilyScan
                 .scan(backend, kStack)
                 .map(_.map(e => kStack.decodeValue(e.framed).payload))
             requests <- headPeerNums.traverse { h =>
-                val k = LaneKey.Request(h, RequestNumber.zero)
-                LaneScan
+                val k = FamilyKey.Request(h, RequestNumber.zero)
+                FamilyScan
                     .scan(backend, k)
                     .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
             }
             softAcks <- headPeerNums.traverse { h =>
-                val k = LaneKey.SoftAck(h, SoftAckNumber.zero)
-                LaneScan
+                val k = FamilyKey.SoftAck(h, SoftAckNumber.zero)
+                FamilyScan
                     .scan(backend, k)
                     .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
             }
             headHardAcks <- headPeerNums.traverse { h =>
-                val k = LaneKey.HardAck(h, HardAckNumber.zero)
-                LaneScan
+                val k = FamilyKey.HardAck(h, HardAckNumber.zero)
+                FamilyScan
                     .scan(backend, k)
                     .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
             }
             coilHardAcks <- hubNums.traverse { h =>
-                val k = LaneKey.HubHardAck(h, HubHardAckNumber.zero)
-                LaneScan
+                val k = FamilyKey.HubHardAck(h, HubHardAckNumber.zero)
+                FamilyScan
                     .scan(backend, k)
                     .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
             }

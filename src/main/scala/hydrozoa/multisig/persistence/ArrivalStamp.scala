@@ -2,7 +2,7 @@ package hydrozoa.multisig.persistence
 
 import java.nio.ByteBuffer
 
-/** The durable arrival stamp that orders persisted lane entries across the `2 + 3N` streams at
+/** The durable arrival stamp that orders persisted family entries across the `2 + 3N` streams at
   * replay time (§5.4). A `(generation, monotonicNanos)` pair, **ordered lexicographically**:
   *
   *   - `generation` — a per-process boot counter persisted in the store and bumped once at startup

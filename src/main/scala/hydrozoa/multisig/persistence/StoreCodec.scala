@@ -51,24 +51,25 @@ object StoreCodec:
         def encode(a: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = a
         def decode(bytes: Array[Byte])(using CardanoNetwork.Section): Array[Byte] = bytes
 
-    /** Lane-CF codec: the Circe (wire-codec) JSON of `A` framed behind the [[ArrivalStamp]] prefix
-      * ([[LaneValue]]). Stripping the prefix yields the byte-identical wire form (§7.1).
+    /** Family-CF codec: the Circe (wire-codec) JSON of `A` framed behind the [[ArrivalStamp]]
+      * prefix ([[FamilyValue]]). Stripping the prefix yields the byte-identical wire form (§7.1).
       *
-      * An explicit factory (not a `given`) — each lane `StoreKey` case calls `StoreCodec.laneValue`
-      * directly, so there is no implicit ambiguity with [[fromCirce]] and no `summon`
-      * self-resolution risk.
+      * An explicit factory (not a `given`) — each family `StoreKey` case calls
+      * `StoreCodec.laneValue` directly, so there is no implicit ambiguity with [[fromCirce]] and no
+      * `summon` self-resolution risk.
       */
     def laneValue[A](using
         mkEnc: CardanoNetwork.Section ?=> Encoder[A],
         mkDec: CardanoNetwork.Section ?=> Decoder[A]
-    ): StoreCodec[LaneValue[A]] = new StoreCodec[LaneValue[A]]:
-        def encode(lv: LaneValue[A])(using CardanoNetwork.Section): Array[Byte] =
-            LaneValue.frame(lv.stamp, lv.payload.asJson(using mkEnc).noSpaces.getBytes("UTF-8"))
-        def decode(bytes: Array[Byte])(using CardanoNetwork.Section): LaneValue[A] =
+    ): StoreCodec[FamilyValue[A]] = new StoreCodec[FamilyValue[A]]:
+        def encode(lv: FamilyValue[A])(using CardanoNetwork.Section): Array[Byte] =
+            FamilyValue.frame(lv.stamp, lv.payload.asJson(using mkEnc).noSpaces.getBytes("UTF-8"))
+        def decode(bytes: Array[Byte])(using CardanoNetwork.Section): FamilyValue[A] =
             val a = io.circe.parser
-                .decode[A](new String(LaneValue.payload(bytes), "UTF-8"))(using mkDec)
+                .decode[A](new String(FamilyValue.payload(bytes), "UTF-8"))(using mkDec)
                 .fold(
-                  err => throw new IllegalArgumentException(s"StoreCodec lane decode failed: $err"),
+                  err =>
+                      throw new IllegalArgumentException(s"StoreCodec family decode failed: $err"),
                   identity
                 )
-            LaneValue(LaneValue.stamp(bytes), a)
+            FamilyValue(FamilyValue.stamp(bytes), a)

@@ -24,7 +24,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     test("put then get returns the same bytes in the same CF") {
         withFreshStore { p =>
-            val key = LaneKey.Block(BlockNumber(7)).encode
+            val key = FamilyKey.Block(BlockNumber(7)).encode
             val value = "hello".getBytes("UTF-8")
             for
                 _ <- p.put(Cf.Block, key, value)
@@ -35,13 +35,13 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     test("get returns None for an absent key") {
         withFreshStore { p =>
-            p.get(Cf.Block, LaneKey.Block(BlockNumber(42)).encode).map(g => assert(g.isEmpty))
+            p.get(Cf.Block, FamilyKey.Block(BlockNumber(42)).encode).map(g => assert(g.isEmpty))
         }
     }
 
     test("delete removes the entry") {
         withFreshStore { p =>
-            val key = LaneKey.Stack(StackNumber(3)).encode
+            val key = FamilyKey.Stack(StackNumber(3)).encode
             for
                 _ <- p.put(Cf.Stack, key, Array[Byte](1, 2, 3))
                 _ <- p.delete(Cf.Stack, key)
@@ -52,9 +52,9 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     test("RawWriteBatch lands atomically across multiple CFs") {
         withFreshStore { p =>
-            val blockKey = LaneKey.Block(BlockNumber(1)).encode
+            val blockKey = FamilyKey.Block(BlockNumber(1)).encode
             val softPeer = HeadPeerNumber(2)
-            val softKey = LaneKey.SoftAck(softPeer, SoftAckNumber(1)).encode
+            val softKey = FamilyKey.SoftAck(softPeer, SoftAckNumber(1)).encode
             val batch =
                 RawWriteBatch.start
                     .put(Cf.Block, blockKey, Array[Byte](0xaa.toByte))
@@ -73,12 +73,12 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         }
     }
 
-    test("cursor scans a satellite lane in ascending index order from the seek point") {
+    test("cursor scans a satellite family in ascending index order from the seek point") {
         withFreshStore { p =>
             val peer = HeadPeerNumber(0)
             val nums = List(0, 1, 2, 5, 10).map(HardAckNumber(_))
-            val keys = nums.map(n => LaneKey.HardAck(peer, n))
-            val seekFrom = LaneKey.HardAck(peer, HardAckNumber(1)).encode
+            val keys = nums.map(n => FamilyKey.HardAck(peer, n))
+            val seekFrom = FamilyKey.HardAck(peer, HardAckNumber(1)).encode
             for
                 _ <- keys.traverse(k => p.put(Cf.HardAck(peer), k.encode, Array[Byte](1)))
                 read <- p.cursor(Cf.HardAck(peer), seekFrom).use { c =>
@@ -91,10 +91,10 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                         }
                     loop(Nil)
                 }
-                got = read.map(kv => LaneKey.decode(Cf.HardAck(peer), kv._1))
+                got = read.map(kv => FamilyKey.decode(Cf.HardAck(peer), kv._1))
             yield
                 val expected = List(1, 2, 5, 10)
-                    .map(n => LaneKey.HardAck(peer, HardAckNumber(n)))
+                    .map(n => FamilyKey.HardAck(peer, HardAckNumber(n)))
                 assert(got == expected, s"got $got, expected $expected")
         }
     }
@@ -102,7 +102,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
     test("data persists across close + reopen") {
         val tempDir = newTempDir()
         try
-            val k = LaneKey.Block(BlockNumber(99)).encode
+            val k = FamilyKey.Block(BlockNumber(99)).encode
             val value = "durable".getBytes("UTF-8")
             // First session: write.
             RocksDbBackendStore
@@ -127,7 +127,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             for
                 emptyResult <- p.lastKey(Cf.SoftConfirmation)
                 _ <- List(1, 5, 2, 42, 7).traverse { n =>
-                    p.put(Cf.SoftConfirmation, LaneKey.intBytes(n), Array[Byte](n.toByte))
+                    p.put(Cf.SoftConfirmation, FamilyKey.intBytes(n), Array[Byte](n.toByte))
                 }
                 last <- p.lastKey(Cf.SoftConfirmation)
             yield assert(
@@ -138,8 +138,8 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         }
     }
 
-    test("per-author CFs isolate each author's lane; an unwritten author's CF is empty") {
-        // The per-author split (§7.1) replaces prefix scoping: each author's SoftAck lane is its own
+    test("per-author CFs isolate each author's family; an unwritten author's CF is empty") {
+        // The per-author split (§7.1) replaces prefix scoping: each author's SoftAck family is its own
         // CF, so `lastKey(Cf.SoftAck(peer))` returns only that author's high-water, and an author
         // never written to has an empty CF.
         withFreshStore { p =>
@@ -148,20 +148,20 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val peer5 = HeadPeerNumber(5)
             for
                 _ <- List(SoftAckNumber(3)).traverse(n =>
-                    p.put(Cf.SoftAck(peer0), LaneKey.SoftAck(peer0, n).encode, Array[Byte](1))
+                    p.put(Cf.SoftAck(peer0), FamilyKey.SoftAck(peer0, n).encode, Array[Byte](1))
                 )
                 _ <- List(SoftAckNumber(1), SoftAckNumber(99), SoftAckNumber(7)).traverse(n =>
-                    p.put(Cf.SoftAck(peer1), LaneKey.SoftAck(peer1, n).encode, Array[Byte](1))
+                    p.put(Cf.SoftAck(peer1), FamilyKey.SoftAck(peer1, n).encode, Array[Byte](1))
                 )
                 got1 <- p.lastKey(Cf.SoftAck(peer1))
                 got0 <- p.lastKey(Cf.SoftAck(peer0))
                 missing <- p.lastKey(Cf.SoftAck(peer5))
             yield assert(
               got1.exists(
-                java.util.Arrays.equals(_, LaneKey.SoftAck(peer1, SoftAckNumber(99)).encode)
+                java.util.Arrays.equals(_, FamilyKey.SoftAck(peer1, SoftAckNumber(99)).encode)
               ) &&
                   got0.exists(
-                    java.util.Arrays.equals(_, LaneKey.SoftAck(peer0, SoftAckNumber(3)).encode)
+                    java.util.Arrays.equals(_, FamilyKey.SoftAck(peer0, SoftAckNumber(3)).encode)
                   ) &&
                   missing.isEmpty,
               s"got1=$got1, got0=$got0, missing=$missing"

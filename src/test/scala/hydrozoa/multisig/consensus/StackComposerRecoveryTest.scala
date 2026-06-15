@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, LaneKey, LaneValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -81,10 +81,10 @@ class StackComposerRecoveryTest extends AnyFunSuite:
         val own = ownNum
         for {
             sb <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
-            _ <- p.put(LaneKey.HardAck(own, HardAckNumber(0)))(
-              LaneValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
+            _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+              FamilyValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
             )
-            _ <- p.put(LaneKey.Stack(StackNumber(1)))(LaneValue(stamp, sb))
+            _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, sb))
             _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
             _ <- p.put(StoreKey.EvacuationMap(BlockNumber(3)))(EvacuationMap.empty)
         } yield ()

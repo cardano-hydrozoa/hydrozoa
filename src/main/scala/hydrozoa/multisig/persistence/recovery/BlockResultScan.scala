@@ -6,13 +6,13 @@ import hydrozoa.multisig.ledger.block.{BlockNumber, BlockResult}
 import hydrozoa.multisig.persistence.{BackendStore, Cf, StoreKey}
 import java.nio.ByteBuffer
 
-/** Range-scan the [[Cf.BlockResult]] CF — the non-lane spine of JointLedger's per-block outputs —
+/** Range-scan the [[Cf.BlockResult]] CF — the non-family spine of JointLedger's per-block outputs —
   * from a block-number floor to the end, decoding each entry to its typed [[BlockResult]].
   *
   * Used by `StackComposer.recover` to rebuild `pending` from the blocks soft-acked since the last
   * closed stack: the range `(lastClosedBlockNum, softAcked]`. The highest persisted entry is the
   * `softAcked` block, since JointLedger writes exactly one `BlockResult` per own soft-ack, so a
-  * scan to the end of the CF needs no explicit upper bound. `BlockResult` is a non-lane CF —
+  * scan to the end of the CF needs no explicit upper bound. `BlockResult` is a non-family CF —
   * entries carry no arrival-stamp prefix, so the raw value bytes decode directly. See
   * `design/recovery-implementation-plan.md` R2-fast.
   */
