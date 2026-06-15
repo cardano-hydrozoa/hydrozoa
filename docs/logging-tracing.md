@@ -1,11 +1,9 @@
 # Logging and Tracing
 
-## Primary pattern: typed `ContraTracer` per actor
-
-Every actor (and every infrastructure component that emits log lines) holds a typed
-`ContraTracer[IO, MyEvent]` passed in via the constructor. The component never sees a SLF4J
-logger — it calls `tracer.traceWith(event)` for each event it wants to publish. A separate
-`MyEventFormat` object renders each event variant to a `LogEvent`.
+This repository handles logging via typed `ContraTracer`s, ported from the haskell at [avieth/contractracer](https://github.com/avieth/contra-tracer).
+With contractracers, components that do "logging" are not aware of the logging backend _at all_. 
+They only emit typed events (via `tracer.traceWith(event)` or similar), and the eventual caller applies functions to
+format and render these events within some effect monad `M`.
 
 ```scala
 sealed trait MyEvent
@@ -27,9 +25,9 @@ final class MyActor(tracer: ContraTracer[IO, MyEvent]) extends Actor[IO, Request
 
 This gives:
 - **Typed contexts.** Each variant carries the data it needs; the format produces the string.
-- **No ambient state.** The tracer is a value in scope — no `IOLocal`, no MDC, no thread-locals.
-- **Composition.** A `ContraTracer` is `A => IO[Unit]`. Combine via `|+|` (Semigroup): one sink
-  writes the human-readable line, another captures into a `Ref`, another emits JSONL.
+- **Composition.** A `ContraTracer` is `A => IO[Unit]`. Combine via `|+|` (`Semigroup`): 
+  one sink can write the human-readable line, another captures into a `Ref` for inspection during test, and a third  
+  can log to a telemetry server. 
 
 ## Core types
 
@@ -68,16 +66,12 @@ objects) that fixes the routing key + base context once and lets each match arm 
 
 - `humanFormat(peerNum)(e): LogEvent` — total. Every event variant renders to one line. Routing
   key is per-component, often suffixed with the peer number (`"CardanoLiaison.<peerNum>"`).
-- `jsonlFormat(peerNum)(e): Option[LogEvent]` — partial. Only events on the trace wire return
-  `Some`. Routing key is pinned to `"hydrozoa.trace"` so one Logback appender captures every
-  `HTRACE|…` line.
 
-Lift either through `Slf4jTracer.sink` and combine:
+Lift through `Slf4jTracer.sink`:
 
 ```scala
 val tracer: ContraTracer[IO, MyEvent] =
     Slf4jTracer.sink.contramap(MyEventFormat.humanFormat(peerNum))
-        |+| Slf4jTracer.sink.traceMaybe(MyEventFormat.jsonlFormat(peerNum))
 ```
 
 The full set of typed events and formatters in the tree is discoverable as `*Event.scala` /

@@ -2,7 +2,7 @@ package hydrozoa.integration.stage1
 
 import cats.*
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent, TxTimingEventFormat}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.head.network
@@ -17,7 +17,6 @@ import hydrozoa.integration.stage1.model.Deposits.{DepositStatus, depositAbsorpt
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import cats.implicits.toContravariantOps
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, trace, warn}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -45,6 +44,9 @@ import scala.util.chaining.*
 object Model:
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
         Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
+
+    private val tmTracer: ContraTracer[cats.Id, TxTimingEvent] =
+        Slf4jTracer.syncSink.contramap(TxTimingEventFormat.humanFormat)
 
     // ===================================
     // Model state
@@ -679,7 +681,7 @@ object Model:
                 )
 
                 blockCanStayMinor: Boolean = state.multiNodeConfig.txTiming
-                    .blockCanStayMinor[Id](ContraTracer.nullTracer)(
+                    .blockCanStayMinor[Id](tmTracer)(
                       blockEndTime,
                       state.competingFallbackStartTime
                     )
