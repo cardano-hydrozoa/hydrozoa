@@ -13,18 +13,19 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.persistence.recovery.OutboxBacking
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 
-/** Recovery tests for the two coil-liaison outbox recovers (§6 PeerLiaison, GUM-153):
+/** Recovery tests for the coil-liaison outbound lanes' backing ([[OutboxBacking]], §6 PeerLiaison,
+  * GUM-153). After a crash each lane restores only its high-water and serves older entries from the
+  * store on demand (`load`), rather than eagerly loading its whole own production:
   *
-  *   - [[PeerLiaisonCoilToHub.recover]] rebuilds a coil peer's own-hard-ack outbox from its own
-  *     `CoilHardAck` family;
-  *   - [[PeerLiaisonHubToCoil.recover]] rebuilds a hub's full-population outbox from the population
-  *     families it already holds — every block (no `canLead` filter), every author's acks, every
-  *     hub's relay lane.
+  *   - a coil peer's own-hard-ack lane is backed by its own `CoilHardAck` family;
+  *   - a hub's full-population lanes are backed by the families it already holds — every block (no
+  *     `canLead` filter on a hub→coil link), every author's acks, every hub's relay lane.
   */
 class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
 
@@ -36,9 +37,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
     private given CardanoNetwork.Section = config
     private val stamp: ArrivalStamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
 
-    test("CoilToHub.recover rebuilds the coil peer's own-hard-ack outbox from CoilHardAck") {
+    test("coil own-hard-ack backing: high-water = max, load returns the tail from a number") {
         val coil = CoilPeerNumber(0)
-        val acks = run { p =>
+        val (hw, fromZero, fromOne) = run { p =>
+            val backing = OutboxBacking.coilHardAck(p.backend, coil)
             for {
                 _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
                   FamilyValue(stamp, coilHardAck(coil, 0, stack = 1))
@@ -46,29 +48,50 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                 _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
                   FamilyValue(stamp, coilHardAck(coil, 1, stack = 2))
                 )
-            } yield ()
-        }(PeerLiaisonCoilToHub.recover(_, coil))
-        assert(acks.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)), s"got $acks")
+                hw <- backing.highWater
+                fromZero <- backing.load(HardAckNumber(0), 16)
+                fromOne <- backing.load(HardAckNumber(1), 16)
+            } yield (hw, fromZero, fromOne)
+        }
+        assert(hw == Some(HardAckNumber(1)), s"high-water = max; got $hw")
+        assert(fromZero.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)), s"$fromZero")
+        assert(fromOne.map(_.hardAckNum) == List(HardAckNumber(1)), s"load from 1 → tail; $fromOne")
     }
 
-    test("CoilToHub.recover on an empty store seeds nothing") {
-        val acks = run(_ => IO.unit)(PeerLiaisonCoilToHub.recover(_, CoilPeerNumber(0)))
-        assert(acks.isEmpty)
+    test("coil own-hard-ack backing on an empty store: no high-water, empty load") {
+        val (hw, loaded) = run { p =>
+            val backing = OutboxBacking.coilHardAck(p.backend, CoilPeerNumber(0))
+            for {
+                hw <- backing.highWater
+                loaded <- backing.load(HardAckNumber.zero, 16)
+            } yield (hw, loaded)
+        }
+        assert(hw.isEmpty && loaded.isEmpty)
     }
 
-    test("HubToCoil.recover rebuilds the full population (all blocks, per-author + per-hub acks)") {
+    test("hub population backings: high-water + load over blocks (no filter), acks, relay lane") {
         val h0 = HeadPeerNumber(0)
         val hub0 = HeadPeerNumber(0)
-        val seed = run { p =>
+        case class Out(
+            blockHw: Option[BlockNumber],
+            blocks: List[BlockNumber],
+            stacks: List[StackNumber],
+            headAcks: List[HardAckNumber],
+            relay: List[HubHardAckNumber]
+        )
+        val out = run { p =>
+            val blockBacking = OutboxBacking.block(p.backend, _ => true)
+            val stackBacking = OutboxBacking.stack(p.backend, _ => true)
+            val headHardAckBacking = OutboxBacking.hardAck(p.backend, h0)
+            val relayBacking = OutboxBacking.hubHardAck(p.backend, hub0)
             for {
-                // Two blocks on the spine — recover keeps BOTH regardless of leader (no canLead).
+                // Two blocks on the spine — a hub→coil link keeps BOTH (no canLead filter).
                 b1 <- blockBrief(1)
                 b2 <- blockBrief(2)
                 _ <- p.put(FamilyKey.Block(BlockNumber(1)))(FamilyValue(stamp, b1))
                 _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, b2))
                 s1 <- stackBrief(1, 1, 2)
                 _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
-                // A head peer's hard-acks + a hub's relay lane.
                 _ <- p.put(FamilyKey.HardAck(h0, HardAckNumber(0)))(
                   FamilyValue(stamp, headHardAck(h0, 0, stack = 1))
                 )
@@ -78,38 +101,30 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                     HardAckWithId(hub0, HubHardAckNumber(0), coilHardAck(CoilPeerNumber(0), 0, 1))
                   )
                 )
-            } yield ()
-        }(PeerLiaisonHubToCoil.recover(_, headPeerNums = List(h0), hubNums = List(hub0)))
-
-        assert(
-          seed.blocks.map(_.blockNum) == List(BlockNumber(1), BlockNumber(2)),
-          "all blocks, no canLead filter"
-        )
-        assert(seed.stacks.map(_.stackNum) == List(StackNumber(1)), "the stack")
-        assert(
-          seed.headHardAcks.getOrElse(h0, Nil).map(_.hardAckNum) == List(HardAckNumber(0)),
-          "head hard-ack"
-        )
-        assert(
-          seed.coilHardAcks.getOrElse(hub0, Nil).map(_.seqNum) == List(HubHardAckNumber(0)),
-          "hub relay lane"
-        )
-        assert(
-          seed.requests.getOrElse(h0, Nil).isEmpty && seed.softAcks.getOrElse(h0, Nil).isEmpty,
-          "unseeded families empty"
-        )
+                blockHw <- blockBacking.highWater
+                blocks <- blockBacking.load(BlockNumber(1), 16)
+                stacks <- stackBacking.load(StackNumber(1), 16)
+                headAcks <- headHardAckBacking.load(HardAckNumber.zero, 16)
+                relay <- relayBacking.load(HubHardAckNumber.zero, 16)
+            } yield Out(
+              blockHw,
+              blocks.map(_.blockNum),
+              stacks.map(_.stackNum),
+              headAcks.map(_.hardAckNum),
+              relay.map(_.seqNum)
+            )
+        }
+        assert(out.blockHw == Some(BlockNumber(2)), "block high-water = max")
+        assert(out.blocks == List(BlockNumber(1), BlockNumber(2)), "all blocks, no canLead filter")
+        assert(out.stacks == List(StackNumber(1)), "the stack")
+        assert(out.headAcks == List(HardAckNumber(0)), "head hard-ack")
+        assert(out.relay == List(HubHardAckNumber(0)), "hub relay lane")
     }
 
-    /** Open a fresh in-memory store, seed it, and run a recover against it. */
-    private def run[A](seed: Persistence[IO] => IO[Unit])(recover: Persistence[IO] => IO[A]): A =
+    /** Open a fresh in-memory store, then run `body` against a `Persistence` over it. */
+    private def run[A](body: Persistence[IO] => IO[A]): A =
         InMemoryBackendStore.open
-            .use(backend =>
-                for {
-                    p <- Persistence.fromBackend(backend)
-                    _ <- seed(p)
-                    out <- recover(p)
-                } yield out
-            )
+            .use(backend => Persistence.fromBackend(backend).flatMap(body))
             .unsafeRunSync()
 
     private def coilHardAck(coil: CoilPeerNumber, hardAckNum: Int, stack: Int): HardAck =

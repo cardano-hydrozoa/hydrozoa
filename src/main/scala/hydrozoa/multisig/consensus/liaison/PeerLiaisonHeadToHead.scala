@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, 
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.recovery.OutboxBacking
 import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
@@ -43,8 +43,8 @@ abstract class PeerLiaisonHeadToHead(
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
 
-    // The mesh liaison runs only on head peers; `recover`'s satellite scans are keyed by this
-    // head peer number.
+    // The mesh liaison runs only on head peers; the satellite backings are keyed by this head peer
+    // number.
     private val ownNum: HeadPeerNumber = config.ownPeerId match {
         case PeerId.Head(n) => n
         case PeerId.Coil(_) =>
@@ -71,41 +71,59 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
+    // Each outbound side is backed by the family this peer's own production lives in, so a reply
+    // hot-loads entries below the in-memory outbox floor and preStart restores only the high-water.
+    // The spines carry every leader's brief, so their backings keep only the ones THIS peer leads;
+    // the satellites are this peer's own author (CF per author).
+    private val backend = persistence.backend
+    private val blockBacking = OutboxBacking.block(backend, b => config.canLeadFast(b.blockNum))
+    private val stackBacking = OutboxBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
+    private val requestBacking = OutboxBacking.request(backend, ownNum)
+    private val softAckBacking = OutboxBacking.softAck(backend, ownNum)
+    private val hardAckBacking = OutboxBacking.hardAck(backend, ownNum)
+    private val hubHardAckBacking = OutboxBacking.hubHardAck(backend, ownNum)
+
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
       outboundNext = config.nextOwnLeaderBlock,
-      inboundNext = after => Some(remoteHead.nextLeaderBlock(after))
+      inboundNext = after => Some(remoteHead.nextLeaderBlock(after)),
+      load = blockBacking.load
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       numberOf = _.stackNum,
       zero = StackNumber.zero,
       outboundNext = config.nextOwnSlowLeaderStack,
-      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after))
+      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after)),
+      load = stackBacking.load
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
       RequestNumber.zero,
       _.increment,
-      config.peerLiaisonMaxRequestsPerBatch
+      config.peerLiaisonMaxRequestsPerBatch,
+      load = requestBacking.load
     )
     private val softAckLane =
         LaneBidirectional.contiguous[SoftAck, SoftAckNumber](
           _.ackNum,
           SoftAckNumber.zero.increment,
-          _.increment
+          _.increment,
+          load = softAckBacking.load
         )
     private val hardAckLane =
         LaneBidirectional.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
           HardAckNumber.zero,
-          _.increment
+          _.increment,
+          load = hardAckBacking.load
         )
     private val hubHardAckLane =
         LaneBidirectional.contiguous[HardAckWithId, HubHardAckNumber](
           _.seqNum,
           HubHardAckNumber.zero,
-          _.increment
+          _.increment,
+          load = hubHardAckBacking.load
         )
 
     // ---- Connections ----------------------------------------------------------------------------
@@ -293,18 +311,19 @@ abstract class PeerLiaisonHeadToHead(
         case hub: HardAckWithId   => hubHardAckLane.append(hub)
     }
 
-    /** Seed the outbound lanes from a recovered [[PeerLiaisonHeadToHead.OutboxSeed]] (R3): refill
-      * each lane's queue and set its high-water to its last entry's number — the state the live
-      * appends would have left. The hub-hard-ack lane seeds on a **hub** head peer (its own
-      * `HubHardAck` is persisted by `CoilAckSequencer`); it is empty on a non-hub.
+    /** Restore each outbound lane's high-water from its backing family, leaving the queues empty
+      * (R3): the Server half hot-loads older own-produced entries from the store on the remote's
+      * `Mesh.Get`, and replay / live production re-appends the tail. The hub-hard-ack lane restores
+      * on a **hub** head peer (its own `HubHardAck` is persisted by `CoilAckSequencer`); it is cold
+      * on a non-hub.
       */
-    private def seedOutbox(seed: PeerLiaisonHeadToHead.OutboxSeed): IO[Unit] =
-        blockLane.seedOutbox(seed.blocks) >>
-            stackLane.seedOutbox(seed.stacks) >>
-            requestLane.seedOutbox(seed.requests) >>
-            softAckLane.seedOutbox(seed.softAcks) >>
-            hardAckLane.seedOutbox(seed.hardAcks) >>
-            hubHardAckLane.seedOutbox(seed.hubHardAcks)
+    private def restoreHighWaters: IO[Unit] =
+        blockBacking.highWater.flatMap(blockLane.seedHighWaterOutbox) >>
+            stackBacking.highWater.flatMap(stackLane.seedHighWaterOutbox) >>
+            requestBacking.highWater.flatMap(requestLane.seedHighWaterOutbox) >>
+            softAckBacking.highWater.flatMap(softAckLane.seedHighWaterOutbox) >>
+            hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox) >>
+            hubHardAckBacking.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -327,17 +346,10 @@ abstract class PeerLiaisonHeadToHead(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
-            // Refill the own-produced outbox from the store so the remote can re-poll the
-            // blocks/acks/requests it missed during our crash (the Server half answers its
-            // `Mesh.Get`s from these lanes; a cold outbox could not answer its catch-up). An
-            // empty store seeds empty lanes, so a cold boot is unaffected.
-            seed <- PeerLiaisonHeadToHead.recover(
-              persistence,
-              ownNum,
-              config.canLeadFast,
-              config.canLeadSlow
-            )
-            _ <- seedOutbox(seed)
+            // Restore each lane's own-produced high-water; the Server half hot-loads older entries
+            // from the store on the remote's Mesh.Get, and replay / live production re-appends the
+            // tail. An empty store leaves every lane cold.
+            _ <- restoreHighWaters
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -377,74 +389,4 @@ object PeerLiaisonHeadToHead {
         coilRelay: Option[CoilRelay.Handle] = None
     )
 
-    /** This peer's own-produced outbox restored from the store on boot — the recoverable lanes' own
-      * entries in ascending number order. [[recover]] rebuilds it; `preStartLocal` seeds the
-      * outbound lanes from it (each lane's high-water is its last entry's number; the cold value is
-      * all empty). `hubHardAcks` is this peer's own `HubHardAck` production (persisted by
-      * `CoilAckSequencer` on a hub; empty on a non-hub).
-      */
-    final case class OutboxSeed(
-        blocks: List[BlockBrief.Next],
-        stacks: List[StackBrief],
-        requests: List[UserRequestWithId],
-        softAcks: List[SoftAck],
-        hardAcks: List[HardAck],
-        hubHardAcks: List[HardAckWithId]
-    )
-
-    /** Reconstruct this peer's own-produced outbox after a crash — the entries the remote pulls
-      * from us via `Mesh.Get`. Pure over the store; the actor wiring (seeding the lanes) is
-      * `preStartLocal`'s. Each lane is read ascending: the satellites (`SoftAck` / `HardAck` /
-      * `Request`) are own-keyed, so a per-peer scan yields exactly our entries; the spines (`Block`
-      * / `Stack`) carry every leader's brief, so we keep only the ones THIS peer leads
-      * (`canLeadFast` / `canLeadSlow`). **Inbound is not restored** — `persistInbound` forwards
-      * each received entry rather than holding it, so inbound re-delivery is the `ReplayActor`'s
-      * job (restoring it here would double-deliver).
-      */
-    def recover(
-        persistence: Persistence[IO],
-        ownNum: HeadPeerNumber,
-        canLeadFast: BlockNumber => Boolean,
-        canLeadSlow: StackNumber => Boolean
-    )(using CardanoNetwork.Section): IO[OutboxSeed] =
-        val backend = persistence.backend
-        val kSoftAck = FamilyKey.SoftAck(ownNum, SoftAckNumber.zero)
-        val kRequest = FamilyKey.Request(ownNum, RequestNumber.zero)
-        val kHardAck = FamilyKey.HardAck(ownNum, HardAckNumber.zero)
-        val kBlock = FamilyKey.Block(BlockNumber.zero)
-        val kStack = FamilyKey.Stack(StackNumber.zero)
-        val kHubHardAck = FamilyKey.HubHardAck(ownNum, HubHardAckNumber.zero)
-        for {
-            softAcks <- FamilyScan
-                .scan(backend, kSoftAck)
-                .map(_.map(e => kSoftAck.decodeValue(e.framed).payload))
-            requests <- FamilyScan
-                .scan(backend, kRequest)
-                .map(_.map(e => kRequest.decodeValue(e.framed).payload))
-            hardAcks <- FamilyScan
-                .scan(backend, kHardAck)
-                .map(_.map(e => kHardAck.decodeValue(e.framed).payload))
-            blocks <- FamilyScan
-                .scan(backend, kBlock)
-                .map(
-                  _.map(e => kBlock.decodeValue(e.framed).payload)
-                      .filter(b => canLeadFast(b.blockNum))
-                )
-            stacks <- FamilyScan
-                .scan(backend, kStack)
-                .map(
-                  _.map(e => kStack.decodeValue(e.framed).payload)
-                      .filter(s => canLeadSlow(s.stackNum))
-                )
-            hubHardAcks <- FamilyScan
-                .scan(backend, kHubHardAck)
-                .map(_.map(e => kHubHardAck.decodeValue(e.framed).payload))
-        } yield OutboxSeed(
-          blocks = blocks,
-          stacks = stacks,
-          requests = requests,
-          softAcks = softAcks,
-          hardAcks = hardAcks,
-          hubHardAcks = hubHardAcks
-        )
 }

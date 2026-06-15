@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus.liaison
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import hydrozoa.multisig.consensus.liaison.LaneOutbound.*
 import org.scalatest.funsuite.AnyFunSuite
@@ -65,6 +66,36 @@ class LaneOutboundTest extends AnyFunSuite {
         val lane = contiguousFrom(0, maxPerReply = 2)
         (0 to 4).foreach(n => lane.append(n).unsafeRunSync())
         assert(lane.reply(1).unsafeRunSync() == Items(List(1, 2)))
+    }
+
+    test("reply hot-loads from the store when the cursor is below the in-memory outbox floor") {
+        // A stub store holding 0..4; on recovery the lane restores only its high-water (empty
+        // outbox), so a pull below the in-memory floor is served from the store via `load`.
+        val store = (0 to 4).toList
+        val lane = LaneOutbound.contiguous[Int, Int](
+          numberOf = identity,
+          first = 0,
+          increment = _ + 1,
+          maxPerReply = 2,
+          load = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
+        )
+        lane.seedHighWater(Some(4)).unsafeRunSync()
+        // Outbox empty → served from the store.
+        val _ = assert(lane.reply(1).unsafeRunSync() == Items(List(1, 2)))
+        // A live tail item lands in memory; its own number is served from memory, older from store.
+        lane.append(5).unsafeRunSync()
+        val _ = assert(lane.reply(5).unsafeRunSync() == Items(List(5)))
+        assert(lane.reply(2).unsafeRunSync() == Items(List(2, 3)))
+    }
+
+    test("seedHighWater sets the append baseline without populating the outbox") {
+        val lane = contiguousFrom(0)
+        lane.seedHighWater(Some(3)).unsafeRunSync()
+        // The next append must continue from the high-water, not the cold `first`.
+        val _ = assertThrows[AppendOutOfOrder](lane.append(3).unsafeRunSync())
+        lane.append(4).unsafeRunSync()
+        // No loader → the restored prefix is not in memory; a pull below the tail is empty.
+        assert(lane.reply(2).unsafeRunSync() == Items(Nil))
     }
 
     test("sparse outbound: own-led append, sentinel and remote-led numbers rejected") {

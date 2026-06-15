@@ -848,15 +848,24 @@ way** — restore per-remote cursors, start with empty queues, serve the outbox 
 - **State:** per-remote cursors (the `GetMsgBatch` fields — `batchNum`,
   `requestNum`, `blockNum`, `softAckNum`, `hardAckNum`, and, where the link carries
   them, `hubHardAckNum`), in/out queues, current requesting batch.
-- **Recover:** cursors via `max(persisted …)`; queues **empty**; the outbox is a
-  **DB-backed view** (on `GetMsgBatch` from R, read the persisted own-produced
-  prefix `[R's cursor, head]`). In steady state the queue is a write-through
-  cache, so a cold cache *is* recovery — same procedure. The whitepaper already
-  prunes these outboxes by **remote `GetMsgBatch` cursors**, not local
-  confirmation, *"so that messages can be retransmitted if needed during recovery
-  scenarios"* ([peer-network](https://) `#outbox-queues-and-confirmation`);
-  persistence extends that retransmissibility across a process restart, not just a
-  transient disconnect.
+- **Recover:** each outbound lane restores **only its high-water**
+  (`max(family key)`, payload-free — `OutboxBacking.highWater`) and leaves its
+  queue **empty**; the outbox is a **DB-backed view** — on `GetMsgBatch` from R,
+  `LaneOutbound.reply` serves the in-memory tail if it holds R's cursor, else
+  hot-loads the prefix below the outbox floor from the family
+  (`OutboxBacking.load`). The high-water is the gap-free `append` baseline and the
+  out-of-bounds guard; replay and live production re-append the tail on top —
+  including not-yet-persisted in-flight entries (e.g. the in-flight stack's own
+  hard-ack, which `SlowConsensusActor` re-broadcasts during replay *after* this
+  restore, so the lane carries it in memory before it is durable). In steady state
+  the queue is a write-through cache, so a cold cache *is* recovery — same
+  procedure. The whitepaper already prunes these outboxes by **remote
+  `GetMsgBatch` cursors**, not local confirmation, *"so that messages can be
+  retransmitted if needed during recovery scenarios"* ([peer-network](https://)
+  `#outbox-queues-and-confirmation`); persistence extends that retransmissibility
+  across a process restart, not just a transient disconnect. Reading from the
+  store on demand (rather than eagerly seeding the whole own production) also
+  bounds the in-memory outbox to the live tail.
 - **Inputs:** remote family entries — **cursor-gated (CR8)**.
 - **Persists:** inbound remote family entries (CR8); each persisted value carries
   a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation, monotonic)` at
@@ -871,14 +880,12 @@ way** — restore per-remote cursors, start with empty queues, serve the outbox 
 | `PeerLiaisonHubToCoil` (hub → coil) | the **full** population: `Block` (contiguous), `Stack`, `Request ×N`, `SoftAck ×N`, head `HardAck ×N`, `HubHardAck ×H` | the coil peer's own `HardAck` → `CoilHardAck` |
 | `PeerLiaisonCoilToHub` (coil → hub) | this coil peer's own `HardAck` (one lane) | the **full** population (mirror of `HubToCoil` outbound) |
 
-> **Code reality (2026-06).** Only `PeerLiaisonHeadToHead.recover` is wired
-> (`recover` → `OutboxSeed` → `LaneOutbound.seed`). `PeerLiaisonHubToCoil` and
-> `PeerLiaisonCoilToHub` start **cold** — no `recover` call yet (GUM-153). Their
-> outbox recovery is a direct reuse of the `HeadToHead` pattern over the lane sets
-> above; until wired, a restarted hub cannot serve a coil peer the pre-crash prefix
-> from memory until the lanes refill from live production. This costs
-> retransmission liveness, **not safety** — the family CFs themselves are persisted
-> by the producers (§10 Q11).
+> **Code reality (2026-06).** All three shapes recover the same way: each outbound
+> lane is built with an `OutboxBacking` over its family, `preStart` restores the
+> lane high-waters (`seedHighWater`), and `LaneOutbound.reply` hot-loads below the
+> in-memory floor (`OutboxBacking.load`). No lane eagerly seeds its whole own
+> production. The earlier `recover` → `OutboxSeed` → `LaneOutbound.seed` (eager,
+> `HeadToHead`-only) is gone (GUM-153).
 
 #### `CardanoLiaison`
 

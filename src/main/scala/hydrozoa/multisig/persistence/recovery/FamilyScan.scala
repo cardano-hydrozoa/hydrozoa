@@ -23,6 +23,43 @@ import hydrozoa.multisig.persistence.{BackendStore, FamilyKey, FamilyValue}
   */
 object FamilyScan:
 
+    /** Hot-load up to `limit` payloads from `from`'s family, starting at `from`'s index
+      * (inclusive), decoding each value with `decode` and keeping only those `keep` accepts. Stops
+      * at the first `limit` kept payloads or end-of-family, whichever comes first — a bounded read
+      * (the early stop makes it cheap even on a long family). Returns the kept payloads in ascending
+      * index order.
+      *
+      * Used by the liaison outbound lanes ([[hydrozoa.multisig.consensus.liaison.LaneOutbound]]) to
+      * serve a remote's `*.Get` from the store when the requested entry is below the in-memory
+      * outbox floor — so a liaison reseeds only its live/replayed tail and reads the older prefix on
+      * demand rather than eagerly loading its whole own production. `keep` filters a spine family to
+      * this peer's own-led entries (the satellites are already single-author per CF).
+      */
+    def loadFrom[T](
+        backend: BackendStore[IO],
+        from: FamilyKey,
+        decode: Array[Byte] => T,
+        keep: T => Boolean,
+        limit: Int
+    ): IO[List[T]] =
+        val cf = from.cf
+        val familyId = from.familyId
+        backend.cursor(cf, from.encode).use { cursor =>
+            def loop(acc: List[T]): IO[List[T]] =
+                if acc.length >= limit then IO.pure(acc.reverse)
+                else
+                    cursor.next.flatMap {
+                        case None => IO.pure(acc.reverse)
+                        case Some((keyBytes, valueBytes)) =>
+                            val key = FamilyKey.decode(cf, keyBytes)
+                            if key.familyId != familyId then IO.pure(acc.reverse)
+                            else
+                                val item = decode(valueBytes)
+                                loop(if keep(item) then item :: acc else acc)
+                    }
+            loop(Nil)
+        }
+
     /** Scan `from`'s family, starting at `from`'s index (inclusive) and running to the end of the
       * family. Returns the entries in ascending index order.
       */

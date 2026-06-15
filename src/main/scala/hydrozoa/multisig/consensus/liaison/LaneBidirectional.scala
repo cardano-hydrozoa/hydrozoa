@@ -26,7 +26,7 @@ final class LaneBidirectional[T, N] private (
     def append(item: T): IO[Unit] = out.append(item)
     def reply(remoteCursor: N): IO[LaneOutbound.Reply[T]] = out.reply(remoteCursor)
     def outboxIsEmpty: IO[Boolean] = out.outboxIsEmpty
-    def seedOutbox(items: List[T]): IO[Unit] = out.seed(items)
+    def seedHighWaterOutbox(highWater: Option[N]): IO[Unit] = out.seedHighWater(highWater)
 
     // ---- Inbound ----
     def cursor: IO[N] = in.cursor
@@ -37,29 +37,34 @@ final class LaneBidirectional[T, N] private (
 
 object LaneBidirectional {
 
-    /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`. */
+    /** A contiguous bidirectional lane: both directions start at `first`, successor `+1`. `load`
+      * hot-loads the outbound prefix below the in-memory outbox floor on a reply (default none).
+      */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
         increment: N => N,
-        maxPerReply: Int = 1
+        maxPerReply: Int = 1,
+        load: (N, Int) => IO[List[T]] = LaneOutbound.noLoad[T, N]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply),
+          LaneOutbound.contiguous(numberOf, first, increment, maxPerReply, load),
           LaneInbound.contiguous(numberOf, first, increment)
         )
 
     /** A sparse bidirectional lane: outbound follows this side's leader schedule (`outboundNext`),
-      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both.
+      * inbound the remote's (`inboundNext`). `zero` is "before the first" for both. `load` hot-loads
+      * the outbound prefix below the in-memory outbox floor on a reply (default none).
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
         outboundNext: N => Option[N],
-        inboundNext: N => Option[N]
+        inboundNext: N => Option[N],
+        load: (N, Int) => IO[List[T]] = LaneOutbound.noLoad[T, N]
     ): LaneBidirectional[T, N] =
         new LaneBidirectional[T, N](
-          LaneOutbound.sparse(numberOf, zero, outboundNext),
+          LaneOutbound.sparse(numberOf, zero, outboundNext, load),
           LaneInbound.sparse(numberOf, zero, inboundNext)
         )
 }

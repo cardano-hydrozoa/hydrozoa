@@ -471,30 +471,31 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    // ---- PeerLiaisonHeadToHead (outbox restore) ----
+    // ---- OutboxBacking (the liaison outbound lanes' recover seam) ----
 
-    test("PeerLiaisonHeadToHead.recover over an empty store yields an empty outbox") {
+    test("OutboxBacking over an empty store has no high-water and an empty load") {
         withStore { p =>
-            PeerLiaisonHeadToHead
-                .recover(p, ownNum, config.canLeadFast, config.canLeadSlow)
-                .map { seed =>
-                    assert(
-                      seed.softAcks.isEmpty && seed.blocks.isEmpty && seed.requests.isEmpty &&
-                          seed.stacks.isEmpty && seed.hardAcks.isEmpty
-                    )
-                }
+            val hardAckBacking = OutboxBacking.hardAck(p.backend, ownNum)
+            val blockBacking = OutboxBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
+            for
+                hwHardAck <- hardAckBacking.highWater
+                hwBlock <- blockBacking.highWater
+                loaded <- hardAckBacking.load(HardAckNumber.zero, 16)
+            yield assert(hwHardAck.isEmpty && hwBlock.isEmpty && loaded.isEmpty)
         }
     }
 
     test(
-      "PeerLiaisonHeadToHead.recover restores own satellites (per-peer) and own-led spines " +
-          "(filtered)"
+      "OutboxBacking high-water = max key; load filters spines to own-led, satellites are per-author"
     ) {
         withStore { p =>
             val other = HeadPeerNumber(1)
             val spineRange = (0 to 5).toList
+            val hardAckBacking = OutboxBacking.hardAck(p.backend, ownNum)
+            val blockBacking = OutboxBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
+            val stackBacking = OutboxBacking.stack(p.backend, s => config.canLeadSlow(s.stackNum))
             for
-                // own HardAcks 0..2 + another peer's at 5 (must be excluded by the per-peer scan).
+                // own HardAcks 0..2 + another peer's at 5; the per-author CF excludes the other's.
                 _ <- List(0, 1, 2).traverse_(k =>
                     p.put(FamilyKey.HardAck(ownNum, HardAckNumber(k)))(
                       FamilyValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
@@ -503,7 +504,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(FamilyKey.HardAck(other, HardAckNumber(5)))(
                   FamilyValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
                 )
-                // Block + Stack spines carry every leader's brief; recover keeps only own-led.
+                // Block + Stack spines carry every leader's brief; load keeps only own-led.
                 _ <- spineRange.traverse_(n =>
                     blockBrief(n).flatMap(b =>
                         p.put(FamilyKey.Block(BlockNumber(n)))(FamilyValue(stamp, b))
@@ -514,13 +515,21 @@ class RecoverSeamsTest extends AnyFunSuite:
                         p.put(FamilyKey.Stack(StackNumber(n)))(FamilyValue(stamp, s))
                     )
                 )
-                seed <- PeerLiaisonHeadToHead
-                    .recover(p, ownNum, config.canLeadFast, config.canLeadSlow)
+                hwHardAck <- hardAckBacking.highWater
+                hwBlock <- blockBacking.highWater
+                hwStack <- stackBacking.highWater
+                ownHardAcks <- hardAckBacking.load(HardAckNumber.zero, 16)
+                ownBlocks <- blockBacking.load(BlockNumber.zero, 16)
+                ownStacks <- stackBacking.load(StackNumber.zero, 16)
             yield assert(
-              seed.hardAcks.map(_.hardAckNum) == List(0, 1, 2).map(HardAckNumber(_)) &&
-                  seed.blocks.map(_.blockNum) ==
+              // satellite high-water = own max (other peer's CF is separate);
+              hwHardAck == Some(HardAckNumber(2)) &&
+                  ownHardAcks.map(_.hardAckNum) == List(0, 1, 2).map(HardAckNumber(_)) &&
+                  // spine high-water = overall max (no filter); load keeps only own-led.
+                  hwBlock == Some(BlockNumber(5)) && hwStack == Some(StackNumber(5)) &&
+                  ownBlocks.map(_.blockNum) ==
                   spineRange.map(BlockNumber(_)).filter(config.canLeadFast) &&
-                  seed.stacks.map(_.stackNum) ==
+                  ownStacks.map(_.stackNum) ==
                   spineRange.map(StackNumber(_)).filter(config.canLeadSlow)
             )
         }

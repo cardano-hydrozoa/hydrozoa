@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.recovery.OutboxBacking
 import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
@@ -74,21 +74,41 @@ abstract class PeerLiaisonHubToCoil(
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
+    // Each lane is backed by the family the hub already persists as a head-mesh member (own-produced
+    // or inbound-replicated), so a reply hot-loads entries below the in-memory outbox floor and
+    // preStart restores only the high-water; the hub serves every author (no own-led filter).
+    private val backend = persistence.backend
+    private val blockBacking = OutboxBacking.block(backend, _ => true)
+    private val stackBacking = OutboxBacking.stack(backend, _ => true)
+    private val requestBackings = headPeerNums.map(h => h -> OutboxBacking.request(backend, h)).toMap
+    private val softAckBackings = headPeerNums.map(h => h -> OutboxBacking.softAck(backend, h)).toMap
+    private val headHardAckBackings =
+        headPeerNums.map(h => h -> OutboxBacking.hardAck(backend, h)).toMap
+    private val coilHardAckBackings =
+        hubNums.map(h => h -> OutboxBacking.hubHardAck(backend, h)).toMap
+
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
-          _.increment
+          _.increment,
+          load = blockBacking.load
         )
     private val stackLane =
-        LaneOutbound.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
+        LaneOutbound.contiguous[StackBrief, StackNumber](
+          _.stackNum,
+          StackNumber(1),
+          _.increment,
+          load = stackBacking.load
+        )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
             h -> LaneOutbound.contiguous[UserRequestWithId, RequestNumber](
               _.requestId.requestNum,
               RequestNumber.zero,
               _.increment,
-              config.peerLiaisonMaxRequestsPerBatch
+              config.peerLiaisonMaxRequestsPerBatch,
+              load = requestBackings(h).load
             )
         }.toMap
     private val softAckLanes: Map[HeadPeerNumber, LaneOutbound[SoftAck, SoftAckNumber]] =
@@ -96,7 +116,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[SoftAck, SoftAckNumber](
               _.ackNum,
               SoftAckNumber.zero.increment,
-              _.increment
+              _.increment,
+              load = softAckBackings(h).load
             )
         }.toMap
     private val headHardAckLanes: Map[HeadPeerNumber, LaneOutbound[HardAck, HardAckNumber]] =
@@ -104,7 +125,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[HardAck, HardAckNumber](
               _.hardAckNum,
               HardAckNumber.zero,
-              _.increment
+              _.increment,
+              load = headHardAckBackings(h).load
             )
         }.toMap
     private val coilHardAckLanes
@@ -113,7 +135,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[HardAckWithId, HubHardAckNumber](
               _.seqNum,
               HubHardAckNumber.zero,
-              _.increment
+              _.increment,
+              load = coilHardAckBackings(h).load
             )
         }.toMap
 
@@ -279,25 +302,25 @@ abstract class PeerLiaisonHubToCoil(
             appendArtifact(artifact) >> server.afterAppend
     }
 
-    /** Seed every population outbox lane from a recovered [[PeerLiaisonHubToCoil.OutboxSeed]]:
-      * refill each lane's queue + high-water so the coil peer can re-pull the pre-crash prefix the
-      * moment it reconnects, rather than waiting for `CoilRelay` to refill the lanes from live
-      * production.
+    /** Restore each population outbox lane's high-water from its backing family, leaving the queues
+      * empty. The Server half answers the coil peer's `Population.Get` by hot-loading older entries
+      * from the store (`OutboxBacking.load`); live `CoilRelay` production re-appends the tail. An
+      * empty store leaves every lane cold.
       */
-    private def seedOutbox(seed: PeerLiaisonHubToCoil.OutboxSeed): IO[Unit] =
-        blockLane.seed(seed.blocks) >>
-            stackLane.seed(seed.stacks) >>
+    private def restoreHighWaters: IO[Unit] =
+        blockBacking.highWater.flatMap(blockLane.seedHighWater) >>
+            stackBacking.highWater.flatMap(stackLane.seedHighWater) >>
             requestLanes.toList.traverse_ { case (h, l) =>
-                l.seed(seed.requests.getOrElse(h, Nil))
+                requestBackings(h).highWater.flatMap(l.seedHighWater)
             } >>
             softAckLanes.toList.traverse_ { case (h, l) =>
-                l.seed(seed.softAcks.getOrElse(h, Nil))
+                softAckBackings(h).highWater.flatMap(l.seedHighWater)
             } >>
             headHardAckLanes.toList.traverse_ { case (h, l) =>
-                l.seed(seed.headHardAcks.getOrElse(h, Nil))
+                headHardAckBackings(h).highWater.flatMap(l.seedHighWater)
             } >>
             coilHardAckLanes.toList.traverse_ { case (h, l) =>
-                l.seed(seed.coilHardAcks.getOrElse(h, Nil))
+                coilHardAckBackings(h).highWater.flatMap(l.seedHighWater)
             }
 
     private def preStartLocal: IO[Unit] =
@@ -305,12 +328,10 @@ abstract class PeerLiaisonHubToCoil(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
-            // Refill the population outbox from the store (the full population the hub already holds
-            // as a head-mesh member). The Server half answers the coil peer's Population.Get from
-            // these lanes; a cold outbox could not serve a catch-up until CoilRelay refilled it. An
-            // empty store seeds empty lanes, so a cold boot is unaffected.
-            seed <- PeerLiaisonHubToCoil.recover(persistence, headPeerNums, hubNums)
-            _ <- seedOutbox(seed)
+            // Restore each lane's high-water; the Server half hot-loads older population entries
+            // from the store on the coil peer's Population.Get, and live CoilRelay production
+            // re-appends the tail. An empty store leaves every lane cold.
+            _ <- restoreHighWaters
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -345,73 +366,4 @@ object PeerLiaisonHubToCoil {
         remote: LiaisonProtocol.CoilToHubHandle
     )
 
-    /** The hub's full-population outbox restored from the store on boot — every author's entries in
-      * ascending number order. [[recover]] rebuilds it; `preStartLocal` seeds the outbox lanes from
-      * it (the cold value is all empty).
-      */
-    final case class OutboxSeed(
-        blocks: List[BlockBrief.Next],
-        stacks: List[StackBrief],
-        requests: Map[HeadPeerNumber, List[UserRequestWithId]],
-        softAcks: Map[HeadPeerNumber, List[SoftAck]],
-        headHardAcks: Map[HeadPeerNumber, List[HardAck]],
-        coilHardAcks: Map[HeadPeerNumber, List[HardAckWithId]]
-    )
-
-    /** Reconstruct the hub's full-population outbox after a crash — the population it serves a coil
-      * peer via `Population.Get`. Unlike a head-mesh liaison (which serves only its own
-      * production), a hub serves **every** author's entries, all of which it already persists as a
-      * head-mesh member (own-produced via its producers; remote via
-      * `PeerLiaisonHeadToHead.persistInbound`; its own `HubHardAck` via `CoilAckSequencer`; other
-      * hubs' via the mesh). So no `canLead` filter — each family is read in full from its first
-      * served index. **Inbound is not restored** — the coil peer's own hard-ack is re-pulled live.
-      * Pure over the store; `preStartLocal` seeds.
-      */
-    def recover(
-        persistence: Persistence[IO],
-        headPeerNums: List[HeadPeerNumber],
-        hubNums: List[HeadPeerNumber]
-    )(using CardanoNetwork.Section): IO[OutboxSeed] =
-        val backend = persistence.backend
-        val kBlock = FamilyKey.Block(BlockNumber(1))
-        val kStack = FamilyKey.Stack(StackNumber(1))
-        for {
-            blocks <- FamilyScan
-                .scan(backend, kBlock)
-                .map(_.map(e => kBlock.decodeValue(e.framed).payload))
-            stacks <- FamilyScan
-                .scan(backend, kStack)
-                .map(_.map(e => kStack.decodeValue(e.framed).payload))
-            requests <- headPeerNums.traverse { h =>
-                val k = FamilyKey.Request(h, RequestNumber.zero)
-                FamilyScan
-                    .scan(backend, k)
-                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
-            }
-            softAcks <- headPeerNums.traverse { h =>
-                val k = FamilyKey.SoftAck(h, SoftAckNumber.zero)
-                FamilyScan
-                    .scan(backend, k)
-                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
-            }
-            headHardAcks <- headPeerNums.traverse { h =>
-                val k = FamilyKey.HardAck(h, HardAckNumber.zero)
-                FamilyScan
-                    .scan(backend, k)
-                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
-            }
-            coilHardAcks <- hubNums.traverse { h =>
-                val k = FamilyKey.HubHardAck(h, HubHardAckNumber.zero)
-                FamilyScan
-                    .scan(backend, k)
-                    .map(es => h -> es.map(e => k.decodeValue(e.framed).payload))
-            }
-        } yield OutboxSeed(
-          blocks = blocks,
-          stacks = stacks,
-          requests = requests.toMap,
-          softAcks = softAcks.toMap,
-          headHardAcks = headHardAcks.toMap,
-          coilHardAcks = coilHardAcks.toMap
-        )
 }
