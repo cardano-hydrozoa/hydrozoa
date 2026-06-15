@@ -126,7 +126,7 @@ object StoreDump:
             case Cf.HardConfirmation =>
                 if key.length == 4 then s"HardConfirmation(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
-            case Cf.DepositMap | Cf.Treasury =>
+            case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
                 if key.isEmpty then "(singleton)" else hex(key)
             case Cf.Meta =>
                 try s"Meta(${new String(key, "UTF-8")})"

@@ -310,7 +310,7 @@ Structural facts:
 | Stack briefs                                                                      | `StackComposer` (own/leader), `PeerLiaison*` (remote) | replayed; own cut authoritative |
 | Hard acks (per-effect, round-1/2/sole)                                            | signed + persisted by `StackComposer` at creation (own `HardAck` lane + `UnsignedStack`, before the handoff — CR4); announced + aggregated by `SlowConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Head-peer acks ride `HardAck`; a coil peer's own ride `CoilHardAck` (next rows). |
 | **Unsigned stack** (`UnsignedStack` CF)                                           | `StackComposer` | the closed `Stack.Unsigned` (brief + locally-derived effects), keyed by `stackNum`, written **before** the handoff to `SlowConsensusActor` so SCA re-forms its in-flight cell on recovery (a `HardAck` signs the effects, which a `StackBrief` alone does not carry; §6 `StackComposer`). Written on every close, head or coil. |
-| **Coil hard acks** (`CoilHardAck` CF, coil peers)                                 | `StackComposer` (coil peer, own); a hub's `PeerLiaisonHubToCoil` writes its coil peers' *inbound* acks here | keyed `(CoilPeerNumber, HardAckNumber)`. A coil peer's own slow-side ack family — `hardAcked` derives from its last own entry, exactly as a head peer's derives from `HardAck`. The hub's receive copy is for hub-crash survival / idempotency (§6 `CoilAckSequencer`). One entry per stack — a coil peer hard-acks every stack (skip-stack optimization deferred, §2). |
+| **Coil hard acks** (`CoilHardAck` CF, coil peers)                                 | `StackComposer` (coil peer, own); a hub's `PeerLiaisonHubToCoil` writes its coil peers' *inbound* acks here | keyed `(CoilPeerNumber, HardAckNumber)`. A coil peer's own slow-side ack family — `hardAcked` derives from its last own entry, exactly as a head peer's derives from `HardAck`. The hub's receive copy is its durable receive log, from which it stamps any unstamped tail after a crash (§6 `CoilAckSequencer`). One entry per stack — a coil peer hard-acks every stack (skip-stack optimization deferred, §2). |
 | **Hub hard acks** (`HubHardAck` CF, hubs)                                         | `CoilAckSequencer` (hub) | the re-sequenced, disseminated coil-ack family, keyed `(HubHeadPeerNumber, HubHardAckNumber)`; carries a `HardAckWithId`. The hub's `nextSeq` derives as `max(HubHardAck where hub == own) + 1` — no stored counter. `SlowConsensusActor` reads all hubs' families to reach the coil quorum (§6 `CoilAckSequencer`). |
 | **Hard confirmation** (`HardConfirmation` CF)                                     | `SlowConsensusActor` → `CardanoLiaison` | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. `CardanoLiaison` submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
 | Deposits map (`DepositMap` CF)                                                    | `JointLedger` | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
@@ -871,8 +871,10 @@ way** — restore per-remote cursors, start with empty queues, serve the outbox 
   a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation, monotonic)` at
   receipt. The boundary that durably stores data it did not produce.
   `PeerLiaisonHubToCoil` additionally writes its coil peer's inbound `HardAck` to
-  the `CoilHardAck` receive family (hub-crash survival / idempotency), the one extra
-  inbound-persist among the three shapes.
+  the `CoilHardAck` receive family (so the hub can stamp a received-but-unstamped ack
+  from the store after a crash — §6 `CoilAckSequencer`), the one extra inbound-persist
+  among the three shapes; it also restores that lane's **receive cursor** to
+  `max(CoilHardAck) + 1` on boot, so a coil is re-pulled only for new acks.
 
 | Shape | Outbox lanes (served) | Inbound lanes (persisted) |
 |---|---|---|
@@ -914,24 +916,35 @@ publishes the **`HubHardAck`** family the population reads to reach the coil quo
 out, but signs nothing — so it recovers by restore, like the other boundaries.
 
 - **State:** `nextSeq` (the next `HubHardAckNumber`) and a per-coil-peer
-  last-sequenced high-water `Map[CoilPeerNumber, HardAckNumber]` (the idempotency
-  guard against retransmits).
+  **stamped-high-water** `Map[CoilPeerNumber, HardAckNumber]` — the highest coil ack
+  number already sequenced onto the spine, per coil. This is *not* an idempotency
+  guard against retransmits (the hub's `PeerLiaisonHubToCoil` restores its
+  coil-ack receive cursor on boot, so a coil never re-serves an ack already held —
+  §6 `PeerLiaison*`); it is the **floor of the gap** the sequencer must still stamp.
 - **Recover:** `nextSeq = max(HubHardAck.key where hub == own) + 1` — derived from
   the `HubHardAck` CF, **no stored counter** (the same no-marker-CF principle as
-  `RequestSequencer`'s `max(own Request) + 1`). The per-coil high-water derives by
-  scanning the `HubHardAck` values (each carries its source coil ack's
-  `HardAckNumber`), so no separate index CF is needed — unless that scan proves too
-  costly, in which case a small index blob is the fallback (§10 Q12).
-- **Inputs:** coil peers' `HardAck`s arriving via the hub's `PeerLiaisonHubToCoil`s.
-- **Persists:** each newly-sequenced `HardAckWithId` → **`HubHardAck`**, **before**
-  it fans out to the mesh + `CoilRelay` (CR4 write-before-send — a re-stamp would
+  `RequestSequencer`'s `max(own Request) + 1`). The per-coil marks are read from the
+  **`CoilStampMark`** singleton blob (a cheap point read, not a `HubHardAck` scan).
+  Then the sequencer **loads and stamps the gap**: for each coil it serves, the
+  `CoilHardAck` entries above its mark — durably received (the liaison persisted them
+  before advancing its receive cursor, CR8) but left unstamped by a crash between the
+  cursor advance and the stamp. The coil will never re-serve them, so they are
+  recovered from the store, not from a re-delivery; stamping fans out exactly as a
+  live ack would (so it runs after connections are wired).
+- **Inputs:** coil peers' `HardAck`s arriving via the hub's `PeerLiaisonHubToCoil`s
+  — each **exactly once** (next-expected cursor + restored receive cursor).
+- **Persists:** each newly-sequenced `HardAckWithId` → **`HubHardAck`**, in the
+  **same atomic batch** as the bumped per-coil **`CoilStampMark`**, **before** it
+  fans out to the mesh + `CoilRelay` (CR4 write-before-send — a re-stamp would
   equivocate on the `HubHardAck` spine: two `HubHardAckNumber`s for one underlying
-  coil ack). The raw inbound coil acks land in `CoilHardAck` via the liaison (above),
-  so the receive log is already durable when the sequencer runs.
-  - ⚠ **Finding (current code):** `CoilAckSequencer` assigns `nextSeq` from an
-    in-memory `Ref` and persists **nothing**. On a hub restart the counter resets,
-    re-stamping already-sequenced acks. Wiring the derive-on-boot + write-before-fan-out
-    above is the open hub-recovery task (§10 Q12).
+  coil ack; the co-written mark keeps "what's stamped" consistent with the spine
+  across a crash). The raw inbound coil acks land in `CoilHardAck` via the liaison
+  (above), so the receive log is already durable when the sequencer runs.
+
+> No idempotency index keyed by `(coil, hardAckNum)`: the restored receive cursor
+> makes re-delivery impossible (a stale re-serve is rejected by the inbound lane's
+> `verify`), so a scalar high-water per coil is all that is needed — both to bound
+> the boot-time gap stamp and as the consistency anchor for the spine.
 
 ### Consensus actors — *replayed*
 
@@ -1430,7 +1443,7 @@ clean append-only stream. Concretely:
 | `BlockSpine`, `StackSpine` | sparse spine — one small entry per block / stack, low write rate, heavily *read* (everyone consults briefs, replay scans them in order) | high bits/key Bloom is almost free (few keys); index + Bloom pinned in cache; range-scan-from-cursor on the spine is the native access pattern |
 | `Request:<peer>` (one per head peer) | **high** write rate — up to 50–75k requests/s across the head — variable-sized payloads, scanned by `requestNum` for block assembly | **one author per CF ⇒ a single monotonic append stream**: non-overlapping L0 SSTables, RocksDB trivial-moves them down, near-zero compaction even at peak rate (the decisive reason for the per-author split, §7.1); larger MemTable absorbs bursts |
 | `SoftAck:<author>`, `HardAck:<peer>` (one per author) | per block / stack-round, small fixed-size entries (Ed25519 sigs), pruned by confirmation-driven ack-pruning | append-only per author (no interleave); strong Bloom (small keys → cheap bits/key); the `*Acked` markers derive from the last key of the **own** author's CF |
-| `CoilHardAck:<coil>` (one per coil author) | a coil peer's own slow-side acks (+ a hub's receive copy per hubbed coil), one entry per stack | append-only per coil author; the coil peer's own is its `hardAcked` source; the hub's copies are its receive log (idempotency, §6 `CoilAckSequencer`) |
+| `CoilHardAck:<coil>` (one per coil author) | a coil peer's own slow-side acks (+ a hub's receive copy per hubbed coil), one entry per stack | append-only per coil author; the coil peer's own is its `hardAcked` source; the hub's copies are its receive log, stamped after a crash (§6 `CoilAckSequencer`) |
 | `HubHardAck:<hub>` (one per hub) | the re-sequenced disseminated coil-ack family, one entry per sequenced coil ack | append-only; `SeekToLast` gives `CoilAckSequencer`'s `nextSeq`; read by every `SlowConsensusActor` for the coil quorum |
 | `BlockResult` | one entry per block (JL's per-block output), keyed by `blockNum`, scanned at recovery to rebuild `StackComposer.pending`, low live read pressure | scan-optimized profile; values larger than acks but smaller than snapshots — independent compaction shape |
 | `UnsignedStack` | one entry per stack close (`Stack.Unsigned` = brief + effects), keyed by `stackNum`, read at recovery to re-form SCA's in-flight cell | scan-optimized + sparse; medium-sized values; independent of the ack CFs |
@@ -1638,8 +1651,9 @@ peer authors no soft-ack) and `hardAcked` derives from its own `CoilHardAck` CF
 in-flight `StackHandoff` from `UnsignedStack` + the own `CoilHardAck` tail and
 admits the inbound `HubHardAck` families so `SlowConsensusActor` re-reaches the
 coil quorum (§6); the coil peer runs one `PeerLiaisonCoilToHub` instead of the mesh.
-A **hub** additionally restores its `CoilAckSequencer` (`nextSeq` +
-idempotency index, §6) and its `PeerLiaisonHubToCoil` outboxes.
+A **hub** additionally restores its `CoilAckSequencer` (`nextSeq` + per-coil
+stamped marks, then stamps any unstamped `CoilHardAck` tail, §6) and its
+`PeerLiaisonHubToCoil` outboxes.
 
 > **Code reality (2026-06).** `CoilMultisigRegimeManager.preStartLocal` does **not
 > yet** call `ReplayActor.replay` — a coil peer boots cold today. The coil replay
@@ -1688,9 +1702,11 @@ idempotency index, §6) and its `PeerLiaisonHubToCoil` outboxes.
   fast side recovers off `BlockResult` alone.
 - **Hub crash with in-flight coil acks.** A hub had received coil acks (in
   `CoilHardAck` receive CFs) and sequenced some onto `HubHardAck`. On reboot
-  `CoilAckSequencer` recovers `nextSeq = max(HubHardAck) + 1` and must **not**
-  re-stamp an already-sequenced ack (idempotency) — assert no `HubHardAckNumber`
-  is ever reused for a different underlying coil ack.
+  `CoilAckSequencer` recovers `nextSeq = max(HubHardAck) + 1` + the per-coil marks,
+  then **stamps the durably-received-but-unstamped `CoilHardAck` tail** above each
+  mark (the acks a crash between cursor-advance and stamping left behind) — assert
+  every received ack ends up stamped exactly once and no `HubHardAckNumber` is reused
+  for a different underlying coil ack.
 - **Coil quorum completes from late acks post-recovery.** A recovered peer's
   in-flight slow-side cell completes as replayed/live `HubHardAck` entries arrive —
   assert hard-confirmation still reaches `AllOf(head) ∧ coilQuorum`.
@@ -1799,21 +1815,23 @@ committed state is observationally equivalent to the no-crash run.*
     `HeadPeerNumber`-typed, so a parallel path may be cleaner than retrofitting a type
     parameter. Also: confirm the `CoilHardAck` family supports `max + 1` and
     the in-flight-stack unpack the way the head HardAck-from-0 scan does (§5.3).
-11. **Coil liaison outbox recovery.** Only `PeerLiaisonHeadToHead.recover` is wired.
-    `PeerLiaisonHubToCoil` (full-population outbox) and `PeerLiaisonCoilToHub`
-    (own-hard-ack outbox) start cold. Reuse the `HeadToHead` `recover → OutboxSeed →
-    LaneOutbound.seed` pattern over each shape's family set (GUM-153). Safety-neutral
-    (the family CFs are persisted by the producers), so liveness-only — but it should
-    land with the coil boot. Confirm the inbound side stays cold for all three
-    (`ReplayActor` re-delivers; `Puller` starts cold), consistent with the head design.
-12. **`CoilAckSequencer` recovery + idempotency index.** Recover `nextSeq =
-    max(HubHardAck where hub == own) + 1` (derived, no stored counter) and persist
-    each sequenced `HardAckWithId` to `HubHardAck` **before** fan-out (CR4). **Open:**
-    derive the per-coil last-sequenced high-water by scanning `HubHardAck` values at
-    boot (each carries its source coil ack's number — no extra CF, consistent with
-    "no marker CF") vs. a small explicit index blob (cheaper boot, one more datum).
-    The scan reads every `HubHardAck` value; pick the blob if a hub sequences high
-    volume.
+11. ~~**Coil liaison outbox recovery.**~~ **Resolved.** All three shapes recover the
+    same way — each outbound lane is built over an `OutboxBacking` (high-water +
+    bounded `load`), `preStart` restores the high-waters, and `LaneOutbound.reply`
+    hot-loads below the in-memory floor; no lane eagerly seeds its whole production
+    (GUM-153, §6 `PeerLiaison*`). The inbound side stays cold (`Puller` starts cold,
+    `ReplayActor` re-delivers) — except `PeerLiaisonHubToCoil`, which restores its
+    coil-ack receive cursor to `max(CoilHardAck) + 1` so the hub re-pulls only new
+    acks (needed by Q12).
+12. ~~**`CoilAckSequencer` recovery.**~~ **Resolved.** Recover `nextSeq =
+    max(HubHardAck where hub == own) + 1` (derived, no stored counter) and the
+    per-coil stamped marks from the `CoilStampMark` singleton blob (a point read, not
+    a `HubHardAck` scan); each sequenced `HardAckWithId` is persisted to `HubHardAck`
+    in the **same atomic batch** as the bumped mark, **before** fan-out (CR4). On boot
+    the sequencer **stamps the gap** — the `CoilHardAck` tail above each mark, durably
+    received but left unstamped by a crash between the liaison's receive-cursor advance
+    and the stamp. No `(coil, hardAckNum)` idempotency index: the restored receive
+    cursor (Q11) makes re-delivery impossible, so a scalar mark per coil suffices.
 13. ~~**`Lane*` → `Family*` rename.**~~ **Resolved.** "Lane" is reserved for the
     peer-liaison transport (§3 vocabulary, `LaneOutbound` / `LaneInbound`); the
     persistence types were renamed `LaneId` / `LaneKey` / `LaneScan` / `LaneValue` /
@@ -1860,7 +1878,7 @@ peers).
 | P8 | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
 | P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped (R4) |
 | — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
-| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + idempotency index (Q12); `PeerLiaison{HubToCoil,CoilToHub}` outbox recovery (Q11). | ✅ |
+| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`), then stamps the unstamped `CoilHardAck` gap (Q12); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (Q11). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
 | P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
 | P13 | **Coil boot replay (Q10):** parallel `CoilReplayCursors`/`ReplayActor.replayCoil` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |

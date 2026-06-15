@@ -1,7 +1,8 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.ack.HardAckNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult as LedgerBlockResult}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
@@ -9,7 +10,7 @@ import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
 import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
+import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
@@ -156,6 +157,19 @@ object StoreKey:
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.RequestHighWater
         def encode: Array[Byte] = FamilyKey.intBytes(num)
+
+    /** Key for [[Cf.CoilStampMark]] — a hub's per-coil stamped-high-water blob
+      * `Map[CoilPeerNumber, HardAckNumber]` (the highest coil `HardAckNumber` sequenced onto this
+      * hub's `HubHardAck` spine, per coil), rewritten in the same atomic batch as each `HubHardAck`.
+      * `CoilAckSequencer.recover` reads it to stamp the durable inbound coil hard-acks
+      * (`CoilHardAck`) above each mark that a crash left unstamped (§6). A singleton.
+      */
+    case object CoilStampMark extends StoreKey:
+        type Value = Map[CoilPeerNumber, HardAckNumber]
+        import CoilStampMarkCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.CoilStampMark
+        def encode: Array[Byte] = singletonKey
 
     /** Key for [[Cf.L2CommandNumber]] — the L2 ledger's commit counter
       * ([[hydrozoa.multisig.ledger.l2.L2CommandNumber]]) reached after block `num`'s L2 commits.

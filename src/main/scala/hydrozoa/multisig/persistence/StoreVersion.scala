@@ -14,8 +14,12 @@ object StoreVersion:
       * v2: per-author satellite CF split (§7.1) — satellite CFs are now one-per-author with the
       * author embedded in the CF name and dropped from the key; incompatible with v1's combined
       * author-prefixed satellite CFs.
+      *
+      * v3: adds the `CoilStampMark` singleton CF (a hub's per-coil stamped-high-water marks, §6
+      * `CoilAckSequencer`); the CF set differs from v2, so a v2 store cannot be opened with the v3
+      * descriptor list.
       */
-    val current: Int = 2
+    val current: Int = 3
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")

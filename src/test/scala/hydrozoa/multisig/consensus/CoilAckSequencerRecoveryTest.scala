@@ -8,13 +8,14 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Recovery tests for [[CoilAckSequencer.recover]] (§6 CoilAckSequencer): a hub restores its
-  * `HubHardAck` relay counter and per-coil idempotency index from its own-hub `HubHardAck` family,
-  * so it never re-stamps an already-sequenced coil ack a liaison re-delivers.
+  * `HubHardAck` relay counter from its own-hub `HubHardAck` family and its per-coil
+  * stamped-high-water marks from the `CoilStampMark` blob, so it knows which durably-received coil
+  * acks a crash left unstamped (the gap it then stamps from the store).
   */
 class CoilAckSequencerRecoveryTest extends AnyFunSuite:
 
@@ -31,34 +32,37 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
         case PeerId.Coil(_) => fail("fixture config must be a head node")
     }
 
-    test("recover on an empty store starts the counter at zero with an empty index") {
+    test("recover on an empty store starts the counter at zero with no marks") {
         val recovered = run(_ => IO.unit)
         assert(
           recovered == CoilAckSequencer.Recovered(HubHardAckNumber.zero, Map.empty),
-          s"empty store → zero counter + empty index; got $recovered"
+          s"empty store → zero counter + no marks; got $recovered"
         )
     }
 
-    test("recover restores nextSeq = max + 1 and the per-coil idempotency index") {
-        // Three sequenced coil acks on this hub's HubHardAck family, contiguous seq 0..2.
+    test("recover restores nextSeq = max(HubHardAck) + 1 and the per-coil marks from CoilStampMark") {
+        val marks = Map(CoilPeerNumber(0) -> HardAckNumber(6), CoilPeerNumber(1) -> HardAckNumber(2))
         val recovered = run { p =>
             for {
+                // Three sequenced coil acks → nextSeq = 3.
                 _ <- putHubAck(p, seq = 0, coil = 0, hardAckNum = 5)
                 _ <- putHubAck(p, seq = 1, coil = 1, hardAckNum = 2)
                 _ <- putHubAck(p, seq = 2, coil = 0, hardAckNum = 6)
+                // Marks blob (written atomically with the last stamp of each coil).
+                _ <- p.put(StoreKey.CoilStampMark)(marks)
             } yield ()
         }
-        val expected = CoilAckSequencer.Recovered(
-          nextSeq = HubHardAckNumber(3),
-          index = Map(
-            (CoilPeerNumber(0), HardAckNumber(5)) -> HubHardAckNumber(0),
-            (CoilPeerNumber(1), HardAckNumber(2)) -> HubHardAckNumber(1),
-            (CoilPeerNumber(0), HardAckNumber(6)) -> HubHardAckNumber(2)
-          )
-        )
         assert(
-          recovered == expected,
-          s"nextSeq = max + 1 and index keyed by (coil, hardAckNum); got $recovered"
+          recovered == CoilAckSequencer.Recovered(HubHardAckNumber(3), marks),
+          s"nextSeq = max + 1 and marks from CoilStampMark; got $recovered"
+        )
+    }
+
+    test("recover with HubHardAck entries but no CoilStampMark blob yields empty marks") {
+        val recovered = run(putHubAck(_, seq = 0, coil = 0, hardAckNum = 5))
+        assert(
+          recovered == CoilAckSequencer.Recovered(HubHardAckNumber(1), Map.empty),
+          s"nextSeq advances; absent blob → empty marks; got $recovered"
         )
     }
 

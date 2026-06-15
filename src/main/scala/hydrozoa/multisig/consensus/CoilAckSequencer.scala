@@ -5,35 +5,45 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Persistence}
+import hydrozoa.multisig.persistence.recovery.FamilyScan
+import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
 import java.nio.ByteBuffer
 import org.typelevel.log4cats.Logger
 
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
   * ([[RequestSequencer]]).
   *
-  * A hub head peer's [[PeerLiaisonHubToCoil]]s hand it the coil peer hard-acks they receive — each
-  * exactly once, since the liaison's batch protocol dispatches a payload only when it advances the
-  * cursor. It stamps each with a monotonic hub-local [[HubHardAckNumber]] and fans the resulting
-  * [[HardAckWithId]] out to all the hub's [[PeerLiaisonHeadToHead]]s, which carry it on the
+  * A hub head peer's [[hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil]]s hand it the coil
+  * peer hard-acks they receive — each **exactly once**: the liaison's batch protocol is
+  * next-expected, so a payload is dispatched only when it advances the receive cursor, and on
+  * recovery that cursor is restored to the last durably received ack (so a coil never re-serves an
+  * ack the hub already holds, and a stale re-serve is rejected by `verify`). It stamps each with a
+  * monotonic hub-local [[HubHardAckNumber]] and fans the resulting [[HardAckWithId]] out to all the
+  * hub's [[hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead]]s, which carry it on the
   * contiguous `HubHardAck` family (§5.3 of `design/coil-network.md`) [doc-ref] — to the head-peer
   * mesh and onward to coil peers. The sequence number is transport ordering only; the embedded ack
   * is verified end-to-end by each receiving `SlowConsensusActor`.
   *
   * **Persistence / recovery** (`persistence-and-crash-recovery.md` §6 CoilAckSequencer). Each
-  * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` family **before** it fans out
-  * (CR4 write-before-send): a re-stamp would equivocate on the `HubHardAck` spine (two
-  * `HubHardAckNumber`s for one coil ack). On boot the sequencer derives `nextSeq = max(HubHardAck
-  * where hub == own) + 1` (no stored counter, like `RequestSequencer`'s `max(own Request) + 1`) and
-  * rebuilds a per-coil idempotency index `(coil, hardAckNum) → seq` from the own-hub `HubHardAck`
-  * values, so a coil ack a liaison re-delivers after a restart is **re-emitted under its original
-  * `seqNum`**, never re-stamped.
+  * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` family in the **same atomic
+  * batch** as the per-coil **stamped-high-water** mark (`StoreKey.CoilStampMark`), **before** it
+  * fans out (CR4 write-before-send): a re-stamp would equivocate on the `HubHardAck` spine (two
+  * `HubHardAckNumber`s for one coil ack). The receive-cursor advance (in the liaison, CR8) and the
+  * stamp are separate writes, so a crash between them can leave a coil ack **durably received**
+  * (`CoilHardAck`, persisted by the liaison) but **unstamped** — and never re-served. On boot the
+  * sequencer therefore (1) derives `nextSeq = max(HubHardAck where hub == own) + 1` and the per-coil
+  * marks from `CoilStampMark`, then (2) **loads and stamps** the `CoilHardAck` tail above each mark
+  * — closing that gap from the store rather than waiting on a re-delivery that cannot come. No
+  * idempotency index: the restored receive cursor makes re-delivery impossible, so a scalar mark
+  * per coil suffices.
   */
 trait CoilAckSequencer(
     config: Config,
@@ -42,6 +52,10 @@ trait CoilAckSequencer(
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
+
+    // `config` is a `CardanoNetwork.Section`; expose it as a given so the `WriteBatch.put` codecs
+    // in `persistStamp` pick it up.
+    private given CardanoNetwork.Section = config
 
     // The sequencer runs on a hub, so its own id is the hub each stamped ack is scoped to.
     private val hubPeerNum: HeadPeerNumber = config.ownPeerId match {
@@ -77,11 +91,15 @@ trait CoilAckSequencer(
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case CoilAckSequencer.PreStart =>
-            // Restore the counter + idempotency index from this hub's own HubHardAck family before
-            // accepting any coil acks, then wire up connections.
-            CoilAckSequencer
-                .recover(persistence, hubPeerNum)
-                .flatMap(state.seed) >> initializeConnections
+            // Restore the counter + per-coil marks, wire connections, then stamp any coil acks a
+            // crash left durably received but unstamped — load-and-stamp from the store, since the
+            // restored receive cursor means they will never be re-served.
+            for {
+                recovered <- CoilAckSequencer.recover(persistence, hubPeerNum)
+                _ <- state.seed(recovered)
+                _ <- initializeConnections
+                _ <- stampGap
+            } yield ()
         case ack: HardAck =>
             ack.peerId match {
                 case PeerId.Head(_) =>
@@ -90,61 +108,88 @@ trait CoilAckSequencer(
                         s"CoilAckSequencer received a head peer hard-ack: ${ack.peerId}"
                       )
                     )
-                case PeerId.Coil(coilNum) =>
-                    for {
-                        conn <- getConnections
-                        // Idempotency: a coil ack a liaison re-delivers after a restart keeps its
-                        // original seqNum — never re-stamped (would equivocate on the HubHardAck
-                        // spine). A first-seen ack is stamped, persisted (CR4), and indexed before
-                        // it leaves.
-                        hubAck <- state.sequence(coilNum, ack)(seq => persistOwnHubAck(seq, ack))
-                        _ <- logger.debug(
-                          s"sequenced coil $coilNum ack ${ack.hardAckNum} as seq ${hubAck.seqNum}"
-                        ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(
-                          _ ! hubAck
-                        )
-                    } yield ()
+                case PeerId.Coil(coilNum) => stamp(coilNum, ack).flatMap(fanOut)
             }
     }
 
-    /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` family, stamped at
-      * creation — CR4 write-before-send (it must be durable before it fans out).
+    /** Stamp one coil ack: assign the next `seqNum`, persist the `HardAckWithId` + the bumped
+      * per-coil mark in one atomic batch (CR4), advance the in-memory state, and return the stamped
+      * ack for fan-out. A crash before [[fanOut]] is safe — the head mesh re-pulls the durable
+      * `HubHardAck`.
       */
-    private def persistOwnHubAck(seq: HubHardAckNumber, ack: HardAck): IO[HardAckWithId] =
-        val hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
+    private def stamp(coilNum: CoilPeerNumber, ack: HardAck): IO[HardAckWithId] =
+        for {
+            seq <- state.nextSeq
+            marks <- state.marks
+            newMarks = marks.updated(coilNum, ack.hardAckNum)
+            hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
+            _ <- persistStamp(seq, hubAck, newMarks)
+            _ <- state.commit(seq, newMarks)
+        } yield hubAck
+
+    /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` family **and** the
+      * per-coil stamped-high-water mark in one atomic `WriteBatch` — CR4 write-before-send (durable
+      * before it fans out), and the mark stays consistent with the spine across a crash.
+      */
+    private def persistStamp(
+        seq: HubHardAckNumber,
+        hubAck: HardAckWithId,
+        newMarks: Map[CoilPeerNumber, HardAckNumber]
+    ): IO[Unit] =
         persistence.arrivalStamp.flatMap(stamp =>
-            persistence
-                .put(FamilyKey.HubHardAck(hubPeerNum, seq))(FamilyValue(stamp, hubAck))
-                .as(hubAck)
+            persistence.write(
+              WriteBatch.start
+                  .put(FamilyKey.HubHardAck(hubPeerNum, seq))(FamilyValue(stamp, hubAck))
+                  .put(StoreKey.CoilStampMark)(newMarks)
+            )
         )
 
+    /** Fan a stamped relay ack out to the head-peer mesh and (on a hub) the coil relay. */
+    private def fanOut(hubAck: HardAckWithId): IO[Unit] =
+        getConnections.flatMap(conn =>
+            logger.debug(
+              s"sequenced coil ${hubAck.ack.hardAckNum} as seq ${hubAck.seqNum}"
+            ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(_ ! hubAck)
+        )
+
+    /** Stamp every coil's received-but-unstamped tail. For each coil the hub serves, the gap is the
+      * `CoilHardAck` entries above its stamped mark; they are durable (the liaison persisted them
+      * before advancing its receive cursor, CR8) but the crash skipped stamping, and the restored
+      * cursor means they will not be re-served. Runs after connections are wired so the stamped acks
+      * fan out exactly as a live ack would.
+      */
+    private def stampGap: IO[Unit] =
+        config.coilPeers.coilPeerNumbers.traverse_ { coilNum =>
+            for {
+                marks <- state.marks
+                from = marks.get(coilNum).fold(HardAckNumber.zero)(_.increment)
+                gap <- loadCoilHardAcksFrom(coilNum, from)
+                _ <- gap.traverse_(ack => stamp(coilNum, ack).flatMap(fanOut))
+            } yield ()
+        }
+
+    /** The coil's durably-received hard-acks with number `>= from`, ascending — the `CoilHardAck`
+      * family the liaison wrote on receipt.
+      */
+    private def loadCoilHardAcksFrom(coilNum: CoilPeerNumber, from: HardAckNumber): IO[List[HardAck]] =
+        val k = FamilyKey.CoilHardAck(coilNum, from)
+        FamilyScan.scan(persistence.backend, k).map(_.map(e => k.decodeValue(e.framed).payload))
+
     private final class State {
-        private val nextSeq = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
-        private val index =
-            Ref.unsafe[IO, Map[(CoilPeerNumber, HardAckNumber), HubHardAckNumber]](Map.empty)
+        private val nextSeqRef = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
+        private val marksRef =
+            Ref.unsafe[IO, Map[CoilPeerNumber, HardAckNumber]](Map.empty)
 
-        /** Seed the counter + idempotency index from recovery (boot only). */
+        /** Seed the counter + per-coil marks from recovery (boot only). */
         def seed(recovered: Recovered): IO[Unit] =
-            nextSeq.set(recovered.nextSeq) >> index.set(recovered.index)
+            nextSeqRef.set(recovered.nextSeq) >> marksRef.set(recovered.marks)
 
-        /** Sequence a coil ack idempotently: re-emit an already-seen `(coil, hardAckNum)` under its
-          * original `seqNum`; otherwise assign the next `seqNum`, run `persist` (CR4) before
-          * recording it, and index it.
-          */
-        def sequence(coilNum: CoilPeerNumber, ack: HardAck)(
-            persist: HubHardAckNumber => IO[HardAckWithId]
-        ): IO[HardAckWithId] =
-            val key = (coilNum, ack.hardAckNum)
-            index.get.flatMap(_.get(key) match {
-                case Some(seq) =>
-                    IO.pure(HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack))
-                case None =>
-                    for {
-                        seq <- nextSeq.getAndUpdate(_.increment)
-                        hubAck <- persist(seq)
-                        _ <- index.update(_.updated(key, seq))
-                    } yield hubAck
-            })
+        def nextSeq: IO[HubHardAckNumber] = nextSeqRef.get
+        def marks: IO[Map[CoilPeerNumber, HardAckNumber]] = marksRef.get
+
+        /** Commit a stamp: advance the counter past `seq` and record the bumped marks. */
+        def commit(seq: HubHardAckNumber, marks: Map[CoilPeerNumber, HardAckNumber]): IO[Unit] =
+            nextSeqRef.set(seq.increment) >> marksRef.set(marks)
     }
 }
 
@@ -156,53 +201,29 @@ object CoilAckSequencer {
     ): IO[CoilAckSequencer] =
         IO(new CoilAckSequencer(config, persistence, pendingConnections) {})
 
-    type Config = OwnPeerPublic.Section
+    // `& HeadConfig.Bootstrap.Section`: for the coil peer list (`coilPeers`) the gap stamper
+    // iterates, and the `CardanoNetwork.Section` the persist codecs need (Bootstrap extends it).
+    type Config = OwnPeerPublic.Section & HeadConfig.Bootstrap.Section
 
     /** The sequencer's recoverable state: the next sequence number to assign and the per-coil
-      * idempotency index, both derived from this hub's own `HubHardAck` family (§6).
+      * stamped-high-water marks, derived from this hub's own `HubHardAck` family and the
+      * `CoilStampMark` blob (§6).
       */
     final case class Recovered(
         nextSeq: HubHardAckNumber,
-        index: Map[(CoilPeerNumber, HardAckNumber), HubHardAckNumber]
+        marks: Map[CoilPeerNumber, HardAckNumber]
     )
 
-    /** Derive [[Recovered]] from this hub's own `HubHardAck` family: `nextSeq = max(seqNum) + 1`
-      * (empty → `zero`), and the idempotency index by reading the contiguous `[0, max]` entries and
-      * keying each by its embedded coil ack `(coil, hardAckNum)`. The family is gap-free, so the
-      * range read is dense.
+    /** Derive [[Recovered]]: `nextSeq = max(HubHardAck seqNum) + 1` (empty → `zero`, the last key of
+      * the own-hub CF), and the per-coil marks from the `CoilStampMark` singleton (empty → no
+      * marks). Both are cheap reads — no full-family scan.
       */
     def recover(persistence: Persistence[IO], hub: HeadPeerNumber): IO[Recovered] =
-        persistence.backend
-            .lastKey(Cf.HubHardAck(hub))
-            .flatMap {
-                case None => IO.pure(Recovered(HubHardAckNumber.zero, Map.empty))
-                case Some(lastKeyBytes) =>
-                    val last = decodeSeq(lastKeyBytes)
-                    (0 to last).toList
-                        .traverse { i =>
-                            val seq = HubHardAckNumber(i)
-                            persistence.getOrFail(FamilyKey.HubHardAck(hub, seq)).map { value =>
-                                indexEntry(value.payload, seq)
-                            }
-                        }
-                        .map(entries => Recovered(last.increment, entries.toMap))
-            }
-
-    /** The idempotency-index entry for a stored relay ack: key it by the embedded coil ack's
-      * `(coil, hardAckNum)`, value its assigned `seqNum`. A head-authored ack here is store
-      * corruption (only coil acks are re-sequenced).
-      */
-    private def indexEntry(
-        hubAck: HardAckWithId,
-        seq: HubHardAckNumber
-    ): ((CoilPeerNumber, HardAckNumber), HubHardAckNumber) =
-        hubAck.ack.peerId match {
-            case PeerId.Coil(coil) => (coil, hubAck.ack.hardAckNum) -> seq
-            case PeerId.Head(_) =>
-                throw new IllegalStateException(
-                  s"HubHardAck holds a head-authored ack: ${hubAck.ack.peerId}"
-                )
-        }
+        for {
+            lastSeq <- persistence.backend.lastKey(Cf.HubHardAck(hub))
+            nextSeq = lastSeq.fold(HubHardAckNumber.zero)(b => decodeSeq(b).increment)
+            marks <- persistence.get(StoreKey.CoilStampMark).map(_.getOrElse(Map.empty))
+        } yield Recovered(nextSeq, marks)
 
     /** Decode a `HubHardAckNumber` from a per-author `[seqNum:4]` key (the CF is the hub, §7.1). */
     private def decodeSeq(bytes: Array[Byte]): HubHardAckNumber =

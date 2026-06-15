@@ -13,13 +13,13 @@ import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.logging.Slf4jTracer
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
+import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{ArrivalStamp, FamilyKey, FamilyValue, InMemoryBackendStore, Persistence, StoreKey}
 import hydrozoa.multisig.{MultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -94,6 +94,15 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         override def receive: Receive[IO, SlowConsensusActor.Request] = {
             case h: HardAck => seen.update(_ :+ h)
             case _          => IO.unit
+        }
+    }
+
+    /** Records every relay ack (`HardAckWithId`) fanned out to a head-mesh liaison slot. */
+    private class HubAckRecorder(seen: Ref[IO, Vector[HardAckWithId]])
+        extends Actor[IO, LiaisonProtocol.HeadToHeadRequest] {
+        override def receive: Receive[IO, LiaisonProtocol.HeadToHeadRequest] = {
+            case h: HardAckWithId => seen.update(_ :+ h)
+            case _                => IO.unit
         }
     }
 
@@ -319,5 +328,59 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         val expected = Vector(0, 1, 2)
         Prop(hub.map(_.hardAckNum.convert) == expected) :| s"hub saw: $hub" &&
         Prop(perCoil.head.map(_.hardAckNum.convert) == expected) :| s"coil saw: ${perCoil.head}"
+    }
+
+    val _ = property(
+      "coil hard-acks durably received but unstamped at boot are stamped from the store (gap)"
+    ) = {
+        val (hubConfig, coilConfigs) = genConfigs(1)
+        given CardanoNetwork.Section = hubConfig
+        val stamp = ArrivalStamp(generation = 0, monotonicNanos = 1L)
+        val coilNum = coilConfigs.head.ownPeerId match {
+            case PeerId.Coil(n) => n
+            case PeerId.Head(_) => sys.error("coil config is not a coil peer")
+        }
+
+        val (seen, mark) = InMemoryBackendStore.open
+            .use { backend =>
+                Persistence.fromBackend(backend).flatMap { persistence =>
+                    // The hub durably received coil acks 0 and 1 (CR8), but the crash left them
+                    // unstamped (no CoilStampMark). On boot the sequencer must stamp both from the
+                    // store — they will never be re-served (the restored receive cursor is past
+                    // them).
+                    val seedStore =
+                        persistence.put(FamilyKey.CoilHardAck(coilNum, HardAckNumber(0)))(
+                          FamilyValue(stamp, coilAck(coilNum, 0))
+                        ) >>
+                            persistence.put(FamilyKey.CoilHardAck(coilNum, HardAckNumber(1)))(
+                              FamilyValue(stamp, coilAck(coilNum, 1))
+                            )
+                    ActorSystem[IO]("coil-gap-stamp-test").use { system =>
+                        for {
+                            _ <- seedStore
+                            seen <- Ref[IO].of(Vector.empty[HardAckWithId])
+                            recorder <- system.actorOf(new HubAckRecorder(seen))
+                            conns = CoilAckSequencer.Connections(
+                              liaisons = List(recorder),
+                              coilRelay = None
+                            )
+                            _ <- system.actorOf(
+                              IO(new CoilAckSequencer(hubConfig, persistence, conns) {})
+                            )
+                            _ <- settleOn(seen.get.map(_.size >= 2))
+                            s <- seen.get
+                            mark <- persistence.get(StoreKey.CoilStampMark)
+                        } yield (s, mark)
+                    }
+                }
+            }
+            .unsafeRunSync()
+
+        val nums = seen.map(_.ack.hardAckNum.convert).sorted
+        val seqs = seen.map(_.seqNum.convert).sorted
+        Prop(seen.size == 2) :| s"stamped both gap acks; saw $seen" &&
+            Prop(nums == Vector(0, 1)) :| s"stamped coil ack nums 0,1; got $nums" &&
+            Prop(seqs == Vector(0, 1)) :| s"assigned contiguous seqNums; got $seqs" &&
+            Prop(mark == Some(Map(coilNum -> HardAckNumber(1)))) :| s"mark advanced; got $mark"
     }
 }

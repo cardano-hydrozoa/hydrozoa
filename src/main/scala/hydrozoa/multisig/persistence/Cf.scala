@@ -49,6 +49,14 @@ object Cf:
     case object RequestHighWater extends Cf:
         def name = "RequestHighWater"
 
+    /** Singleton CF (hub-only): per-coil stamped-high-water marks for `CoilAckSequencer` — the
+      * highest coil `HardAckNumber` this hub has sequenced onto its `HubHardAck` spine, per coil
+      * peer. Written in the same atomic batch as each `HubHardAck`, so recovery knows which durable
+      * inbound coil hard-acks (`CoilHardAck`) still need stamping (§6 `CoilAckSequencer`).
+      */
+    case object CoilStampMark extends Cf:
+        def name = "CoilStampMark"
+
     /** JL L2 commit counter, keyed by `blockNum`. */
     case object L2CommandNumber extends Cf:
         def name = "L2CommandNumber"
@@ -102,6 +110,7 @@ object Cf:
       SoftConfirmation,
       HardConfirmation,
       RequestHighWater,
+      CoilStampMark,
       L2CommandNumber,
       UnsignedStack,
       DepositMap,
