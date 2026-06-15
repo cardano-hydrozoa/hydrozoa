@@ -1,13 +1,14 @@
 package hydrozoa.app
 
 import cats.effect.{ExitCode, IO, IOApp}
+import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, EvaluatorMode, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
@@ -24,49 +25,50 @@ import scalus.cardano.txbuilder.{Change, PubKeyWitness, TransactionBuilder}
   */
 object TokenRecovery extends IOApp:
 
-    val logger = Logging.loggerIO("hydrozoa.app.TokenRecovery")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.TokenRecovery"))
 
     override def run(args: List[String]): IO[ExitCode] = {
         val cardanoNetwork: StandardCardanoNetwork = Main.cardanoNetwork
 
         (for {
-            _ <- logger.info("Starting token recovery from faucet...")
+            _ <- log.info("Starting token recovery from faucet...")
 
             // Load environment config
             env <- Main.loadEnv
-            _ <- logger.info("Loaded environment configuration")
+            _ <- log.info("Loaded environment configuration")
 
             // Check that token recovery address is defined
             tokenRecoveryAddress <- env.tokenRecoveryAddress match {
                 case Some(addr) => IO.pure(addr)
                 case None =>
-                    logger.error("TOKEN_RECOVERY_ADDRESS is not set in .env file") >>
+                    log.error("TOKEN_RECOVERY_ADDRESS is not set in .env file") >>
                         IO.raiseError(
                           new IllegalStateException(
                             "TOKEN_RECOVERY_ADDRESS must be set to recover tokens"
                           )
                         )
             }
-            _ <- logger.info(s"Token recovery address: ${tokenRecoveryAddress.toBech32.get}")
+            _ <- log.info(s"Token recovery address: ${tokenRecoveryAddress.toBech32.get}")
 
             // Create faucet address from verification key
             faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork)
-            _ <- logger.info(s"Faucet address: ${faucetAddress.toBech32.get}")
+            _ <- log.info(s"Faucet address: ${faucetAddress.toBech32.get}")
 
             // Initialize backend
-            _ <- logger.info("Initializing Cardano backend...")
+            _ <- log.info("Initializing Cardano backend...")
             backend <- CardanoBackendBlockfrost(
               network = Left(cardanoNetwork),
               apiKey = env.blockfrostApiKey
             )
 
             // Query faucet UTXOs
-            _ <- logger.info("Querying faucet address for UTXOs...")
+            _ <- log.info("Querying faucet address for UTXOs...")
             faucetUtxos <- backend
                 .utxosAt(faucetAddress)
                 .flatMap(_.fold(IO.raiseError, IO.pure))
 
-            _ <- logger.info(s"Found ${faucetUtxos.size} UTXO(s) at faucet address")
+            _ <- log.info(s"Found ${faucetUtxos.size} UTXO(s) at faucet address")
 
             // Filter UTXOs containing tokens
             utxosWithTokens = faucetUtxos.filter { case (_, output) =>
@@ -75,17 +77,17 @@ object TokenRecovery extends IOApp:
 
             _ <-
                 if utxosWithTokens.isEmpty then
-                    logger.info("No UTXOs with tokens found. Nothing to recover.")
-                else logger.info(s"Found ${utxosWithTokens.size} UTXO(s) containing tokens")
+                    log.info("No UTXOs with tokens found. Nothing to recover.")
+                else log.info(s"Found ${utxosWithTokens.size} UTXO(s) containing tokens")
 
             // Calculate total tokens to recover
             totalTokens = Value.combine(utxosWithTokens.map((_, o) => o.value))
             tokensOnly = Value(Coin.zero, totalTokens.assets)
 
-            _ <- logger.info(s"Total tokens to recover: ${tokensOnly.assets}")
+            _ <- log.info(s"Total tokens to recover: ${tokensOnly.assets}")
 
             // Build transaction
-            _ <- logger.info("Building recovery transaction...")
+            _ <- log.info("Building recovery transaction...")
 
             // Create token output with min ADA
             tokenOutput = TransactionOutput
@@ -95,7 +97,9 @@ object TokenRecovery extends IOApp:
                 )
                 .ensureMinAda(cardanoNetwork)
 
-            _ <- logger.info(s"Token output requires ${tokenOutput.value.coin} lovelace minimum")
+            _ <- log.info(
+              s"Token output requires ${tokenOutput.value.coin} lovelace minimum"
+            )
 
             // Build transaction steps
             unbalanced = TransactionBuilder
@@ -129,22 +133,22 @@ object TokenRecovery extends IOApp:
                 .fold(err => throw RuntimeException(err.toString), _.transaction)
 
             // Sign with faucet wallet
-            _ <- logger.info("Signing transaction with faucet wallet...")
+            _ <- log.info("Signing transaction with faucet wallet...")
             walletModule = WalletModule.Scalus
             witness = walletModule.signTx(balanced, env.verificationKey, env.signingKey)
             signed = balanced.attachVKeyWitnesses(List(witness))
 
-            _ <- logger.info(s"Recovery tx: ${HexUtil.encodeHexString(signed.toCbor)}")
+            _ <- log.info(s"Recovery tx: ${HexUtil.encodeHexString(signed.toCbor)}")
 
             // Submit transaction
-            _ <- logger.info("Submitting transaction...")
+            _ <- log.info("Submitting transaction...")
             result <- backend.submitTx(signed)
 
-            _ <- logger.info(s"Submission result: $result")
-            _ <- logger.info("Token recovery completed successfully!")
+            _ <- log.info(s"Submission result: $result")
+            _ <- log.info("Token recovery completed successfully!")
 
         } yield ExitCode.Success).handleErrorWith { err =>
-            logger.error(s"Token recovery failed: ${err.getMessage}") >>
+            log.error(s"Token recovery failed: ${err.getMessage}") >>
                 IO.pure(ExitCode.Error)
         }
     }

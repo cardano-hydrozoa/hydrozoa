@@ -1,10 +1,10 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{Fiber, IO, IOLocal, Ref}
+import cats.effect.{Fiber, IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.*
@@ -77,7 +77,7 @@ case class Stage4Sut(
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
-    tracerLocal: IOLocal[Slf4jTracer],
+    log: ContraTracer[IO, Slf4jMsg],
     // Cleanup hooks for resources allocated outside the actor system (currently the
     // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
     // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
@@ -117,10 +117,9 @@ object Stage4SutCommands:
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
                 reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
@@ -130,10 +129,9 @@ object Stage4SutCommands:
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
                 reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
             } yield ValidityFlag.Valid

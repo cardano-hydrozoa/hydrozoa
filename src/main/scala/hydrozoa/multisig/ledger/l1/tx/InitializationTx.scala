@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.l1.tx
 
+import cats.implicits.toContravariantOps
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -7,6 +8,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, InitializationTxEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx.InitializationTxOps.Parse.Error.MetadataParseError
@@ -68,13 +70,14 @@ object InitializationTx {
         type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
             TxTiming.Section & InitializationParameters.Section
 
-        private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTx")
+        private val log: ContraTracer[cats.Id, Slf4jMsg] =
+            Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("InitializationTx"))
 
         private def time[A](label: String)(block: => A): A = {
             val start = System.nanoTime()
             val result = block
             val elapsed = (System.nanoTime() - start) / 1_000_000.0
-            logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+            log.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
             result
         }
 

@@ -1,11 +1,13 @@
 package hydrozoa.multisig.ledger.l1.tx
 
 import cats.data.NonEmptyList
+import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
@@ -69,13 +71,14 @@ object FallbackTx {
 private object FallbackTxOps {
     type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
+    private val log: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("FallbackTx"))
 
     private def time[A](label: String)(block: => A): A = {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: $elapsed%.2f ms")
+        log.trace(f"\t\t⏱️ $label: $elapsed%.2f ms")
         result
     }
 

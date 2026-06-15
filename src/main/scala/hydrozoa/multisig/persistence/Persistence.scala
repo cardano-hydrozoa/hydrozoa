@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.persistence.PersistenceEvent.*
 import java.nio.ByteBuffer
 
 /** The **typed, actor-facing** persistence API.
@@ -21,9 +22,8 @@ import java.nio.ByteBuffer
   * (e.g. those involving `QuantizedInstant` or `Payout.Obligation`) pick it up implicitly so the
   * `Persistence` API itself stays config-free at the call site.
   *
-  * **Logging.** Every op (get / put / delete / write) is traced at INFO with explicit
-  * `routingKey = "Persistence"`, so log lines route to the `"Persistence"` logger in `logback.xml`
-  * regardless of the ambient actor's [[Slf4jTracer.routeLocal]].
+  * **Tracing.** Every op (get / put / delete / write) is emitted as a [[PersistenceEvent]] through
+  * the supplied [[ContraTracer]]. The default human format routes under `"Persistence"`.
   *
   * See `design/persistence-and-crash-recovery.md` §7.
   */
@@ -71,9 +71,9 @@ object Persistence:
       * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`).
       */
     def fromBackend(
-        backend: BackendStore[IO]
+        backend: BackendStore[IO],
+        tracer: ContraTracer[IO, PersistenceEvent]
     )(using CardanoNetwork.Section): IO[Persistence[IO]] =
-        val logger = Logging.loggerIO("Persistence")
         for generation <- bumpGeneration(backend)
         yield new Persistence[IO]:
             def arrivalStamp: IO[ArrivalStamp] =
@@ -82,19 +82,15 @@ object Persistence:
             def get(key: StoreKey): IO[Option[key.Value]] =
                 backend
                     .get(key.cf, key.encode)
-                    .flatTap(bytesOpt =>
-                        logger.info(
-                          s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}"
-                        )
-                    )
+                    .flatTap(bytesOpt => tracer.traceWith(Get(key, bytesOpt.isDefined)))
                     .map(_.map(key.decodeValue))
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
                 backend.put(key.cf, key.encode, key.encodeValue(value)) *>
-                    logger.info(s"put $key")
+                    tracer.traceWith(Put(key))
 
             def delete(key: StoreKey): IO[Unit] =
-                backend.delete(key.cf, key.encode) *> logger.info(s"delete $key")
+                backend.delete(key.cf, key.encode) *> tracer.traceWith(Delete(key))
 
             def write(batch: WriteBatch): IO[Unit] =
-                backend.write(batch.toRaw) *> logger.info(s"write batch (${batch.size} ops)")
+                backend.write(batch.toRaw) *> tracer.traceWith(Write(batch.size))

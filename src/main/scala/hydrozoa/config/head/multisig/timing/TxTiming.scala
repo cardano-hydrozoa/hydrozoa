@@ -1,8 +1,10 @@
 package hydrozoa.config.head.multisig.timing
 
+import cats.Monad
+import cats.implicits.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
-import hydrozoa.lib.logging.{Level, LogEvent, Traced}
+import hydrozoa.lib.logging.ContraTracer
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -99,23 +101,23 @@ final case class TxTiming(
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
       * block so that the competing fallback start time is pushed forward for future blocks.
+      *
+      * Polymorphic on `F`: pure callers pass `ContraTracer.nullTracer[cats.Id, TxTimingEvent]` and
+      * get a plain `Boolean`; IO callers pass a real `ContraTracer[IO, TxTimingEvent]`.
       */
-    def blockCanStayMinor(
+    def blockCanStayMinor[F[_]: Monad](
+        tracer: ContraTracer[F, TxTimingEvent]
+    )(
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
-    ): Traced[Boolean] = {
-        val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime).convert
-        val result = fmbt > blockCreationEndTime.convert
-        (
-          result,
-          List(
-            LogEvent(
-              Level.Trace,
-              s"blockCanStayMinor: competingFallbackStartTime: $competingFallbackStartTime, forcedMajorBlockWakeupTime: $fmbt, blockCreationEndTime: $blockCreationEndTime",
-              routingKey = Some("TxTiming")
+    ): F[Boolean] = {
+        val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime)
+        val result = fmbt.convert > blockCreationEndTime.convert
+        tracer
+            .traceWith(
+              TxTimingEvent.CanStayMinor(competingFallbackStartTime, fmbt, blockCreationEndTime)
             )
-          )
-        )
+            .as(result)
     }
 
     def depositSubmissionDeadline(

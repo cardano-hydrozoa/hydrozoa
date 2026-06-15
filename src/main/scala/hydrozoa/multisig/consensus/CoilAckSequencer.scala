@@ -6,12 +6,12 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
+import hydrozoa.multisig.consensus.CoilAckSequencerEvent.SequencedCoilAck
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import org.typelevel.log4cats.Logger
 
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
   * ([[RequestSequencer]]).
@@ -30,7 +30,8 @@ import org.typelevel.log4cats.Logger
   */
 trait CoilAckSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections
+    pendingConnections: MultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections,
+    tracer: ContraTracer[IO, CoilAckSequencerEvent]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
@@ -41,8 +42,6 @@ trait CoilAckSequencer(
         case PeerId.Coil(_) =>
             throw new IllegalStateException("CoilAckSequencer runs only on a hub head peer")
     }
-
-    private given logger: Logger[IO] = Logging.loggerIO(s"CoilAckSequencer.${config.ownPeerLabel}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -84,8 +83,8 @@ trait CoilAckSequencer(
                         hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
                         // To the head-peer mesh (other heads) and to CoilRelay (this hub's coil
                         // peers), both carrying it on a `HubHardAckLane`.
-                        _ <- logger.debug(
-                          s"sequenced coil $coilNum ack ${ack.hardAckNum} as seq $seq"
+                        _ <- tracer.traceWith(
+                          SequencedCoilAck(coilNum, ack.hardAckNum, seq)
                         ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(
                           _ ! hubAck
                         )
@@ -104,9 +103,10 @@ trait CoilAckSequencer(
 object CoilAckSequencer {
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections
+        pendingConnections: MultisigRegimeManager.PendingConnections,
+        tracer: ContraTracer[IO, CoilAckSequencerEvent]
     ): IO[CoilAckSequencer] =
-        IO(new CoilAckSequencer(config, pendingConnections) {})
+        IO(new CoilAckSequencer(config, pendingConnections, tracer) {})
 
     type Config = OwnPeerPublic.Section
 

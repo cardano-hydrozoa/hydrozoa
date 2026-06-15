@@ -1,10 +1,11 @@
 package hydrozoa.multisig.ledger.l1.deposits.map
 
+import cats.implicits.toContravariantOps
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Entry
@@ -22,7 +23,8 @@ final case class DepositsMap private[map] (
     treeMap: TreeMap[DepositAbsorptionStartTime, Queue[Entry]]
 ) {
 
-    private val logger = Logging.logger("DepositsMap")
+    private val log: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("DepositsMap"))
 
     /** Append a request to the end of the queue of requests with the same start time.
       */
@@ -81,7 +83,7 @@ final case class DepositsMap private[map] (
         settlementTxEndTime: SettlementTxEndTime,
         pollResults: PollResults
     ): DepositsMap.Partition = {
-        logger.debug(
+        log.debug(
           "[partition]" +
               s"\n\t blockCreationEndTime: $blockCreationEndTime" +
               s"\n\t settlementTxEndTime: $settlementTxEndTime" +
@@ -107,16 +109,16 @@ final case class DepositsMap private[map] (
 
                     val compartment =
                         if isImmature then {
-                            logger.debug(s"$entry is immature.")
+                            log.debug(s"$entry is immature.")
                             Immature
                         } else if isExpired then {
-                            logger.debug(s"$entry is expired (rejected).")
+                            log.debug(s"$entry is expired (rejected).")
                             Expired
                         } else if isExistent then {
-                            logger.debug(s"$entry is eligible")
+                            log.debug(s"$entry is eligible")
                             Eligible
                         } else {
-                            logger.debug(s"$entry is mature, but not in the poll results.")
+                            log.debug(s"$entry is mature, but not in the poll results.")
                             NotInPollResults
                         }
 

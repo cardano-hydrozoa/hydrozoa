@@ -4,17 +4,16 @@ import cats.effect.IO
 import fs2.Stream
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
 import io.circe.syntax.*
 import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.http4s.headers.Authorization
 import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
-import org.typelevel.log4cats.Logger
 
 /** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
   * proxy -- load-balancer, unified api).
@@ -23,11 +22,10 @@ class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
     headConfig: HeadConfig,
-    serverConfig: HydrozoaServer.Config
+    serverConfig: HydrozoaServer.Config,
+    tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
     private given HeadConfig = headConfig
-
-    private given logger: Logger[IO] = Logging.loggerIO("HydrozoaRoutes")
 
     /** Check if the provided credentials match the configured admin credentials */
     private def checkAuth(req: org.http4s.Request[IO]): Boolean =
@@ -49,25 +47,21 @@ class HydrozoaRoutes(
 
         // POST /api/l2/submit - Submit an L2 transaction
         case req @ POST -> Root / "api" / "l2" / "submit" =>
+            val path = "POST /api/l2/submit"
             val result: IO[org.http4s.Response[IO]] = for {
                 bodyText <- req.bodyText.compile.string
-                _ <- logger.debug(s"POST /api/l2/submit - Headers: ${req.headers}")
-                _ <- logger.debug(s"POST /api/l2/submit - Body: $bodyText")
+                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
+                _ <- tracer.traceWith(RequestBody(path, bodyText))
                 // Try to parse as JSON to get better error messages
                 _ <- io.circe.parser.parse(bodyText) match {
                     case Left(parseError) =>
-                        logger.error(
-                          s"POST /api/l2/submit - JSON parse error: ${parseError.getMessage}"
-                        )
+                        tracer.traceWith(JsonParseError(path, parseError))
                     case Right(json) =>
-                        // Try to decode to UserRequest
                         userRequestDecoder.decodeJson(json) match {
                             case Left(decodeError) =>
-                                logger.error(
-                                  s"POST /api/l2/submit - JSON decode error: ${decodeError.getMessage}"
-                                ) *>
-                                    logger.error(
-                                      s"POST /api/l2/submit - Decode error history: ${decodeError.history}"
+                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
+                                    tracer.traceWith(
+                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
                                     )
                             case Right(_) =>
                                 IO.unit
@@ -76,65 +70,50 @@ class HydrozoaRoutes(
                 // Re-create request with the body we just read
                 newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
                 transactionRequest <- newReq.as[UserRequest]
-                _ <- logger.debug(s"POST /api/l2/submit - Decoded: $transactionRequest")
+                _ <- tracer.traceWith(RequestDecoded(path, transactionRequest.toString))
                 // Send synchronous request to RequestSequencer and get back RequestId
                 requestId <- requestSequencer ?: transactionRequest
                 response = RequestAccepted(requestId = requestId)
                 resp <- Ok(response.asJson)
             } yield resp
 
-            result.handleErrorWith { error =>
-                logger.error(error)(s"POST /api/l2/submit - Error: ${error.getMessage}") *>
-                    BadRequest(
-                      Error(
-                        error = error.getMessage
-                      ).asJson
-                    )
+            result.handleErrorWith { err =>
+                tracer.traceWith(RequestFailed(path, err)) *>
+                    BadRequest(Error(error = err.getMessage).asJson)
             }
 
         // POST /api/deposit/register - Register a deposit
         case req @ POST -> Root / "api" / "deposit" / "register" =>
+            val path = "POST /api/deposit/register"
             val result: IO[org.http4s.Response[IO]] = for {
                 bodyText <- req.bodyText.compile.string
-                _ <- logger.debug(s"POST /api/deposit/register - Headers: ${req.headers}")
-                _ <- logger.debug(s"POST /api/deposit/register - Body: $bodyText")
-                // Try to parse as JSON to get better error messages
+                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
+                _ <- tracer.traceWith(RequestBody(path, bodyText))
                 _ <- io.circe.parser.parse(bodyText) match {
                     case Left(parseError) =>
-                        logger.error(
-                          s"POST /api/deposit/register - JSON parse error: ${parseError.getMessage}"
-                        )
+                        tracer.traceWith(JsonParseError(path, parseError))
                     case Right(json) =>
-                        // Try to decode to UserRequest
                         io.circe.Decoder[UserRequest].decodeJson(json) match {
                             case Left(decodeError) =>
-                                logger.error(
-                                  s"POST /api/deposit/register - JSON decode error: ${decodeError.getMessage}"
-                                ) *>
-                                    logger.error(
-                                      s"POST /api/deposit/register - Decode error history: ${decodeError.history}"
+                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
+                                    tracer.traceWith(
+                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
                                     )
                             case Right(_) =>
                                 IO.unit
                         }
                 }
-                // Re-create request with the body we just read
                 newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
                 depositRequest <- newReq.as[UserRequest]
-                _ <- logger.debug(s"POST /api/deposit/register - Decoded: $depositRequest")
-                // Send synchronous request to RequestSequencer and get back RequestId
+                _ <- tracer.traceWith(RequestDecoded(path, depositRequest.toString))
                 requestId <- requestSequencer ?: depositRequest
                 response = RequestAccepted(requestId)
                 resp <- Ok(response.asJson)
             } yield resp
 
-            result.handleErrorWith { error =>
-                logger.error(error)(s"POST /api/deposit/register - Error: ${error.getMessage}") *>
-                    BadRequest(
-                      Error(
-                        error = error.getMessage
-                      ).asJson
-                    )
+            result.handleErrorWith { err =>
+                tracer.traceWith(RequestFailed(path, err)) *>
+                    BadRequest(Error(error = err.getMessage).asJson)
             }
 
         // GET /api/head-info
@@ -162,12 +141,8 @@ class HydrozoaRoutes(
                 )
             } yield resp
 
-            result.handleErrorWith { error =>
-                InternalServerError(
-                  Error(
-                    error = error.getMessage
-                  ).asJson
-                )
+            result.handleErrorWith { err =>
+                InternalServerError(Error(error = err.getMessage).asJson)
             }
 
         // GET /health - Health check endpoint
@@ -176,8 +151,9 @@ class HydrozoaRoutes(
 
         // POST /api/admin/finalize - Trigger head finalization (admin only)
         case req @ POST -> Root / "api" / "admin" / "finalize" =>
+            val path = "POST /api/admin/finalize"
             if !checkAuth(req) then
-                logger.warn("POST /api/admin/finalize - Unauthorized attempt") *>
+                tracer.traceWith(UnauthorizedAdmin(path)) *>
                     Unauthorized(
                       org.http4s.headers.`WWW-Authenticate`(
                         org.http4s.Challenge("Basic", "Hydrozoa Admin")
@@ -185,13 +161,9 @@ class HydrozoaRoutes(
                     )
             else
                 val result: IO[org.http4s.Response[IO]] = for {
-                    _ <- logger.info(
-                      "POST /api/admin/finalize - Triggering local head finalization"
-                    )
+                    _ <- tracer.traceWith(FinalizeTriggered)
                     _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
-                    _ <- logger.info(
-                      "POST /api/admin/finalize - Finalization signal sent to BlockWeaver"
-                    )
+                    _ <- tracer.traceWith(FinalizeSignalSent)
                     resp <- Ok(
                       io.circe.Json.obj(
                         "status" -> "success".asJson,
@@ -200,15 +172,9 @@ class HydrozoaRoutes(
                     )
                 } yield resp
 
-                result.handleErrorWith { error =>
-                    logger.error(error)(
-                      s"POST /api/admin/finalize - Error: ${error.getMessage}"
-                    ) *>
-                        InternalServerError(
-                          Error(
-                            error = error.getMessage
-                          ).asJson
-                        )
+                result.handleErrorWith { err =>
+                    tracer.traceWith(RequestFailed(path, err)) *>
+                        InternalServerError(Error(error = err.getMessage).asJson)
                 }
     }
 }
@@ -218,7 +184,8 @@ object HydrozoaRoutes {
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
         headConfig: HeadConfig,
-        serverConfig: HydrozoaServer.Config
+        serverConfig: HydrozoaServer.Config,
+        tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[HydrozoaRoutes] =
-        IO.pure(new HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, serverConfig))
+        IO.pure(new HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, serverConfig, tracer))
 }

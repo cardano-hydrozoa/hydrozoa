@@ -17,8 +17,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import cats.effect.IOLocal
-import hydrozoa.lib.logging.{Logging, Slf4jTracer}
+import hydrozoa.lib.logging.{Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
@@ -26,6 +25,8 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNum
 import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerWsTransportEventFormat}
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, CoilAckSequencer, CoilRelay, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
+import hydrozoa.multisig.consensus.CoilAckSequencerEventFormat
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransportEventFormat, HubWsTransportEventFormat}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEvent, PeerLiaisonEventFormat, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
 import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -38,7 +39,7 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
-import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
@@ -113,7 +114,8 @@ case class Stage4Suite(
     override type State = ModelState
     override type Sut = Stage4Sut
 
-    private val logger = Logging.loggerIO("Stage4.Suite")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Suite"))
 
     /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS scheduler
       * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
@@ -133,7 +135,7 @@ case class Stage4Suite(
         commands: List[AnyCommand[ModelState, Stage4Sut]]
     ): IO[Unit] =
         super.onTestCaseGenerated(initialState, commands) >>
-            logger.info(Stage4Runner.renderTable(initialState, commands))
+            log.info(Stage4Runner.renderTable(initialState, commands))
 
     override def initEnv: Unit = ()
 
@@ -171,8 +173,8 @@ case class Stage4Suite(
         // validation under WS is a follow-up.
         val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
 
-        // ------ Pre-system IO: clock alignment + tracer local. ------
-        val preSystem: IO[IOLocal[Slf4jTracer]] = for {
+        // ------ Pre-system IO: clock alignment. ------
+        val preSystem: IO[Unit] = for {
             // TestControl branch: jump the virtual clock from 0 to the head's start epoch.
             // Without TestControl this would be a literal multi-decade real sleep, so it must
             // be gated on `useTestControl`. The non-TestControl analogue is the
@@ -202,8 +204,7 @@ case class Stage4Suite(
                             IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
                     }
             }
-            tracerLocal <- Slf4jTracer.makeLocal
-        } yield tracerLocal
+        } yield ()
 
         // ------ Post-system, pre-stack IO: backend + per-peer Deferred/Ref maps. ------
         val postSystem: IO[
@@ -302,11 +303,13 @@ case class Stage4Suite(
             // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
             // every producer (RequestSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
             // one per-peer store; `analyzePersistence` reads it back.
-            openPeerBackend(peerNum).evalMap { backendStore =>
+            val persistenceTracer: ContraTracer[IO, PersistenceEvent] =
+                Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            openPeerBackend(peerNum, persistenceTracer).evalMap { backendStore =>
                 for
                     persistence <- {
                         given CardanoNetwork.Section = nodeConfig
-                        Persistence.fromBackend(backendStore)
+                        Persistence.fromBackend(backendStore, persistenceTracer)
                     }
                     blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, bwTracer))
                     cardanoLiaison <- system.actorOf(
@@ -448,7 +451,12 @@ case class Stage4Suite(
             for {
                 coilAckSequencer <-
                     if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
-                    else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
+                    else
+                        val casTracer = Slf4jTracer.sink
+                            .contramap(CoilAckSequencerEventFormat.humanFormat(hubNum))
+                        system
+                            .actorOf(CoilAckSequencer(hubConfig, hubPending, casTracer))
+                            .map(Some(_))
 
                 coilRelay <-
                     if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
@@ -492,10 +500,15 @@ case class Stage4Suite(
                     for
                         coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
                         // The coil peer gets its own per-peer store (in-memory for the test).
-                        coilBackendStore <- InMemoryBackendStore.open.allocated.map(_._1)
+                        coilPersistenceTracer = Slf4jTracer.sink
+                            .contramap(PersistenceEventFormat.humanFormat)
+                        coilBackendStore <- InMemoryBackendStore
+                            .open(coilPersistenceTracer)
+                            .allocated
+                            .map(_._1)
                         coilPersistence <- {
                             given CardanoNetwork.Section = coilConfig
-                            Persistence.fromBackend(coilBackendStore)
+                            Persistence.fromBackend(coilBackendStore, coilPersistenceTracer)
                         }
                         // Capture sink mirroring `buildPeerStack`'s SCA sink: the follower's
                         // hard-confirmed stacks land in the per-coil Ref consumed by
@@ -583,7 +596,6 @@ case class Stage4Suite(
         // ------ error drainer and per-peer CardanoLiaison-tick fibers, then assemble the
         // ------ Stage4Sut.
         def finalizeSut(
-            tracerLocal: IOLocal[Slf4jTracer],
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
@@ -737,12 +749,12 @@ case class Stage4Suite(
                   peerNum -> stack.backendStore
               },
               submittedRequestIds = submittedRequestIds,
-              tracerLocal = tracerLocal,
+              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
         }
 
         for {
-            tracerLocal <- Resource.eval(preSystem)
+            _ <- Resource.eval(preSystem)
             system <- ActorSystem[IO](label)
             postSystemState <- Resource.eval(postSystem)
             (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap) = postSystemState
@@ -766,7 +778,6 @@ case class Stage4Suite(
             (coilAckSequencer, coilRelay, coilWirings) = coilSetup
             sut <- Resource.eval(
               finalizeSut(
-                tracerLocal,
                 system,
                 cardanoBackend,
                 peerStackMap,
@@ -845,7 +856,10 @@ case class Stage4Suite(
                 .map(_.toMap)
             coilHubTransportOpt <-
                 if coilNums.isEmpty then IO.none[HubWsTransport]
-                else HubWsTransport.create(coilNums).map(Some(_))
+                else
+                    val hwtTracer = Slf4jTracer.sink
+                        .contramap(HubWsTransportEventFormat.humanFormat(hubNum))
+                    HubWsTransport.create(coilNums, hwtTracer).map(Some(_))
 
             // One shared WS client for every dialer on this SUT.
             client <- JdkWSClient.simple[IO]
@@ -896,8 +910,10 @@ case class Stage4Suite(
 
             // Coil uplinks (coil dials hub) + their dialers.
             uplinkEntries <- coilNums.traverse { coilNum =>
+                val cpwtTracer = Slf4jTracer.sink
+                    .contramap(CoilPeerWsTransportEventFormat.humanFormat(coilNum))
                 CoilPeerWsTransport
-                    .create(coilNum, hubCoilUri)
+                    .create(coilNum, hubCoilUri, cpwtTracer)
                     .flatMap(up =>
                         up.startDialer(client).allocated.map(_._2).map(rel => (coilNum, up, rel))
                     )
@@ -936,7 +952,7 @@ case class Stage4Suite(
 
     override def shutdownSut(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
         for
-            _ <- logger.warn("shutdownSut")
+            _ <- log.warn("shutdownSut")
             // Drain before terminating: the leader's JointLedger is in `Producing` when the
             // last command arrives, and its `userRequestState.requests` only become a
             // `BlockBrief` when the block is sealed. Sealing happens when `BlockWeaver` decides
@@ -1011,7 +1027,6 @@ case class Stage4Suite(
             else analysisProp
 
     private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
-        given IOLocal[Slf4jTracer] = sut.tracerLocal
         for
             briefsByPeer <- sut.blockBriefs.toList
                 .traverse { case (p, ref) => ref.get.map(p -> _) }
@@ -1026,7 +1041,7 @@ case class Stage4Suite(
                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                 .map(_.toMap)
             canonicalStacks = stacksByPeer(sortedPeers.head)
-            _ <- logger.info(
+            _ <- log.info(
               "hard-confirmed stacks per peer: " +
                   sortedPeers
                       .map(p => s"peer${p: Int}=${stacksByPeer.getOrElse(p, Vector.empty).size}")
@@ -1037,7 +1052,7 @@ case class Stage4Suite(
                 .traverse { case (c, ref) => ref.get.map(c -> _) }
                 .map(_.toMap)
             _ <- IO.whenA(coilStacksByCoil.nonEmpty)(
-              logger.info(
+              log.info(
                 "coil hard-confirmed stacks: " +
                     coilStacksByCoil.toList
                         .sortBy((c, _) => c.convert)
@@ -1062,6 +1077,7 @@ case class Stage4Suite(
             effectsLandedProp <- EffectsLanded.propEffectsLanded(
               canonicalStacks,
               sut.cardanoBackend,
+              log,
               attempts = 1,
               sleep = 0.seconds,
             )
@@ -1151,7 +1167,7 @@ case class Stage4Suite(
                     softAcks <- countEntries(backend, Cf.SoftAck)
                     hardAcks <- countEntries(backend, Cf.HardAck)
                     requests <- countEntries(backend, Cf.Request)
-                    _ <- logger.info(
+                    _ <- log.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
                           s"evacuationMaps=$evacuationMaps (expected=$expectedEvac) " +
@@ -1196,13 +1212,16 @@ case class Stage4Suite(
       * allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until a
       * stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
       */
-    private def openPeerBackend(peerNum: HeadPeerNumber): Resource[IO, BackendStore[IO]] =
+    private def openPeerBackend(
+        peerNum: HeadPeerNumber,
+        tracer: ContraTracer[IO, PersistenceEvent]
+    ): Resource[IO, BackendStore[IO]] =
         backendMode match
-            case BackendMode.InMemory => InMemoryBackendStore.open
+            case BackendMode.InMemory => InMemoryBackendStore.open(tracer)
             case BackendMode.RocksDb(root) =>
                 val dir = root.resolve(s"peer-${peerNum: Int}")
                 Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
-                    RocksDbBackendStore.open(dir)
+                    RocksDbBackendStore.open(dir, tracer)
 
     private def countEntries(
         backend: BackendStore[IO],
@@ -1371,7 +1390,7 @@ case class Stage4Suite(
         nPeers: Int,
         submittedIds: Vector[RequestId],
         lastState: ModelState,
-    )(using IOLocal[Slf4jTracer]): IO[Unit] = {
+    ): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Block".padTo(colWidth, ' ')} |"
@@ -1426,7 +1445,7 @@ case class Stage4Suite(
         val text = (divider :: header :: divider :: rows.toList ++
             (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
             .mkString("\n", "\n", "")
-        Slf4jTracer.info(text)
+        log.info(text)
     }
 
     /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
@@ -1440,7 +1459,7 @@ case class Stage4Suite(
         sortedPeers: Seq[HeadPeerNumber],
         stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
         nPeers: Int,
-    )(using IOLocal[Slf4jTracer]): IO[Unit] = {
+    ): IO[Unit] = {
         val colWidth = 72
         val divider = s"+${"-" * (colWidth + 2)}+"
         val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
@@ -1484,7 +1503,7 @@ case class Stage4Suite(
         val text = (divider :: header :: divider :: rows.toList ++
             (divider :: peersLine :: legend :: Nil))
             .mkString("\n", "\n", "")
-        Slf4jTracer.info(text)
+        log.info(text)
     }
 
 // ===================================

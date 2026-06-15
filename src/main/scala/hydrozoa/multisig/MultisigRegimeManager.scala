@@ -65,6 +65,8 @@ trait MultisigRegimeManager(
         tracer.contramap(MultisigRegimeManagerEvent.BWL.apply)
     private val sclTracer: ContraTracer[IO, LimiterEvent] =
         tracer.contramap(MultisigRegimeManagerEvent.SCL.apply)
+    private val casTracer: ContraTracer[IO, CoilAckSequencerEvent] =
+        tracer.contramap(MultisigRegimeManagerEvent.CAS.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -191,7 +193,10 @@ trait MultisigRegimeManager(
             // Non-hub head peers spawn none.
             coilAckSequencer <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
-                else context.actorOf(CoilAckSequencer(config, pendingConnections)).map(Some(_))
+                else
+                    context
+                        .actorOf(CoilAckSequencer(config, pendingConnections, casTracer))
+                        .map(Some(_))
 
             coilRelay <-
                 if hubbedCoilPeers.isEmpty then IO.none[CoilRelay.Handle]

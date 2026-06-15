@@ -3,11 +3,12 @@ package hydrozoa.multisig.backend.cardano
 import cats.arrow.FunctionK
 import cats.data.State
 import cats.effect.{IO, Ref}
+import cats.implicits.toContravariantOps
 import cats.syntax.all.catsSyntaxFlatMapOps
 import cats.~>
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
@@ -16,7 +17,8 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerStat
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, TransactionInput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.Data
 
-val logger = Logging.logger("test.CardanoBackendMock")
+val logger: ContraTracer[cats.Id, Slf4jMsg] =
+    Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("test.CardanoBackendMock"))
 
 final case class MockState(
     ledgerState: LedgerState,

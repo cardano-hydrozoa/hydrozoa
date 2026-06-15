@@ -17,7 +17,8 @@ import hydrozoa.integration.stage1.model.Deposits.{DepositStatus, depositAbsorpt
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.lib.logging.{Logging, value}
+import cats.implicits.toContravariantOps
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, trace, warn}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor, given}
@@ -42,7 +43,8 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
 
 object Model:
-    private val logger = Logging.logger("Stage1.Model")
+    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
 
     // ===================================
     // Model state
@@ -676,12 +678,11 @@ object Model:
                   refundedThisBlock
                 )
 
-                blockCanStayMinor = state.multiNodeConfig.txTiming
-                    .blockCanStayMinor(
+                blockCanStayMinor: Boolean = state.multiNodeConfig.txTiming
+                    .blockCanStayMinor[Id](ContraTracer.nullTracer)(
                       blockEndTime,
                       state.competingFallbackStartTime
                     )
-                    .value
 
                 hasWithdrawals = accumulator.exists(_._2 match {
                     case e: L2Tx => e.l1utxos.nonEmpty

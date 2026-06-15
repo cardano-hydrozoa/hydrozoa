@@ -3,8 +3,9 @@ package org.scalacheck.commands
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Resource}
+import cats.syntax.all.*
 import ch.qos.logback.classic.Level
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, error, info, warn}
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.LoggerFactory
 
@@ -242,9 +243,15 @@ trait ScenarioGen[State, Sut]:
   */
 trait ModelBasedSuite {
 
-    private val logger =
-        org.slf4j.LoggerFactory.getLogger("org.scalacheck.commands.ModelBasedSuite")
-    private val loggerIO = Logging.loggerIO("org.scalacheck.commands.ModelBasedSuite")
+    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite")
+        )
+
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(
+          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite")
+        )
 
     /** Represent [some parts of] the environment on which a test case is run.
       *
@@ -297,7 +304,7 @@ trait ModelBasedSuite {
       * `super.onTestCaseGenerated(...)` to keep the default log alongside their own.
       */
     def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): IO[Unit] =
-        loggerIO.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
+        log.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
 
     // ===================================
     // SUT
@@ -625,9 +632,9 @@ trait ModelBasedSuite {
                                 for {
                                     gate <- Deferred[IO, Unit]
                                     _ <- IO(pendingDelay.set(Some((c.delay, gate))))
-                                    _ <- loggerIO.info("Suspend on the gate...")
+                                    _ <- log.info("Suspend on the gate...")
                                     _ <- gate.get
-                                    _ <- loggerIO.info("Running the command...")
+                                    _ <- log.info("Running the command...")
                                     pred <- c.runPC(sut)
                                     (newPredResult, newState) = LoggingControl.withSuppressedLogs(
                                       "predicate evaluation and state advancement"
@@ -682,7 +689,7 @@ trait ModelBasedSuite {
             // Drive each command: read delay → advance → release gate → tick until next signal.
             // If the program already finished (e.g. cs was empty), skip the command loop.
             _ <- tc.results.flatMap {
-                case Some(_) => loggerIO.info("empty command list, done")
+                case Some(_) => log.info("empty command list, done")
                 case None    =>
                     // 4. Otherwise, run per-command iteration.
                     // Note that the outer doesn't need the command object.
@@ -702,7 +709,7 @@ trait ModelBasedSuite {
                                         if delay > Duration.Zero then tc.advance(delay) else IO.unit
 
                                     // 7. Release the inner to run the command.
-                                    _ <- loggerIO.info("Opening the gate")
+                                    _ <- log.info("Opening the gate")
                                     _ <- gate.complete(())
 
                                     // 8. Tick until all fibers exhaust, then check next signal.
@@ -758,11 +765,11 @@ trait ModelBasedSuite {
             case true => tickUntil(tc, done)
             case false =>
                 done.flatMap {
-                    case true => loggerIO.info("tickUntil is done")
+                    case true => log.info("tickUntil is done")
                     case false =>
                         val msg =
                             "tickUntil: fibers exhausted but signal not received — SUT deadlock or unexpected IO.sleep"
-                        loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                        log.error(msg) >> IO.raiseError(new RuntimeException(msg))
                 }
         }
 
@@ -776,17 +783,17 @@ trait ModelBasedSuite {
             case false =>
                 done.flatMap {
                     case true =>
-                        loggerIO.info("tickUntilAdvancing is done")
+                        log.info("tickUntilAdvancing is done")
                     case false =>
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
-                                loggerIO.warn(
+                                log.warn(
                                   s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
                                 ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
                             else {
                                 val msg =
                                     "TestControl deadlock: no eligible fibers and predicate not satisfied"
-                                loggerIO.error(msg) >> IO.raiseError(new RuntimeException(msg))
+                                log.error(msg) >> IO.raiseError(new RuntimeException(msg))
                             }
                         }
                 }

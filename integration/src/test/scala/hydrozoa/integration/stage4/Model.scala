@@ -4,7 +4,8 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.logging.Logging
+import cats.implicits.toContravariantOps
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
@@ -22,7 +23,8 @@ import scala.concurrent.duration.FiniteDuration
 
 object Model {
 
-    private val logger = Logging.logger("Stage4.Model")
+    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Model"))
 
     case class Params(
         multiNodeConfig: MultiNodeConfig,

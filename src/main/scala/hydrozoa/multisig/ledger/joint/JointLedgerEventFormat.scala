@@ -1,7 +1,8 @@
 package hydrozoa.multisig.ledger.joint
 
+import hydrozoa.config.head.multisig.timing.TxTimingEventFormat
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeaderEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent.*
 
 /** Renderers from [[JointLedgerEvent]] to [[LogEvent]]. Lives separately from the event ADT so the
@@ -82,7 +83,7 @@ object JointLedgerEventFormat:
                       s"  Block brief: $brief",
                   "blockNum" -> s"${brief.blockNum: Int}"
                 )
-            case HeaderLog(level, msg, ctx) =>
-                LogEvent(level, msg, ev.ctx ++ ctx, routingKey = ev.routingKey)
+            case HeaderEvent(bhe) => BlockHeaderEventFormat.humanFormat(bhe)
+            case TimingEvent(tme) => TxTimingEventFormat.humanFormat(tme)
         }
     }

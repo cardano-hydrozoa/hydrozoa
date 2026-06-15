@@ -6,14 +6,14 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.{ContraTracer, Traced}
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
@@ -55,14 +55,14 @@ final case class JointLedger(
       */
     private given CardanoNetwork.Section = config
 
-    /** Bridge for pure functions that return `Traced[A]` (e.g. `BlockHeader.nextHeader*`): emits
-      * each [[hydrozoa.lib.logging.LogEvent]] through the typed JL tracer as a
-      * [[JointLedgerEvent.HeaderLog]] pass-through, then yields the result `A`.
+    /** Typed sub-tracers for the polymorphic `BlockHeader.nextHeader*` /
+      * `TxTiming.blockCanStayMinor` pure functions. Their events flow through the JL tracer wrapped
+      * as `JointLedgerEvent.HeaderEvent` / `JointLedgerEvent.TimingEvent`.
       */
-    private def emitTraced[A](traced: Traced[A]): IO[A] =
-        traced._2
-            .traverse_(e => tracer.traceWith(JointLedgerEvent.HeaderLog(e.level, e.msg, e.ctx)))
-            .as(traced._1)
+    private val bhTracer: ContraTracer[IO, BlockHeaderEvent] =
+        tracer.contramap(JointLedgerEvent.HeaderEvent.apply)
+    private val tmTracer: ContraTracer[IO, TxTimingEvent] =
+        tracer.contramap(JointLedgerEvent.TimingEvent.apply)
 
     private val connections = Ref.unsafe[IO, Option[Connections]](None)
 
@@ -538,13 +538,14 @@ final case class JointLedger(
                         // `evacDiffs` are surfaced to the slow side via `BlockResult`.
                         newJLState = p.setL2LedgerState(newL2State)
 
-                        headerIntermediate <- emitTraced(
-                          previousHeader.nextHeaderIntermediate(
-                            txTiming,
-                            blockCreationStartTime,
-                            blockCreationEndTime,
-                            decisions.mNextAbsorptionStartTime,
-                          )
+                        headerIntermediate <- previousHeader.nextHeaderIntermediate(
+                          bhTracer,
+                          tmTracer
+                        )(
+                          txTiming,
+                          blockCreationStartTime,
+                          blockCreationEndTime,
+                          decisions.mNextAbsorptionStartTime,
                         )
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
@@ -553,13 +554,11 @@ final case class JointLedger(
                         evacDiffs = newL2State.diffs
                         newJLState = p.setL2LedgerState(newL2State)
 
-                        headerIntermediate <- emitTraced(
-                          previousHeader.nextHeaderMajor(
-                            txTiming,
-                            blockCreationStartTime,
-                            blockCreationEndTime,
-                            decisions.mNextAbsorptionStartTime,
-                          )
+                        headerIntermediate <- previousHeader.nextHeaderMajor(bhTracer)(
+                          txTiming,
+                          blockCreationStartTime,
+                          blockCreationEndTime,
+                          decisions.mNextAbsorptionStartTime,
                         )
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 }

@@ -12,7 +12,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.liaison.{PeerLiaisonCoilToHub, PeerLiaisonEventFormat, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
@@ -152,16 +152,17 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         val (hubConfig, coilConfigs) = genConfigs(nCoil)
         given CardanoNetwork.Section = hubConfig
 
-        InMemoryBackendStore.open
+        InMemoryBackendStore
+            .open(ContraTracer.nullTracer)
             .use { backend =>
-                Persistence.fromBackend(backend).flatMap { persistence =>
+                Persistence.fromBackend(backend, ContraTracer.nullTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
                             headPending <- Deferred[IO, MultisigRegimeManager.Connections]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
-                              CoilAckSequencer(hubConfig, headPending)
+                              CoilAckSequencer(hubConfig, headPending, ContraTracer.nullTracer)
                             )
                             coilRelay <- system.actorOf(CoilRelay(headPending))
 

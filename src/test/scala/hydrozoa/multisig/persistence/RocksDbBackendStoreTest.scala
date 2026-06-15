@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.traverse.*
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -105,14 +106,14 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val value = "durable".getBytes("UTF-8")
             // First session: write.
             RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, ContraTracer.nullTracer)
                 .use { p =>
                     p.put(Cf.Block, k, value)
                 }
                 .unsafeRunSync()
             // Second session: read back.
             val got = RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, ContraTracer.nullTracer)
                 .use { p =>
                     p.get(Cf.Block, k)
                 }
@@ -183,10 +184,13 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             // First open seeds the current version.
-            RocksDbBackendStore.open(tempDir).use(_ => IO.unit).unsafeRunSync()
+            RocksDbBackendStore
+                .open(tempDir, ContraTracer.nullTracer)
+                .use(_ => IO.unit)
+                .unsafeRunSync()
             // Tamper: rewrite the version key with a bogus value.
             RocksDbBackendStore
-                .open(tempDir)
+                .open(tempDir, ContraTracer.nullTracer)
                 .use { p =>
                     p.put(
                       Cf.Meta,
@@ -197,7 +201,11 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                 .unsafeRunSync()
             // Reopen — must fail.
             val outcome =
-                RocksDbBackendStore.open(tempDir).use(_ => IO.unit).attempt.unsafeRunSync()
+                RocksDbBackendStore
+                    .open(tempDir, ContraTracer.nullTracer)
+                    .use(_ => IO.unit)
+                    .attempt
+                    .unsafeRunSync()
             assert(
               outcome.left.toOption
                   .exists(_.getMessage.contains("schema version mismatch")),
@@ -211,7 +219,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
-        try RocksDbBackendStore.open(tempDir).use(prog).unsafeRunSync()
+        try RocksDbBackendStore.open(tempDir, ContraTracer.nullTracer).use(prog).unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =

@@ -22,7 +22,7 @@ import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.{DevnetInfo, devnetInfo}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jTracer}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -31,10 +31,9 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop}
-import org.typelevel.log4cats.Logger
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionOutput, Utxo, Utxos, Value}
@@ -294,8 +293,11 @@ case class Suite(
             .fold(err => throw RuntimeException(err.toString), identity)
     }
 
-    val logger: org.slf4j.Logger = Logging.logger("Stage1.Suite")
-    val loggerIO: Logger[IO] = Logging.loggerIO("Stage1.Suite")
+    val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Suite"))
+
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Suite"))
 
     // ===================================
     // Initial state handling
@@ -412,13 +414,11 @@ case class Suite(
         val runId = java.util.UUID.randomUUID().toString.take(8)
 
         for {
-            tracerLocal <- Slf4jTracer.makeLocal
-            given cats.effect.IOLocal[Slf4jTracer] = tracerLocal
-            _ <- Slf4jTracer.info(s"Creating new SUT [${label}/${runId}]")
+            _ <- log.info(s"Creating new SUT [${label}/${runId}]")
 
             // Fast-forward to the current time if TestControl is used
             _ <- IO.whenA(useTestControl)(for {
-                _ <- Slf4jTracer.debug("Fast-forward to the current time...")
+                _ <- log.debug("Fast-forward to the current time...")
 
                 // Before creating the actor system, if we are in the TestControl we need
                 // to fast-forward to the zero block creation time.
@@ -430,7 +430,7 @@ case class Suite(
                   )
                 )
                 now <- IO.realTimeInstant
-                _ <- Slf4jTracer.info(s"[startupSut] Current time: ${now.toEpochMilli}")
+                _ <- log.info(s"[startupSut] Current time: ${now.toEpochMilli}")
             } yield ())
 
             // For real-blockchain modes: sleep until takeoff time so the model clock and the
@@ -448,12 +448,12 @@ case class Suite(
                             )
                         else
                             val sleepMs = t.toEpochMilli - now.toEpochMilli
-                            Slf4jTracer.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
+                            log.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
                                 IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
                     }
             }
 
-            _ <- Slf4jTracer.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            _ <- log.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
 
             headPeerNum = HeadPeerNumber.zero
             nodeConfig = multiNodeConfig.nodeConfigs(headPeerNum)
@@ -543,11 +543,12 @@ case class Suite(
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
             // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-            // need a handle. `given IOLocal[Slf4jTracer]` is already in scope above.
-            persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
+            // need a handle.
+            persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            persistenceBackend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
             persistence <- {
                 given CardanoNetwork.Section = nodeConfig
-                Persistence.fromBackend(persistenceBackend)
+                Persistence.fromBackend(persistenceBackend, persistenceTracer)
             }
             jointLedger <- system.actorOf(
               JointLedger(
@@ -582,7 +583,7 @@ case class Suite(
           system = system,
           cardanoBackend = cardanoBackend,
           agent = agent,
-          tracerLocal = tracerLocal,
+          log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
           runId = runId,
         )
     }
@@ -628,9 +629,9 @@ case class Suite(
                 )
                 for {
                     // TODO: this is needed for Yaci only
-                    _ <- loggerIO.info("Wait a bit for backend being ready...")
+                    _ <- log.info("Wait a bit for backend being ready...")
                     _ <- IO.sleep(1.second)
-                    _ <- loggerIO.info(
+                    _ <- log.info(
                       "Creating Cardano backend and fetching the last epoch parameters to check they match ones in the head config..."
                     )
                     cardanoBackend <- CardanoBackendBlockfrost(
@@ -656,7 +657,7 @@ case class Suite(
 
     override def shutdownSut(lastState: State, sut: Sut): IO[Prop] = for {
 
-        _ <- loggerIO.info("shutdownSut")
+        _ <- log.info("shutdownSut")
 
         /** Important: this action should ensure that the actor system was not terminated.
           *

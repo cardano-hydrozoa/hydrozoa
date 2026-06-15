@@ -1,12 +1,14 @@
 package hydrozoa.multisig.ledger.block
 
-import hydrozoa.config.head.multisig.timing.TxTiming
+import cats.Monad
+import cats.implicits.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, DepositDecisionWakeupTime, FallbackTxStartTime, ForcedMajorBlockWakeupTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
+import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.{Level, LogEvent, Traced}
+import hydrozoa.lib.logging.ContraTracer
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -141,39 +143,39 @@ object BlockHeader {
 
     object NonFinal {
         trait Section extends BlockHeader.Section, Fields.NonFinal {
-            final def nextHeaderIntermediate(
+            final def nextHeaderIntermediate[F[_]: Monad](
+                bhTracer: ContraTracer[F, BlockHeaderEvent],
+                tmTracer: ContraTracer[F, TxTimingEvent]
+            )(
                 txTiming: TxTiming,
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-            ): Traced[BlockHeader.Intermediate] = {
-                val (canStayMinor, timingEvents) =
-                    txTiming.blockCanStayMinor(newEndTime, fallbackTxStartTime)
-                if canStayMinor then {
-                    val (header, headerEvents) =
-                        nextHeaderMinor(
-                          newStartTime,
-                          newEndTime,
-                          mAbsorptionStartTime,
-                        )
-                    (header, timingEvents ++ headerEvents)
-                } else {
-                    val (header, headerEvents) =
-                        nextHeaderMajor(
-                          txTiming,
-                          newStartTime,
-                          newEndTime,
-                          mAbsorptionStartTime,
-                        )
-                    (header, timingEvents ++ headerEvents)
+            ): F[BlockHeader.Intermediate] =
+                txTiming.blockCanStayMinor(tmTracer)(newEndTime, fallbackTxStartTime).flatMap {
+                    canStayMinor =>
+                        if canStayMinor then
+                            nextHeaderMinor(bhTracer)(
+                              newStartTime,
+                              newEndTime,
+                              mAbsorptionStartTime,
+                            ).widen[BlockHeader.Intermediate]
+                        else
+                            nextHeaderMajor(bhTracer)(
+                              txTiming,
+                              newStartTime,
+                              newEndTime,
+                              mAbsorptionStartTime,
+                            ).widen[BlockHeader.Intermediate]
                 }
-            }
 
-            final def nextHeaderMinor(
+            final def nextHeaderMinor[F[_]: Monad](
+                tracer: ContraTracer[F, BlockHeaderEvent]
+            )(
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-            ): Traced[BlockHeader.Minor] = {
+            ): F[BlockHeader.Minor] = {
                 val newDepositDecisionWakeupTime =
                     mAbsorptionStartTime.map(t => DepositDecisionWakeupTime(t.convert))
                 val header = BlockHeader.Minor(
@@ -185,24 +187,22 @@ object BlockHeader {
                   forcedMajorBlockWakeupTime = forcedMajorBlockWakeupTime,
                   mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
                 )
-                (
-                  header,
-                  List(
-                    LogEvent(
-                      Level.Trace,
-                      s"nextHeaderMinor: forcedMajorBlockWakeupTime=$forcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
-                      routingKey = Some("BlockHeader")
+                tracer
+                    .traceWith(
+                      BlockHeaderEvent
+                          .NextMinor(forcedMajorBlockWakeupTime, newDepositDecisionWakeupTime)
                     )
-                  )
-                )
+                    .as(header)
             }
 
-            final def nextHeaderMajor(
+            final def nextHeaderMajor[F[_]: Monad](
+                tracer: ContraTracer[F, BlockHeaderEvent]
+            )(
                 txTiming: TxTiming,
                 newStartTime: BlockCreationStartTime,
                 newEndTime: BlockCreationEndTime,
                 mAbsorptionStartTime: Option[DepositAbsorptionStartTime],
-            ): Traced[BlockHeader.Major] = {
+            ): F[BlockHeader.Major] = {
                 val newFallbackStartTime = txTiming.newFallbackStartTime(newEndTime)
                 val newForcedMajorBlockWakeupTime =
                     txTiming.forcedMajorBlockWakeupTime(newFallbackStartTime)
@@ -217,16 +217,12 @@ object BlockHeader {
                   forcedMajorBlockWakeupTime = newForcedMajorBlockWakeupTime,
                   mDepositDecisionWakeupTime = newDepositDecisionWakeupTime,
                 )
-                (
-                  header,
-                  List(
-                    LogEvent(
-                      Level.Trace,
-                      s"nextHeaderMajor: forcedMajorBlockWakeupTime=$newForcedMajorBlockWakeupTime, mDepositDecisionWakeupTime=$newDepositDecisionWakeupTime",
-                      routingKey = Some("BlockHeader")
+                tracer
+                    .traceWith(
+                      BlockHeaderEvent
+                          .NextMajor(newForcedMajorBlockWakeupTime, newDepositDecisionWakeupTime)
                     )
-                  )
-                )
+                    .as(header)
             }
         }
     }

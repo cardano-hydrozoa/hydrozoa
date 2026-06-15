@@ -5,7 +5,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.stage1.CommandGenerators.{TxMutator, TxStrategy}
 import hydrozoa.integration.stage1.model.Deposits.DepositStatus
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
-import hydrozoa.lib.logging.Logging
+import cats.implicits.toContravariantOps
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.block.BlockBrief.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -20,7 +21,8 @@ import scala.collection.immutable.Queue
 
 object Commands:
 
-    private val logger = Logging.logger("Stage1.Commands")
+    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Commands"))
 
     // ===================================
     // Delay

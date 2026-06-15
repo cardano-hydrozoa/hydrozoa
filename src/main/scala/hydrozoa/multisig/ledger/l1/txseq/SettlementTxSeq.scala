@@ -1,8 +1,10 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
 import cats.data.NonEmptyVector
+import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, FallbackTxStartTime}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -43,13 +45,14 @@ object SettlementTxSeq {
 private object SettlementTxSeqOps {
     type Config = HeadConfig.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTxSeq")
+    private val log: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("SettlementTxSeq"))
 
     private def time[A](label: String)(block: => A): A = {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        log.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 

@@ -1,9 +1,11 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
+import cats.implicits.toContravariantOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
 import monocle.Focus.focus
@@ -20,13 +22,14 @@ object InitializationTxSeq {
 private object InitializationTxSeqOps {
     type Config = HeadConfig.Bootstrap.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
+    private val log: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("InitializationTxSeq"))
 
     private def time[A](label: String)(block: => A): A = {
         val start = System.nanoTime()
         val result = block
         val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
+        log.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
         result
     }
 

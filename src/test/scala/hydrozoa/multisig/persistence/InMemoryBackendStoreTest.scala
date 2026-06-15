@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.traverse.*
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -127,4 +128,4 @@ class InMemoryBackendStoreTest extends AnyFunSuite:
     }
 
     private def withStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
-        InMemoryBackendStore.open.use(prog).unsafeRunSync()
+        InMemoryBackendStore.open(ContraTracer.nullTracer).use(prog).unsafeRunSync()

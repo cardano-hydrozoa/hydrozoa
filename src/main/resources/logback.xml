@@ -32,10 +32,13 @@
     <logger name="EvacuationActor" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
-    <logger name="HydrozoaRoutes" level="trace"/>
+    <logger name="HydrozoaHttp" level="trace"/>
+    <logger name="CoilPeerWsTransport" level="trace"/>
+    <logger name="HubWsTransport" level="trace"/>
+    <logger name="CoilAckSequencer" level="trace"/>
     <logger name="Persistence" level="info"/>
+    <logger name="BlockHeader" level="info"/>
+    <logger name="TxTiming" level="info"/>
     <logger name="hydrozoa" level="trace"/>
     <logger name="scalus" level="trace"/>
-    <logger name="TracerDemo" level="info"/>
-    <logger name="LoggerDemo" level="info"/>
 </configuration>

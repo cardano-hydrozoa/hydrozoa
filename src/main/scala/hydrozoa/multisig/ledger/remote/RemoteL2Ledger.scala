@@ -5,19 +5,19 @@ import cats.data.EitherT
 import cats.effect.{Async, IO, Ref, Temporal}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.Codec
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
-import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.*
 
 /** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
@@ -41,11 +41,10 @@ class RemoteL2Ledger private (
     connRef: Ref[IO, Option[WSConnectionHighLevel[IO]]],
     initialBackoff: FiniteDuration,
     maxBackoff: FiniteDuration,
-    config: RemoteL2Ledger.Config
+    config: RemoteL2Ledger.Config,
+    tracer: ContraTracer[IO, RemoteL2LedgerEvent]
 ) extends L2Ledger[IO] {
     import RemoteL2LedgerCodecs.given
-
-    private given logger: Logger[IO] = Logging.loggerIO("RemoteL2Ledger")
 
     override implicit def monadF: Monad[IO] = Async[IO]
 
@@ -60,11 +59,11 @@ class RemoteL2Ledger private (
       */
     private def connect(): IO[WSConnectionHighLevel[IO]] = {
         for {
-            _ <- logger.info(s"Connecting to WebSocket at $wsUri")
+            _ <- tracer.traceWith(Connecting(wsUri))
             wsClient <- JdkWSClient.simple[IO]
             newConn <- wsClient.connectHighLevel(WSRequest(wsUri)).allocated.map(_._1)
             _ <- connRef.set(Some(newConn))
-            _ <- logger.info(s"Successfully connected to $wsUri")
+            _ <- tracer.traceWith(Connected(wsUri))
         } yield newConn
     }
 
@@ -99,14 +98,12 @@ class RemoteL2Ledger private (
                 else calculatedBackoffSeconds.seconds
 
             for {
-                _ <- logger.warn(error)(
-                  s"Connection error (attempt ${attempt + 1}), reconnecting after $backoffDuration"
-                )
+                _ <- tracer.traceWith(ConnectionError(attempt, backoffDuration, error))
                 _ <- Temporal[IO].sleep(backoffDuration)
                 // Clear the old connection and try again
                 _ <- connRef.set(None)
                 _ <- connect().handleErrorWith { reconnectError =>
-                    logger.debug(reconnectError)("Reconnection attempt failed, will retry") *>
+                    tracer.traceWith(ReconnectionAttemptFailed(reconnectError)) *>
                         IO.unit // Swallow the error, continue retrying
                 }
                 // Recursively retry - NO LIMIT
@@ -128,7 +125,7 @@ class RemoteL2Ledger private (
                 for {
                     // Send request
                     message <- IO.pure(request.asJson.noSpaces)
-                    _ <- logger.debug(s"Sending request: $message")
+                    _ <- tracer.traceWith(Sending(message))
                     _ <- conn.send(WSFrame.Text(message))
 
                     // Wait for response (synchronous)
@@ -138,7 +135,7 @@ class RemoteL2Ledger private (
                         .compile
                         .lastOrError
 
-                    _ <- logger.debug(s"Received response: $responseText")
+                    _ <- tracer.traceWith(Received(responseText))
 
                     // Decode response
                     ret <- decode[Response](responseText) match {
@@ -294,13 +291,14 @@ object RemoteL2Ledger {
       */
     def create(
         wsUri: String,
+        config: Config,
+        tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
-        config: Config
     ): IO[RemoteL2Ledger] = {
         for {
             uri <- IO.fromEither(Uri.fromString(wsUri))
             connRef <- Ref.of[IO, Option[WSConnectionHighLevel[IO]]](None)
-        } yield new RemoteL2Ledger(uri, connRef, initialBackoff, maxBackoff, config)
+        } yield new RemoteL2Ledger(uri, connRef, initialBackoff, maxBackoff, config, tracer)
     }
 }

@@ -24,6 +24,13 @@
     <logger name="EvacuationActor" level="warn"/>
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
+    <logger name="CoilPeerWsTransport" level="warn"/>
+    <logger name="HubWsTransport" level="warn"/>
+    <logger name="CoilAckSequencer" level="warn"/>
+    <logger name="HydrozoaHttp" level="warn"/>
+    <logger name="RemoteL2Ledger" level="warn"/>
+    <logger name="BlockHeader" level="warn"/>
+    <logger name="TxTiming" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>

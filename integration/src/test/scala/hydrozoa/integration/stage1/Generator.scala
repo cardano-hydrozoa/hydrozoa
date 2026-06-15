@@ -19,7 +19,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
-import hydrozoa.lib.logging.Logging
+import cats.implicits.toContravariantOps
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
@@ -51,7 +52,8 @@ import scala.math.Ordering.Implicits.infixOrderingOps
   */
 object CommandGenerators:
 
-    private val logger: org.slf4j.Logger = Logging.logger("Stage1.CommandGenerators")
+    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
+        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.CommandGenerators"))
 
     // ===================================
     // Delay
