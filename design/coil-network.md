@@ -49,9 +49,12 @@ The "constant follower" intuition holds with **two precise breaks**:
 1. **Authors one lane only — own `HardAck`.** Whitepaper: *"Coil peers can
    produce only one type of log entries: Hard acknowledgements."*
    (`peer-network`).
-2. **Own `HardAck` may be gappy.** Whitepaper: *"coil peers may skip
-   acknowledging blocks entirely since not all are available at all times"*
-   (`peer-network`). Head peers must sign every stack; a coil peer may decline.
+2. **Own `HardAck` may be gappy (whitepaper allowance — deferred).** Whitepaper:
+   *"coil peers may skip acknowledging blocks entirely since not all are available
+   at all times"* (`peer-network`). Head peers must sign every stack; the whitepaper
+   lets a coil peer decline. **The current implementation does not take this up** —
+   a coil peer hard-acks **every** stack, so its `CoilHardAck` family is dense in
+   `StackNumber`; the skip-hard-ack optimization is deferred (§6.1, GUM-152).
 
 On both consensus sides it only **follows** — reconstructing the same local state
 a head follower does, emitting no artifact of its own. **Fast side:** it consumes
@@ -525,6 +528,6 @@ construction — **never** carried in a wire message:
 - `SlowConsensusActor`: **no** role gate — aggregates head + coil hard-acks
   identically and signs its own. On a coil its own hard-ack is broadcast up the
   uplink rather than across the mesh, but that is a `Connections` wiring
-  difference, not a behavioral gate. (Its skip-stack choice, §6, is a *runtime*
-  decision, not a construction gate.)
+  difference, not a behavioral gate. (The skip-hard-ack optimization, §6.1, is
+  deferred — a coil currently hard-acks every stack.)
 - `CardanoLiaison`: **no** role gate — submits happy-path + fallback identically.
