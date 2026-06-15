@@ -79,7 +79,7 @@ The full set of typed events and formatters in the tree is discoverable as `*Eve
 
 ## Custom in-process sinks
 
-A `ContraTracer` is `A => IO[Unit]`, so any side-effect can be a sink. Stage 4 captures block
+A `ContraTracer` is `A => IO[Unit]`, so any side-effect can be a sink. For example, Stage 4 captures block
 briefs into a `Ref` for end-of-test assertions, combined with the SLF4J sink:
 
 ```scala
@@ -132,8 +132,20 @@ def blockCanStayMinor[F[_]: Monad](
       tracer.contramap(JointLedgerEvent.TimingEvent.apply)
   ```
   Then call `txTiming.blockCanStayMinor(tmTracer)(...)` — returns `IO[Boolean]`.
-- Pure callers pass `ContraTracer.nullTracer[cats.Id, TxTimingEvent]` — `F = Id` collapses
-  `F[Boolean]` to `Boolean`, no side effects, no IO.
+- Pure callers lift the same IO sink through `Slf4jTracer.ioToId`, an `IO ~> Id` natural
+  transformation, via [[ContraTracer.natTracer]]:
+  ```scala
+  private val tmTracer: ContraTracer[cats.Id, TxTimingEvent] =
+      Slf4jTracer.sink
+          .contramap(TxTimingEventFormat.humanFormat)
+          .natTracer(Slf4jTracer.ioToId)
+  ```
+  Then call `txTiming.blockCanStayMinor(tmTracer)(...)` — returns `Boolean` (because
+  `Id[Boolean] = Boolean`). The events reach the same SLF4J back-end as the IO path.
+
+There is **one** sink (`Slf4jTracer.sink: ContraTracer[IO, LogEvent]`). Synchronous code
+reaches it through the NT. Don't silence at the call site with `ContraTracer.nullTracer` —
+silence at the Logback level instead (`<logger name="X" level="off"/>`).
 
 The same shape is used for `BlockHeader.nextHeader*` (typed events: `BlockHeaderEvent`).
 
@@ -156,7 +168,7 @@ log.info("Starting Hydrozoa node...")
 
 The extension methods are polymorphic on `F[_]: Monad`, so the same shape works for pure code
 (`F = cats.Id`) that can't run an `IO[Unit]` — `Gen` generators, synchronous tx builders, etc.
-Use [[Slf4jTracer.syncSink]] for the synchronous variant:
+Lift the IO sink through `Slf4jTracer.ioToId` (an `IO ~> Id` natural transformation):
 
 ```scala
 import cats.implicits.toContravariantOps
@@ -164,10 +176,15 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 
 // In a `Gen[A]` body or any pure synchronous code path:
 private val log: ContraTracer[cats.Id, Slf4jMsg] =
-    Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
+    Slf4jTracer.sink
+        .contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
+        .natTracer(Slf4jTracer.ioToId)
 
 val _ = log.debug("hello from Gen")   // Unit, runs the SLF4J side-effect synchronously
 ```
+
+`src/main/scala/hydrozoa/lib/logging/TracingDemo.scala` shows both flavors end-to-end. Run
+it with `sbt "runMain hydrozoa.lib.logging.TracingDemo"`.
 
 Both forms are still typed `ContraTracer`s — they compose with `|+|`, `contramap`, custom
 sinks, etc. The only difference from a per-actor event ADT is that the message string is the

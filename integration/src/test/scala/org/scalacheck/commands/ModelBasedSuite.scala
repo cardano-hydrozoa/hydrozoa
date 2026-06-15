@@ -244,9 +244,9 @@ trait ScenarioGen[State, Sut]:
 trait ModelBasedSuite {
 
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(
-          Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite")
-        )
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("org.scalacheck.commands.ModelBasedSuite"))
+            .natTracer(Slf4jTracer.ioToId)
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(

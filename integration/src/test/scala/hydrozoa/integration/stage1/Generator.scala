@@ -53,7 +53,9 @@ import scala.math.Ordering.Implicits.infixOrderingOps
 object CommandGenerators:
 
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.CommandGenerators"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Stage1.CommandGenerators"))
+            .natTracer(Slf4jTracer.ioToId)
 
     // ===================================
     // Delay

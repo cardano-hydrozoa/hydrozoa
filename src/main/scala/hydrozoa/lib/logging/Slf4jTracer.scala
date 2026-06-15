@@ -1,7 +1,9 @@
 package hydrozoa.lib.logging
 
 import cats.Id
+import cats.arrow.FunctionK
 import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 
 enum Level:
     case Trace, Debug, Info, Warn, Error
@@ -74,21 +76,23 @@ object Slf4jTracer:
             case Level.Error => ev.cause.fold(lg.error(msg))(lg.error(_)(msg))
     )
 
-    /** Synchronous variant of [[sink]] for pure code paths (ScalaCheck `Gen` generators, tx
-      * builders, etc.) that can't run an `IO[Unit]`. Same routing semantics — routes via
-      * [[LogEvent.routingKey]] and emits through the underlying SLF4J `Logger` directly.
+    /** Natural transformation `IO ~> Id` for lifting [[sink]] (and any `ContraTracer[IO, _]`
+      * derived from it) into a synchronous `ContraTracer[Id, _]` — used by pure / synchronous code
+      * paths (ScalaCheck `Gen` generators, synchronous tx builders, etc.) that can't run an
+      * `IO[Unit]`. Combine with [[ContraTracer.natTracer]]:
+      *
+      * {{{
+      *   val ioTracer: ContraTracer[IO, MyEvent] =
+      *       Slf4jTracer.sink.contramap(MyEventFormat.humanFormat(...))
+      *   val idTracer: ContraTracer[Id, MyEvent] =
+      *       ioTracer.natTracer(Slf4jTracer.ioToId)
+      * }}}
+      *
+      * There is **one** sink ([[sink]]); pure callers reach the same SLF4J back-end through this NT
+      * rather than a parallel synchronous sink.
       */
-    val syncSink: ContraTracer[Id, LogEvent] = ContraTracer.emit((ev: LogEvent) =>
-        val lg = Logging.logger(ev.routingKey.getOrElse("hydrozoa"))
-        val msg = renderMsg(ev)
-        ev.level match
-            case Level.Trace => lg.trace(msg)
-            case Level.Debug => lg.debug(msg)
-            case Level.Info  => lg.info(msg)
-            case Level.Warn  => lg.warn(msg)
-            case Level.Error =>
-                ev.cause.fold(lg.error(msg))(c => lg.error(msg, c))
-    )
+    val ioToId: FunctionK[IO, Id] = new FunctionK[IO, Id]:
+        def apply[A](fa: IO[A]): Id[A] = fa.unsafeRunSync()
 
     private def renderMsg(ev: LogEvent): String =
         val prefix =

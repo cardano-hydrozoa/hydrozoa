@@ -174,7 +174,9 @@ object HeadConfig {
         }
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("HeadConfig"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("HeadConfig"))
+            .natTracer(Slf4jTracer.ioToId)
 
     type HeadConfigError = InitializationTxSeq.Build.Error | HeadConfigBootstrapError
 

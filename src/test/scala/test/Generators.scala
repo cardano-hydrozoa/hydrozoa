@@ -60,7 +60,9 @@ object Generators {
     // Use:
     //   - trace level for diversity traces (z-print-results property)
     val loggerGenerators: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Generators"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Generators"))
+            .natTracer(Slf4jTracer.ioToId)
 
     /** NOTE: generators here are opinionated. They are not directly suitable for upstreaming and
       * contain reasonable, hydrozoa-specific defaults.

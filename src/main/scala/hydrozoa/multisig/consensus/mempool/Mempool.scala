@@ -21,7 +21,9 @@ final case class Mempool(
 ) {
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Mempool"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Mempool"))
+            .natTracer(Slf4jTracer.ioToId)
 
     def isEmpty: Boolean = requests.isEmpty
 

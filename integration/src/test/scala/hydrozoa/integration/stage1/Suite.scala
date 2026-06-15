@@ -293,11 +293,10 @@ case class Suite(
             .fold(err => throw RuntimeException(err.toString), identity)
     }
 
-    val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Suite"))
-
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Suite"))
+
+    val logger: ContraTracer[cats.Id, Slf4jMsg] = log.natTracer(Slf4jTracer.ioToId)
 
     // ===================================
     // Initial state handling

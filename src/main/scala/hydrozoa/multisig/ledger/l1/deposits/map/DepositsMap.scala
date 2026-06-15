@@ -24,7 +24,9 @@ final case class DepositsMap private[map] (
 ) {
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("DepositsMap"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("DepositsMap"))
+            .natTracer(Slf4jTracer.ioToId)
 
     /** Append a request to the end of the queue of requests with the same start time.
       */

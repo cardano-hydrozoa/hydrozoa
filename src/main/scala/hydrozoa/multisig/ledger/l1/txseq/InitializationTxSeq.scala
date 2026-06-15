@@ -23,7 +23,9 @@ private object InitializationTxSeqOps {
     type Config = HeadConfig.Bootstrap.Section
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("InitializationTxSeq"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("InitializationTxSeq"))
+            .natTracer(Slf4jTracer.ioToId)
 
     private def time[A](label: String)(block: => A): A = {
         val start = System.nanoTime()

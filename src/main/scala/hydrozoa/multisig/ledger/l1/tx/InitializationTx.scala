@@ -71,7 +71,9 @@ object InitializationTx {
             TxTiming.Section & InitializationParameters.Section
 
         private val log: ContraTracer[cats.Id, Slf4jMsg] =
-            Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("InitializationTx"))
+            Slf4jTracer.sink
+                .contramap(Slf4jMsgFormat.humanFormat("InitializationTx"))
+                .natTracer(Slf4jTracer.ioToId)
 
         private def time[A](label: String)(block: => A): A = {
             val start = System.nanoTime()

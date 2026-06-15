@@ -72,7 +72,9 @@ private object FallbackTxOps {
     type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("FallbackTx"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("FallbackTx"))
+            .natTracer(Slf4jTracer.ioToId)
 
     private def time[A](label: String)(block: => A): A = {
         val start = System.nanoTime()

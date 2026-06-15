@@ -43,10 +43,14 @@ import scala.util.chaining.*
 
 object Model:
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
+            .natTracer(Slf4jTracer.ioToId)
 
     private val tmTracer: ContraTracer[cats.Id, TxTimingEvent] =
-        Slf4jTracer.syncSink.contramap(TxTimingEventFormat.humanFormat)
+        Slf4jTracer.sink
+            .contramap(TxTimingEventFormat.humanFormat)
+            .natTracer(Slf4jTracer.ioToId)
 
     // ===================================
     // Model state

@@ -18,7 +18,9 @@ import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, 
 import scalus.uplc.builtin.Data
 
 val logger: ContraTracer[cats.Id, Slf4jMsg] =
-    Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("test.CardanoBackendMock"))
+    Slf4jTracer.sink
+        .contramap(Slf4jMsgFormat.humanFormat("test.CardanoBackendMock"))
+        .natTracer(Slf4jTracer.ioToId)
 
 final case class MockState(
     ledgerState: LedgerState,

@@ -24,7 +24,9 @@ import scala.concurrent.duration.FiniteDuration
 object Model {
 
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Model"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Stage4.Model"))
+            .natTracer(Slf4jTracer.ioToId)
 
     case class Params(
         multiNodeConfig: MultiNodeConfig,

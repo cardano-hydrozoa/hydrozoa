@@ -22,7 +22,9 @@ import scala.collection.immutable.Queue
 object Commands:
 
     private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Commands"))
+        Slf4jTracer.sink
+            .contramap(Slf4jMsgFormat.humanFormat("Stage1.Commands"))
+            .natTracer(Slf4jTracer.ioToId)
 
     // ===================================
     // Delay

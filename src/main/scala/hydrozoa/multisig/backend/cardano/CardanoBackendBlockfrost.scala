@@ -47,8 +47,9 @@ class CardanoBackendBlockfrost private (
 ) extends CardanoBackend[IO] {
 
     private val log: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.syncSink
+        Slf4jTracer.sink
             .contramap(Slf4jMsgFormat.humanFormat(getClass.getName))
+            .natTracer(Slf4jTracer.ioToId)
 
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
