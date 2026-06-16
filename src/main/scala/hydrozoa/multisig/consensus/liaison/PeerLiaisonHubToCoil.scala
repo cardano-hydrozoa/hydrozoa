@@ -80,8 +80,10 @@ abstract class PeerLiaisonHubToCoil(
     private val backend = persistence.backend
     private val blockBacking = OutboxBacking.block(backend, _ => true)
     private val stackBacking = OutboxBacking.stack(backend, _ => true)
-    private val requestBackings = headPeerNums.map(h => h -> OutboxBacking.request(backend, h)).toMap
-    private val softAckBackings = headPeerNums.map(h => h -> OutboxBacking.softAck(backend, h)).toMap
+    private val requestBackings =
+        headPeerNums.map(h => h -> OutboxBacking.request(backend, h)).toMap
+    private val softAckBackings =
+        headPeerNums.map(h => h -> OutboxBacking.softAck(backend, h)).toMap
     private val headHardAckBackings =
         headPeerNums.map(h => h -> OutboxBacking.hardAck(backend, h)).toMap
     private val coilHardAckBackings =
@@ -92,14 +94,14 @@ abstract class PeerLiaisonHubToCoil(
           _.blockNum,
           BlockNumber(1),
           _.increment,
-          load = blockBacking.load
+          backfill = blockBacking.backfill
         )
     private val stackLane =
         LaneOutbound.contiguous[StackBrief, StackNumber](
           _.stackNum,
           StackNumber(1),
           _.increment,
-          load = stackBacking.load
+          backfill = stackBacking.backfill
         )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
@@ -108,7 +110,7 @@ abstract class PeerLiaisonHubToCoil(
               RequestNumber.zero,
               _.increment,
               config.peerLiaisonMaxRequestsPerBatch,
-              load = requestBackings(h).load
+              backfill = requestBackings(h).backfill
             )
         }.toMap
     private val softAckLanes: Map[HeadPeerNumber, LaneOutbound[SoftAck, SoftAckNumber]] =
@@ -117,7 +119,7 @@ abstract class PeerLiaisonHubToCoil(
               _.ackNum,
               SoftAckNumber.zero.increment,
               _.increment,
-              load = softAckBackings(h).load
+              backfill = softAckBackings(h).backfill
             )
         }.toMap
     private val headHardAckLanes: Map[HeadPeerNumber, LaneOutbound[HardAck, HardAckNumber]] =
@@ -126,7 +128,7 @@ abstract class PeerLiaisonHubToCoil(
               _.hardAckNum,
               HardAckNumber.zero,
               _.increment,
-              load = headHardAckBackings(h).load
+              backfill = headHardAckBackings(h).backfill
             )
         }.toMap
     private val coilHardAckLanes
@@ -136,7 +138,7 @@ abstract class PeerLiaisonHubToCoil(
               _.seqNum,
               HubHardAckNumber.zero,
               _.increment,
-              load = coilHardAckBackings(h).load
+              backfill = coilHardAckBackings(h).backfill
             )
         }.toMap
 
@@ -304,8 +306,8 @@ abstract class PeerLiaisonHubToCoil(
 
     /** Restore each population outbox lane's high-water from its backing family, leaving the queues
       * empty. The Server half answers the coil peer's `Population.Get` by hot-loading older entries
-      * from the store (`OutboxBacking.load`); live `CoilRelay` production re-appends the tail. An
-      * empty store leaves every lane cold.
+      * from the store (`OutboxBacking.backfill`); live `CoilRelay` production re-appends the tail.
+      * An empty store leaves every lane cold.
       */
     private def restoreHighWaters: IO[Unit] =
         blockBacking.highWater.flatMap(blockLane.seedHighWater) >>
@@ -336,7 +338,10 @@ abstract class PeerLiaisonHubToCoil(
             // each ack before the cursor advanced), so we re-pull only NEW acks: the hub's
             // CoilAckSequencer stamps any received-but-unstamped tail from the store, and verify
             // rejects a stale re-serve — we must not re-receive (and re-stamp) what we already hold.
-            _ <- OutboxBacking.coilHardAck(backend, coil).highWater.flatMap(ownHardAckLane.restoreFrom)
+            _ <- OutboxBacking
+                .coilHardAck(backend, coil)
+                .highWater
+                .flatMap(ownHardAckLane.restoreCursor)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()

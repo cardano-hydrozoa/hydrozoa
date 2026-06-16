@@ -70,7 +70,7 @@ final class LaneInbound[T, N] private (
       * stale re-serve of what we already hold (which would otherwise be re-dispatched to the
       * consensus actors that `ReplayActor` already re-fed).
       */
-    def restoreFrom(lastReceived: Option[N]): IO[Unit] =
+    def restoreCursor(lastReceived: Option[N]): IO[Unit] =
         inboundCursor.set(lastReceived.flatMap(next).getOrElse(initialCursor))
 }
 

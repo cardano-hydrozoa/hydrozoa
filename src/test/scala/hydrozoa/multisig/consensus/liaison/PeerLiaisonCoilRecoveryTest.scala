@@ -49,8 +49,8 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                   FamilyValue(stamp, coilHardAck(coil, 1, stack = 2))
                 )
                 hw <- backing.highWater
-                fromZero <- backing.load(HardAckNumber(0), 16)
-                fromOne <- backing.load(HardAckNumber(1), 16)
+                fromZero <- backing.backfill(HardAckNumber(0), 16)
+                fromOne <- backing.backfill(HardAckNumber(1), 16)
             } yield (hw, fromZero, fromOne)
         }
         assert(hw == Some(HardAckNumber(1)), s"high-water = max; got $hw")
@@ -63,7 +63,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
             val backing = OutboxBacking.coilHardAck(p.backend, CoilPeerNumber(0))
             for {
                 hw <- backing.highWater
-                loaded <- backing.load(HardAckNumber.zero, 16)
+                loaded <- backing.backfill(HardAckNumber.zero, 16)
             } yield (hw, loaded)
         }
         assert(hw.isEmpty && loaded.isEmpty)
@@ -102,10 +102,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                   )
                 )
                 blockHw <- blockBacking.highWater
-                blocks <- blockBacking.load(BlockNumber(1), 16)
-                stacks <- stackBacking.load(StackNumber(1), 16)
-                headAcks <- headHardAckBacking.load(HardAckNumber.zero, 16)
-                relay <- relayBacking.load(HubHardAckNumber.zero, 16)
+                blocks <- blockBacking.backfill(BlockNumber(1), 16)
+                stacks <- stackBacking.backfill(StackNumber(1), 16)
+                headAcks <- headHardAckBacking.backfill(HardAckNumber.zero, 16)
+                relay <- relayBacking.backfill(HubHardAckNumber.zero, 16)
             } yield Out(
               blockHw,
               blocks.map(_.blockNum),

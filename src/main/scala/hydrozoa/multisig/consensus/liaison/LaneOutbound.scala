@@ -36,7 +36,7 @@ final class LaneOutbound[T, N] private (
     numberOf: T => N,
     next: Option[N] => Option[N],
     maxPerReply: Int,
-    load: (N, Int) => IO[List[T]]
+    backfill: (N, Int) => IO[List[T]]
 )(using ord: Ordering[N]) {
     import LaneOutbound.*
     import ord.mkOrderingOps
@@ -65,22 +65,23 @@ final class LaneOutbound[T, N] private (
                     ) >> lastAppended.set(Some(n)) >> outbox.update(_ :+ item)
         }
 
-    /** Restore only the lane's high-water on recovery, leaving the outbox empty: the lane serves the
-      * older prefix from the store via [[load]] and lets replay / live production re-append the tail
-      * on top. This is the gap-free baseline an [[append]] continues from (the first post-boot
-      * append must be `next(high-water)`), and the [[reply]] out-of-bounds guard. `None` is the cold
-      * state.
+    /** Restore only the lane's high-water on recovery, leaving the outbox empty: the lane serves
+      * the older prefix from the store via [[backfill]] and lets replay / live production re-append
+      * the tail on top. This is the gap-free baseline an [[append]] continues from (the first
+      * post-boot append must be `next(high-water)`), and the [[reply]] out-of-bounds guard. `None`
+      * is the cold state.
       */
     def seedHighWater(highWater: Option[N]): IO[Unit] =
         lastAppended.set(highWater) >> outbox.set(Queue.empty)
 
     /** Serve the remote's pull. Prune everything strictly below its cursor (retransmit-safe — the
-      * head is kept until the remote moves past it). If the in-memory outbox head *is* the requested
-      * number, serve up to [[maxPerReply]] items from it (the live / replayed tail, including
-      * not-yet-persisted entries); otherwise the requested entry is below the outbox floor (older,
-      * already durable, or the remote regressed across a restart), so hot-load it from the store via
-      * [[load]]. Returns [[OutOfBounds]] if the remote's cursor is ahead of what we could have
-      * produced (protocol desync — the caller raises), else the (possibly empty) slice.
+      * head is kept until the remote moves past it). If the in-memory outbox head *is* the
+      * requested number, serve up to [[maxPerReply]] items from it (the live / replayed tail,
+      * including not-yet-persisted entries); otherwise the requested entry is below the outbox
+      * floor (older, already durable, or the remote regressed across a restart), so hot-load it
+      * from the store via [[backfill]]. Returns [[OutOfBounds]] if the remote's cursor is ahead of
+      * what we could have produced (protocol desync — the caller raises), else the (possibly empty)
+      * slice.
       */
     def reply(remoteCursor: N): IO[Reply[T]] =
         lastAppended.get.flatMap { last =>
@@ -98,7 +99,7 @@ final class LaneOutbound[T, N] private (
                             case Some(head) if numberOf(head) == remoteCursor =>
                                 IO.pure(Items(pruned.take(maxPerReply).toList))
                             case _ =>
-                                load(remoteCursor, maxPerReply).map(Items(_))
+                                backfill(remoteCursor, maxPerReply).map(Items(_))
                     }
         }
 
@@ -120,44 +121,39 @@ object LaneOutbound {
           s"append out of order: last=$last attempted=$attempted expected=$expected"
         )
 
-    /** A no-op store loader: a lane with no durable backing serves only from its in-memory outbox
-      * (the default; the liaisons pass a real loader so [[reply]] can hot-load below the floor).
-      */
-    def noLoad[T, N]: (N, Int) => IO[List[T]] = (_, _) => IO.pure(Nil)
-
     /** A contiguous outbound lane whose first number is `first` and whose successor is `+1` (acks,
-      * requests, re-sequenced relay lanes). `increment` supplies the `+1`; `load` hot-loads the
-      * prefix below the in-memory outbox floor on [[reply]] (default none).
+      * requests, re-sequenced relay lanes). `increment` supplies the `+1`; `backfill` reads the
+      * prefix below the in-memory outbox floor from the store on [[reply]].
       */
     def contiguous[T, N: Ordering](
         numberOf: T => N,
         first: N,
         increment: N => N,
         maxPerReply: Int = 1,
-        load: (N, Int) => IO[List[T]] = noLoad[T, N]
+        backfill: (N, Int) => IO[List[T]]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
           next = _.fold(Some(first))(last => Some(increment(last))),
           maxPerReply = maxPerReply,
-          load = load
+          backfill = backfill
         )
 
     /** A sparse outbound lane: only the round-robin leader emits, so the successor is this side's
       * leader schedule. `next(after)` is this side's next-led number after `after`; `zero` is
-      * "before the first". `load` hot-loads the prefix below the in-memory outbox floor on [[reply]]
-      * (default none).
+      * "before the first". `backfill` reads the prefix below the in-memory outbox floor from the
+      * store on [[reply]].
       */
     def sparse[T, N: Ordering](
         numberOf: T => N,
         zero: N,
         next: N => Option[N],
-        load: (N, Int) => IO[List[T]] = noLoad[T, N]
+        backfill: (N, Int) => IO[List[T]]
     ): LaneOutbound[T, N] =
         new LaneOutbound[T, N](
           numberOf = numberOf,
           next = last => next(last.getOrElse(zero)),
           maxPerReply = 1,
-          load = load
+          backfill = backfill
         )
 }

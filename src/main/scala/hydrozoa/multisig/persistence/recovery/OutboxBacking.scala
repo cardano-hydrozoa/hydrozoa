@@ -19,13 +19,13 @@ import java.nio.ByteBuffer
   *   - [[highWater]] — the lane's last durable number (`lastKey` of the family), so `preStart`
   *     seeds only the high-water (no payloads): the gap-free [[LaneOutbound.append]] check and the
   *     out-of-bounds guard work, and replay can re-append the live tail on top.
-  *   - [[load]] — up to `limit` payloads from a `from` number, so [[LaneOutbound.reply]] hot-loads
+  *   - [[backfill]] — up to `limit` payloads from a `from` number, so [[LaneOutbound.reply]] reads
   *     the prefix below its in-memory outbox floor when a remote pulls an old entry, instead of
   *     holding the whole own production in memory.
   *
-  * `keep` filters a spine family to this peer's own-led entries (a head-mesh liaison serves only its
-  * own-led briefs); the satellites are already a single author per CF, and a hub→coil link serves
-  * every author, so both pass the default accept-all.
+  * `keep` filters a spine family to this peer's own-led entries (a head-mesh liaison serves only
+  * its own-led briefs); the satellites are already a single author per CF, and a hub→coil link
+  * serves every author, so both pass the default accept-all.
   */
 final class OutboxBacking[T, N] private (
     backend: BackendStore[IO],
@@ -39,7 +39,7 @@ final class OutboxBacking[T, N] private (
     def highWater: IO[Option[N]] = backend.lastKey(cf).map(_.map(decodeNum))
 
     /** Up to `limit` own-produced payloads with number `>= from`, ascending. */
-    def load(from: N, limit: Int): IO[List[T]] =
+    def backfill(from: N, limit: Int): IO[List[T]] =
         FamilyScan.loadFrom(backend, seekKey(from), decodePayload, keep, limit)
 
 object OutboxBacking:

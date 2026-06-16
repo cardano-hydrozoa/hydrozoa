@@ -45,7 +45,7 @@ abstract class PeerLiaisonHeadToHead(
 
     // The mesh liaison runs only on head peers; the satellite backings are keyed by this head peer
     // number.
-    private val ownNum: HeadPeerNumber = config.ownPeerId match {
+    private val ownHeadPeerNum: HeadPeerNumber = config.ownPeerId match {
         case PeerId.Head(n) => n
         case PeerId.Coil(_) =>
             throw new IllegalStateException("PeerLiaisonHeadToHead runs only on a head peer")
@@ -78,52 +78,52 @@ abstract class PeerLiaisonHeadToHead(
     private val backend = persistence.backend
     private val blockBacking = OutboxBacking.block(backend, b => config.canLeadFast(b.blockNum))
     private val stackBacking = OutboxBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
-    private val requestBacking = OutboxBacking.request(backend, ownNum)
-    private val softAckBacking = OutboxBacking.softAck(backend, ownNum)
-    private val hardAckBacking = OutboxBacking.hardAck(backend, ownNum)
-    private val hubHardAckBacking = OutboxBacking.hubHardAck(backend, ownNum)
+    private val requestBacking = OutboxBacking.request(backend, ownHeadPeerNum)
+    private val softAckBacking = OutboxBacking.softAck(backend, ownHeadPeerNum)
+    private val hardAckBacking = OutboxBacking.hardAck(backend, ownHeadPeerNum)
+    private val hubHardAckBacking = OutboxBacking.hubHardAck(backend, ownHeadPeerNum)
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
       outboundNext = config.nextOwnLeaderBlock,
       inboundNext = after => Some(remoteHead.nextLeaderBlock(after)),
-      load = blockBacking.load
+      backfill = blockBacking.backfill
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       numberOf = _.stackNum,
       zero = StackNumber.zero,
       outboundNext = config.nextOwnSlowLeaderStack,
       inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after)),
-      load = stackBacking.load
+      backfill = stackBacking.backfill
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
       RequestNumber.zero,
       _.increment,
       config.peerLiaisonMaxRequestsPerBatch,
-      load = requestBacking.load
+      backfill = requestBacking.backfill
     )
     private val softAckLane =
         LaneBidirectional.contiguous[SoftAck, SoftAckNumber](
           _.ackNum,
           SoftAckNumber.zero.increment,
           _.increment,
-          load = softAckBacking.load
+          backfill = softAckBacking.backfill
         )
     private val hardAckLane =
         LaneBidirectional.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
           HardAckNumber.zero,
           _.increment,
-          load = hardAckBacking.load
+          backfill = hardAckBacking.backfill
         )
     private val hubHardAckLane =
         LaneBidirectional.contiguous[HardAckWithId, HubHardAckNumber](
           _.seqNum,
           HubHardAckNumber.zero,
           _.increment,
-          load = hubHardAckBacking.load
+          backfill = hubHardAckBacking.backfill
         )
 
     // ---- Connections ----------------------------------------------------------------------------
@@ -317,13 +317,15 @@ abstract class PeerLiaisonHeadToHead(
       * on a **hub** head peer (its own `HubHardAck` is persisted by `CoilAckSequencer`); it is cold
       * on a non-hub.
       */
-    private def restoreHighWaters: IO[Unit] =
-        blockBacking.highWater.flatMap(blockLane.seedHighWaterOutbox) >>
-            stackBacking.highWater.flatMap(stackLane.seedHighWaterOutbox) >>
-            requestBacking.highWater.flatMap(requestLane.seedHighWaterOutbox) >>
-            softAckBacking.highWater.flatMap(softAckLane.seedHighWaterOutbox) >>
-            hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox) >>
-            hubHardAckBacking.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
+    private def restoreOutboundHighWaters: IO[Unit] =
+        for {
+            _ <- blockBacking.highWater.flatMap(blockLane.seedHighWaterOutbox)
+            _ <- stackBacking.highWater.flatMap(stackLane.seedHighWaterOutbox)
+            _ <- requestBacking.highWater.flatMap(requestLane.seedHighWaterOutbox)
+            _ <- softAckBacking.highWater.flatMap(softAckLane.seedHighWaterOutbox)
+            _ <- hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox)
+            _ <- hubHardAckBacking.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
+        } yield ()
 
     /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
       * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
@@ -336,9 +338,18 @@ abstract class PeerLiaisonHeadToHead(
         val remoteNum = remoteHead.peerNum
         OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreInbound) >>
             OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreInbound) >>
-            OutboxBacking.request(backend, remoteNum).highWater.flatMap(requestLane.restoreInbound) >>
-            OutboxBacking.softAck(backend, remoteNum).highWater.flatMap(softAckLane.restoreInbound) >>
-            OutboxBacking.hardAck(backend, remoteNum).highWater.flatMap(hardAckLane.restoreInbound) >>
+            OutboxBacking
+                .request(backend, remoteNum)
+                .highWater
+                .flatMap(requestLane.restoreInbound) >>
+            OutboxBacking
+                .softAck(backend, remoteNum)
+                .highWater
+                .flatMap(softAckLane.restoreInbound) >>
+            OutboxBacking
+                .hardAck(backend, remoteNum)
+                .highWater
+                .flatMap(hardAckLane.restoreInbound) >>
             OutboxBacking
                 .hubHardAck(backend, remoteNum)
                 .highWater
@@ -368,7 +379,7 @@ abstract class PeerLiaisonHeadToHead(
             // Restore each lane's own-produced high-water; the Server half hot-loads older entries
             // from the store on the remote's Mesh.Get, and replay / live production re-appends the
             // tail. An empty store leaves every lane cold.
-            _ <- restoreHighWaters
+            _ <- restoreOutboundHighWaters
             // Restore the inbound receive cursors so we re-pull only NEW remote entries.
             _ <- restoreInboundCursors
             _ <- puller.start

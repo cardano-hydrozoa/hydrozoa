@@ -11,12 +11,16 @@ import org.scalatest.funsuite.AnyFunSuite
   */
 class LaneOutboundTest extends AnyFunSuite {
 
+    // A lane with an empty durable backing: a reply below the in-memory floor finds nothing.
+    private val emptyBackfill: (Int, Int) => IO[List[Int]] = (_, _) => IO.pure(Nil)
+
     private def contiguousFrom(first: Int, maxPerReply: Int = 1): LaneOutbound[Int, Int] =
         LaneOutbound.contiguous[Int, Int](
           numberOf = identity,
           first = first,
           increment = _ + 1,
-          maxPerReply
+          maxPerReply,
+          backfill = emptyBackfill
         )
 
     // Sparse own-led schedule: the lane's zero (0) is the bootstrap sentinel, never led. This side
@@ -25,7 +29,8 @@ class LaneOutboundTest extends AnyFunSuite {
         LaneOutbound.sparse[Int, Int](
           numberOf = identity,
           zero = 0,
-          next = after => Some(if after % 2 == 0 then after + 2 else after + 1)
+          next = after => Some(if after % 2 == 0 then after + 2 else after + 1),
+          backfill = emptyBackfill
         )
 
     test("contiguous append enforces gap-free order from the first number") {
@@ -70,14 +75,14 @@ class LaneOutboundTest extends AnyFunSuite {
 
     test("reply hot-loads from the store when the cursor is below the in-memory outbox floor") {
         // A stub store holding 0..4; on recovery the lane restores only its high-water (empty
-        // outbox), so a pull below the in-memory floor is served from the store via `load`.
+        // outbox), so a pull below the in-memory floor is served from the store via `backfill`.
         val store = (0 to 4).toList
         val lane = LaneOutbound.contiguous[Int, Int](
           numberOf = identity,
           first = 0,
           increment = _ + 1,
           maxPerReply = 2,
-          load = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
+          backfill = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
         )
         lane.seedHighWater(Some(4)).unsafeRunSync()
         // Outbox empty → served from the store.
@@ -98,7 +103,7 @@ class LaneOutboundTest extends AnyFunSuite {
           first = 0,
           increment = _ + 1,
           maxPerReply = 1,
-          load = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
+          backfill = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
         )
         lane.seedHighWater(Some(3)).unsafeRunSync()
         lane.append(2).unsafeRunSync() // re-broadcast of an already-durable ack: no throw
@@ -117,7 +122,8 @@ class LaneOutboundTest extends AnyFunSuite {
         // above the high-water still raises (the baseline is 3, not None).
         val _ = assertThrows[AppendOutOfOrder](lane.append(5).unsafeRunSync())
         lane.append(4).unsafeRunSync()
-        // No loader → the restored prefix is not in memory; a pull below the tail is empty.
+        // Empty backing → the restored prefix is not in memory and the store has nothing to
+        // backfill; a pull below the tail is empty.
         assert(lane.reply(2).unsafeRunSync() == Items(Nil))
     }
 
