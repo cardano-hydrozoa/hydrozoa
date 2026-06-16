@@ -26,14 +26,14 @@ object FamilyScan:
     /** Hot-load up to `limit` payloads from `from`'s family, starting at `from`'s index
       * (inclusive), decoding each value with `decode` and keeping only those `keep` accepts. Stops
       * at the first `limit` kept payloads or end-of-family, whichever comes first — a bounded read
-      * (the early stop makes it cheap even on a long family). Returns the kept payloads in ascending
-      * index order.
+      * (the early stop makes it cheap even on a long family). Returns the kept payloads in
+      * ascending index order.
       *
       * Used by the liaison outbound lanes ([[hydrozoa.multisig.consensus.liaison.LaneOutbound]]) to
       * serve a remote's `*.Get` from the store when the requested entry is below the in-memory
-      * outbox floor — so a liaison reseeds only its live/replayed tail and reads the older prefix on
-      * demand rather than eagerly loading its whole own production. `keep` filters a spine family to
-      * this peer's own-led entries (the satellites are already single-author per CF).
+      * outbox floor — so a liaison reseeds only its live/replayed tail and reads the older prefix
+      * on demand rather than eagerly loading its whole own production. `keep` filters a spine
+      * family to this peer's own-led entries (the satellites are already single-author per CF).
       */
     def loadFrom[T](
         backend: BackendStore[IO],
@@ -94,8 +94,7 @@ object FamilyScan:
         scanFamilies(backend, cursors.scanFloors)
 
     /** Scan every family named by `floors`, returning one entry list per family — the
-      * family-agnostic core used by both the head [[ReplayCursors.scanFloors]] and the coil
-      * [[CoilReplayCursors.scanFloors]].
+      * family-agnostic core behind [[ReplayCursors.scanFloors]].
       */
     def scanFamilies(
         backend: BackendStore[IO],

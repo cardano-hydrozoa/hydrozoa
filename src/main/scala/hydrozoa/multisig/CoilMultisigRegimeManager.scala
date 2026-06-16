@@ -155,7 +155,7 @@ trait CoilMultisigRegimeManager(
             // HubHardAck + this coil peer's own CoilHardAck) and seed BlockWeaver's first L1
             // PollResults. Run INLINE here (Plan A) so every send queues behind each actor's PreStart
             // and drains in order once the barrier opens. Cold store ⇒ near-no-op.
-            _ <- ReplayActor.replayCoil(
+            _ <- ReplayActor.replay(
               persistence,
               cardanoBackend,
               ReplayActor.Targets(
@@ -164,9 +164,12 @@ trait CoilMultisigRegimeManager(
                 slowConsensusActor = slowConsensusActor,
                 stackComposer = stackComposer
               ),
-              own = ownCoilNum,
+              own = PeerId.Coil(ownCoilNum),
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
+              // A coil peer is never a hub, so it re-feeds no coil-ack gap (its Targets carries no
+              // CoilAckSequencer either — the gap step is a no-op).
+              coils = Nil,
               treasuryAddress = config.initializationTx.treasuryProduced.address
             )(using config)
 

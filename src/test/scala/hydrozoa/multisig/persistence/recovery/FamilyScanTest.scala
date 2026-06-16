@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.traverse.*
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -108,7 +108,8 @@ class FamilyScanTest extends AnyFunSuite:
                   peers,
                   Nil,
                   highWater,
-                  hardAckedStack = Some(StackNumber(1))
+                  hardAckedStack = Some(StackNumber(1)),
+                  own = PeerId.Head(HeadPeerNumber(0))
                 )
 
             // For each family: a few indices below its floor (must be skipped) and a few at/above it

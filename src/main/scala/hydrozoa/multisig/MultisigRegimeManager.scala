@@ -215,7 +215,7 @@ trait MultisigRegimeManager(
                 stackComposer = stackComposer,
                 coilAckSequencer = coilAckSequencer
               ),
-              own = ownHeadNum,
+              own = PeerId.Head(ownHeadNum),
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
               coils = hubbedCoilPeers,

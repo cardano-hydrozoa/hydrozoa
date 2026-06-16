@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence.recovery
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId.*
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -15,6 +15,8 @@ import org.scalatest.funsuite.AnyFunSuite
 class ReplayCursorsTest extends AnyFunSuite:
 
     private val peers = List(HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(2))
+
+    private val ownHead: PeerId = PeerId.Head(HeadPeerNumber(0))
 
     private def rid(peer: Int, num: Long): RequestId =
         RequestId(HeadPeerNumber(peer), RequestNumber(num))
@@ -74,7 +76,8 @@ class ReplayCursorsTest extends AnyFunSuite:
               peers,
               Nil,
               hw,
-              hardAckedStack = Some(StackNumber(4))
+              hardAckedStack = Some(StackNumber(4)),
+              own = ownHead
             )
 
         // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = fastBlockMark + 1.
@@ -131,10 +134,14 @@ class ReplayCursorsTest extends AnyFunSuite:
               peers,
               Nil,
               Map.empty,
-              hardAckedStack = Some(StackNumber(2))
+              hardAckedStack = Some(StackNumber(2)),
+              own = ownHead
             )
         assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
-        assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(6)), "fastBlockMark 5 + 1")
+        assert(
+          cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(6)),
+          "fastBlockMark 5 + 1"
+        )
         assert(cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(0)))
         assert(
           cursors.stackSpineForComposer == FamilyKey.Stack(StackNumber(3)),
@@ -151,7 +158,8 @@ class ReplayCursorsTest extends AnyFunSuite:
           peers,
           Nil,
           Map.empty,
-          hardAckedStack = None
+          hardAckedStack = None,
+          own = ownHead
         )
 
         assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
@@ -167,7 +175,15 @@ class ReplayCursorsTest extends AnyFunSuite:
 
     test("scanFloors enumerates exactly 2 + 3N families (no hubs; spines collapse to confirmed)") {
         val cursors =
-            ReplayCursors.derive(Markers(None, None, None), None, peers, Nil, Map.empty, None)
+            ReplayCursors.derive(
+              Markers(None, None, None),
+              None,
+              peers,
+              Nil,
+              Map.empty,
+              None,
+              own = ownHead
+            )
         assert(cursors.scanFloors.size == 2 + 3 * peers.size)
         // The spines in scanFloors are the lower (aggregator) floor, not the ledger one.
         assert(cursors.scanFloors.contains(cursors.blockSpineForAggregator))
@@ -177,11 +193,36 @@ class ReplayCursorsTest extends AnyFunSuite:
     test("derive: hub HubHardAck cursors scan from 0; scanFloors grows to 2 + 3N + H") {
         val hubs = List(HeadPeerNumber(0), HeadPeerNumber(1))
         val cursors =
-            ReplayCursors.derive(Markers(None, None, None), None, peers, hubs, Map.empty, None)
+            ReplayCursors.derive(
+              Markers(None, None, None),
+              None,
+              peers,
+              hubs,
+              Map.empty,
+              None,
+              own = ownHead
+            )
         hubs.foreach(h =>
             assert(cursors.hubHardAcks(h) == FamilyKey.HubHardAck(h, HubHardAckNumber.zero))
         )
         assert(cursors.hubHardAcks.size == hubs.size)
         assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
         hubs.foreach(h => assert(cursors.scanFloors.contains(cursors.hubHardAcks(h))))
+        // A head peer carries no own CoilHardAck floor.
+        assert(cursors.ownCoilHardAck.isEmpty)
+    }
+
+    test("derive: a coil peer adds its own CoilHardAck floor; scanFloors grows by one") {
+        val hubs = List(HeadPeerNumber(1))
+        val own = PeerId.Coil(CoilPeerNumber(0))
+        val cursors =
+            ReplayCursors.derive(Markers(None, None, None), None, peers, hubs, Map.empty, None, own)
+        assert(
+          cursors.ownCoilHardAck.contains(
+            FamilyKey.CoilHardAck(CoilPeerNumber(0), HardAckNumber.zero)
+          )
+        )
+        // 2 spines + 3N satellites + H hubs + 1 own CoilHardAck.
+        assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size + 1)
+        assert(cursors.scanFloors.contains(cursors.ownCoilHardAck.get))
     }

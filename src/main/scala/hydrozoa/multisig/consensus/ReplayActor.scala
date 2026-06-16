@@ -5,12 +5,12 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, CoilReplayCursors, FamilyScan, RawFamilyEntry, ReplayCursors}
+import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, FamilyScan, RawFamilyEntry, ReplayCursors}
 import hydrozoa.multisig.persistence.{FamilyKey, Markers, Persistence, StoreKey}
 import scalus.cardano.address.ShelleyAddress
 
@@ -31,11 +31,11 @@ import scalus.cardano.address.ShelleyAddress
   *      "crash mid-stack" case) — from its persisted `Stack.Unsigned` + this peer's hard-acks, and
   *      hand it to `SlowConsensusActor` so it re-forms its cell and re-aggregates. StackComposer
   *      stays out of the acked band (its recover treats acked stacks as closed).
-  *   3. Derive the `2 + 3N + H` [[ReplayCursors]], scan every lane from its floor, total-order the
-  *      tail by arrival stamp ([[ArrivalOrderedMerge]]), and route each entry into the reading
-  *      actor's mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck
-  *      → SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
-  *      `softAcked+1`, Stack spine → StackComposer at `hardAcked+1`).
+  *   3. Derive the [[ReplayCursors]], scan every lane from its floor, total-order the tail by
+  *      arrival stamp ([[ArrivalOrderedMerge]]), and route each entry into the reading actor's
+  *      mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck /
+  *      CoilHardAck → SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
+  *      `fastBlockMark+1`, Stack spine → StackComposer at `hardAcked+1`).
   *   4. (Hub only) re-feed `CoilAckSequencer` the received-but-unstamped coil-ack gap — for each
   *      hubbed coil, the `CoilHardAck` tail above its `CoilStampMark` floor — so the `HubHardAck`
   *      spine is rebuilt through the normal stamp path (see [[replayCoilAckGap]]).
@@ -56,16 +56,20 @@ object ReplayActor:
         coilAckSequencer: Option[CoilAckSequencer.Handle] = None
     )
 
-    /** Run the boot replay (see the object docstring). Pure over the store + a one-shot L1 read;
-      * all effects are mailbox sends to `targets`. `peers` is every head peer (own included),
+    /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
+      * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the shared
+      * steps are common to both peer types; the single residual peer-type branch is on `own`, the
+      * slow-side own-ack family: a head peer reads its own hard-acks from `HardAck`, a coil peer
+      * from `CoilHardAck` (§10 Q10). `peers` is every head peer (own included on a head peer),
       * `hubs` every hub head peer (their `HubHardAck` families carry the coil quorum SCA
-      * aggregates); `own` and `treasuryAddress` come from the node config.
+      * aggregates, read by both peer types), `coils` the hubbed coils whose ack gap a hub re-feeds
+      * (`Nil` off a hub). `own` and `treasuryAddress` come from the node config.
       */
     def replay(
         persistence: Persistence[IO],
         cardanoBackend: CardanoBackend[IO],
         targets: Targets,
-        own: HeadPeerNumber,
+        own: PeerId,
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         coils: List[CoilPeerNumber],
@@ -73,21 +77,34 @@ object ReplayActor:
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
         for
-            markers <- Markers.derive(backend, own)
             fastBlockMark <- Markers.recoverFastBlockMark(backend)
-            hardAckedStack <- markers.hardAcked.traverse(n =>
-                persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
-            )
+            softConfirmed <- Markers.recoverSoftConfirmed(backend)
+            hardConfirmed <- Markers.recoverHardConfirmed(backend)
+            // The ONE residual peer-type branch: the slow-side own-ack family. A head peer reads its
+            // own hard-acks from `HardAck`, a coil peer from `CoilHardAck` (§10 Q10) — both the acked
+            // stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks come
+            // from this family. Everything outside this match is shared.
+            ownAck <- own match
+                case PeerId.Head(h) => recoverOwnAck(persistence, h, hardConfirmed)
+                case PeerId.Coil(c) => recoverOwnAckCoil(persistence, c, hardConfirmed)
+            (hardAckedStack, inflight) = ownAck
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
-            _ <- validateInvariants(markers, fastBlockMark, hardAckedStack)
+            _ <- validateInvariants(softConfirmed, hardConfirmed, fastBlockMark, hardAckedStack)
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
             _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
-            _ <- reconstructInflightHandoff(persistence, own, markers.hardConfirmed, hardAckedStack)
-                .flatMap(_.traverse_(targets.slowConsensusActor ! _))
+            _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
             highWater <- recoverHighWater(persistence, fastBlockMark)
-            cursors = ReplayCursors.derive(markers, fastBlockMark, peers, hubs, highWater, hardAckedStack)
+            cursors = ReplayCursors.derive(
+              Markers(softConfirmed, hardConfirmed, None),
+              fastBlockMark,
+              peers,
+              hubs,
+              highWater,
+              hardAckedStack,
+              own
+            )
             perLane <- FamilyScan.scanFamilies(backend, cursors)
             _ <- ArrivalOrderedMerge
                 .merge(perLane)
@@ -104,12 +121,14 @@ object ReplayActor:
             //    its receive cursor, but a crash between that and the stamp can leave a tail the coil
             //    will never re-serve. Replaying it through the normal stamp path rebuilds the
             //    HubHardAck spine — the sequencer itself is a thin counter and does not scan.
+            //    `coilAckSequencer` is present only on a hub, so this is a no-op off a hub.
             _ <- targets.coilAckSequencer.traverse_(replayCoilAckGap(persistence, coils, _))
         yield ()
 
-    /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap floor
-      * per coil is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the tail is
-      * the `CoilHardAck` entries above it, which the sequencer stamps via its normal `HardAck` path.
+    /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap
+      * floor per coil is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the
+      * tail is the `CoilHardAck` entries above it, which the sequencer stamps via its normal
+      * `HardAck` path.
       */
     private def replayCoilAckGap(
         persistence: Persistence[IO],
@@ -126,90 +145,70 @@ object ReplayActor:
             }
         }
 
-    /** The coil counterpart of [[replay]] (§10 Q10), run inline by
-      * [[hydrozoa.multisig.CoilMultisigRegimeManager]] before its start barrier. A coil peer
-      * differs in its anchors and the extra coil-quorum families (see [[CoilReplayCursors]]): the
-      * fast side resumes from `coilBlockMark = max(BlockResult)` (it authors no soft-ack), the slow
-      * side from the last own `CoilHardAck`, and the replay tail additionally carries the hubs'
-      * `HubHardAck` families + this coil peer's own `CoilHardAck`. `peers` is every head peer;
-      * `hubs` every hub.
+    /** Read the head peer's own slow-side anchors: the acked stack (StackComposer/aggregator floor,
+      * unpacked from the last own `HardAck` value — the `HardAckNumber → StackNumber` gap, §10 Q9)
+      * and the in-flight handoff. The own ack family is `HardAck`.
       */
-    def replayCoil(
+    private def recoverOwnAck(
         persistence: Persistence[IO],
-        cardanoBackend: CardanoBackend[IO],
-        targets: Targets,
-        own: CoilPeerNumber,
-        peers: List[HeadPeerNumber],
-        hubs: List[HeadPeerNumber],
-        treasuryAddress: ShelleyAddress
-    )(using CardanoNetwork.Section): IO[Unit] =
-        val backend = persistence.backend
+        own: HeadPeerNumber,
+        hardConfirmed: Option[StackNumber]
+    )(using
+        CardanoNetwork.Section
+    ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
         for
-            softConfirmed <- Markers.recoverSoftConfirmed(backend)
-            hardConfirmed <- Markers.recoverHardConfirmed(backend)
-            coilBlockMark <- Markers.recoverFastBlockMark(backend)
-            coilHardAcked <- Markers.recoverCoilHardAcked(backend, own)
-            coilHardAckedStack <- coilHardAcked.traverse(n =>
+            hardAcked <- Markers.recoverHardAcked(persistence.backend, own)
+            hardAckedStack <- hardAcked.traverse(n =>
+                persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
+            )
+            inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
+        yield (hardAckedStack, inflight)
+
+    /** Coil counterpart of [[recoverOwnAck]]: the own ack family is `CoilHardAck` (§10 Q10). */
+    private def recoverOwnAckCoil(
+        persistence: Persistence[IO],
+        own: CoilPeerNumber,
+        hardConfirmed: Option[StackNumber]
+    )(using
+        CardanoNetwork.Section
+    ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
+        for
+            coilHardAcked <- Markers.recoverCoilHardAcked(persistence.backend, own)
+            hardAckedStack <- coilHardAcked.traverse(n =>
                 persistence.getOrFail(FamilyKey.CoilHardAck(own, n)).map(_.payload.stackNum)
             )
-            _ <- validateInvariantsCoil(
-              softConfirmed,
-              hardConfirmed,
-              coilBlockMark,
-              coilHardAckedStack
-            )
-            // 1. First L1 sample → BlockWeaver (a coil peer follows blocks, like a head follower).
-            _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
-            // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA, with
-            //    its own acks read from CoilHardAck.
-            _ <- reconstructInflightHandoffCoil(persistence, own, hardConfirmed, coilHardAckedStack)
-                .flatMap(_.traverse_(targets.slowConsensusActor ! _))
-            // 3. Derive coil cursors, scan all lanes (head families + hubs' HubHardAck + own
-            //    CoilHardAck), total-order, route the tail into mailboxes.
-            highWater <- recoverHighWater(persistence, coilBlockMark)
-            cursors = CoilReplayCursors.deriveCoil(
-              softConfirmed,
-              hardConfirmed,
-              coilBlockMark,
-              coilHardAckedStack,
-              peers,
-              hubs,
+            inflight <- reconstructInflightHandoffCoil(
+              persistence,
               own,
-              highWater
+              hardConfirmed,
+              hardAckedStack
             )
-            perLane <- FamilyScan.scanFamilies(backend, cursors.scanFloors)
-            _ <- ArrivalOrderedMerge
-                .merge(perLane)
-                .traverse_(
-                  route(
-                    _,
-                    cursors.blockSpineForLedger.num,
-                    cursors.stackSpineForComposer.num,
-                    targets
-                  )
-                )
-        yield ()
+        yield (hardAckedStack, inflight)
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
       * (`confirmed ≤ acked` — we confirm only what we have acked). A violation means a torn or
       * regressed store, so refuse to start — the raise fails `MultisigRegimeManager.preStartLocal`.
       * (The recover seams already fail-safe on a missing snapshot via `getOrFail`; this catches the
-      * marker-vs-marker inconsistency before any replay is fed.)
+      * marker-vs-marker inconsistency before any replay is fed.) Shared by both peer types: the
+      * fast arm checks `softConfirmed ≤ fastBlockMark`, the slow arm
+      * `hardConfirmed ≤ hardAckedStack`.
       */
     private def validateInvariants(
-        markers: Markers,
+        softConfirmed: Option[BlockNumber],
+        hardConfirmed: Option[StackNumber],
         fastBlockMark: Option[BlockNumber],
         hardAckedStack: Option[StackNumber]
     ): IO[Unit] =
-        val softOk = (markers.softConfirmed, fastBlockMark) match
+        val softOk = (softConfirmed, fastBlockMark) match
             case (Some(confirmed), Some(acked)) => Ordering[BlockNumber].lteq(confirmed, acked)
             case _                              => true
-        val hardOk = (markers.hardConfirmed, hardAckedStack) match
+        val hardOk = (hardConfirmed, hardAckedStack) match
             case (Some(confirmed), Some(acked)) => Ordering[StackNumber].lteq(confirmed, acked)
             case _                              => true
         IO.raiseUnless(softOk && hardOk)(
           new IllegalStateException(
-            s"Recovery refused: store inconsistency (confirmed > acked). markers=$markers, " +
+            s"Recovery refused: store inconsistency (confirmed > acked). " +
+                s"softConfirmed=$softConfirmed hardConfirmed=$hardConfirmed " +
                 s"fastBlockMark=$fastBlockMark, hardAckedStack=$hardAckedStack"
           )
         )
@@ -261,8 +260,8 @@ object ReplayActor:
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
     /** The per-peer request high-water at `fastBlockMark` (the fast anchor; the RequestLane resume
-      * floor source, §5.3), or empty for a cold store. Shared by the head [[replay]] and coil
-      * [[replayCoil]] — both anchor the request high-water on `max(BlockResult)`.
+      * floor source, §5.3), or empty for a cold store. Both peer types anchor the request
+      * high-water on `max(BlockResult)`.
       */
     private def recoverHighWater(
         persistence: Persistence[IO],
@@ -271,29 +270,6 @@ object ReplayActor:
         fastBlockMark match
             case None    => IO.pure(Map.empty)
             case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
-
-    /** Coil counterpart of [[validateInvariants]]: a confirmed mark must not exceed the coil peer's
-      * anchors (`softConfirmed ≤ coilBlockMark`, `hardConfirmed ≤ coilHardAckedStack`).
-      */
-    private def validateInvariantsCoil(
-        softConfirmed: Option[BlockNumber],
-        hardConfirmed: Option[StackNumber],
-        coilBlockMark: Option[BlockNumber],
-        coilHardAckedStack: Option[StackNumber]
-    ): IO[Unit] =
-        val softOk = (softConfirmed, coilBlockMark) match
-            case (Some(confirmed), Some(acked)) => Ordering[BlockNumber].lteq(confirmed, acked)
-            case _                              => true
-        val hardOk = (hardConfirmed, coilHardAckedStack) match
-            case (Some(confirmed), Some(acked)) => Ordering[StackNumber].lteq(confirmed, acked)
-            case _                              => true
-        IO.raiseUnless(softOk && hardOk)(
-          new IllegalStateException(
-            s"Coil recovery refused: store inconsistency (confirmed > acked). " +
-                s"softConfirmed=$softConfirmed coilBlockMark=$coilBlockMark " +
-                s"hardConfirmed=$hardConfirmed coilHardAckedStack=$coilHardAckedStack"
-          )
-        )
 
     /** Coil counterpart of [[reconstructInflightHandoff]]: the in-flight stack's own acks come from
       * the coil peer's `CoilHardAck` lane (not `HardAck`); everything else is identical.
@@ -325,9 +301,9 @@ object ReplayActor:
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
     /** Route one decoded lane entry into the reading actor's mailbox. Family-agnostic (shared by
-      * the head [[replay]] and the coil [[replayCoil]]): spines fan out to two roles, sliced by the
-      * ledger floor (the aggregator already gets everything scanned from its lower floor): blocks
-      * to FastConsensusActor always (scanned from `softConfirmed+1`) and to BlockWeaver only
+      * both peer types in [[replay]]): spines fan out to two roles, sliced by the ledger floor (the
+      * aggregator already gets everything scanned from its lower floor): blocks to
+      * FastConsensusActor always (scanned from `softConfirmed+1`) and to BlockWeaver only
       * `≥ blockLedgerFloor`; stacks to StackComposer only `≥ stackComposerFloor` (the acked band's
       * single stack is handled by the reconstructed handoff, not its brief). The coil-quorum
       * families route to `SlowConsensusActor`: `CoilHardAck` carries a `HardAck` directly,

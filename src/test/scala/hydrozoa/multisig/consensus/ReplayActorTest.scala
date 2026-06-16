@@ -106,15 +106,15 @@ class ReplayActorTest extends AnyFunSuite:
           coils = List(coil)
         )
         assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
-        val fed = c.coilAckSeq.collect { case h: HardAck => (h.hardAckNum: Int) }
+        val fed = c.coilAckSeq.collect { case h: HardAck => h.hardAckNum: Int }
         assert(fed == Vector(1, 2), s"gap = acks above the mark (1,2), none <= 0; got $fed")
     }
 
     test(
-      "ReplayActor.replayCoil routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
+      "ReplayActor.replay (coil) routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
     ) {
         val c = runReplayCoil(seedRecoverableCoil)
-        assert(c.outcome.isRight, s"replayCoil failed: ${c.outcome}")
+        assert(c.outcome.isRight, s"coil replay failed: ${c.outcome}")
         // BlockWeaver: first PollResults + the block brief (>= coilBlockMark+1 = 3).
         assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
         assert(hasBlock(c.bw, 5), "BW block 5")
@@ -176,7 +176,7 @@ class ReplayActorTest extends AnyFunSuite:
                               persistence,
                               cardanoBackend,
                               ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
-                              own,
+                              PeerId.Head(own),
                               peers,
                               hubs,
                               coils,
@@ -194,7 +194,7 @@ class ReplayActorTest extends AnyFunSuite:
             )
             .unsafeRunSync()
 
-    /** Coil counterpart of [[runReplay]]: boot four probes + a mock L1, seed, run `replayCoil` with
+    /** Coil counterpart of [[runReplay]]: boot four probes + a mock L1, seed, run `replay` with
       * coil params (own coil 0, all head peers, a single hub head peer 1), settle, capture.
       */
     private def runReplayCoil(seed: Persistence[IO] => IO[Unit]): Captured =
@@ -217,13 +217,14 @@ class ReplayActorTest extends AnyFunSuite:
                         sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
                         _ <- seed(persistence)
                         outcome <- ReplayActor
-                            .replayCoil(
+                            .replay(
                               persistence,
                               cardanoBackend,
                               ReplayActor.Targets(bw, fca, sca, sc),
-                              CoilPeerNumber(0),
+                              PeerId.Coil(CoilPeerNumber(0)),
                               peers,
                               hubs,
+                              Nil,
                               treasuryAddress
                             )
                             .attempt
@@ -282,9 +283,9 @@ class ReplayActorTest extends AnyFunSuite:
             _ <- p.put(FamilyKey.Stack(StackNumber(2)))(FamilyValue(stamp, s2))
         } yield ()
 
-    /** softConfirmed = 5 but fastBlockMark = max(BlockResult) = 2 → confirmed > acked, a torn store.
-      * `validateInvariants` reads only the SoftConfirmation key and the BlockResult key, so a dummy
-      * value byte suffices for the former and a real `BlockResult` for the latter.
+    /** softConfirmed = 5 but fastBlockMark = max(BlockResult) = 2 → confirmed > acked, a torn
+      * store. `validateInvariants` reads only the SoftConfirmation key and the BlockResult key, so
+      * a dummy value byte suffices for the former and a real `BlockResult` for the latter.
       */
     private def seedInconsistent(p: Persistence[IO]): IO[Unit] =
         for {
@@ -326,7 +327,7 @@ class ReplayActorTest extends AnyFunSuite:
             )
             unsigned <- unsignedStack(1)
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(unsigned)
-            // The coil fast anchor: max(BlockResult) = 2 (replayCoil reads only the key), with its
+            // The coil fast anchor: max(BlockResult) = 2 (replay reads only the key), with its
             // request high-water.
             br <- blockResult(2)
             _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)

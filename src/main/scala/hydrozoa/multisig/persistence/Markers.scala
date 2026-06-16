@@ -32,8 +32,8 @@ final case class Markers(
 
 object Markers:
     /** Read all three markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
-      * per-author CF split each satellite CF holds exactly one author's family, so the own `hardAcked`
-      * mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
+      * per-author CF split each satellite CF holds exactly one author's family, so the own
+      * `hardAcked` mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
       */
     def derive(backend: BackendStore[IO], own: HeadPeerNumber): IO[Markers] =
         (
@@ -56,12 +56,25 @@ object Markers:
 
     /** The shared fast-side anchor: `fastBlockMark = max(BlockResult.key)`, the highest block this
       * peer durably finalized, or `None` for an empty store. The `BlockResult` CF is written every
-      * block by every peer (§6), so this anchor is identical for head and coil peers: on a head peer
-      * `max(BlockResult)` equals `max(own SoftAck)` (both written in the same atomic per-block batch),
-      * and a coil peer authors no soft-ack at all. `JointLedger` and `ReplayActor` read it on boot.
+      * block by every peer (§6), so this anchor is identical for head and coil peers: on a head
+      * peer `max(BlockResult)` equals `max(own SoftAck)` (both written in the same atomic per-block
+      * batch), and a coil peer authors no soft-ack at all. `JointLedger` and `ReplayActor` read it
+      * on boot.
       */
     def recoverFastBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
+
+    /** The head slow-side anchor: `hardAcked = max(own HardAck.key)` — the head peer's last own
+      * hard-ack number, or `None` for an empty store. The head counterpart of
+      * [[recoverCoilHardAcked]]; exposed standalone so the unified boot replay reads just this mark
+      * without the broader [[derive]] (which also re-scans the soft/hard-confirmation spines the
+      * caller already holds).
+      */
+    def recoverHardAcked(
+        backend: BackendStore[IO],
+        own: HeadPeerNumber
+    ): IO[Option[HardAckNumber]] =
+        backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
 
     /** The coil slow-side anchor: `hardAcked = max(own CoilHardAck.key)` — the coil peer's last own
       * hard-ack number, or `None` for an empty store. A coil peer's own hard-acks live in its
