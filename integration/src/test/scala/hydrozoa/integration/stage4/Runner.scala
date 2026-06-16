@@ -5,9 +5,9 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.implicits.*
 import hydrozoa.integration.stage4.Model.*
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import org.scalacheck.commands.{AnyCommand, LoggingControl}
+import org.scalacheck.commands.AnyCommand
 import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
 
 import scala.concurrent.duration.DurationInt
@@ -108,27 +108,24 @@ object Stage4Runner:
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
     )(using ContraTracer[IO, Slf4jMsg]): IO[Unit] =
-        renderTable(initialState, commands).flatMap(s => IO(println(s)))
+        renderTable(initialState, commands).flatMap(IO.println)
 
 @main def stage4PrintCommandSequence(): Unit =
-    given ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("stage4"))
-    val prop = LoggingControl.withSuppressedLogs("stage4 command sequence generation") {
-        PropertyM.monadicIO {
-            for
-                initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
-                    nPeers = 3,
-                    meanInterArrivalTime = p =>
-                        (p: Int) match
-                            case 0 => 30.seconds
-                            case 1 => 8.seconds
-                            case _ => 15.seconds
-                ))
-                commandsResult <- Stage4Runner.generateCommands(initialState, 300)
-                (_, commands)   = commandsResult
-                _              <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
-            yield Prop.passed
-        }
+    given ContraTracer[IO, Slf4jMsg] = ContraTracer.nullTracer
+    val prop = PropertyM.monadicIO {
+        for
+            initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
+                nPeers = 3,
+                meanInterArrivalTime = p =>
+                    (p: Int) match
+                        case 0 => 30.seconds
+                        case 1 => 8.seconds
+                        case _ => 15.seconds
+            ))
+            commandsResult <- Stage4Runner.generateCommands(initialState, 300)
+            (_, commands)   = commandsResult
+            _              <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
+        yield Prop.passed
     }
     val _ = Test.check(Test.Parameters.default.withMinSuccessfulTests(1), prop)
 

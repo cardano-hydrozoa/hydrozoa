@@ -5,50 +5,10 @@ import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
 import cats.Monad
-import ch.qos.logback.classic.Level
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, error, info, warn}
 import org.scalacheck.{Gen, Prop, PropertyM}
-import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
-
-/** Utility for temporarily changing log levels. */
-object LoggingControl {
-
-    /** Temporarily suspends ALL loggers with a warning message.
-      *
-      * @param reason
-      *   A description of why logging is being suspended (e.g., "command generation")
-      * @param block
-      *   The code to execute with logging suspended
-      */
-    def withSuppressedLogs[A](reason: String)(block: => A): A = {
-        import ch.qos.logback.classic.LoggerContext
-
-        import scala.jdk.CollectionConverters.*
-
-        val loggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
-        val allLoggers = loggerContext.getLoggerList.asScala.toList
-
-        // Save original levels
-        val originalLevels = allLoggers.map(logger => (logger, logger.getLevel))
-
-        // Print warning before suspending logs
-        println(s"⚠️  All loggers are suspended while $reason...")
-
-        try {
-            allLoggers.foreach(_.setLevel(Level.OFF))
-            block
-        } finally {
-            originalLevels.foreach { case (logger, level) => logger.setLevel(level) }
-        }
-    }
-}
-
-/** TODO:
-  *   - Reproducibility (now seeding is broken)
-  *   - Shrinking?
-  */
 
 // ===================================
 // Command typeclasses
