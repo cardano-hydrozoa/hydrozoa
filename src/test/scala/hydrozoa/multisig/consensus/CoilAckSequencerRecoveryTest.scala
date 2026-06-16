@@ -40,8 +40,11 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
         )
     }
 
-    test("recover restores nextSeq = max(HubHardAck) + 1 and the per-coil marks from CoilStampMark") {
-        val marks = Map(CoilPeerNumber(0) -> HardAckNumber(6), CoilPeerNumber(1) -> HardAckNumber(2))
+    test(
+      "recover restores nextSeq = max(HubHardAck) + 1 and the per-coil marks from CoilStampMark"
+    ) {
+        val marks =
+            Map(CoilPeerNumber(0) -> HardAckNumber(6), CoilPeerNumber(1) -> HardAckNumber(2))
         val recovered = run { p =>
             for {
                 // Three sequenced coil acks → nextSeq = 3.

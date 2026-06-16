@@ -189,8 +189,8 @@ object CoilAckSequencer {
         marks: Map[CoilPeerNumber, HardAckNumber]
     )
 
-    /** Derive [[Recovered]]: `nextSeq = max(HubHardAck seqNum) + 1` (empty → `zero`, the last key of
-      * the own-hub CF), and the per-coil marks from the `CoilStampMark` singleton (empty → no
+    /** Derive [[Recovered]]: `nextSeq = max(HubHardAck seqNum) + 1` (empty → `zero`, the last key
+      * of the own-hub CF), and the per-coil marks from the `CoilStampMark` singleton (empty → no
       * marks). Both are cheap reads — no full-family scan.
       */
     def recover(persistence: Persistence[IO], hub: HeadPeerNumber): IO[Recovered] =

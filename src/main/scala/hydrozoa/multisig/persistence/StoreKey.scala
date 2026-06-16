@@ -160,9 +160,9 @@ object StoreKey:
 
     /** Key for [[Cf.CoilStampMark]] — a hub's per-coil stamped-high-water blob
       * `Map[CoilPeerNumber, HardAckNumber]` (the highest coil `HardAckNumber` sequenced onto this
-      * hub's `HubHardAck` spine, per coil), rewritten in the same atomic batch as each `HubHardAck`.
-      * `CoilAckSequencer.recover` reads it to stamp the durable inbound coil hard-acks
-      * (`CoilHardAck`) above each mark that a crash left unstamped (§6). A singleton.
+      * hub's `HubHardAck` spine, per coil), rewritten in the same atomic batch as each
+      * `HubHardAck`. `CoilAckSequencer.recover` reads it to stamp the durable inbound coil
+      * hard-acks (`CoilHardAck`) above each mark that a crash left unstamped (§6). A singleton.
       */
     case object CoilStampMark extends StoreKey:
         type Value = Map[CoilPeerNumber, HardAckNumber]

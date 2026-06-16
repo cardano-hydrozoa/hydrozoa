@@ -6,8 +6,8 @@ import io.circe.{Decoder, Encoder}
 
 /** Persistence-layer JSON codec for the value at `StoreKey.CoilStampMark` — a hub's per-coil
   * stamped-high-water blob `Map[CoilPeerNumber, HardAckNumber]`, rewritten on each `HubHardAck`
-  * stamp. `CoilAckSequencer.recover` reads it to find the durable coil hard-acks
-  * (`CoilHardAck`) still needing stamping after a crash (§6).
+  * stamp. `CoilAckSequencer.recover` reads it to find the durable coil hard-acks (`CoilHardAck`)
+  * still needing stamping after a crash (§6).
   *
   * `CoilPeerNumber` carries a `KeyEncoder`/`KeyDecoder` and `HardAckNumber` a `Codec`, so Circe's
   * automatic `Map` instances suffice — these givens just name them for `StoreCodec.fromCirce`.
