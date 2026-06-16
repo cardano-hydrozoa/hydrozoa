@@ -88,11 +88,34 @@ class LaneOutboundTest extends AnyFunSuite {
         assert(lane.reply(2).unsafeRunSync() == Items(List(2, 3)))
     }
 
+    test("append at or below the high-water is a no-op (absorbs a replay re-broadcast)") {
+        // The store holds 0..3; on recovery the lane restores high-water = 3 (e.g. round-2), queue
+        // empty. SlowConsensusActor then re-broadcasts the in-flight stack's round-1 (= 2, below the
+        // high-water) — this must be a no-op, not an out-of-order error.
+        val store = (0 to 3).toList
+        val lane = LaneOutbound.contiguous[Int, Int](
+          numberOf = identity,
+          first = 0,
+          increment = _ + 1,
+          maxPerReply = 1,
+          load = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
+        )
+        lane.seedHighWater(Some(3)).unsafeRunSync()
+        lane.append(2).unsafeRunSync() // re-broadcast of an already-durable ack: no throw
+        // It is still servable — hot-loaded from the store, since the queue stayed empty.
+        val _ = assert(lane.reply(2).unsafeRunSync() == Items(List(2)))
+        // A genuinely new item (high-water + 1) still appends; a gap above it still raises.
+        lane.append(4).unsafeRunSync()
+        val _ = assert(lane.reply(4).unsafeRunSync() == Items(List(4)))
+        assert(intercept[AppendOutOfOrder](lane.append(6).unsafeRunSync()).attempted == "6")
+    }
+
     test("seedHighWater sets the append baseline without populating the outbox") {
         val lane = contiguousFrom(0)
         lane.seedHighWater(Some(3)).unsafeRunSync()
-        // The next append must continue from the high-water, not the cold `first`.
-        val _ = assertThrows[AppendOutOfOrder](lane.append(3).unsafeRunSync())
+        // The next *new* item must continue from the high-water (4), not the cold `first`; a gap
+        // above the high-water still raises (the baseline is 3, not None).
+        val _ = assertThrows[AppendOutOfOrder](lane.append(5).unsafeRunSync())
         lane.append(4).unsafeRunSync()
         // No loader → the restored prefix is not in memory; a pull below the tail is empty.
         assert(lane.reply(2).unsafeRunSync() == Items(Nil))
