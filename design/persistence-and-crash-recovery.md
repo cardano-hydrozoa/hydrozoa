@@ -825,15 +825,13 @@ Each contract has four fields — **State**, **Recover** (how it is rebuilt),
 
 #### `RequestSequencer`
 
-- **State:** next `RequestNumber` (`nLedgerEvent`, starts `0`).
+- **State:** next `RequestNumber` (`nextRequestNumRef`, starts `0`).
 - **Recover:** `next = max(persisted own RequestWithId).requestNum + 1` (empty →
   `0`). CR3 is a corollary of CR4 here.
 - **Inputs:** `UserRequest.Sync` — user-originated, droppable (crash before
   persist → user resubmits).
 - **Persists:** the produced `UserRequestWithId`, **before `dResponse.complete(id)`**
   — before the user is told the id, not merely before broadcast (CR1/CR4).
-  - ⚠ **Finding (current code):** it completes `dResponse` then sends, persisting
-    nothing. The barrier must precede telling the user the id.
 - **Coil peer:** **inert.** It fills the shared `Connections` slot but no HTTP
   surface routes requests to it and a coil peer authors none (`coil-network.md`
   §5.2), so on a coil peer it has nothing to persist or recover.
@@ -848,28 +846,35 @@ way** — restore per-remote cursors, start with empty queues, serve the outbox 
 - **State:** per-remote cursors (the `GetMsgBatch` fields — `batchNum`,
   `requestNum`, `blockNum`, `softAckNum`, `hardAckNum`, and, where the link carries
   them, `hubHardAckNum`), in/out queues, current requesting batch.
-- **Recover:** each outbound lane restores **only its high-water**
-  (`max(family key)`, payload-free — `OutboxBacking.highWater`) and leaves its
-  queue **empty**; the outbox is a **DB-backed view** — on `GetMsgBatch` from R,
-  `LaneOutbound.reply` serves the in-memory tail if it holds R's cursor, else
-  hot-loads the prefix below the outbox floor from the family
-  (`OutboxBacking.load`). The high-water is the gap-free `append` baseline and the
-  out-of-bounds guard; replay and live production re-append the tail on top —
-  including not-yet-persisted in-flight entries (e.g. the in-flight stack's own
-  hard-ack, which `SlowConsensusActor` re-broadcasts during replay *after* this
-  restore, so the lane carries it in memory before it is durable). In steady state
-  the queue is a write-through cache, so a cold cache *is* recovery — same
-  procedure. The whitepaper already prunes these outboxes by **remote
+- **Recover.** Everything that ever reaches a liaison outbox is **persisted before
+  it is appended** (CR4 — nothing leaves the process undurable), so the family is the
+  source of truth and the outbox is only a cache. Recovery therefore restores almost
+  nothing:
+  - **Queue stays empty.** No payloads are eagerly seeded; it fills only as live
+    production appends new items, and `reply` hot-loads anything else from the family
+    on demand.
+  - **One scalar is restored** — the high-water number (`lastAppended = max(family
+    key)`, payload-free — `OutboxBacking.highWater`). It is not state to serve; it
+    exists so (a) the first post-crash `append` is legal — live production resumes at
+    `high-water + 1`, and `append` is gap-free (requires `next(lastAppended)`), so a
+    cold `None` would make it throw — and (b) it is `reply`'s out-of-bounds bound
+    (`next(lastAppended)`) for a remote that re-pulls before we append anything.
+  - **Serving is a DB-backed view.** On `GetMsgBatch` from R, `LaneOutbound.reply`
+    returns the in-memory tail if it holds R's cursor, else hot-loads the prefix from
+    the family (`OutboxBacking.load`). Because every served entry is persisted, the
+    family always backs it — the cache need never be authoritative.
+- In steady state the queue is a write-through cache, so a cold cache *is* recovery —
+  same procedure. The whitepaper already prunes these outboxes by **remote
   `GetMsgBatch` cursors**, not local confirmation, *"so that messages can be
   retransmitted if needed during recovery scenarios"* ([peer-network](https://)
   `#outbox-queues-and-confirmation`); persistence extends that retransmissibility
   across a process restart, not just a transient disconnect. Reading from the
   store on demand (rather than eagerly seeding the whole own production) also
   bounds the in-memory outbox to the live tail.
-- **Inputs:** remote family entries — **cursor-gated (CR8)**.
-- **Persists:** inbound remote family entries (CR8); each persisted value carries
-  a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation, monotonic)` at
-  receipt. The boundary that durably stores data it did not produce.
+- **Inputs:** remote lane entries — **cursor-gated (CR8)**.
+- **Persists:** each inbound remote lane entry into its family (CR8); each persisted
+  value carries a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation,
+  monotonic)` at receipt. The boundary that durably stores data it did not produce.
   `PeerLiaisonHubToCoil` additionally writes its coil peer's inbound `HardAck` to
   the `CoilHardAck` receive family (so the hub can stamp a received-but-unstamped ack
   from the store after a crash — §6 `CoilAckSequencer`), the one extra inbound-persist
@@ -925,14 +930,18 @@ out, but signs nothing — so it recovers by restore, like the other boundaries.
   the `HubHardAck` CF, **no stored counter** (the same no-marker-CF principle as
   `RequestSequencer`'s `max(own Request) + 1`). The per-coil marks are read from the
   **`CoilStampMark`** singleton blob (a cheap point read, not a `HubHardAck` scan).
-  Then the sequencer **loads and stamps the gap**: for each coil it serves, the
-  `CoilHardAck` entries above its mark — durably received (the liaison persisted them
-  before advancing its receive cursor, CR8) but left unstamped by a crash between the
-  cursor advance and the stamp. The coil will never re-serve them, so they are
-  recovered from the store, not from a re-delivery; stamping fans out exactly as a
-  live ack would (so it runs after connections are wired).
-- **Inputs:** coil peers' `HardAck`s arriving via the hub's `PeerLiaisonHubToCoil`s
-  — each **exactly once** (next-expected cursor + restored receive cursor).
+  That is the sequencer's whole boot — it does **not** scan for the gap. The
+  unstamped gap is **replayed by the `ReplayActor`** (step 4 of [[replay]], hub
+  only): using each coil's `CoilStampMark` as the floor, it scans the `CoilHardAck`
+  tail above it — durably received (the liaison persisted it before advancing its
+  receive cursor, CR8) but left unstamped by a crash between the cursor advance and
+  the stamp — and re-feeds those acks here through the normal `HardAck` path. The
+  coil will never re-serve them, so the spine rebuilds from the store, not from a
+  re-delivery; this runs in the coordinated pre-barrier replay, like every other
+  durable input family.
+- **Inputs:** coil peers' `HardAck`s — live via the hub's `PeerLiaisonHubToCoil`s
+  (each **exactly once**: next-expected cursor + restored receive cursor), and at
+  boot the `ReplayActor`-replayed gap. Both land on the same `HardAck` path.
 - **Persists:** each newly-sequenced `HardAckWithId` → **`HubHardAck`**, in the
   **same atomic batch** as the bumped per-coil **`CoilStampMark`**, **before** it
   fans out to the mesh + `CoilRelay` (CR4 write-before-send — a re-stamp would
@@ -1652,8 +1661,9 @@ in-flight `StackHandoff` from `UnsignedStack` + the own `CoilHardAck` tail and
 admits the inbound `HubHardAck` families so `SlowConsensusActor` re-reaches the
 coil quorum (§6); the coil peer runs one `PeerLiaisonCoilToHub` instead of the mesh.
 A **hub** additionally restores its `CoilAckSequencer` (`nextSeq` + per-coil
-stamped marks, then stamps any unstamped `CoilHardAck` tail, §6) and its
-`PeerLiaisonHubToCoil` outboxes.
+stamped marks) and has the `ReplayActor` re-feed it any unstamped `CoilHardAck`
+tail (§6), and restores its `PeerLiaisonHubToCoil` outboxes + coil-ack receive
+cursors.
 
 > **Code reality (2026-06).** `CoilMultisigRegimeManager.preStartLocal` does **not
 > yet** call `ReplayActor.replay` — a coil peer boots cold today. The coil replay
@@ -1703,9 +1713,10 @@ stamped marks, then stamps any unstamped `CoilHardAck` tail, §6) and its
 - **Hub crash with in-flight coil acks.** A hub had received coil acks (in
   `CoilHardAck` receive CFs) and sequenced some onto `HubHardAck`. On reboot
   `CoilAckSequencer` recovers `nextSeq = max(HubHardAck) + 1` + the per-coil marks,
-  then **stamps the durably-received-but-unstamped `CoilHardAck` tail** above each
-  mark (the acks a crash between cursor-advance and stamping left behind) — assert
-  every received ack ends up stamped exactly once and no `HubHardAckNumber` is reused
+  and the **`ReplayActor` re-feeds the durably-received-but-unstamped `CoilHardAck`
+  tail** above each mark (the acks a crash between cursor-advance and stamping left
+  behind) — assert every received ack ends up stamped exactly once and no
+  `HubHardAckNumber` is reused
   for a different underlying coil ack.
 - **Coil quorum completes from late acks post-recovery.** A recovered peer's
   in-flight slow-side cell completes as replayed/live `HubHardAck` entries arrive —
@@ -1827,11 +1838,14 @@ committed state is observationally equivalent to the no-crash run.*
     max(HubHardAck where hub == own) + 1` (derived, no stored counter) and the
     per-coil stamped marks from the `CoilStampMark` singleton blob (a point read, not
     a `HubHardAck` scan); each sequenced `HardAckWithId` is persisted to `HubHardAck`
-    in the **same atomic batch** as the bumped mark, **before** fan-out (CR4). On boot
-    the sequencer **stamps the gap** — the `CoilHardAck` tail above each mark, durably
-    received but left unstamped by a crash between the liaison's receive-cursor advance
-    and the stamp. No `(coil, hardAckNum)` idempotency index: the restored receive
-    cursor (Q11) makes re-delivery impossible, so a scalar mark per coil suffices.
+    in the **same atomic batch** as the bumped mark, **before** fan-out (CR4). The
+    unstamped gap — the `CoilHardAck` tail above each mark, durably received but left
+    unstamped by a crash between the liaison's receive-cursor advance and the stamp —
+    is **re-fed by the `ReplayActor`** (step 4 of `replay`, hub only: reads the marks
+    as the floor, scans `CoilHardAck`, routes each to the sequencer's `HardAck` path),
+    so the sequencer itself does not scan and stays a thin counter. No `(coil,
+    hardAckNum)` idempotency index: the restored receive cursor (Q11) makes
+    re-delivery impossible, so a scalar mark per coil suffices.
 13. ~~**`Lane*` → `Family*` rename.**~~ **Resolved.** "Lane" is reserved for the
     peer-liaison transport (§3 vocabulary, `LaneOutbound` / `LaneInbound`); the
     persistence types were renamed `LaneId` / `LaneKey` / `LaneScan` / `LaneValue` /
@@ -1878,7 +1892,7 @@ peers).
 | P8 | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
 | P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped (R4) |
 | — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
-| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`), then stamps the unstamped `CoilHardAck` gap (Q12); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (Q11). | ✅ |
+| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `CoilHardAck` gap to it (Q12); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (Q11). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
 | P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
 | P13 | **Coil boot replay (Q10):** parallel `CoilReplayCursors`/`ReplayActor.replayCoil` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |

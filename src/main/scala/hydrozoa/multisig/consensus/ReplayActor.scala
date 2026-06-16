@@ -36,18 +36,24 @@ import scalus.cardano.address.ShelleyAddress
   *      actor's mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck
   *      → SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
   *      `softAcked+1`, Stack spine → StackComposer at `hardAcked+1`).
+  *   4. (Hub only) re-feed `CoilAckSequencer` the received-but-unstamped coil-ack gap — for each
+  *      hubbed coil, the `CoilHardAck` tail above its `CoilStampMark` floor — so the `HubHardAck`
+  *      spine is rebuilt through the normal stamp path (see [[replayCoilAckGap]]).
   *
   * Inbound is not restored from PeerLiaisonHeadToHead (it forwards, holds no inbound queue); this
   * is the single place that re-feeds the consensus actors from the persisted lane tail.
   */
 object ReplayActor:
 
-    /** The consensus actors the replay tail is routed into. */
+    /** The consensus actors the replay tail is routed into. `coilAckSequencer` is present only on a
+      * hub — the boundary the received-but-unstamped coil-ack gap is re-fed to (see [[replay]]).
+      */
     final case class Targets(
         blockWeaver: BlockWeaver.Handle,
         fastConsensusActor: FastConsensusActor.Handle,
         slowConsensusActor: SlowConsensusActor.Handle,
-        stackComposer: StackComposer.Handle
+        stackComposer: StackComposer.Handle,
+        coilAckSequencer: Option[CoilAckSequencer.Handle] = None
     )
 
     /** Run the boot replay (see the object docstring). Pure over the store + a one-shot L1 read;
@@ -62,6 +68,7 @@ object ReplayActor:
         own: HeadPeerNumber,
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
+        coils: List[CoilPeerNumber],
         treasuryAddress: ShelleyAddress
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
@@ -91,7 +98,32 @@ object ReplayActor:
                     targets
                   )
                 )
+            // 4. (Hub only) re-feed the received-but-unstamped coil-ack gap to CoilAckSequencer:
+            //    PeerLiaisonHubToCoil persisted each inbound ack (CoilHardAck, CR8) before advancing
+            //    its receive cursor, but a crash between that and the stamp can leave a tail the coil
+            //    will never re-serve. Replaying it through the normal stamp path rebuilds the
+            //    HubHardAck spine — the sequencer itself is a thin counter and does not scan.
+            _ <- targets.coilAckSequencer.traverse_(replayCoilAckGap(persistence, coils, _))
         yield ()
+
+    /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap floor
+      * per coil is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the tail is
+      * the `CoilHardAck` entries above it, which the sequencer stamps via its normal `HardAck` path.
+      */
+    private def replayCoilAckGap(
+        persistence: Persistence[IO],
+        coils: List[CoilPeerNumber],
+        coilAckSequencer: CoilAckSequencer.Handle
+    )(using CardanoNetwork.Section): IO[Unit] =
+        persistence.get(StoreKey.CoilStampMark).map(_.getOrElse(Map.empty)).flatMap { marks =>
+            coils.traverse_ { coil =>
+                val from = marks.get(coil).fold(HardAckNumber.zero)(_.increment)
+                val k = FamilyKey.CoilHardAck(coil, from)
+                FamilyScan
+                    .scan(persistence.backend, k)
+                    .flatMap(_.traverse_(e => coilAckSequencer ! k.decodeValue(e.framed).payload))
+            }
+        }
 
     /** The coil counterpart of [[replay]] (§10 Q10), run inline by
       * [[hydrozoa.multisig.CoilMultisigRegimeManager]] before its start barrier. A coil peer

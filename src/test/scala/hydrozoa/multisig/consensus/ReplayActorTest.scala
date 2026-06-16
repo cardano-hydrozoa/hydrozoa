@@ -86,6 +86,30 @@ class ReplayActorTest extends AnyFunSuite:
         assert(c.sca.count(_.isInstanceOf[HardAck]) == 1, "SCA gets the hub-relayed ack")
     }
 
+    test("ReplayActor (hub) re-feeds the unstamped coil-ack gap to CoilAckSequencer") {
+        // The hub durably received coil 0's acks 0..2 (CoilHardAck) but only stamped through 0
+        // (CoilStampMark floor). Replay must re-feed the gap {1, 2} — above the mark — and nothing
+        // at or below it.
+        val coil = CoilPeerNumber(0)
+        val c = runReplay(
+          seed = p =>
+              p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
+                FamilyValue(stamp, coilHardAck(0, 0, stack = 1))
+              ) >>
+                  p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
+                    FamilyValue(stamp, coilHardAck(0, 1, stack = 2))
+                  ) >>
+                  p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(2)))(
+                    FamilyValue(stamp, coilHardAck(0, 2, stack = 3))
+                  ) >>
+                  p.put(StoreKey.CoilStampMark)(Map(coil -> HardAckNumber(0))),
+          coils = List(coil)
+        )
+        assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        val fed = c.coilAckSeq.collect { case h: HardAck => (h.hardAckNum: Int) }
+        assert(fed == Vector(1, 2), s"gap = acks above the mark (1,2), none <= 0; got $fed")
+    }
+
     test(
       "ReplayActor.replayCoil routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
     ) {
@@ -115,6 +139,7 @@ class ReplayActorTest extends AnyFunSuite:
         fca: Vector[FastConsensusActor.Request],
         sca: Vector[SlowConsensusActor.Request],
         sc: Vector[StackComposer.Request],
+        coilAckSeq: Vector[CoilAckSequencer.Request],
         outcome: Either[Throwable, Unit]
     )
 
@@ -123,7 +148,8 @@ class ReplayActorTest extends AnyFunSuite:
       */
     private def runReplay(
         seed: Persistence[IO] => IO[Unit],
-        hubs: List[HeadPeerNumber] = Nil
+        hubs: List[HeadPeerNumber] = Nil,
+        coils: List[CoilPeerNumber] = Nil
     ): Captured =
         val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
@@ -142,15 +168,18 @@ class ReplayActorTest extends AnyFunSuite:
                         fca <- system.actorOf(Recorder[FastConsensusActor.Request](fcaSink))
                         sca <- system.actorOf(Recorder[SlowConsensusActor.Request](scaSink))
                         sc <- system.actorOf(Recorder[StackComposer.Request](scSink))
+                        seqSink <- Ref.of[IO, Vector[CoilAckSequencer.Request]](Vector.empty)
+                        seq <- system.actorOf(Recorder[CoilAckSequencer.Request](seqSink))
                         _ <- seed(persistence)
                         outcome <- ReplayActor
                             .replay(
                               persistence,
                               cardanoBackend,
-                              ReplayActor.Targets(bw, fca, sca, sc),
+                              ReplayActor.Targets(bw, fca, sca, sc, Some(seq)),
                               own,
                               peers,
                               hubs,
+                              coils,
                               treasuryAddress
                             )
                             .attempt
@@ -159,7 +188,8 @@ class ReplayActorTest extends AnyFunSuite:
                         fcaMsgs <- fcaSink.get
                         scaMsgs <- scaSink.get
                         scMsgs <- scSink.get
-                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, outcome)
+                        seqMsgs <- seqSink.get
+                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, seqMsgs, outcome)
                 )
             )
             .unsafeRunSync()
@@ -202,7 +232,7 @@ class ReplayActorTest extends AnyFunSuite:
                         fcaMsgs <- fcaSink.get
                         scaMsgs <- scaSink.get
                         scMsgs <- scSink.get
-                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, outcome)
+                    } yield Captured(bwMsgs, fcaMsgs, scaMsgs, scMsgs, Vector.empty, outcome)
                 )
             )
             .unsafeRunSync()

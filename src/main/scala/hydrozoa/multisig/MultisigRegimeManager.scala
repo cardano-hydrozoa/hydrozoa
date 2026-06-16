@@ -212,11 +212,13 @@ trait MultisigRegimeManager(
                 blockWeaver = blockWeaver,
                 fastConsensusActor = consensusActor,
                 slowConsensusActor = slowConsensusActor,
-                stackComposer = stackComposer
+                stackComposer = stackComposer,
+                coilAckSequencer = coilAckSequencer
               ),
               own = ownHeadNum,
               peers = config.headPeerIds.map(_.peerNum).toList,
               hubs = config.hubHeadPeerNumbers,
+              coils = hubbedCoilPeers,
               treasuryAddress = config.initializationTx.treasuryProduced.address
             )(using config)
 

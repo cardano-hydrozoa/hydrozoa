@@ -5,7 +5,6 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
@@ -13,8 +12,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.persistence.recovery.FamilyScan
-import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Persistence, StoreKey, WriteBatch}
 import java.nio.ByteBuffer
 import org.typelevel.log4cats.Logger
 
@@ -39,11 +37,12 @@ import org.typelevel.log4cats.Logger
   * `HubHardAckNumber`s for one coil ack). The receive-cursor advance (in the liaison, CR8) and the
   * stamp are separate writes, so a crash between them can leave a coil ack **durably received**
   * (`CoilHardAck`, persisted by the liaison) but **unstamped** — and never re-served. On boot the
-  * sequencer therefore (1) derives `nextSeq = max(HubHardAck where hub == own) + 1` and the per-coil
-  * marks from `CoilStampMark`, then (2) **loads and stamps** the `CoilHardAck` tail above each mark
-  * — closing that gap from the store rather than waiting on a re-delivery that cannot come. No
-  * idempotency index: the restored receive cursor makes re-delivery impossible, so a scalar mark
-  * per coil suffices.
+  * sequencer restores only its state — `nextSeq = max(HubHardAck where hub == own) + 1` and the
+  * per-coil marks from `CoilStampMark`. The unstamped gap is **replayed by the `ReplayActor`**:
+  * using each coil's mark as the floor, it scans the `CoilHardAck` tail above it and re-feeds those
+  * acks through the normal `HardAck` path here, closing the gap from the store rather than from a
+  * re-delivery that cannot come. No idempotency index: the restored receive cursor makes
+  * re-delivery impossible, so a scalar mark per coil suffices.
   */
 trait CoilAckSequencer(
     config: Config,
@@ -91,14 +90,13 @@ trait CoilAckSequencer(
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case CoilAckSequencer.PreStart =>
-            // Restore the counter + per-coil marks, wire connections, then stamp any coil acks a
-            // crash left durably received but unstamped — load-and-stamp from the store, since the
-            // restored receive cursor means they will never be re-served.
+            // Restore the counter + per-coil marks, then wire connections. The received-but-
+            // unstamped coil-ack gap is re-fed by the ReplayActor through the HardAck path below
+            // (using CoilStampMark as the floor), so the sequencer itself does not scan.
             for {
                 recovered <- CoilAckSequencer.recover(persistence, hubPeerNum)
                 _ <- state.seed(recovered)
                 _ <- initializeConnections
-                _ <- stampGap
             } yield ()
         case ack: HardAck =>
             ack.peerId match {
@@ -152,29 +150,6 @@ trait CoilAckSequencer(
             ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(_ ! hubAck)
         )
 
-    /** Stamp every coil's received-but-unstamped tail. For each coil the hub serves, the gap is the
-      * `CoilHardAck` entries above its stamped mark; they are durable (the liaison persisted them
-      * before advancing its receive cursor, CR8) but the crash skipped stamping, and the restored
-      * cursor means they will not be re-served. Runs after connections are wired so the stamped acks
-      * fan out exactly as a live ack would.
-      */
-    private def stampGap: IO[Unit] =
-        config.coilPeers.coilPeerNumbers.traverse_ { coilNum =>
-            for {
-                marks <- state.marks
-                from = marks.get(coilNum).fold(HardAckNumber.zero)(_.increment)
-                gap <- loadCoilHardAcksFrom(coilNum, from)
-                _ <- gap.traverse_(ack => stamp(coilNum, ack).flatMap(fanOut))
-            } yield ()
-        }
-
-    /** The coil's durably-received hard-acks with number `>= from`, ascending — the `CoilHardAck`
-      * family the liaison wrote on receipt.
-      */
-    private def loadCoilHardAcksFrom(coilNum: CoilPeerNumber, from: HardAckNumber): IO[List[HardAck]] =
-        val k = FamilyKey.CoilHardAck(coilNum, from)
-        FamilyScan.scan(persistence.backend, k).map(_.map(e => k.decodeValue(e.framed).payload))
-
     private final class State {
         private val nextSeqRef = Ref.unsafe[IO, HubHardAckNumber](HubHardAckNumber.zero)
         private val marksRef =
@@ -201,9 +176,9 @@ object CoilAckSequencer {
     ): IO[CoilAckSequencer] =
         IO(new CoilAckSequencer(config, persistence, pendingConnections) {})
 
-    // `& HeadConfig.Bootstrap.Section`: for the coil peer list (`coilPeers`) the gap stamper
-    // iterates, and the `CardanoNetwork.Section` the persist codecs need (Bootstrap extends it).
-    type Config = OwnPeerPublic.Section & HeadConfig.Bootstrap.Section
+    // `& CardanoNetwork.Section`: the `WriteBatch.put` codecs in `persistStamp` need it (same
+    // shape as `RequestSequencer.Config`).
+    type Config = OwnPeerPublic.Section & CardanoNetwork.Section
 
     /** The sequencer's recoverable state: the next sequence number to assign and the per-coil
       * stamped-high-water marks, derived from this hub's own `HubHardAck` family and the
