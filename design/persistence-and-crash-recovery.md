@@ -40,34 +40,34 @@ see [timing-rules](https://) `#fallback`).
 so it recovers by the same machinery described here. The two node types diverge in
 a handful of precise, enumerated places — a coil peer never leads either spine,
 authors no user requests, **authors no soft-ack** (its fast-side recovery anchors on
-the shared `BlockResult` CF, §6 `JointLedger`), and routes its own hard-acks through
+the shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and routes its own hard-acks through
 the `CoilHardAck` / `HubHardAck` families rather than the head `HardAck` satellite.
 Those deltas are threaded into each section below rather than quarantined; where a
 mechanism is genuinely identical, that is stated. Hub head peers carry one extra
-recovery contract — the `CoilAckSequencer` re-sequencing boundary (§6).
+recovery contract — the `CoilAckSequencer` re-sequencing boundary ([§6](#6-per-actor-recovery-contracts)).
 
 ### In scope (M5)
 
 - **Both peer types — head and coil.** Durable storage and crash recovery for head
   peers *and* coil peers, over the one shared store. Coil-specific deltas are called
   out inline (search "coil"); the hub-side `CoilAckSequencer` / coil-link liaisons
-  are covered in §6.
+  are covered in [§6](#6-per-actor-recovery-contracts).
 - Durable storage for everything a peer needs to rebuild its crash-time state,
   which splits into two kinds:
     - **The common (consensus) data set** — this peer's replica of the *replicated
       set*: the single-writer families that converge across **all** peers (the
       block / stack spines + the request / soft-ack / hard-ack satellites, plus the
-      coil `CoilHardAck` / `HubHardAck` families; §3). Every peer eventually holds
+      coil `CoilHardAck` / `HubHardAck` families; [§3](#3-consensus-data-the-families)). Every peer eventually holds
       the same set; it is the shared, network-disseminated consensus data.
     - **Peer-local derived data** — what *this* peer computes and keeps for its own
       recovery, **never shared** and not part of the replicated set: per-block
       `BlockResult`s, the soft / hard confirmation records, the passive snapshots
       (deposits map, treasury, evacuation maps), the request high-water and L2
       command number, the sequencer counters / indices (`RequestSequencer`,
-      `CoilAckSequencer`), and store metadata (§3.2, §5.2). Each peer derives these
+      `CoilAckSequencer`), and store metadata ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it), [§5.2](#52-state-recovery-the-base-snapshots)). Each peer derives these
       from the common set; they differ peer to peer (different `hardAcked` marks,
       different in-flight bands) and are stored only because re-deriving them from
-      scratch on every boot would be unsound or too slow (§5.2).
+      scratch on every boot would be unsound or too slow ([§5.2](#52-state-recovery-the-base-snapshots)).
   The line matters for recovery: the common set is replayed (and, post-recovery,
   re-converges over `GetMsgBatch`); the peer-local data is restored from this peer's
   own disk and is **never** requested from anyone else (next bullet).
@@ -128,7 +128,7 @@ observations in).
 > (hub → coil, serving the full population stream), and `PeerLiaisonCoilToHub`
 > (coil → hub, serving only the coil peer's own hard-ack). `PeerLiaison*` denotes
 > all three; they share the pull-based `GetMsgBatch` / `NewMsgBatch` protocol and
-> the same outbox-as-DB-view recovery contract (§6), differing only in which lane
+> the same outbox-as-DB-view recovery contract ([§6](#6-per-actor-recovery-contracts)), differing only in which lane
 > set each carries (`coil-network.md` §5.5). Where a recovery point is specific to
 > one shape, it is named explicitly.
 
@@ -137,14 +137,14 @@ observations in).
 > *same* store, so its consensus actors recover by the same base-state-seed +
 > replay; the only divergences are enumerated where they bite (no own user
 > requests; **no own soft-ack** — its fast side anchors on its `BlockResult` mark,
-> §6 `JointLedger`; own hard-acks in `CoilHardAck`, §6 `StackComposer`). A **hub** head peer carries one
+> [§6](#6-per-actor-recovery-contracts) `JointLedger`; own hard-acks in `CoilHardAck`, [§6](#6-per-actor-recovery-contracts) `StackComposer`). A **hub** head peer carries one
 > extra boundary actor — **`CoilAckSequencer`**, a re-sequencing boundary
 > (`RequestSequencer`-shaped: it assigns a per-hub sequence number to its coil peers'
-> hard-acks and authors the `HubHardAck` family; §6). The hub's stateless
+> hard-acks and authors the `HubHardAck` family; [§6](#6-per-actor-recovery-contracts)). The hub's stateless
 > **`CoilRelay`** fan-out holds no cursor or buffer and so has *nothing* to
 > recover — the boundary/consensus split simply does not apply to it.
 
-**Why this split is the keystone.** It is what makes replay (§5) safe. The line is
+**Why this split is the keystone.** It is what makes replay ([§5](#5-recovery-architecture)) safe. The line is
 **not** a persistence monopoly — both sides write the store (boundaries persist what
 crosses them, CR1/CR8; consensus producers persist their family outputs at creation,
 CR4). It rests on two facts about *recovery*:
@@ -163,7 +163,7 @@ CR4). It rests on two facts about *recovery*:
   **same cursor / equivocation filter the boundaries already run in steady state**: a
   re-emitted output `≤` the boundary's cursor is dropped just as a live duplicate would
   be. That filter — not a deferred boundary start — is why all actors can safely start
-  **together** (§5).
+  **together** ([§5](#5-recovery-architecture)).
 
 ---
 
@@ -183,7 +183,7 @@ entire family. Two family shapes realize that:
   *i* is the only peer that writes entry *i*, but leadership rotates across the
   spine. No single peer authors the whole spine, yet every individual entry still
   has exactly one writer (and each peer's own contribution is a **sparse**
-  subsequence — gaps where others led; §3.1's "per-writer gaps, globally gap-free").
+  subsequence — gaps where others led; [§3.1](#31-the-families--one-cf-per-author)'s "per-writer gaps, globally gap-free").
 
 Either way the defining invariant is **one writer per entry**, so entries never
 conflict and every peer eventually holds a copy of *every* entry. "Replicated" =
@@ -199,7 +199,7 @@ requests is imposed downstream by fast consensus (block briefs), not by the fami
 > transport* view — what a `PeerLiaison*` pulls and serves over `GetMsgBatch`
 > (`LaneOutbound` / `LaneInbound`). A liaison serves a family's entries to a remote
 > *as a lane*; on disk that same sequence is a *family* — and the persistence types are
-> named accordingly: `FamilyId` / `FamilyKey` / `FamilyScan` / `FamilyValue` (§3 vocabulary).
+> named accordingly: `FamilyId` / `FamilyKey` / `FamilyScan` / `FamilyValue` ([§3](#3-consensus-data-the-families) vocabulary).
 
 ### 3.1 The families — one CF per author
 
@@ -210,26 +210,26 @@ per author) attached to a spine.
 **Each satellite author gets its own CF** — the families are **not** multiplexed by
 an author-prefix into one shared CF. One author's CF receives only that author's
 monotonic stream, so it is a clean append-only sequence (non-overlapping L0 SSTables
-→ near-zero compaction), which matters at the request rate (§7). The CF *is* the
+→ near-zero compaction), which matters at the request rate ([§7](#7-storage-design--rocksdb)). The CF *is* the
 author discriminant, so the on-disk key is just the within-author index.
 Consequently the **CF set is derived from head config at open** — fixed for a head
 instance's lifetime (membership changes by closing and re-opening a fresh head, so
-the set never changes under a running store, §7).
+the set never changes under a running store, [§7](#7-storage-design--rocksdb)).
 
 The spines are **common** — a *single* BlockSpine and a *single* StackSpine shared
 by the whole head — while each satellite is **per author**. A head of **N** peers
 therefore has **2 spines + 3·N satellite CFs** (Request / SoftAck / HardAck per head
 peer), and every peer eventually holds a copy of all of them. That `2 + 3N` is the
-head-mesh figure the recovery indices algorithm works over (§5.3).
+head-mesh figure the recovery indices algorithm works over ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)).
 
 With **C** coil peers across **H** hubs the disseminated set grows by **H** hubs'
 `HubHardAck` CFs (`SlowConsensusActor` reads them for the coil quorum). A coil peer
 authors **only** its own `CoilHardAck` family (it never leads a spine, authors no
-request, and **authors no soft-ack** — §2), and that family reaches the population
+request, and **authors no soft-ack** — [§2](#2-two-kinds-of-actor)), and that family reaches the population
 only re-sequenced onto a hub's `HubHardAck`. So a *head* peer works over
 `2 + 3N + H` families; a *coil* peer over `2 + 3N + H` (the disseminated population)
 **plus its own** `CoilHardAck` CF; a *hub* additionally holds a `CoilHardAck` receive
-CF per coil peer it hubs (§5.3).
+CF per coil peer it hubs ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)).
 
 | Family | Writer(s) | Per-author CF? | Index key (within CF) | Pacing | Gap rule | Role |
 |---|---|---|---|---|---|---|
@@ -240,7 +240,7 @@ CF per coil peer it hubs (§5.3).
 | **HardAck** | each head peer | one per head peer | `HardAckNumber` | coverage-paced | cover every stack — all head peers' acks needed to hard-confirm | ratifies StackSpine → hard-confirm |
 
 `SoftAck` is **head-only** — a coil peer authors none, and recovers its fast side
-from the shared `fastBlockMark = max(BlockResult.key)` anchor instead (§6
+from the shared `fastBlockMark = max(BlockResult.key)` anchor instead ([§6](#6-per-actor-recovery-contracts)
 `JointLedger`), so no coil identity enters the `SoftAck` family.
 
 **Coil hard-ack families** (present once any coil peer is configured —
@@ -250,16 +250,16 @@ they feed the hub re-sequencing pipeline, so they get their own family **kinds**
 
 | Family | Writer(s) | Per-author CF? | Index key (within CF) | Pacing | Gap rule | Role |
 |---|---|---|---|---|---|---|
-| **CoilHardAck** | each coil peer (own); a hub also keeps a receive CF per coil peer it hubs | one per coil peer | `HardAckNumber` | author-paced | covers **every** stack — a coil peer hard-acks all (the skip-stack optimization is deferred, §2) | the coil peer's own slow-side ack family; the hub's copy is its receive log |
+| **CoilHardAck** | each coil peer (own); a hub also keeps a receive CF per coil peer it hubs | one per coil peer | `HardAckNumber` | author-paced | covers **every** stack — a coil peer hard-acks all (the skip-stack optimization is deferred, [§2](#2-two-kinds-of-actor)) | the coil peer's own slow-side ack family; the hub's copy is its receive log |
 | **HubHardAck** | each hub | one per hub | `HubHardAckNumber` | hub-paced | gap-free | the re-sequenced, *disseminated* coil-ack family the head mesh + hub→coil links carry; `SlowConsensusActor` reads it to reach the coil quorum |
 
 Only `HubHardAck` is disseminated across the network — a coil peer's raw
 `CoilHardAck` reaches the population only *re-sequenced* onto a hub's `HubHardAck`
-(the raw copy a hub keeps is for hub-crash survival, §6 `CoilAckSequencer`).
+(the raw copy a hub keeps is for hub-crash survival, [§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`).
 
 > **Coil families are slow-side only.** A coil peer touches none of the fast-side
 > author families: no `Request`, no `SoftAck` (its fast recovery anchors on the
-> shared `BlockResult` CF, §6 `JointLedger`). Its only authored family is the
+> shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`). Its only authored family is the
 > slow-side `CoilHardAck` — separate from the head `HardAck` family because a coil
 > hard-ack has a **different dissemination path** (up to its hub, which re-sequences
 > it onto `HubHardAck`), and keeping the raw coil acks in their own kind isolates the
@@ -289,12 +289,12 @@ Structural facts:
   no Request and no SoftAck, and produces no disseminated ack. Its sole authored
   family is `CoilHardAck` (its slow-side acks, re-sequenced onto a hub's `HubHardAck`
   for the population); its fast-side recovery anchors on the shared `BlockResult` CF
-  (§6 `JointLedger`), not on any ack it authors. It *reads* the whole disseminated
+  ([§6](#6-per-actor-recovery-contracts) `JointLedger`), not on any ack it authors. It *reads* the whole disseminated
   population.
 - **A hub additionally authors `HubHardAck`.** A hub is a head peer (so it writes all
   five head families) that also serves coil peers: its `CoilAckSequencer` re-sequences
   its coil peers' hard-acks into the disseminated `HubHardAck` family the population
-  reads to reach the coil quorum (§6).
+  reads to reach the coil quorum ([§6](#6-per-actor-recovery-contracts)).
 - **Dependency:** Request family → BlockSpine → StackSpine; SoftAck family ratifies
   BlockSpine; HardAck family (+ the coil quorum via `HubHardAck`) ratifies StackSpine.
 
@@ -304,18 +304,18 @@ Structural facts:
 |-----------------------------------------------------------------------------------|---|---|
 | User requests + assigned `RequestId`                                              | `RequestSequencer` (own), `PeerLiaison*` (remote) | replayed; own assignments authoritative (CR1) |
 | Block briefs                                                                      | `JointLedger` (own/leader), `PeerLiaison*` (remote) | replayed; own leader briefs authoritative |
-| Soft acks (sig over header, `SoftAck` family, one CF per **head** peer)            | signed + persisted by `JointLedger` (**head peers only**) at creation (own `SoftAck` lane, before the handoff — CR4); announced by `FastConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Each head peer has its own `SoftAck` CF keyed by `SoftAckNumber`; on a head peer `max(own SoftAck CF)` coincides with `fastBlockMark = max(BlockResult)`. A coil peer authors none (it anchors its fast side on `BlockResult`, §6 `JointLedger`). |
-| **Block result** (`BlockResult` CF)                                               | `JointLedger` | per-block JL **deltas** (evac-map diff, payouts, refunds, absorbed deposits, fallback time); keyed by `blockNum`. The `brief` is **not** stored here — it already lives in the `Block` family, rehydrated from there at recovery (`BlockResult.fromPersisted`), so it is not duplicated across two families; the live `JL → StackComposer` message still carries it. Lets `StackComposer` rebuild `pending` from disk on restart without JL re-running the band. Written on **every** peer (head and coil); `max(BlockResult.key)` is the shared fast-side recovery anchor `fastBlockMark` (§6 `JointLedger`), identical on head and coil. On a head peer it equals `max(own SoftAck)`; a coil peer authors no soft-ack. |
+| Soft acks (sig over header, `SoftAck` family, one CF per **head** peer)            | signed + persisted by `JointLedger` (**head peers only**) at creation (own `SoftAck` lane, before the handoff — CR4); announced by `FastConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Each head peer has its own `SoftAck` CF keyed by `SoftAckNumber`; on a head peer `max(own SoftAck CF)` coincides with `fastBlockMark = max(BlockResult)`. A coil peer authors none (it anchors its fast side on `BlockResult`, [§6](#6-per-actor-recovery-contracts) `JointLedger`). |
+| **Block result** (`BlockResult` CF)                                               | `JointLedger` | per-block JL **deltas** (evac-map diff, payouts, refunds, absorbed deposits, fallback time); keyed by `blockNum`. The `brief` is **not** stored here — it already lives in the `Block` family, rehydrated from there at recovery (`BlockResult.fromPersisted`), so it is not duplicated across two families; the live `JL → StackComposer` message still carries it. Lets `StackComposer` rebuild `pending` from disk on restart without JL re-running the band. Written on **every** peer (head and coil); `max(BlockResult.key)` is the shared fast-side recovery anchor `fastBlockMark` ([§6](#6-per-actor-recovery-contracts) `JointLedger`), identical on head and coil. On a head peer it equals `max(own SoftAck)`; a coil peer authors no soft-ack. |
 | **Soft confirmation** (`SoftConfirmation` CF)                                     | `FastConsensusActor` | header + aggregated multisig over the soft-acks, written at confirmation time, keyed by `blockNum`. `softConfirmed` **derives** as `max(SoftConfirmation.key)` — no marker key. Prunes soft-acks. Aggregates **head-peer** acks only (the coil quorum sits on the slow side). |
 | Stack briefs                                                                      | `StackComposer` (own/leader), `PeerLiaison*` (remote) | replayed; own cut authoritative |
 | Hard acks (per-effect, round-1/2/sole)                                            | signed + persisted by `StackComposer` at creation (own `HardAck` lane + `UnsignedStack`, before the handoff — CR4); announced + aggregated by `SlowConsensusActor`; remote acks via `PeerLiaison*` | replayed; own ack authoritative (CR2). Head-peer acks ride `HardAck`; a coil peer's own ride `CoilHardAck` (next rows). |
-| **Unsigned stack** (`UnsignedStack` CF)                                           | `StackComposer` | the closed `Stack.Unsigned` (brief + locally-derived effects), keyed by `stackNum`, written **before** the handoff to `SlowConsensusActor` so SCA re-forms its in-flight cell on recovery (a `HardAck` signs the effects, which a `StackBrief` alone does not carry; §6 `StackComposer`). Written on every close, head or coil. |
-| **Coil hard acks** (`CoilHardAck` CF, coil peers)                                 | `StackComposer` (coil peer, own); a hub's `PeerLiaisonHubToCoil` writes its coil peers' *inbound* acks here | keyed `(CoilPeerNumber, HardAckNumber)`. A coil peer's own slow-side ack family — `hardAcked` derives from its last own entry, exactly as a head peer's derives from `HardAck`. The hub's receive copy is its durable receive log, from which it stamps any unstamped tail after a crash (§6 `CoilAckSequencer`). One entry per stack — a coil peer hard-acks every stack (skip-stack optimization deferred, §2). |
-| **Hub hard acks** (`HubHardAck` CF, hubs)                                         | `CoilAckSequencer` (hub) | the re-sequenced, disseminated coil-ack family, keyed `(HubHeadPeerNumber, HubHardAckNumber)`; carries a `HardAckWithId`. The hub's `nextSeq` derives as `max(HubHardAck where hub == own) + 1` — no stored counter. `SlowConsensusActor` reads all hubs' families to reach the coil quorum (§6 `CoilAckSequencer`). |
+| **Unsigned stack** (`UnsignedStack` CF)                                           | `StackComposer` | the closed `Stack.Unsigned` (brief + locally-derived effects), keyed by `stackNum`, written **before** the handoff to `SlowConsensusActor` so SCA re-forms its in-flight cell on recovery (a `HardAck` signs the effects, which a `StackBrief` alone does not carry; [§6](#6-per-actor-recovery-contracts) `StackComposer`). Written on every close, head or coil. |
+| **Coil hard acks** (`CoilHardAck` CF, coil peers)                                 | `StackComposer` (coil peer, own); a hub's `PeerLiaisonHubToCoil` writes its coil peers' *inbound* acks here | keyed `(CoilPeerNumber, HardAckNumber)`. A coil peer's own slow-side ack family — `hardAcked` derives from its last own entry, exactly as a head peer's derives from `HardAck`. The hub's receive copy is its durable receive log, from which it stamps any unstamped tail after a crash ([§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`). One entry per stack — a coil peer hard-acks every stack (skip-stack optimization deferred, [§2](#2-two-kinds-of-actor)). |
+| **Hub hard acks** (`HubHardAck` CF, hubs)                                         | `CoilAckSequencer` (hub) | the re-sequenced, disseminated coil-ack family, keyed `(HubHeadPeerNumber, HubHardAckNumber)`; carries a `HardAckWithId`. The hub's `nextSeq` derives as `max(HubHardAck where hub == own) + 1` — no stored counter. `SlowConsensusActor` reads all hubs' families to reach the coil quorum ([§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`). |
 | **Hard confirmation** (`HardConfirmation` CF)                                     | `SlowConsensusActor` → `CardanoLiaison` | multisigned effects / SECs / fallbacks **in full**, written at confirmation time, keyed by `stackNum`. `hardConfirmed` **derives** as `max(HardConfirmation.key)` — no marker key. `CardanoLiaison` submits; evacuation reads. Prunes hard-acks. **R10 evacuation floor.** |
-| Deposits map (`DepositMap` CF)                                                    | `JointLedger` | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, §5.3) |
-| Request high-water (`RequestHighWater` CF)                                        | `JointLedger` | **per-block** — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]` giving the highest request from each peer included in any block `≤ blockNum` (cumulative, monotone in `blockNum`). One entry per own soft-ack, bundled with that block. The Request family recovery cursor is `RequestHighWater[fastBlockMark] + 1` per peer. Persisted (not derived) because retention (§5.1) prunes the old briefs a brief-fold would need (§5.3); block-keyed (not a singleton) so the high-water at any committed block is recoverable. |
-| L2 command number (`L2CommandNumber` CF)                                          | `JointLedger` | **per-block** — keyed by `blockNum`, a single `Long`: the L2 ledger's commit counter reached after that block's L2 commits. One entry per own soft-ack, bundled with that block. On recover `JointLedger` reads `L2CommandNumber[fastBlockMark]` and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state (§6). |
+| Deposits map (`DepositMap` CF)                                                    | `JointLedger` | **snapshotted** (one keyed blob, rewritten on every own soft ack — out-of-order subset, [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)) |
+| Request high-water (`RequestHighWater` CF)                                        | `JointLedger` | **per-block** — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]` giving the highest request from each peer included in any block `≤ blockNum` (cumulative, monotone in `blockNum`). One entry per own soft-ack, bundled with that block. The Request family recovery cursor is `RequestHighWater[fastBlockMark] + 1` per peer. Persisted (not derived) because retention ([§5.1](#51-the-markers--all-derived-none-stored)) prunes the old briefs a brief-fold would need ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)); block-keyed (not a singleton) so the high-water at any committed block is recoverable. |
+| L2 command number (`L2CommandNumber` CF)                                          | `JointLedger` | **per-block** — keyed by `blockNum`, a single `Long`: the L2 ledger's commit counter reached after that block's L2 commits. One entry per own soft-ack, bundled with that block. On recover `JointLedger` reads `L2CommandNumber[fastBlockMark]` and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state ([§6](#6-per-actor-recovery-contracts)). |
 | Treasury (`Treasury` CF)                                                          | `StackComposer` | **snapshotted** (one keyed blob, rewritten on every own hard-ack stack-close — rotates per settlement / finalization) |
 | Evacuation maps (`EvacuationMap` CF)                                              | `StackComposer` | **per-block, but only at the blocks that back an on-chain KZG commitment** — every **major** block (its post-diff map is the settlement's `nextKzg`) and every **last-of-partition minor** (the minor that gets a SEC), keyed by `blockNum`. SC folds each block's `evacuationMapDiff` onto the running map and persists the result at those blocks on every own hard-ack stack-close. The maps at other minors commit to nothing on-chain, so the rule-based dispute can never need them. KZG commitment derives from the map, not stored separately. |
 
@@ -331,7 +331,7 @@ own producer at its own moment. Keeping them split is what lets `softConfirmed` 
 while still giving `StackComposer` what it needs to rebuild on restart:
 
 - **`BlockResult` (JL, at ack time).** Per-block JL output, keyed by `blockNum`.
-  Written in JL's own atomic per-soft-ack `WriteBatch` (§6) alongside the soft-ack
+  Written in JL's own atomic per-soft-ack `WriteBatch` ([§6](#6-per-actor-recovery-contracts)) alongside the soft-ack
   / brief / deposits-snapshot. On restart, `StackComposer` loads `BlockResult`s
   for `(StackSpine[hardAcked].lastBlockNum, head]` from disk to rebuild its
   `pending` map — JL itself anchors at `fastBlockMark` and does **not** re-run earlier
@@ -345,7 +345,7 @@ while still giving `StackComposer` what it needs to rebuild on restart:
   effects / SECs / fallbacks **in full**, keyed by `stackNum`. `CardanoLiaison`
   submits the effects; evacuation reads the SECs. Written in SCA's own atomic
   batch alongside the hard-ack prune. The **R10 evacuation floor** — never
-  deleted (§5.1 retention rule).
+  deleted ([§5.1](#51-the-markers--all-derived-none-stored) retention rule).
 
 Storing these as separate artifacts decouples three concerns: when JL writes
 (per ack), when FCA writes (per confirmation), and when SCA writes (per
@@ -376,7 +376,7 @@ last key, no separate marker record to keep consistent.
   this peer is persisted **before** the corresponding message leaves a boundary
   (to a `PeerLiaison*` outbox, to the user, or to L1).
 - **CR6 — Write atomicity.** A crash mid-write leaves the store consistent: a
-  record is fully present or fully absent (one atomic `WriteBatch`, §7).
+  record is fully present or fully absent (one atomic `WriteBatch`, [§7](#7-storage-design--rocksdb)).
 - **CR7 — Recovery within the timing budget.** Total downtime (crash → restart →
   caught-up) must fit the head's inactivity/silence margin, or the peer must fail
   safe (stay down / signal evacuation) rather than rejoin stale.
@@ -392,7 +392,7 @@ last key, no separate marker record to keep consistent.
 **Recovery is initialization against a non-empty store.** There is one boot path;
 a cold start is the degenerate case where the store is empty. The same path runs
 on every boot, so it cannot silently rot, and "test recovery" reduces to "restart
-and observe re-convergence" (§9).
+and observe re-convergence" ([§9](#9-failure-scenarios-to-specify--test)).
 
 **Recovery is therefore re-entrant — a second crash mid-recovery is not special.**
 Because recovery *is* the normal boot path, it makes only the same monotonic,
@@ -405,16 +405,16 @@ next boot re-runs the identical path from wherever the anchor reached and makes
 the same progress.
 Each uninterrupted attempt strictly advances (or completes), so recovery converges
 to the committed state after finitely many interruptions — exactly the
-observational-equivalence property of §9, with the crash placed *inside* the
+observational-equivalence property of [§9](#9-failure-scenarios-to-specify--test), with the crash placed *inside* the
 recovery window.
 
 The boot **starts every actor together** — consensus and boundary alike — and
-lets them run. The §2 split is by *recovery mechanism* (replay vs restore), not by
+lets them run. The [§2](#2-two-kinds-of-actor) split is by *recovery mechanism* (replay vs restore), not by
 *start order*; the two mechanisms run concurrently:
 
 1. **Consensus actors: base-state seed, then replay.** Each is seeded with its
    base snapshot at the side's ack mark (`fastBlockMark` on the fast side, `hardAcked`
-   on the slow; §5.2; empty for the pure aggregators); a central **`ReplayActor`**
+   on the slow; [§5.2](#52-state-recovery-the-base-snapshots); empty for the pure aggregators); a central **`ReplayActor`**
    re-runs the admitted input tail through them, rebuilding state *and* the
    inter-actor signal cascade.
 2. **Boundary actors restore in parallel.** Each loads its own state directly from
@@ -432,7 +432,7 @@ forward progress *should* emit. So there is nothing for a separate "boundary-las
 phase to protect — the cursor filter is load-bearing either way, and deferring
 boundary start **buys nothing**. We start from the simpler all-together shape and
 observe; if a replay re-emission is ever found to leak past the cursor filter, we
-can reintroduce a deferral surgically (§10 Q1) — but only if measurement shows it
+can reintroduce a deferral surgically ([§10](#10-open-questions) Q1) — but only if measurement shows it
 is needed. The all-together start needs **no** topology change: consensus actors
 reference the boundaries through the `Connections` barrier (`pendingConnections`),
 so the boundaries are already in place when consensus starts.
@@ -457,15 +457,15 @@ CF**: each derives from a single-CF scan with no consistency burden of its own.
 | Marker | Side | Definition (and how it's derived) |
 |---|---|---|
 | **`softConfirmed`** | fast | The highest **soft-confirmed** block — `max(SoftConfirmation.key)` (last key in the `SoftConfirmation` CF; empty store → no soft confirmations). Identical on head and coil (both aggregate the head-peer soft-acks into `SoftConfirmation`). |
-| **`fastBlockMark`** (shared anchor — not a `Markers` field) | fast | The fast-side **acked** mark — the highest block we durably finalized — `fastBlockMark = max(BlockResult.key)`, derived by `Markers.recoverFastBlockMark`. **Identical on head and coil**: the `BlockResult` CF is written every block by every peer, so on a **head** peer `max(BlockResult)` equals `max(own SoftAck CF)` (both written in the same atomic per-block batch), and a **coil** peer authors no soft-ack at all. `JointLedger`'s recover is one routine off this mark on either peer type (§6 `JointLedger`). |
+| **`fastBlockMark`** (shared anchor — not a `Markers` field) | fast | The fast-side **acked** mark — the highest block we durably finalized — `fastBlockMark = max(BlockResult.key)`, derived by `Markers.recoverFastBlockMark`. **Identical on head and coil**: the `BlockResult` CF is written every block by every peer, so on a **head** peer `max(BlockResult)` equals `max(own SoftAck CF)` (both written in the same atomic per-block batch), and a **coil** peer authors no soft-ack at all. `JointLedger`'s recover is one routine off this mark on either peer type ([§6](#6-per-actor-recovery-contracts) `JointLedger`). |
 | **`hardConfirmed`** | slow | The highest **hard-confirmed** stack — `max(HardConfirmation.key)` (last key in the `HardConfirmation` CF). Identical on head and coil. |
-| **`hardAcked`** | slow | The highest stack **we hard-acked** ourselves — derived from the last own entry in the **`HardAck`** CF on a head peer, or the **`CoilHardAck`** CF on a coil peer (unpack the stack identifier from the value). Covers leader *and* follower acks. On a coil peer the family is dense in `StackNumber` — it hard-acks every stack (skip-stack optimization deferred, §2) — so `max` over its entries gives `hardAcked` directly, as on a head peer. |
+| **`hardAcked`** | slow | The highest stack **we hard-acked** ourselves — derived from the last own entry in the **`HardAck`** CF on a head peer, or the **`CoilHardAck`** CF on a coil peer (unpack the stack identifier from the value). Covers leader *and* follower acks. On a coil peer the family is dense in `StackNumber` — it hard-acks every stack (skip-stack optimization deferred, [§2](#2-two-kinds-of-actor)) — so `max` over its entries gives `hardAcked` directly, as on a head peer. |
 
 The two pairs are independent: fast and slow advance at their own pace. Within a
 side the relation is **`acked ≥ confirmed`** — we ack a block / stack *before* it
 confirms — so the band `[confirmed + 1, acked]` (per side) is
 **acked-by-us-but-not-yet-confirmed**. Its pending confirmations complete from
-late peer acks arriving live post-recovery (§6 aggregator).
+late peer acks arriving live post-recovery ([§6](#6-per-actor-recovery-contracts) aggregator).
 
 On a **coil** peer the marks keep the same meaning and the same `acked ≥ confirmed`
 relation, with the slow acked mark derived from `CoilHardAck`. The fast-side band
@@ -480,7 +480,7 @@ marker key is stored:
 | Marker | Anchors | What that actor reads at boot |
 |---|---|---|
 | `fastBlockMark` (shared anchor — not a `Markers` field) | **`JointLedger*`* | the **`DepositMap`** CF (one keyed blob — the deposits map as of our last own soft ack). `previousBlockHeader` is reloaded from `BlockSpine[fastBlockMark].brief`. JL is at `Done(fastBlockMark)`; SC's `pending` rebuild is **not** JL's burden — SC loads `BlockResult`s directly (next row). |
-| `hardAcked` | **`StackComposer*`* | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (keyed by `blockNum`, written only at committed blocks — major / SEC minor; load `EvacuationMap[StackSpine[hardAcked].lastBlockNum]` for the current map — that last block is always a committed one for a non-final stack, §5.2). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackSpine[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAck family) + 1`) are derived. SC additionally reads `BlockResult` for `(StackSpine[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
+| `hardAcked` | **`StackComposer*`* | **`Treasury`** (one blob — cumulative treasury UTXO ref) + **`EvacuationMap`** (keyed by `blockNum`, written only at committed blocks — major / SEC minor; load `EvacuationMap[StackSpine[hardAcked].lastBlockNum]` for the current map — that last block is always a committed one for a non-final stack, [§5.2](#52-state-recovery-the-base-snapshots)). Counters like `lastClosedStackNum` (= `hardAcked`), `lastClosedBlockNum` (from `StackSpine[hardAcked].brief`), and `nextOwnHardAckNum` (= `max(own HardAck family) + 1`) are derived. SC additionally reads `BlockResult` for `(StackSpine[hardAcked].lastBlockNum, head]` to rebuild `pending`. |
 | `softConfirmed` | **`FastConsensusActor*`* | **Nothing of its own.** Cells `≤ softConfirmed` were dropped the moment they produced their `SoftConfirmation` record; cells `> softConfirmed` are in-flight and rebuilt by replay. |
 | `hardConfirmed` | **`SlowConsensusActor*`* | **Nothing of its own.** Same shape: cells dropped at confirmation; in-flight tail rebuilds from replay. |
 
@@ -494,7 +494,7 @@ the band's briefs + acks.
 
 - **Signers / ledgers** resume at the acked mark `+ 1` (CR2 — no re-signing what we
   already signed). `JointLedger` picks up via `BlockWeaver`'s re-drive from
-  `fastBlockMark + 1` (§6); `StackComposer` from `hardAcked + 1`.
+  `fastBlockMark + 1` ([§6](#6-per-actor-recovery-contracts)); `StackComposer` from `hardAcked + 1`.
 - **Aggregators** resume at `*Confirmed + 1` — their cells
   reconstitute as the replayed briefs + acks land. Anything `≤` the confirmed
   mark has already become a `SoftConfirmation` / `HardConfirmation` record and no
@@ -505,7 +505,7 @@ the band's briefs + acks.
 
 The `2 + 3N + H` per-family resume cursors that the `ReplayActor` uses to seek into
 the store **derive from the markers** — which derive from CF scans — with no
-extra per-family or per-marker storage (§5.3).
+extra per-family or per-marker storage ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)).
 
 Recovery never *writes* a marker (there is none to write); it derives them at
 boot and uses them to drive replay + runtime invariants — ack-pruning, late-ack
@@ -521,11 +521,11 @@ below.
 >    `HardAck`. The confirmation record itself is **retained**, not deleted — for
 >    hard-confirmation it is the full multisigned effects / SECs, i.e. the
 >    **R10 evacuation floor**. This prunes *acks*, never the committed region.
-> 2. **The recovery base (a logical compacted view).** The base snapshot (§5.2)
+> 2. **The recovery base (a logical compacted view).** The base snapshot ([§5.2](#52-state-recovery-the-base-snapshots))
 >    is a compacted *image* of state at the side's ack mark; the `ReplayActor`
 >    replays the entries after it. A read-time construction over a copy — it
 >    deletes nothing from the live store.
-> 3. **RocksDB native compaction (§7)** — the storage engine merging SST files.
+> 3. **RocksDB native compaction ([§7](#7-storage-design--rocksdb))** — the storage engine merging SST files.
 >    Engine-internal, unrelated to either.
 >
 > **Hard rule:** physical deletion from the durable store **never descends below
@@ -554,7 +554,7 @@ These carry **only the non-derivable** passive state on each side:
     - `RequestHighWater` — keyed by `blockNum`, a `Map[HeadPeerNumber, RequestNumber]`
       giving each peer's highest included request as of that block; recovery reads
       the entry at `fastBlockMark`. It is *not* `JointLedger` state; it feeds the
-      Request family recovery cursors (§5.3), written here so the `fastBlockMark` entry
+      Request family recovery cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)), written here so the `fastBlockMark` entry
       stays aligned with the soft-ack and survives brief pruning.
 - slow — **`Treasury`** + **`EvacuationMap`** CFs (`StackComposer`):
     - `Treasury` — one keyed blob, the cumulative treasury UTXO ref at
@@ -591,13 +591,13 @@ These carry **only the non-derivable** passive state on each side:
       successor stack, so no cumulative map is loaded after it.
 
   SC's pairing maps (`pending` / `ready`) and counters rebuild from families +
-  `BlockResult` (§6 `StackComposer`).
+  `BlockResult` ([§6](#6-per-actor-recovery-contracts) `StackComposer`).
 
-The snapshots do **not** carry per-family cursors (those are derived, §5.3), do
+The snapshots do **not** carry per-family cursors (those are derived, [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)), do
 **not** carry the acked-but-unconfirmed band (those briefs / acks are still in
 the family CFs above the side's confirmed mark — unpruned), and do **not** carry
 SC's `pending` map (rebuilt from the `BlockResult` CF on restart — JL writes
-each block's result at ack time, §3.2, §6 `JointLedger`, so SC can load
+each block's result at ack time, [§3.2](#32-what-gets-stored-and-how-recovery-treats-it), [§6](#6-per-actor-recovery-contracts) `JointLedger`, so SC can load
 `(StackSpine[hardAcked].lastBlockNum, head]` directly). The pending soft / hard
 confirmations themselves complete in the **aggregators**
 (`FastConsensusActor` / `SlowConsensusActor`) from the persisted briefs +
@@ -610,7 +610,7 @@ To replay, the `ReplayActor` needs an initial cursor for each family: **2** for
 the shared spines (one BlockSpine, one StackSpine), **+ 3 per head peer** (its
 Request / Soft-ack / Hard-ack satellites), **+ 1 per hub** (its `HubHardAck`
 family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
-(§3.1); a coil peer also replays its own `CoilHardAck` family. Every one of them
+([§3.1](#31-the-families--one-cf-per-author)); a coil peer also replays its own `CoilHardAck` family. Every one of them
 **derives from the markers** via Hydrozoa's monotonicity invariants:
 
 - **Requests** — monotonic per peer: *if a block includes Peer A's Request `N`,
@@ -621,7 +621,7 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   entry (`recoverHighWater` keys on `fastBlockMark`) — *not* recomputed by scanning briefs.
   Folding briefs is unsound: to get *every* peer's high-water you must scan back
   until each peer's latest included request appears (worst case to block 0), and
-  once retention (§5.1) prunes old briefs below the hard-confirmed floor they are
+  once retention ([§5.1](#51-the-markers--all-derived-none-stored)) prunes old briefs below the hard-confirmed floor they are
   gone. The counter sidesteps both — `N` reads, immune to pruning. (This is the one
   request-side datum that *is* stored; the family cursors themselves still derive
   from the markers.)
@@ -641,7 +641,7 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   is a `HardAckNumber` counter, not a `StackNumber`, so the acked-stack floor is
   sourced separately (unpack the stack id from the last own `HardAck` value).
 - **Soft acks** — single consumer (FCA). The soft-ack index *coincides with the
-  block number* (one ack per block, §3.1), so each peer's SoftAck family cursor is the
+  block number* (one ack per block, [§3.1](#31-the-families--one-cf-per-author)), so each peer's SoftAck family cursor is the
   fast-side confirmed mark `+ 1`, exactly the BlockSpine `confirmed` floor.
 - **Requests** — single consumer (`BlockWeaver`), at the per-peer high-water `+ 1`
   (the persisted counter above).
@@ -669,7 +669,7 @@ slow-side acked stack and the hard-ack floors (the hard-ack-family indexing gap)
 to derive. The pending-deposits map mutates on *any* block (a request *adds* a
 deposit; a major block *absorbs* an out-of-order **subset**), so it is neither
 constant nor a marker-findable suffix and cannot be reconstructed from the families.
-It is carried instead as **snapshotted passive state** (§5.2), re-written on every
+It is carried instead as **snapshotted passive state** ([§5.2](#52-state-recovery-the-base-snapshots)), re-written on every
 own soft ack — the one place a snapshot is unavoidable on the fast side.
 
 ### 5.4 Total order of the replayed streams
@@ -678,7 +678,7 @@ Within a family, order is intrinsic — the family's own index (RequestNumber;
 Block/StackNumber; ack index). To order entries *across* the `2 + 3N + H` streams,
 **every persisted family value carries a 12-byte big-endian `ArrivalStamp` prefix**
 — a `(generation, monotonic)` pair (receipt time for inbound entries, creation for
-own ones — §7.1); merging by stamp yields a fixed, durable interleaving — "not
+own ones — [§7.1](#71-key-layout--family-ids)); merging by stamp yields a fixed, durable interleaving — "not
 canonical, but correct."
 
 The stamp must stay comparable **across restarts**, which a bare process-monotonic
@@ -693,15 +693,15 @@ exactly `(generation, monotonic)` order.
 That interleaving is the *one that actually happened*, hence already causally valid
 (nothing was delivered before its prerequisites — it physically couldn't be). The
 consensus tolerates other interleavings too — that robustness is what mechanism (1)
-leans on (§5.6) — so the recorded order isn't strictly required for committed-state
+leans on ([§5.6](#56-the-replay-mechanism)) — so the recorded order isn't strictly required for committed-state
 correctness. It is kept as a **known-good serialization**: a safety net if
-robustness is imperfect, the order the one-by-one oracle (§5.6) replays, and a
+robustness is imperfect, the order the one-by-one oracle ([§5.6](#56-the-replay-mechanism)) replays, and a
 faithful record of the run.
 
 **The stamps order streams; they are not a clock.** Time-dependent decisions do
 *not* replay off them — block-cut timing uses the live wall clock, with committed
 blocks keeping the times in their persisted brief headers and in-flight blocks
-re-cut fresh (§6).
+re-cut fresh ([§6](#6-per-actor-recovery-contracts)).
 
 ### 5.5 The L1 boundary is re-sampled live, not replayed
 
@@ -735,21 +735,21 @@ byte-for-byte the same message `CardanoLiaison` emits in steady state
 (`CardanoLiaison.runEffects` → `blockWeaver ! PollResults(...)`), just sourced
 eagerly by recovery instead of on the poll timer. Subsequent live `PollResults`
 from `CardanoLiaison` flow normally once it is running. This is still the **live**
-L1 read of §5.5 ("re-sampled live, not replayed") — merely *initiated by* the
+L1 read of [§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed) ("re-sampled live, not replayed") — merely *initiated by* the
 `ReplayActor` rather than awaited from the boundary — so it carries the same
 above/below-the-confirmed-mark semantics.
 
 ### 5.6 The replay mechanism
 
 **Replay re-feeds families, and only families.** The replicated set's family entries
-(§3.1) are the sole replay input; every *non-family* input is reproduced, not
+([§3.1](#31-the-families--one-cf-per-author)) are the sole replay input; every *non-family* input is reproduced, not
 replayed — inter-actor signals (`StartBlock`/`CompleteBlock`, the soft-confirm
 fan-out, `GetState`) regenerate from the interior cascade, and L1 poll results
-are re-sampled live (§5.5) — with the `ReplayActor` seeding the first
+are re-sampled live ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) — with the `ReplayActor` seeding the first
 `PollResults` into `BlockWeaver` straight from `CardanoBackend`, rather than waiting
 on `CardanoLiaison`'s poll cadence. So an actor whose inputs are *all* non-family signals
 gets base state but no tail — `JointLedger`, for one, reads no family (`BlockWeaver`
-drives it), so the `ReplayActor` never feeds it (§6). This holds for either
+drives it), so the `ReplayActor` never feeds it ([§6](#6-per-actor-recovery-contracts)). This holds for either
 mechanism below.
 
 Two candidate mechanisms for *how* to feed that family tail; we target **(1)** and
@@ -761,12 +761,12 @@ keep **(2)** as a test oracle.
    `BlockWeaver` the request families; the ack-aggregators the ack families). Then open
    the start barrier and let them run concurrently to the crash state. Fast,
    reuses the existing `Deferred[Connections]` barrier (though a **separate
-   suspend barrier** may be needed to hold actors during seeding — §8, §10 Q1),
+   suspend barrier** may be needed to hold actors during seeding — [§8](#8-boot-sequence), [§10](#10-open-questions) Q1),
    and unifies replay with normal operation (cold boot = the empty-seed case).
-   Boundary actors start *together* with the consensus actors (§5); during replay
+   Boundary actors start *together* with the consensus actors ([§5](#5-recovery-architecture)); during replay
    the interior's external re-emissions reach the running boundaries but are
    dropped by the same cursor filter that suppresses live duplicates (each
-   boundary loads its cursor before processing anything; §5). What is restored is
+   boundary loads its cursor before processing anything; [§5](#5-recovery-architecture)). What is restored is
    the **base snapshot + family-entry tail in mailboxes**; everything else regenerates
    as the tail is processed — you don't capture internal in-flight messages.
 2. **One-by-one + quiescence** *(test oracle, not for production)*. The `ReplayActor`
@@ -804,7 +804,7 @@ that restored nothing else can still fallback, vote, and evacuate.
 ## 6. Per-actor recovery contracts
 
 Each contract has four fields — **State**, **Recover** (how it is rebuilt),
-**Inputs**, **Persists** — and is grouped by §2's split.
+**Inputs**, **Persists** — and is grouped by [§2](#2-two-kinds-of-actor)'s split.
 
 ### 6.1 Boundary actors
 
@@ -886,11 +886,11 @@ differing only in which lanes each serves.
   bounds the in-memory outbox to the live tail.
 - **Inputs:** remote lane entries — **cursor-gated (CR8)**.
 - **Persists:** each inbound remote lane entry into its family (CR8); each persisted
-  value carries a **12-byte `ArrivalStamp` prefix** (§5.4, §7.1) — `(generation,
+  value carries a **12-byte `ArrivalStamp` prefix** ([§5.4](#54-total-order-of-the-replayed-streams), [§7.1](#71-key-layout--family-ids)) — `(generation,
   monotonic)` at receipt. The boundary that durably stores data it did not produce.
   `PeerLiaisonHubToCoil` additionally writes its coil peer's inbound `HardAck` to
   the `CoilHardAck` receive family (so the hub can stamp a received-but-unstamped ack
-  from the store after a crash — §6 `CoilAckSequencer`), the one extra inbound-persist
+  from the store after a crash — [§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`), the one extra inbound-persist
   among the three shapes; it also restores that lane's **receive cursor** to
   `max(CoilHardAck) + 1` on boot, so a coil is re-pulled only for new acks.
 
@@ -914,12 +914,12 @@ differing only in which lanes each serves.
   - `effectInputs: Map[TransactionInput, EffectId]` — the "which effect spends this input" index;
   - `happyPathEffects: TreeMap[EffectId, HappyPathEffect]`;
   - `fallbackEffects: Map[BlockVersion.Major, FallbackTx]`.
-- **Recover:** fold over the **`HardConfirmation` CF** (§3.2, multisigned effects /
+- **Recover:** fold over the **`HardConfirmation` CF** ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it), multisigned effects /
   SECs / fallbacks in full); `targetState` seeded from
   `config.initializationTx.treasuryProduced.utxoId` until stack-0 hard-confirms;
   effects faulted in lazily. **Submission progress is recovered from L1 itself**
   (poll → observe the current treasury utxo) — L1 is the durable truth,
-  re-sampled live (§5.5), so there is no own progress marker.
+  re-sampled live ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)), so there is no own progress marker.
 - **Inputs:** `Stack.HardConfirmed`, `Timeout` (poll tick).
 - **Persists:** nothing of its own (signs nothing ⇒ no CR2; submits multisigned
   txs). The lazy load is `effectInputs(observedInput) → happyPathEffects(effectId)`.
@@ -940,7 +940,7 @@ out, but signs nothing — so it recovers by restore, like the other boundaries.
     highest coil ack number already sequenced onto the spine, per coil. This is not an
     idempotency guard against retransmits (the hub's `PeerLiaisonHubToCoil` restores its
     coil-ack receive cursor on boot, so a coil never re-serves an ack already held —
-    §6.1.2); it is the **floor of the gap** the replay must still stamp.
+    [§6.1.2](#612-peerliaison-three-shapes)); it is the **floor of the gap** the replay must still stamp.
 - **Recover:** `nextSeq = max(HubHardAck.key where hub == own) + 1` — derived from
   the `HubHardAck` CF, **no stored counter** (the same no-marker-CF principle as
   `RequestSequencer`'s `max(own Request) + 1`). The per-coil marks are read from the
@@ -989,21 +989,21 @@ mark onward, regenerating the inter-actor signals deterministically.
   `BlockCreationStart/EndTime` already sit in the persisted brief headers), and a
   block left mid-`Producing` at the crash was never saved or acked, so `BlockWeaver`
   just **cuts a fresh block** under the current clock — a never-committed cut may
-  legitimately differ, and only committed state must match (§9). The transient
+  legitimately differ, and only committed state must match ([§9](#9-failure-scenarios-to-specify--test)). The transient
   `pollResults` is seeded **by the `ReplayActor`**, which reads L1 directly from
   `CardanoBackend` and sends the first `PollResults` rather than waiting on
-  `CardanoLiaison`'s poll cadence (§5.5) — so deposit decisions can proceed
+  `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) — so deposit decisions can proceed
   immediately on replay.
 - **Inputs:** `UserRequestWithId`, `BlockBrief.Next`, `Block.SoftConfirmed`,
   `PollResults` (the first one from the `ReplayActor`'s direct `CardanoBackend`
-  read; later ones live from `CardanoLiaison` — §5.5), `Wakeup`, finalization trigger.
+  read; later ones live from `CardanoLiaison` — [§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)), `Wakeup`, finalization trigger.
 - **Persists:** nothing — authors no family; drives `JointLedger` via
   `StartBlock`/`CompleteBlock{Regular,Final}`, which authors the brief.
 - **Coil peer:** **follower-only** — never enters Leader role, drives `JointLedger`
   from observed `BlockBrief.Next` + relayed requests + `PollResults` exactly as a
   head follower does (`coil-network.md` §5.2). Recovery is identical: it holds no
   persistent state and rebuilds mempool + `nextBlockNumber` from the replay tail
-  off the shared `fastBlockMark + 1` (§5.1).
+  off the shared `fastBlockMark + 1` ([§5.1](#51-the-markers--all-derived-none-stored)).
 
 #### 6.2.2 `JointLedger`
 
@@ -1015,7 +1015,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
     mid-block.
 - **Recover:** restore `Done(previousBlockHeader, deposits)` from two sources —
   load the **`deposits` map** from the snapshot bundled with the `fastBlockMark` ack
-  (§5.1, §5.2), and reload `previousBlockHeader` from `BlockSpine[fastBlockMark]` (its
+  ([§5.1](#51-the-markers--all-derived-none-stored), [§5.2](#52-state-recovery-the-base-snapshots)), and reload `previousBlockHeader` from `BlockSpine[fastBlockMark]` (its
   brief is already persisted there; no need to duplicate it in the snapshot).
   Those two are `JointLedger`'s whole passive state. It then **co-anchors the L2
   ledger**: reads `L2CommandNumber[fastBlockMark]` and calls `l2Ledger.restoreTo(it)` so
@@ -1023,7 +1023,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   note above). (The acked-but-unconfirmed
   band `[softConfirmed + 1, fastBlockMark]` is **not** `JointLedger` state: those
   blocks are already applied — `JointLedger` is at `Done(fastBlockMark)` — and their
-  pending soft-confirmations complete in the **aggregator**, not here; §5.2.)
+  pending soft-confirmations complete in the **aggregator**, not here; [§5.2](#52-state-recovery-the-base-snapshots).)
   `JointLedger` is **not fed by the `ReplayActor`**; `BlockWeaver` replays its own
   tail and re-drives `JointLedger` via `StartBlock`/`CompleteBlock` + forwarded
   requests, reproducing the `[fastBlockMark + 1, head]` blocks. A mid-`Producing`
@@ -1038,7 +1038,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   **every** peer (head and coil), keyed by `blockNum`:
     - the per-block **`BlockResult` deltas** → **`BlockResult`** CF (the `brief` is
       **not** stored — it already lives in the `Block` family and is rehydrated from
-      there at recovery, so it is not duplicated across two families; §3.2) — so
+      there at recovery, so it is not duplicated across two families; [§3.2](#32-what-gets-stored-and-how-recovery-treats-it)) — so
       `StackComposer` can rebuild its `pending` map from disk on restart by loading
       `(StackSpine[hardAcked].lastBlockNum, head]` directly, instead of relying on
       `JointLedger` to re-emit results below the fast anchor,
@@ -1046,7 +1046,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
       overwrites the previous snapshot),
     - the cumulative **request high-water** → **`RequestHighWater`** CF (keyed by
       `blockNum`, a `Map[HeadPeerNumber, RequestNumber]`). Feeds the Request-family
-      recovery cursors (§5.3) — recovery reads the entry at the fast anchor,
+      recovery cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)) — recovery reads the entry at the fast anchor,
     - the **L2 command number** → **`L2CommandNumber`** CF (keyed by `blockNum`, a
       single `Long`): `l2Ledger.currentCommandNumber` read after this block's L2
       commit. On recover `JointLedger` reads the fast-anchor entry and calls
@@ -1055,7 +1055,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   A **head** peer additionally writes, in the same batch, its own `BlockBrief` →
   **`BlockSpine`** (leader only — the spine author) and its own **soft-ack** → its
   own-author **`SoftAck`** CF. A **coil** peer writes neither: it never leads, and it
-  **authors no soft-ack** (§2).
+  **authors no soft-ack** ([§2](#2-two-kinds-of-actor)).
 - **Fast-side anchor — the shared `fastBlockMark`.** The fast side recovers from one
   mark on both peer types: `fastBlockMark = max(BlockResult.key)`
   (`Markers.recoverFastBlockMark`) — the highest block this peer durably finalized.
@@ -1063,7 +1063,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   the header from the `Block` family (present on every peer, leader-written or inbound
   via `persistInbound`) plus the `DepositMap`, then the L2 co-anchor via
   `L2CommandNumber[fastBlockMark]`. No marker key is written — the mark derives from a
-  single-CF scan (§5.1). The persisted `BlockResult` holds only the deltas — its `brief`
+  single-CF scan ([§5.1](#51-the-markers--all-derived-none-stored)). The persisted `BlockResult` holds only the deltas — its `brief`
   is rehydrated from the `Block` family at recovery (`BlockResult.fromPersisted`), not
   stored twice. Soft-**confirmation** is *not* written here — that is
   `FastConsensusActor`'s job (below). The own soft-ack's equivocation guard is a
@@ -1136,14 +1136,14 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
       aggregated multisig over the soft-acks) to the **`SoftConfirmation`** CF
       (keyed by `blockNum`), and prune the now-redundant soft-acks for this
       block from `SoftAck`. No marker key is written — `softConfirmed` derives
-      as `max(SoftConfirmation.key)` (§5.1).
+      as `max(SoftConfirmation.key)` ([§5.1](#51-the-markers--all-derived-none-stored)).
     - `SlowConsensusActor`: write the **`HardConfirmation`** record (multisigned
       effects / SECs / fallbacks in full) to the **`HardConfirmation`** CF
       (keyed by `stackNum`), and prune the now-redundant hard-acks from
       `HardAck`. `CardanoLiaison` submits the effects from this record. No marker
       key written — `hardConfirmed` derives as `max(HardConfirmation.key)`.
 
-  See §3.2.
+  See [§3.2](#32-what-gets-stored-and-how-recovery-treats-it).
 - **Recover (replay):** rebuild only the **in-flight cells** above the side's
   confirmed mark — `FastConsensusActor` for cells `> softConfirmed`,
   `SlowConsensusActor` for cells `> hardConfirmed` — from briefs + acks (fast side)
@@ -1162,7 +1162,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   the signers (`JointLedger` / `StackComposer`), guarded at the `PeerLiaison*`
   boundary (CR2).
 - **Head vs coil.** `FastConsensusActor` aggregates **head-peer** soft-acks into
-  `SoftConfirmation` on both node types — a coil peer authors no soft-ack at all (§6
+  `SoftConfirmation` on both node types — a coil peer authors no soft-ack at all ([§6](#6-per-actor-recovery-contracts)
   `JointLedger`), so FCA on a coil peer has no own ack to add and recovers identically. `SlowConsensusActor` reaches the population quorum by
   aggregating all head-peer `HardAck`s **plus `coilQuorum` coil acks read from the
   `HubHardAck` families**; on recovery those coil acks reconstitute as the replayed
@@ -1199,7 +1199,7 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
     from it), the slow-side analogue of `JointLedger`'s deposits map.
 - **Recover** (same order):
   - `pending` rebuilds **directly from disk** by scanning the **`BlockResult`** CF over
-    `(lastClosedBlockNum, head]` (JL wrote each block's result at ack time, §6
+    `(lastClosedBlockNum, head]` (JL wrote each block's result at ack time, [§6](#6-per-actor-recovery-contracts)
     `JointLedger`); `ready` and the `Block.SoftConfirmed`s for that band come from FCA's
     in-flight replay;
   - `inboundLeaderBrief` comes from the replayed **StackSpine**;
@@ -1212,7 +1212,7 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
   - `treasury` from the `Treasury` CF and `evacuationMap` from
     `EvacuationMap[StackSpine[hardAcked].lastBlockNum]` — the cumulative non-derivable
     state as of `hardAcked` (that key is always present for a non-final `hardAcked`
-    stack: its last block is always committed, §5.2; older committed `EvacuationMap`
+    stack: its last block is always committed, [§5.2](#52-state-recovery-the-base-snapshots); older committed `EvacuationMap`
     entries stay on disk for the rule-based evacuation read, not loaded into SC state).
   - Then close stacks `> hardAcked` — never `≤ hardAcked` (no re-signing, CR2).
 - **Bootstrap vs recovery (one seam, two seeds).** On a **cold** store `PreStart`
@@ -1221,7 +1221,7 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
   `treasury` / `evacuationMap` from `config.initializationTx.treasuryProduced` /
   `config.initialEvacuationMap`. On a **non-empty** store that genesis seed is
   replaced by the loaded snapshot, and stack 0 — long since hard-confirmed — is
-  **not** recomposed. (Cold start is the degenerate case, §5.)
+  **not** recomposed. (Cold start is the degenerate case, [§5](#5-recovery-architecture).)
 - **Inputs:** `BlockResult` (`JointLedger`), `Block.SoftConfirmed` (`FastConsensusActor`),
   `StackBrief` (remote leader, via `PeerLiaison*` — the StackSpine), `Stack.HardConfirmed`
   (`SlowConsensusActor` — arms the next close).
@@ -1250,7 +1250,7 @@ the evacuation map for KZG), and **signs this peer's hard-acks** for the stack.
       the committed blocks — the ones whose map backs an on-chain commitment
       (`StackComposer.committedBlockNums`, mirroring
       `StackEffectsBuilder.mkEffectsRegular`). The intermediate minors' maps
-      back nothing on-chain, so the dispute can never need them (see §5.2).
+      back nothing on-chain, so the dispute can never need them (see [§5.2](#52-state-recovery-the-base-snapshots)).
 
   Bundling the two snapshots with the acks keeps them aligned with the
   `hardAcked` anchor — exactly as deposits ride `JointLedger`'s soft-ack write.
@@ -1336,20 +1336,20 @@ Two further mechanisms we lean on:
       so a write burst on one CF doesn't stall compaction on another.
     - **Bloom-filter scoping** — each SSTable's Bloom filter covers only its own
       CF's keys. A missing-key check in one CF doesn't pay for SSTables in
-      others. A prefix extractor (e.g. the `[peer:1]` byte on satellite CFs, §7.1)
+      others. A prefix extractor (e.g. the `[peer:1]` byte on satellite CFs, [§7.1](#71-key-layout--family-ids))
       further lets a scan skip SSTables that hold no entries for a given peer.
     - **Tag-byte savings** — with the CF as the family discriminant, the
-      encoded key drops the tag byte entirely (§7.1).
+      encoded key drops the tag byte entirely ([§7.1](#71-key-layout--family-ids)).
     - **Per-CF metrics + backup granularity** — observability and (later) backups
       are CF-level.
 
 Our store opens a **config-derived set of CFs** — no marker CF (every marker
-derives from a single-CF scan, §5.1). The set is **fixed-shape CFs** (the two
+derives from a single-CF scan, [§5.1](#51-the-markers--all-derived-none-stored)). The set is **fixed-shape CFs** (the two
 spines, the spine-indexed working/confirmation CFs, the snapshots, `Meta`) **plus
 one CF per satellite author**, the count derived from head config at store-open:
 `2 + 3N + H` for a head peer (`+ C` receive CFs on a hub; `+` its own `CoilHardAck`
 on a coil peer), where **N** head peers, **C** coil peers, **H** hubs
-(§3.1). Membership changes by closing and re-opening a fresh head, so the set is
+([§3.1](#31-the-families--one-cf-per-author)). Membership changes by closing and re-opening a fresh head, so the set is
 constant for a store's lifetime — RocksDB opens exactly the CFs that exist.
 
 ```
@@ -1386,13 +1386,13 @@ constant for a store's lifetime — RocksDB opens exactly the CFs that exist.
    │     └──────┘                                                          │
    │                                                                       │
    │   (arrival stamps ride inline as a 12-byte prefix on each            │
-   │    family value — not a separate CF; see §5.4, §7.1)                  │
+   │    family value — not a separate CF; see [§5.4](#54-total-order-of-the-replayed-streams), [§7.1](#71-key-layout--family-ids))                  │
    └───────────────────────────────────────────────────────────────────────┘
 ```
 
 RocksDB's own crash recovery is mechanical: on open it replays the WAL from where
 the most recent SSTable flush stopped, reconstructing the MemTable. *Our*
-recovery (§5–§6) builds on top of that — once RocksDB hands us a consistent view
+recovery ([§5](#5-recovery-architecture)–[§6](#6-per-actor-recovery-contracts)) builds on top of that — once RocksDB hands us a consistent view
 of the committed bytes in our CFs, we rebuild actor state from there.
 
 **Three operational facts worth knowing.**
@@ -1409,7 +1409,7 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   parallel-compaction count.
 - **`RocksDB.Snapshot` is in-process only.** It's an in-memory, process-lifetime
   construct — it does *not* survive a restart. Our recovery point is defined by
-  the **derived `*Acked` marks** (§5.1 — from CF scans), never by a
+  the **derived `*Acked` marks** ([§5.1](#51-the-markers--all-derived-none-stored) — from CF scans), never by a
   `RocksDB.Snapshot`. Keep the distinction firm: "RocksDB snapshot" = a
   consistent live read view across ongoing writes; "our base snapshot" = the
   persisted passive-state blob (in `DepositMap` / `RequestHighWater` / `Treasury` /
@@ -1423,7 +1423,7 @@ of the committed bytes in our CFs, we rebuild actor state from there.
 
 **How we use it.**
 
-- **Families** = key `FamilyKey` (a `FamilyId` + the within-author index; §7.1) ⇒ replay
+- **Families** = key `FamilyKey` (a `FamilyId` + the within-author index; [§7.1](#71-key-layout--family-ids)) ⇒ replay
   is a **range scan from a cursor**, RocksDB's sweet spot; the access pattern is
   range-scan-by-family, not ad-hoc SQL.
 - **Durability barriers** = one atomic **`WriteBatch`** spanning every CF the
@@ -1433,27 +1433,27 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   now-redundant per-ack keys in the same `WriteBatch`. Physical deletion is
   **bounded by the last hard-confirmed stack's last block** — never delete the
   confirmation records, the `BlockResult` records below that floor, or anything
-  else that would breach the R10 evacuation floor (§5.1 note). The storage
+  else that would breach the R10 evacuation floor ([§5.1](#51-the-markers--all-derived-none-stored) note). The storage
   engine's own **native (SST) compaction** runs underneath and is a separate,
   internal matter.
 - **Column families.** The satellite *families* (`Request`, `SoftAck`, `HardAck`,
-  `CoilHardAck`, `HubHardAck`) are **split one CF per author** (§3.1, §7.1); the two
+  `CoilHardAck`, `HubHardAck`) are **split one CF per author** ([§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)); the two
   spines (`BlockSpine`, `StackSpine`) are one CF each; six spine-indexed
   working / confirmation CFs (`BlockResult`, `SoftConfirmation`, `HardConfirmation`,
   `RequestHighWater`, `L2CommandNumber`, `UnsignedStack` — the last the
   `Stack.Unsigned` `StackComposer` persists before each handoff, keyed by `stackNum`);
   three snapshot CFs (`DepositMap` + `Treasury` single keyed blobs; `EvacuationMap`
   keyed per committed block); one metadata (`Meta`, store version + the
-  arrival-stamp generation counter, §5.4). The generic benefits of CF-per-concern
+  arrival-stamp generation counter, [§5.4](#54-total-order-of-the-replayed-streams)). The generic benefits of CF-per-concern
   (per-CF tuning, compaction isolation, scoped Bloom filters) are enumerated in the
   primer above; the per-author split adds **append-only-per-CF** write behavior
-  (§7.1). **Atomicity across CFs is preserved**: `WriteBatch` covers puts in
+  ([§7.1](#71-key-layout--family-ids)). **Atomicity across CFs is preserved**: `WriteBatch` covers puts in
   multiple CFs as one WAL record, so the per-soft-ack bundle `{own SoftAck,
   BlockResult, DepositMap, RequestHighWater, L2CommandNumber}` (+ `BlockSpine` when
   leading) lands as one transaction across **six CFs**.
 - **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
   CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
-  committed block (§3.2).
+  committed block ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it)).
 
 **Per-CF profile — what CF-per-concern buys us.** The CFs have very
 different workload shapes, and the win of splitting them is that each one's
@@ -1464,20 +1464,20 @@ clean append-only stream. Concretely:
 | CF | Workload shape | Concrete payoff of having its own CF |
 |---|---|---|
 | `BlockSpine`, `StackSpine` | sparse spine — one small entry per block / stack, low write rate, heavily *read* (everyone consults briefs, replay scans them in order) | high bits/key Bloom is almost free (few keys); index + Bloom pinned in cache; range-scan-from-cursor on the spine is the native access pattern |
-| `Request:<peer>` (one per head peer) | **high** write rate — up to 50–75k requests/s across the head — variable-sized payloads, scanned by `requestNum` for block assembly | **one author per CF ⇒ a single monotonic append stream**: non-overlapping L0 SSTables, RocksDB trivial-moves them down, near-zero compaction even at peak rate (the decisive reason for the per-author split, §7.1); larger MemTable absorbs bursts |
+| `Request:<peer>` (one per head peer) | **high** write rate — up to 50–75k requests/s across the head — variable-sized payloads, scanned by `requestNum` for block assembly | **one author per CF ⇒ a single monotonic append stream**: non-overlapping L0 SSTables, RocksDB trivial-moves them down, near-zero compaction even at peak rate (the decisive reason for the per-author split, [§7.1](#71-key-layout--family-ids)); larger MemTable absorbs bursts |
 | `SoftAck:<author>`, `HardAck:<peer>` (one per author) | per block / stack-round, small fixed-size entries (Ed25519 sigs), pruned by confirmation-driven ack-pruning | append-only per author (no interleave); strong Bloom (small keys → cheap bits/key); the `*Acked` markers derive from the last key of the **own** author's CF |
-| `CoilHardAck:<coil>` (one per coil author) | a coil peer's own slow-side acks (+ a hub's receive copy per hubbed coil), one entry per stack | append-only per coil author; the coil peer's own is its `hardAcked` source; the hub's copies are its receive log, stamped after a crash (§6 `CoilAckSequencer`) |
+| `CoilHardAck:<coil>` (one per coil author) | a coil peer's own slow-side acks (+ a hub's receive copy per hubbed coil), one entry per stack | append-only per coil author; the coil peer's own is its `hardAcked` source; the hub's copies are its receive log, stamped after a crash ([§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`) |
 | `HubHardAck:<hub>` (one per hub) | the re-sequenced disseminated coil-ack family, one entry per sequenced coil ack | append-only; `SeekToLast` gives `CoilAckSequencer`'s `nextSeq`; read by every `SlowConsensusActor` for the coil quorum |
 | `BlockResult` | one entry per block (JL's per-block output), keyed by `blockNum`, scanned at recovery to rebuild `StackComposer.pending`, low live read pressure | scan-optimized profile; values larger than acks but smaller than snapshots — independent compaction shape |
 | `UnsignedStack` | one entry per stack close (`Stack.Unsigned` = brief + effects), keyed by `stackNum`, read at recovery to re-form SCA's in-flight cell | scan-optimized + sparse; medium-sized values; independent of the ack CFs |
 | `SoftConfirmation` | one entry per soft-confirmed block (FCA aggregate output), keyed by `blockNum`, low write rate (one per confirmation event); `softConfirmed = max(key)` | a single `SeekToLast` derives the marker for free; small + sparse — cheap to keep |
-| `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (`CardanoLiaison` + rule-based regime, §6, §5.7) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
+| `HardConfirmation` | one entry per hard-confirmed stack (multisigned effects / SECs / fallbacks), keyed by `stackNum`, the R10 evacuation floor — physical deletion never descends here; folded sequentially at recovery (`CardanoLiaison` + rule-based regime, [§6](#6-per-actor-recovery-contracts), [§5.7](#57-the-recovery-priority-ladder-graceful-degradation)) | scan-optimized; `hardConfirmed = max(key)` from `SeekToLast`; **never compacted past — physical-retention floor** |
 | `DepositMap` | one key (`Meta`-like — single keyed blob), medium-sized blob, **rewritten on every own soft ack** (high churn on a single key) | RocksDB-friendly single-key churn (large MemTable absorbs the overwrites; compaction collapses the chain quickly); isolated from ack-CF compaction |
-| `RequestHighWater` | one entry per block keyed by `blockNum`, a small `Map[HeadPeerNumber, RequestNumber]` (`N` entries), written on every own soft ack (cumulative — each entry extends the previous) | scan-optimized + sparse like `BlockResult`; recovery reads the `fastBlockMark` entry to seed the `N` Request family cursors (§5.3); its own CF keeps the churn off the family / ack compaction queues |
-| `L2CommandNumber` | one entry per block keyed by `blockNum`, a single `Long` (the L2 ledger's commit counter reached after that block's L2 commits), written on every own soft ack | tiny scan-optimized + sparse CF; `JointLedger`'s own `recover` reads the `fastBlockMark` entry and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state (§6); isolated from the family / ack compaction queues |
+| `RequestHighWater` | one entry per block keyed by `blockNum`, a small `Map[HeadPeerNumber, RequestNumber]` (`N` entries), written on every own soft ack (cumulative — each entry extends the previous) | scan-optimized + sparse like `BlockResult`; recovery reads the `fastBlockMark` entry to seed the `N` Request family cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)); its own CF keeps the churn off the family / ack compaction queues |
+| `L2CommandNumber` | one entry per block keyed by `blockNum`, a single `Long` (the L2 ledger's commit counter reached after that block's L2 commits), written on every own soft ack | tiny scan-optimized + sparse CF; `JointLedger`'s own `recover` reads the `fastBlockMark` entry and calls `l2Ledger.restoreTo` to co-anchor the committed L2 state ([§6](#6-per-actor-recovery-contracts)); isolated from the family / ack compaction queues |
 | `Treasury` | one key, rewritten only at own hard-ack stack-close (slow cadence); small (UTXO ref) | low write rate ⇒ tiny compaction footprint; own CF makes it trivially backupable / restorable as part of the R10 floor |
 | `EvacuationMap` | keyed by `blockNum`; one entry per **committed** block (each major + each last-of-partition SEC minor — the only maps that back an on-chain commitment), written in batches at own hard-ack stack-close (the closing stack's committed blocks in one `WriteBatch`); each map is cumulative L2 state | scan-optimized profile (range-read for evacuation reconstruction); pruning is bounded — anything strictly older than the last-hard-confirmed major can be dropped, since those minors can never be disputed against once the next major supersedes them |
-| `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open (§5.4), so this process's family stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |
+| `Meta` | store-level keys: the schema version and the **arrival-stamp `generation`** — a per-process counter read+incremented+persisted once at store-open ([§5.4](#54-total-order-of-the-replayed-streams)), so this process's family stamps sort after earlier ones across restarts | no tuning needed; one obvious place for store-level metadata |
 
 A few benefits worth calling out separately:
 
@@ -1485,7 +1485,7 @@ A few benefits worth calling out separately:
   request storm) and ack CFs churn (every confirmation prunes a batch). With
   one big keyspace those two would share a compaction queue and starve each
   other; per-CF queues let them be independent — and the per-author split makes
-  each Request author its own append-only CF (§7.1).
+  each Request author its own append-only CF ([§7.1](#71-key-layout--family-ids)).
 - **The atomic `WriteBatch` across CFs is what lets the per-soft-ack bundle
   `{BlockSpine, own SoftAck, BlockResult, DepositMap, RequestHighWater, L2CommandNumber}`
   land as one transaction**, even though its pieces live in six CFs. Without
@@ -1514,7 +1514,7 @@ Notes / decisions:
 - **Native dependency** (RocksJava / JNI) — accepted.
 - The "schema" is now **key-layout design**; **family values reuse the existing wire
   codecs** (`consensus/transport/Codecs.scala`) under a **12-byte `ArrivalStamp`
-  prefix** (§5.4, §7.1) — strip the prefix and you have the byte-identical wire
+  prefix** ([§5.4](#54-total-order-of-the-replayed-streams), [§7.1](#71-key-layout--family-ids)) — strip the prefix and you have the byte-identical wire
   form (one codec to test, byte-identical forward path). Non-family CF values
   (`BlockResult` / `SoftConfirmation` / `HardConfirmation` / `DepositMap` /
   `Treasury` / `EvacuationMap` / `Meta`) need their own codecs (no wire form,
@@ -1529,7 +1529,7 @@ Notes / decisions:
 
 Two types, kept distinct: a **`FamilyId`** names a family (the CF to scan); a
 **`FamilyKey`** is a full addressable entry (`FamilyId` + the within-author index).
-`FamilyId` is the cursor/scan unit — §5.3 derives exactly one resume cursor per family.
+`FamilyId` is the cursor/scan unit — [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors) derives exactly one resume cursor per family.
 
 ```scala
 /** Identifies one single-writer family = the CF to scan.
@@ -1564,7 +1564,7 @@ enum FamilyKey:
 ```
 
 **Each family is its own column family — one CF per spine, one CF per satellite
-author** (§3.1). The `FamilyId` maps to a CF handle (the CF *name* encodes
+author** ([§3.1](#31-the-families--one-cf-per-author)). The `FamilyId` maps to a CF handle (the CF *name* encodes
 kind + author; the handle map is built from head config at store-open), so the
 **author is the CF, not part of the on-disk key**. The encoded byte key is just the
 **within-author index**, big-endian fixed-width, so lexicographic byte order matches
@@ -1584,16 +1584,16 @@ Widths follow the value ranges: `Block` / `Stack` / `SoftAck` / `HardAck` /
 `HubHardAckNumber` are non-negative `Int` (4 bytes); `RequestNumber < 2⁴⁰`, carried
 as an 8-byte `Long`. **No author prefix in the key** — splitting per author into its
 own CF makes each CF a single monotonic append stream (non-overlapping L0 → trivial
-compaction), the decisive property at the request rate (§7); it also drops the
+compaction), the decisive property at the request rate ([§7](#7-storage-design--rocksdb)); it also drops the
 `[peer:1]` prefix the old multiplexed layout carried.
 
 **Range scan / cursor.** Each scan is the whole of one author's CF in index order.
 To replay a family from its cursor, pick the CF (`FamilyId` → handle) and position an
-iterator at `[cursorBE]`. Each replay cursor (§5.3) is a `FamilyKey` — its `familyId`
+iterator at `[cursorBE]`. Each replay cursor ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)) is a `FamilyKey` — its `familyId`
 picks the CF, the index gives the seek key.
 
 **Values.** Family values are framed as `[arrivalStamp : 12][wirePayload …]` — the
-durable `ArrivalStamp` (`[generation : 4][monotonicNanos : 8]` big-endian; §5.4) is
+durable `ArrivalStamp` (`[generation : 4][monotonicNanos : 8]` big-endian; [§5.4](#54-total-order-of-the-replayed-streams)) is
 a fixed prefix on the wire-codec payload. Stripping the prefix gives the bytes that
 go on the wire — there is no separate `ArrivalStamps` CF. Non-family CFs (`BlockResult`,
 `SoftConfirmation`, `HardConfirmation`, `RequestHighWater`, `L2CommandNumber`,
@@ -1635,12 +1635,12 @@ the JVM, not from a separate writer staying up.)
 Executed in/around the regime manager's `preStartLocal`, before
 `pendingConnections.complete` — `MultisigRegimeManager` on a head peer,
 `CoilMultisigRegimeManager` on a coil peer (both run the single `PeerId`-parameterized
-replay seam; §6, §10). **All actors start together**; the two recovery mechanisms
-(replay / restore) run concurrently (§5).
+replay seam; [§6](#6-per-actor-recovery-contracts), [§10](#10-open-questions)). **All actors start together**; the two recovery mechanisms
+(replay / restore) run concurrently ([§5](#5-recovery-architecture)).
 
 1. Open the store; verify version; **bump the arrival-stamp `generation`** — read
    the `Cf.Meta` counter, increment, persist (once per store-open), so every family
-   stamp this process writes sorts after every earlier process's (§5.4). Absent
+   stamp this process writes sorts after every earlier process's ([§5.4](#54-total-order-of-the-replayed-streams)). Absent
    store → cold start (the degenerate replay: empty base, empty mailboxes), and the
    generation simply starts at 1.
 2. **Derive the markers** by CF scan — the three `Markers` plus the shared
@@ -1653,23 +1653,23 @@ replay seam; §6, §10). **All actors start together**; the two recovery mechani
      field.
 3. **Load base snapshots** for the consensus actors — `DepositMap` +
    `RequestHighWater[fastBlockMark]` (JL; the latter feeds the Request family cursors,
-   §5.3), `Treasury` + `EvacuationMap` (SC; the latter at
+   [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)), `Treasury` + `EvacuationMap` (SC; the latter at
    `EvacuationMap[StackSpine[hardAcked].lastBlockNum]`, always present for a
-   non-final stack — §5.2). Validate invariants (markers consistent with the
+   non-final stack — [§5.2](#52-state-recovery-the-base-snapshots)). Validate invariants (markers consistent with the
    snapshot blobs being aligned to their anchors; counter monotonicity). On
    violation → **fail safe**.
 4. **`ReplayActor` seeds the consensus actors' mailboxes** with the total-ordered
-   family-entry tail, **using per-actor resume cursors** (§5.1):
+   family-entry tail, **using per-actor resume cursors** ([§5.1](#51-the-markers--all-derived-none-stored)):
    signers / ledger from the acked mark `+ 1` (fast: `fastBlockMark + 1`; slow:
    `hardAcked + 1` — no re-signing, CR2); aggregators from `*Confirmed + 1` (fast:
    `softConfirmed + 1`; slow: `hardConfirmed + 1`), so the acked-but-unconfirmed
    band is re-aggregated as peers' late acks arrive. `StackComposer` also reads
    `BlockResult` for `(StackSpine[hardAcked].lastBlockNum, head]` to rebuild
-   `pending` (§6 `StackComposer`). The `ReplayActor` also reads L1 **directly from
+   `pending` ([§6](#6-per-actor-recovery-contracts) `StackComposer`). The `ReplayActor` also reads L1 **directly from
    `CardanoBackend`** (`utxosAt(treasuryAddress)`) and seeds the first
    `PollResults` into `BlockWeaver`, so deposit decisions proceed immediately rather
-   than waiting on `CardanoLiaison`'s poll cadence (§5.5). A **suspend barrier** may
-   be needed to hold the consensus actors until seeding completes (§10 Q1).
+   than waiting on `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)). A **suspend barrier** may
+   be needed to hold the consensus actors until seeding completes ([§10](#10-open-questions) Q1).
 5. **Open the start barrier:** every actor — consensus *and* boundary — runs.
    Consensus actors rebuild state + cascades from the seeded tail; their external
    re-emissions (acks, briefs, effects) reach the already-running boundaries.
@@ -1678,12 +1678,12 @@ replay seam; §6, §10). **All actors start together**; the two recovery mechani
    boundary restores its own state, loaded **before** the boundary processes anything.
    A replay re-emission `≤ cursor` is dropped by the same cursor / equivocation filter
    that runs in steady state; a `> cursor` output is genuine forward progress and goes
-   out normally (§5).
+   out normally ([§5](#5-recovery-architecture)).
 7. **Reconcile L1:** `CardanoLiaison` polls `CardanoBackend` on its own cadence
    (the `ReplayActor` already supplied the first sample in step 4); the in-flight
-   tail re-verifies against live L1 (§5.5) and may diverge; detect whether the
+   tail re-verifies against live L1 ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) and may diverge; detect whether the
    head moved to the rule-based regime while we were down (→ hand off to the
-   rule-based path, which reads this store once then runs off L1 (§5.7) —
+   rule-based path, which reads this store once then runs off L1 ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation)) —
    not a multisig resume).
 8. Resume `GetMsgBatch` over the connected `PeerLiaison*`s from restored cursors;
    catch up to current head height (ordinary liveness, not backfill).
@@ -1696,17 +1696,17 @@ operator / trigger evacuation rather than rejoin stale.
 `CoilMultisigRegimeManager.preStartLocal` (the head path is
 `MultisigRegimeManager.preStartLocal`); the steps are identical with three coil
 adaptations: step 2's fast anchor `fastBlockMark = max(BlockResult)` is shared, but
-`hardAcked` derives from its own `CoilHardAck` CF rather than `HardAck` (§5.1);
+`hardAcked` derives from its own `CoilHardAck` CF rather than `HardAck` ([§5.1](#51-the-markers--all-derived-none-stored));
 step 4's `ReplayActor` reconstructs the in-flight `StackHandoff` from `UnsignedStack` +
 the own `CoilHardAck` tail and admits the inbound `HubHardAck` families so
-`SlowConsensusActor` re-reaches the coil quorum (§6); the coil peer runs one
+`SlowConsensusActor` re-reaches the coil quorum ([§6](#6-per-actor-recovery-contracts)); the coil peer runs one
 `PeerLiaisonCoilToHub` instead of the mesh. A **hub** additionally restores its
 `CoilAckSequencer` (`nextSeq` + per-coil stamped marks) and has the `ReplayActor`
-re-feed it any unstamped `CoilHardAck` tail (§6), and restores its
+re-feed it any unstamped `CoilHardAck` tail ([§6](#6-per-actor-recovery-contracts)), and restores its
 `PeerLiaisonHubToCoil` outboxes + coil-ack receive cursors. Both regime managers
 (`MultisigRegimeManager` and `CoilMultisigRegimeManager`) drive the single
 `ReplayActor.replay(own: PeerId, …)` seam, the `CoilAckSequencer` recover, and all
-three liaisons' outbox recover (§6).
+three liaisons' outbox recover ([§6](#6-per-actor-recovery-contracts)).
 
 ---
 
@@ -1725,13 +1725,13 @@ three liaisons' outbox recover (§6).
   must converge. Recovery is re-entrant — it only advances markers/snapshots
   monotonically and atomically (CR6/CR8/CR3) and replay is deterministic
   re-derivation, so a partially-completed recovery is just a valid earlier
-  state to recover from again (§5). Test: inject crashes at successive points
+  state to recover from again ([§5](#5-recovery-architecture)). Test: inject crashes at successive points
   *within* the recovery window and assert the same final committed state.
 - L1 moved while down: in-flight tail re-verifies against current truth and
-  legitimately diverges/falls back (§5.5) — assert this is *not* treated as
+  legitimately diverges/falls back ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) — assert this is *not* treated as
   corruption.
 - Long downtime → head went to rule-based regime while down → recovery must detect
-  and not re-enter multisig (CR7, §8 step 7 — post-barrier L1 reconciliation).
+  and not re-enter multisig (CR7, [§8](#8-boot-sequence) step 7 — post-barrier L1 reconciliation).
 - Torn/corrupt record, or counter regression on load → refuse start.
 - Head-wide restart: all peers crash and recover — does the protocol re-converge
   purely from persisted state + replay?
@@ -1765,7 +1765,7 @@ with a **crash-restart action** that kills and reconstructs a peer from its stor
 mid-run, asserting the consensus invariants still hold — for **head, coil, and hub**
 peers. Single-actor restart tests the per-actor contract; **whole-node reboot**
 tests cross-actor re-convergence; **crash-window fault injection** tests the CR4/CR8
-barriers. Run the one-by-one replay (§5.6 mechanism 2) as the deterministic oracle
+barriers. Run the one-by-one replay ([§5.6](#56-the-replay-mechanism) mechanism 2) as the deterministic oracle
 the concurrent run is checked against. Property: *for any crash point, recovered
 committed state is observationally equivalent to the no-crash run.*
 
@@ -1773,8 +1773,8 @@ committed state is observationally equivalent to the no-crash run.*
 
 ## 10. Open questions
 
-_Resolved questions have been folded into the sections they belong to (§3, §5, §6,
-§7); only genuinely-open items remain here._
+_Resolved questions have been folded into the sections they belong to ([§3](#3-consensus-data-the-families), [§5](#5-recovery-architecture), [§6](#6-per-actor-recovery-contracts),
+[§7](#7-storage-design--rocksdb)); only genuinely-open items remain here._
 
 1. **Additional barrier?** Does the `ReplayActor` need an **extra suspend barrier** to
    hold the consensus actors while it seeds their mailboxes, or does the existing
@@ -1788,7 +1788,7 @@ _Resolved questions have been folded into the sections they belong to (§3, §5,
    field), the fast side anchoring on the shared `fastBlockMark = max(BlockResult)` on
    both peer types. The sole residual `own match` is on the slow-side own-ack family (a
    head peer reads `HardAck`, a coil peer `CoilHardAck`); everything else is shared
-   (§5, §6 `JointLedger` / `StackComposer`). Remaining: confirm under load that
+   ([§5](#5-recovery-architecture), [§6](#6-per-actor-recovery-contracts) `JointLedger` / `StackComposer`). Remaining: confirm under load that
    `CoilHardAck` `max + 1` + the in-flight-stack unpack behave as the head `HardAck`
    scan does.
 
@@ -1797,31 +1797,31 @@ _Resolved questions have been folded into the sections they belong to (§3, §5,
 **Priority.** Sequence by **custody value, not by data flow.** After the storage
 skeleton (P1), the first deliverable is **persisting what the rule-based regime
 reads** — the hard-confirmed effects / SECs / fallbacks (the **R10 evacuation
-floor**) plus the read path that loads them once on handover (§5.7 top rung).
+floor**) plus the read path that loads them once on handover ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation) top rung).
 With that durable, a crashed peer can always fall back, vote, and evacuate even if
 nothing else is restored. Everything after it is liveness / performance and may be
 built **in any order**.
 
 Status legend: ✅ done · 🚧 done, uncommitted · 📋 scoped, not started · ⬜ pending.
 Steps below renumbered (the old letter scheme `Pa–Pg` is now `P3–P9`); `P1`/`P2` are
-unchanged. `P10–P14` are the coil workstream (§2, §6 — the head plan threaded onto coil
+unchanged. `P10–P14` are the coil workstream ([§2](#2-two-kinds-of-actor), [§6](#6-per-actor-recovery-contracts) — the head plan threaded onto coil
 peers).
 
 | Step | Deliverable | Status |
 |---|---|---|
-| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `FamilyId`/`FamilyKey` layout (§7.1); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
-| P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside (§6 `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 (§5.7). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** |
-| P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each family value (§5.4). | ✅ |
+| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `FamilyId`/`FamilyKey` layout ([§7.1](#71-key-layout--family-ids)); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
+| P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside ([§6](#6-per-actor-recovery-contracts) `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation)). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** |
+| P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each family value ([§5.4](#54-total-order-of-the-replayed-streams)). | ✅ |
 | P4 | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. | ✅ |
-| P5 | Fast-side per-block persistence (`JointLedger`): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` (§6 `JointLedger`); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart (§5.2); `RequestHighWater` feeds the Request family recovery cursors (§5.3). | ✅ — soft-ack pruning **deferred** (keep-all) |
-| P6 | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence (§5.5). | ✅ — suspend barrier reuses the `Connections` barrier (Q1) |
-| P7 | L1 reconciliation + live re-sample in `CardanoLiaison` (§5.5, §8 step 7 — post-barrier). | ✅ |
-| P8 | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
-| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped, not started — deferred |
-| — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
-| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `CoilHardAck` gap to it (§6.1.4); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (§6.1.2). | ✅ |
-| P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; coil JL recovers off the shared `fastBlockMark = max(BlockResult)` (§6 `JointLedger`). | ✅ |
-| P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
+| P5 | Fast-side per-block persistence (`JointLedger`): per-soft-ack `WriteBatch` over `Block` + `SoftAck` + `BlockResult` + `DepositMap` + `RequestHighWater` ([§6](#6-per-actor-recovery-contracts) `JointLedger`); plus `FastConsensusActor`'s confirmation write to `SoftConfirmation` + soft-ack pruning. The `BlockResult` CF is what lets `StackComposer` rebuild `pending` from disk on restart ([§5.2](#52-state-recovery-the-base-snapshots)); `RequestHighWater` feeds the Request family recovery cursors ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)). | ✅ — soft-ack pruning **deferred** (keep-all) |
+| P6 | `ReplayActor` + total-order merge ([§5.4](#54-total-order-of-the-replayed-streams)) + indices algorithm ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)); pre-populate-mailboxes mechanism + suspend barrier ([§5.6](#56-the-replay-mechanism)); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)). | ✅ — suspend barrier reuses the `Connections` barrier (Q1) |
+| P7 | L1 reconciliation + live re-sample in `CardanoLiaison` ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed), [§8](#8-boot-sequence) step 7 — post-barrier). | ✅ |
+| P8 | Boot sequence end-to-end ([§8](#8-boot-sequence)); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
+| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property ([§9](#9-failure-scenarios-to-specify--test)). | 📋 scoped, not started — deferred |
+| — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed ([§6](#6-per-actor-recovery-contracts) `StackComposer`). | ✅ |
+| P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `CoilHardAck` gap to it ([§6.1.4](#614-coilacksequencer)); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore ([§6.1.2](#612-peerliaison-three-shapes)). | ✅ |
+| P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; coil JL recovers off the shared `fastBlockMark = max(BlockResult)` ([§6](#6-per-actor-recovery-contracts) `JointLedger`). | ✅ |
+| P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` ([§6](#6-per-actor-recovery-contracts) `StackComposer`). | ✅ |
 | P13 | **Coil boot replay (Q2):** unified `ReplayActor.replay(own: PeerId)` / `ReplayCursors` with `ownCoilHardAck` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor the shared `fastBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |
 | P14 | **Head-peer `HubHardAck` replay** (follow-up to P13): `HubHardAck` added to the head `ReplayCursors` + `replay` (`hubs = config.hubHeadPeerNumbers`) so a head peer in a coil head re-feeds the coil quorum on recovery. | ✅ |
 
@@ -1841,4 +1841,4 @@ peers).
   `multisig/ledger/joint/JointLedger.scala`; `multisig/consensus/transport/Codecs.scala`;
   `rulebased/persistence/Persistence.scala` (stub).
 - Bootstrap (stack-0 init + fallback): `StackComposer.bootstrapInitialStack` — the
-  cold-start seed; recovery loads the snapshot instead (§6 `StackComposer`).
+  cold-start seed; recovery loads the snapshot instead ([§6](#6-per-actor-recovery-contracts) `StackComposer`).
