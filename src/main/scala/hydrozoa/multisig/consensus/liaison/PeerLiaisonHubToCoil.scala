@@ -327,6 +327,20 @@ abstract class PeerLiaisonHubToCoil(
             }
         } yield ()
 
+    /** Restore the inbound coil-ack receive cursor to `next(max(CoilHardAck))` (CR8 persisted each
+      * ack before the cursor advanced), so we re-pull only NEW acks: the hub's `CoilAckSequencer`
+      * stamps any received-but-unstamped tail from the store, and `verify` rejects a stale re-serve
+      * — we must not re-receive (and re-stamp) what we already hold. A single inbound lane (the
+      * coil peer's own hard-acks), so one cursor.
+      */
+    private def restoreInboundCursors: IO[Unit] =
+        for {
+            _ <- OutboxBacking
+                .coilHardAck(backend, coil)
+                .highWater
+                .flatMap(ownHardAckLane.restoreCursor)
+        } yield ()
+
     private def preStartLocal: IO[Unit] =
         for {
             c <- resolveConnections
@@ -336,14 +350,8 @@ abstract class PeerLiaisonHubToCoil(
             // from the store on the coil peer's Population.Get, and live CoilRelay production
             // re-appends the tail. An empty store leaves every lane cold.
             _ <- restoreHighWaters
-            // Restore the inbound coil-ack receive cursor to next(max(CoilHardAck)) (CR8 persisted
-            // each ack before the cursor advanced), so we re-pull only NEW acks: the hub's
-            // CoilAckSequencer stamps any received-but-unstamped tail from the store, and verify
-            // rejects a stale re-serve — we must not re-receive (and re-stamp) what we already hold.
-            _ <- OutboxBacking
-                .coilHardAck(backend, coil)
-                .highWater
-                .flatMap(ownHardAckLane.restoreCursor)
+            // Restore the inbound coil-ack receive cursor so we re-pull only NEW acks.
+            _ <- restoreInboundCursors
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
