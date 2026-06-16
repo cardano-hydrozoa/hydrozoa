@@ -448,15 +448,15 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    test("CardanoLiaison.recover over an empty HardConfirmation CF folds to initialState") {
+    test("CardanoLiaison.recover over an empty HardConfirmation CF folds to State.empty") {
         // The effect-fold parity (recover == live path) rides on the kernels both call —
         // `State.applyInitialEffects`/`applyRegularEffects` — which the live `Stack.HardConfirmed`
         // path exercises (stage4); a fixture-level fold test is impractical here (the effect leaf
         // txs have no public constructors) and is left to the R4 crash tests.
         withStore { p =>
             CardanoLiaison.State
-                .recover(p, config)
-                .map(s => assert(s == CardanoLiaison.State.initialState(config)))
+                .recover(p)
+                .map(s => assert(s == CardanoLiaison.State.empty))
         }
     }
 

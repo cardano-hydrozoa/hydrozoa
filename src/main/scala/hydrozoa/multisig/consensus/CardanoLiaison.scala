@@ -87,6 +87,12 @@ object CardanoLiaison:
 
     /** The state we want to achieve on L1. */
     enum TargetState:
+        /** The cold, pre-stack-0 target: the head is not yet on L1 and nothing is submittable. The
+          * real target is learned from the hard-confirmed stack 0 (see
+          * [[State.applyInitialEffects]]).
+          */
+        case Uninitialized
+
         /** Regular state of an active head represented by id of the treasury utxo. */
         case Active(treasuryUtxoId: TransactionInput)
 
@@ -123,25 +129,25 @@ object CardanoLiaison:
     )
 
     object State:
-        def initialState(config: Config): State = {
-            // The submittable init + fallback effects are NOT seeded from config: those bodies are
-            // the UNSIGNED genesis placeholders, never submittable. CardanoLiaison learns the real
-            // (multisigned) init + fallback only from the hard-confirmed stack 0, via
-            // `handleInitialStackL1Effects`. We only seed the target treasury utxo id, which is
-            // identified by the init tx id (a body hash, witness-independent) and so is exact even
-            // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
-            // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
+        /** The cold, pre-stack-0 state: no L1 target and no effects. The live `stateRef` boots here
+          * and [[recover]] folds from here; [[applyInitialEffects]] instals the real target +
+          * init/fallback once stack 0 hard-confirms. Config-free — the (multisigned) init +
+          * fallback and the target treasury utxo id are all learned from the hard-confirmed stack
+          * 0, never seeded from the unsigned config bodies, so nothing is submittable until then.
+          */
+        val empty: State =
             State(
-              targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
+              targetState = TargetState.Uninitialized,
               effectInputs = Map.empty,
               happyPathEffects = TreeMap.empty,
               fallbackEffects = Map.empty
             )
-        }
 
         /** Apply a hard-confirmed *initial* stack's L1 effects — the pure transition shared by the
-          * live `Stack.HardConfirmed` path and [[recover]]: override the config-seeded UNSIGNED
-          * init tx + fallback with the ratified bodies from stack 0.
+          * live `Stack.HardConfirmed` path and [[recover]]: instal the ratified (multisigned) init
+          * tx + fallback from stack 0 into the cold [[empty]] state, setting the real `Active`
+          * target. This is what makes the head submittable; before it, the state is
+          * `Uninitialized`.
           */
         def applyInitialEffects(state: State, eff: StackEffects.HardConfirmed.Initial): State =
             state.copy(
@@ -207,14 +213,14 @@ object CardanoLiaison:
           * `Cf.HardConfirmation` (ascending stack order) through the same kernels the live
           * `Stack.HardConfirmed` path uses — so a recovered `State` equals a live run's. Submission
           * progress is **not** restored: `runEffects` re-samples L1 (§5.5), so only the effect
-          * index is rebuilt. An empty CF folds to [[initialState]] (the cold value); no `Option`
-          * (there is no own-ack to gate on).
+          * index is rebuilt. An empty CF folds to [[empty]] (the cold value); no `Option` (there is
+          * no own-ack to gate on).
           */
-        def recover(persistence: Persistence[IO], config: Config)(using
+        def recover(persistence: Persistence[IO])(using
             CardanoNetwork.Section
         ): IO[State] =
             HardConfirmationScan.scanFrom(persistence.backend, StackNumber.zero).map {
-                _.foldLeft(initialState(config)) { (state, eff) =>
+                _.foldLeft(empty) { (state, eff) =>
                     eff match {
                         case ini: StackEffects.HardConfirmed.Initial =>
                             applyInitialEffects(state, ini)
@@ -280,6 +286,7 @@ object CardanoLiaison:
         extension (state: State)
             def prettyDump: String = {
                 val targetStateStr = state.targetState match {
+                    case TargetState.Uninitialized => "Uninitialized"
                     case TargetState.Active(treasuryUtxoId) =>
                         s"Active(treasuryUtxoId=${treasuryUtxoId})"
                     case TargetState.Finalized(finalizationTxHash) =>
@@ -341,7 +348,7 @@ trait CardanoLiaison(
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
-    private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.initialState(config))
+    private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.empty)
 
     private def getConnections: IO[Connections] = this.connections.get.flatMap(
       _.fold(
@@ -398,9 +405,9 @@ trait CardanoLiaison(
         for {
             _ <- initializeConnections
             // R3: rebuild the submission index by folding the persisted HardConfirmation CF (an
-            // empty CF folds to `initialState`). Submission progress itself is NOT persisted —
+            // empty CF folds to `State.empty`). Submission progress itself is NOT persisted —
             // `runEffects` re-samples L1, so recover restores only the effect index.
-            recovered <- State.recover(persistence, config)(using config)
+            recovered <- State.recover(persistence)(using config)
             _ <- stateRef.set(recovered)
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
@@ -416,12 +423,12 @@ trait CardanoLiaison(
 
     /** Learn the hard-confirmed *initial* stack's L1 effects (stack 0).
       *
-      * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
-      * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
-      * the **unsigned** body — usable only as a pre-confirmation placeholder, never submittable.
-      * Once stack 0 is hard-confirmed, [[StackEffects.HardConfirmed.Initial]] carries the
-      * slow-consensus-ratified init tx (the round-2 Initial unlock) + the locally-derived fallback;
-      * this overrides the seeded entries with them so `runEffects` submits the correct init tx.
+      * Before stack 0, `State` is the cold [[State.empty]] — an `Uninitialized` target with no
+      * effects, so nothing is submittable. Once stack 0 is hard-confirmed,
+      * [[StackEffects.HardConfirmed.Initial]] carries the slow-consensus-ratified init tx (the
+      * round-2 Initial unlock) + the locally-derived fallback; [[State.applyInitialEffects]]
+      * instals them — the `Active` target, `EffectId.initializationEffectId`, and
+      * `fallbackEffects(Major.zero)` — so `runEffects` submits the correct init tx.
       *
       * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
       * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
@@ -605,6 +612,10 @@ trait CardanoLiaison(
                                         }
                                         // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                                         state.targetState match {
+                                            case TargetState.Uninitialized =>
+                                                // Pre stack-0: no L1 target to reconcile and nothing
+                                                // submittable — wait for the Initial stack effects.
+                                                IO.pure(List.empty)
                                             case TargetState.Active(targetTreasuryUtxoId) =>
                                                 if utxoIds.contains(targetTreasuryUtxoId)
                                                 then
