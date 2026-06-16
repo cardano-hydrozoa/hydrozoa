@@ -672,6 +672,17 @@ constant nor a marker-findable suffix and cannot be reconstructed from the famil
 It is carried instead as **snapshotted passive state** ([§5.2](#52-state-recovery-the-base-snapshots)), re-written on every
 own soft ack — the one place a snapshot is unavoidable on the fast side.
 
+**These index reads need no cross-CF atomicity.** They are taken family by family
+(each `highWater` / marker is its own `lastKey` scan), never under one snapshot. That
+is safe because every family is **append-only with a single serialized writer** (one
+author per CF — [§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)): a reader — even one running concurrently
+with that writer, e.g. a liaison re-seeding its lanes after the start barrier — sees a
+consistent prefix. It can at worst miss the newest append, never a torn entry, and a
+stale high-water self-corrects through the normal `append` / `backfill` path (and the
+re-pull cursor protocol). The one read carrying a **cross-CF invariant** — the
+markers' `confirmed ≤ acked` — is derived **before** the start barrier, while no
+writer is producing yet ([§8](#8-boot-sequence)), and is fail-safed by `validateInvariants`.
+
 ### 5.4 Total order of the replayed streams
 
 Within a family, order is intrinsic — the family's own index (RequestNumber;

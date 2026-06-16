@@ -330,15 +330,18 @@ abstract class PeerLiaisonHeadToHead(
     /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
       * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
       * otherwise re-dispatch to the consensus actors that `ReplayActor` already re-fed, CR8). The
-      * satellites read the **remote**'s own-keyed family; the sparse spines read the overall family
-      * max (the inbound lane's leader-schedule successor picks the remote's next-led number). An
-      * empty store leaves a lane at its cold initial cursor.
+      * satellites read the **remote**'s own-keyed family; the spines are a single shared CF (every
+      * leader's briefs, not per-author), so they read the overall family max and the sparse lane's
+      * leader-schedule successor picks the remote's next-led number. The spine max reuses the
+      * outbound `blockBacking` / `stackBacking`: `highWater` is the whole-CF `lastKey`, independent
+      * of the backing's own-led `keep` (which filters only `backfill`). An empty store leaves a
+      * lane at its cold initial cursor.
       */
     private def restoreInboundCursors: IO[Unit] =
         val remoteNum = remoteHead.peerNum
         for {
-            _ <- OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreInbound)
-            _ <- OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreInbound)
+            _ <- blockBacking.highWater.flatMap(blockLane.restoreInbound)
+            _ <- stackBacking.highWater.flatMap(stackLane.restoreInbound)
             _ <- OutboxBacking
                 .request(backend, remoteNum)
                 .highWater
