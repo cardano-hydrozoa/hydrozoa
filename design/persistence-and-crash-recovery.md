@@ -510,7 +510,7 @@ the band's briefs + acks.
 - **Signers / ledgers** resume at `*Acked + 1` (CR2 — no re-signing what we
   already signed). `JointLedger` picks up via `BlockWeaver`'s re-drive from
   `softAcked + 1` (§6); `StackComposer` from `hardAcked + 1`.
-- **Aggregators** resume at `*Confirmed + 1` (per §10 Q2 option a) — their cells
+- **Aggregators** resume at `*Confirmed + 1` — their cells
   reconstitute as the replayed briefs + acks land. Anything `≤` the confirmed
   mark has already become a `SoftConfirmation` / `HardConfirmation` record and no
   longer needs re-aggregation.
@@ -617,7 +617,7 @@ each block's result at ack time, §3.2, §6 `JointLedger`, so SC can load
 confirmations themselves complete in the **aggregators**
 (`FastConsensusActor` / `SlowConsensusActor`) from the persisted briefs +
 peers' late acks — the aggregators sign nothing, so they can re-acquire and
-re-aggregate the band freely, unlike the signers (§10 Q2).
+re-aggregate the band freely, unlike the signers.
 
 ### 5.3 The indices algorithm: deriving the 2 + 3N + H family cursors
 
@@ -654,7 +654,7 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   number, §3.1). On the slow side `hardConfirmed` is marker-derived but the **acked
   stack** is *not* — `hardAcked` is a `HardAckNumber` counter, not a `StackNumber`,
   so the acked-stack floor is sourced separately (unpack the stack id from the last
-  own `HardAck` value; §10 Q2).
+  own `HardAck` value).
 - **Soft acks** — single consumer (FCA). The soft-ack index *coincides with the
   block number* (one ack per block, §3.1), so each peer's SoftAck family cursor is the
   fast-side confirmed mark `+ 1`, exactly the BlockSpine `confirmed` floor.
@@ -666,19 +666,18 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   `StackNumber → HardAckNumber` correspondence — so there is no marker-findable
   floor. Recovery scans each peer's HardAck family **from 0** (correct, not minimal).
   Tightening needs a per-peer hard-ack marker or a stack-indexed hard-ack family;
-  deferred (§10 Q2).
+  deferred.
 - **Hub hard acks** (and a coil peer's own **coil hard acks**) — like `HardAck`,
   indexed by a `HardAckNumber` (per hub / per coil), with no marker-findable
   `StackNumber` floor, so recovery scans each such family **from 0**.
   Both `ReplayActor.replay` (head, via `ReplayCursors`) and `replayCoil` (coil) scan + route
   these (P14); the floor-tightening is the same hard-ack indexing
-  gap (§10 Q2).
+  gap.
 
 So the cursors split into **dual-floor spines + single-floor satellites** (`4 + 3N`
 floors over the `2 + 3N` head families, plus single-floor `H` hub + coil hard-ack
 families). All derive from the markers + the request high-water counter, except the
-slow-side acked stack and the hard-ack floors (the hard-ack-family indexing gap,
-§10 Q2). None of the cursors is stored.
+slow-side acked stack and the hard-ack floors (the hard-ack-family indexing gap). None of the cursors is stored.
 
 **The deposits map is the exception — and it is not a family**, so it has no cursor
 to derive. The pending-deposits map mutates on *any* block (a request *adds* a
@@ -1170,8 +1169,8 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   `[hardConfirmed + 1, hardAcked]` — at most one stack, single-flight — on the
   slow side, where the `ReplayActor` reconstructs a `StackHandoff` from that
   stack's `UnsignedStack` + the own acks, so SCA forms the cell via its existing
-  path; `StackComposer` stays out) per §10 Q2 (signing nothing, the aggregator may
-  re-aggregate freely). The aggregator does **not** reload past
+  path; `StackComposer` stays out) — signing nothing, the aggregator may
+  re-aggregate freely. The aggregator does **not** reload past
   confirmation records: a cell is dropped once it confirms, so confirmations
   below the confirmed mark are not aggregator state — they were persisted for
   **downstream consumers** (`CardanoLiaison` folds over `HardConfirmation`,
@@ -1688,7 +1687,7 @@ mechanisms (replay / restore) run concurrently (§5).
    snapshot blobs being aligned to their anchors; counter monotonicity). On
    violation → **fail safe**.
 3. **`ReplayActor` seeds the consensus actors' mailboxes** with the total-ordered
-   family-entry tail, **using per-actor resume cursors** (§5.1, §10 Q2 option a):
+   family-entry tail, **using per-actor resume cursors** (§5.1):
    signers / ledger from `*Acked + 1` (fast: `softAcked + 1`; slow: `hardAcked + 1`
    — no re-signing, CR2); aggregators from `*Confirmed + 1` (fast:
    `softConfirmed + 1`; slow: `hardConfirmed + 1`), so the acked-but-unconfirmed
@@ -1814,28 +1813,7 @@ _Resolved questions have been folded into the sections they belong to (§3, §5,
    that barrier inside its `PreStart` handler, so replay sends queue *behind* `PreStart`
    and drain in order once it opens — which appears sufficient (then we add nothing).
    Confirm empirically on the real substrate before adding a second barrier.
-2. **Band-confirmation completion / aggregator resume point.** Signers / ledger
-   resume at the ack mark + 1 (fast: `softAcked + 1`, slow: `hardAcked + 1`) to
-   protect the signers (no re-signing, CR2). But the ack-aggregators must still
-   complete the acked-but-unconfirmed band (fast: `[softConfirmed + 1, softAcked]`;
-   slow counterpart) as peers' late acks arrive — and those cells aren't rebuilt
-   by an ack-mark-+1 replay. Options: **(a)** the aggregators replay from the
-   confirmed mark + 1 (fast: `softConfirmed + 1`; slow: `hardConfirmed + 1`)
-   — they sign nothing, so re-aggregating is safe — while the signers /
-   ledger keep their ack-mark-+1 resume point, giving a per-actor resume scheme;
-   **(b)** the aggregator **re-reads** the band's briefs / acks from the persisted
-   families on demand. Decide — (a) looks cleaner.
-
-   **Related (surfaced in R1): the HardAck family scan floor.** Resume *points* aside,
-   the slow side also lacks a derivable scan *floor* for the per-peer hard-ack
-   families. The HardAck family is indexed by the author's own `HardAckNumber`, not by
-   `StackNumber`, and no marker records the `StackNumber → HardAckNumber`
-   correspondence — so unlike the other four families (§5.3) its cursor cannot
-   be derived from `hardConfirmed` / `hardAcked`. R1 scans these families **from 0**
-   (correct, not minimal). A tight floor needs one of: a per-peer hard-ack marker;
-   a stack-indexed hard-ack family; or reading each entry's embedded stack id while
-   scanning and stopping once it passes the band. Decide alongside (a)/(b).
-3. **Coil marker / cursor derivation seam — resolved (P13), confirm:** the coil path
+2. **Coil marker / cursor derivation seam — resolved (P13), confirm:** the coil path
    took a **parallel** derivation (`CoilReplayCursors` / `ReplayActor.replayCoil`)
    rather than a `PeerId`-parameterized one (§5, §6 `JointLedger` / `StackComposer`).
    Remaining: confirm under load that `CoilHardAck` `max + 1` + the in-flight-stack
@@ -1871,7 +1849,7 @@ peers).
 | P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `CoilHardAck` gap to it (§6.1.4); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (§6.1.2). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
 | P12 | **Coil slow-side anchor:** `StackComposer` coil recover off `CoilHardAck` + the `UnsignedStack` brief; `Markers.recoverCoilHardAcked` / `recoverHardConfirmed` (§6 `StackComposer`). | ✅ |
-| P13 | **Coil boot replay (Q3):** parallel `CoilReplayCursors`/`ReplayActor.replayCoil` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |
+| P13 | **Coil boot replay (Q2):** parallel `CoilReplayCursors`/`ReplayActor.replayCoil` (route `CoilHardAck`→SCA, `HubHardAck`→SCA via `.ack`, fast anchor `coilBlockMark`); `CoilMultisigRegimeManager` replay seam. | ✅ |
 | P14 | **Head-peer `HubHardAck` replay** (follow-up to P13): `HubHardAck` added to the head `ReplayCursors` + `replay` (`hubs = config.hubHeadPeerNumbers`) so a head peer in a coil head re-feeds the coil quorum on recovery. | ✅ |
 
 ---
