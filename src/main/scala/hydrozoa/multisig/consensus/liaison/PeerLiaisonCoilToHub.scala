@@ -331,20 +331,22 @@ abstract class PeerLiaisonCoilToHub(
       */
     private def restoreInboundCursors: IO[Unit] =
         val backend = persistence.backend
-        OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreCursor) >>
-            OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreCursor) >>
-            requestLanes.toList.traverse_ { case (h, l) =>
+        for {
+            _ <- OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreCursor)
+            _ <- OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreCursor)
+            _ <- requestLanes.toList.traverse_ { case (h, l) =>
                 OutboxBacking.request(backend, h).highWater.flatMap(l.restoreCursor)
-            } >>
-            softAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- softAckLanes.toList.traverse_ { case (h, l) =>
                 OutboxBacking.softAck(backend, h).highWater.flatMap(l.restoreCursor)
-            } >>
-            headHardAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
                 OutboxBacking.hardAck(backend, h).highWater.flatMap(l.restoreCursor)
-            } >>
-            coilHardAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
                 OutboxBacking.hubHardAck(backend, h).highWater.flatMap(l.restoreCursor)
             }
+        } yield ()
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(

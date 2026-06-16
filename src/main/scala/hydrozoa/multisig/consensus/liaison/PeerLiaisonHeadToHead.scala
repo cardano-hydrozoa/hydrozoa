@@ -336,24 +336,26 @@ abstract class PeerLiaisonHeadToHead(
       */
     private def restoreInboundCursors: IO[Unit] =
         val remoteNum = remoteHead.peerNum
-        OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreInbound) >>
-            OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreInbound) >>
-            OutboxBacking
+        for {
+            _ <- OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreInbound)
+            _ <- OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreInbound)
+            _ <- OutboxBacking
                 .request(backend, remoteNum)
                 .highWater
-                .flatMap(requestLane.restoreInbound) >>
-            OutboxBacking
+                .flatMap(requestLane.restoreInbound)
+            _ <- OutboxBacking
                 .softAck(backend, remoteNum)
                 .highWater
-                .flatMap(softAckLane.restoreInbound) >>
-            OutboxBacking
+                .flatMap(softAckLane.restoreInbound)
+            _ <- OutboxBacking
                 .hardAck(backend, remoteNum)
                 .highWater
-                .flatMap(hardAckLane.restoreInbound) >>
-            OutboxBacking
+                .flatMap(hardAckLane.restoreInbound)
+            _ <- OutboxBacking
                 .hubHardAck(backend, remoteNum)
                 .highWater
                 .flatMap(hubHardAckLane.restoreInbound)
+        } yield ()
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart

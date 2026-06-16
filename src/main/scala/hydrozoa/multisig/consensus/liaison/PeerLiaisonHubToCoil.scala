@@ -310,20 +310,22 @@ abstract class PeerLiaisonHubToCoil(
       * An empty store leaves every lane cold.
       */
     private def restoreHighWaters: IO[Unit] =
-        blockBacking.highWater.flatMap(blockLane.seedHighWater) >>
-            stackBacking.highWater.flatMap(stackLane.seedHighWater) >>
-            requestLanes.toList.traverse_ { case (h, l) =>
+        for {
+            _ <- blockBacking.highWater.flatMap(blockLane.seedHighWater)
+            _ <- stackBacking.highWater.flatMap(stackLane.seedHighWater)
+            _ <- requestLanes.toList.traverse_ { case (h, l) =>
                 requestBackings(h).highWater.flatMap(l.seedHighWater)
-            } >>
-            softAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- softAckLanes.toList.traverse_ { case (h, l) =>
                 softAckBackings(h).highWater.flatMap(l.seedHighWater)
-            } >>
-            headHardAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
                 headHardAckBackings(h).highWater.flatMap(l.seedHighWater)
-            } >>
-            coilHardAckLanes.toList.traverse_ { case (h, l) =>
+            }
+            _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
                 coilHardAckBackings(h).highWater.flatMap(l.seedHighWater)
             }
+        } yield ()
 
     private def preStartLocal: IO[Unit] =
         for {
