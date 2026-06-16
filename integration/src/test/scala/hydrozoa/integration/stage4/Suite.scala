@@ -42,7 +42,7 @@ import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
-import org.scalacheck.{Gen, Prop}
+import org.scalacheck.{Gen, Prop, PropertyM}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
@@ -134,16 +134,21 @@ case class Stage4Suite(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
     ): IO[Unit] =
-        super.onTestCaseGenerated(initialState, commands) >>
-            log.info(Stage4Runner.renderTable(initialState, commands))
+        for
+            _ <- super.onTestCaseGenerated(initialState, commands)
+            table <- Stage4Runner.renderTable(initialState, commands)(using log)
+            _ <- log.info(table)
+        yield ()
 
-    override def initEnv: Unit = ()
+    override def initEnv: PropertyM[IO, Unit] = PropertyM.run(IO.unit)
 
-    override def genInitialState(env: Unit): Gen[ModelState] =
-        Stage4Suite.genInitialState(
-          nPeers = nPeers,
-          nCoilPeers = nCoilPeers,
-          useTestControl = useTestControl
+    override def genInitialState(env: Unit): PropertyM[IO, ModelState] =
+        PropertyM.pick(
+          Stage4Suite.genInitialState(
+            nPeers = nPeers,
+            nCoilPeers = nCoilPeers,
+            useTestControl = useTestControl
+          )
         )
 
     override def canStartupNewSut(): Boolean = true

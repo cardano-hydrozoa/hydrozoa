@@ -8,8 +8,7 @@ import cats.Monad
   *
   * Pair with [[Slf4jMsgFormat.humanFormat]] to lift into [[LogEvent]] under a fixed routing key.
   * The extension methods on `ContraTracer[F, Slf4jMsg]` give `log.info("…")` ergonomics for any
-  * `F[_]: Monad` — typically `IO` (via [[Slf4jTracer.sink]]) or `cats.Id` (via the same `sink`
-  * lifted through [[Slf4jTracer.ioToId]] for pure / synchronous call sites).
+  * `F[_]: Monad` — typically `IO` (via [[Slf4jTracer.sink]]).
   */
 sealed trait Slf4jMsg
 
@@ -43,12 +42,6 @@ object Slf4jMsgFormat:
   *
   *   log.info("Hello world")            // IO[Unit]
   *
-  *   private val syncLog: ContraTracer[cats.Id, Slf4jMsg] =
-  *       Slf4jTracer.sink
-  *           .contramap(Slf4jMsgFormat.humanFormat("Stage1.Model"))
-  *           .natTracer(Slf4jTracer.ioToId)
-  *
-  *   val _ = syncLog.debug("hello in Gen")  // Unit
   * }}}
   */
 extension [F[_]: Monad](t: ContraTracer[F, Slf4jMsg])

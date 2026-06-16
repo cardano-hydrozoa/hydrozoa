@@ -21,6 +21,7 @@
         <appender-ref ref="STDOUT"/>
         <appender-ref ref="LOG_FILE"/>
     </root>
+    <logger name="CardanoBackend" level="warn"/>
     <logger name="CardanoLiaison" level="trace"/>
     <logger name="PeerLiaison" level="trace"/>
     <logger name="PeerLiaison.HeadToHead" level="trace"/>

@@ -27,7 +27,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -469,7 +469,8 @@ object Migrate extends IOApp:
 
             backend <- CardanoBackendBlockfrost(
               network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
+              apiKey = env.blockfrostApiKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
 
             // Get peer address

@@ -101,9 +101,17 @@ final case class TxTiming(
     /** A block can stay minor if this predicate is true for its start time, relative to the
       * previous major block's fallback tx start time. Otherwise, it must be upgraded to a major
       * block so that the competing fallback start time is pushed forward for future blocks.
-      *
-      * Polymorphic on `F`: pure callers pass `ContraTracer.nullTracer[cats.Id, TxTimingEvent]` and
-      * get a plain `Boolean`; IO callers pass a real `ContraTracer[IO, TxTimingEvent]`.
+      */
+    def blockCanStayMinor(
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackStartTime: FallbackTxStartTime
+    ): Boolean =
+        forcedMajorBlockWakeupTime(
+          competingFallbackStartTime
+        ).convert > blockCreationEndTime.convert
+
+    /** Traced variant of [[blockCanStayMinor]]. IO callers pass a real
+      * `ContraTracer[IO, TxTimingEvent]`; pure callers use the untraced overload.
       */
     def blockCanStayMinor[F[_]: Monad](
         tracer: ContraTracer[F, TxTimingEvent]
@@ -112,12 +120,11 @@ final case class TxTiming(
         competingFallbackStartTime: FallbackTxStartTime
     ): F[Boolean] = {
         val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime)
-        val result = fmbt.convert > blockCreationEndTime.convert
         tracer
             .traceWith(
               TxTimingEvent.CanStayMinor(competingFallbackStartTime, fmbt, blockCreationEndTime)
             )
-            .as(result)
+            .as(fmbt.convert > blockCreationEndTime.convert)
     }
 
     def depositSubmissionDeadline(

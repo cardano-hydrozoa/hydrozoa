@@ -1,9 +1,14 @@
 package hydrozoa.integration.stage4
 
+import cats.data.StateT
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import cats.implicits.*
 import hydrozoa.integration.stage4.Model.*
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.commands.{AnyCommand, LoggingControl}
-import org.scalacheck.{Test, YetAnotherProperties}
+import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
 
 import scala.concurrent.duration.DurationInt
 
@@ -12,17 +17,20 @@ object Stage4Runner:
     def generateCommands(
         initialState: ModelState,
         n: Int
-    ): (ModelState, List[AnyCommand[ModelState, Stage4Sut]]) =
-        List.fill(n)(()).foldLeft((initialState, Nil: List[AnyCommand[ModelState, Stage4Sut]])) {
-            case ((state, cmds), _) =>
-                val cmd = Stage4ScenarioGen.genNextCommand(state).sample.get
-                (cmd.advanceState(state), cmds :+ cmd)
-        }
+    )(using ContraTracer[IO, Slf4jMsg]): PropertyM[IO, (ModelState, List[AnyCommand[ModelState, Stage4Sut]])] =
+        val step: StateT[[x] =>> PropertyM[IO, x], ModelState, AnyCommand[ModelState, Stage4Sut]] =
+            StateT { state =>
+                for
+                    cmd      <- Stage4ScenarioGen.genNextCommand(state)
+                    newState <- PropertyM.run(cmd.advanceState[IO](state))
+                yield (newState, cmd)
+            }
+        step.replicateA(n).run(initialState)
 
     def renderTable(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
-    ): String =
+    )(using ContraTracer[IO, Slf4jMsg]): IO[String] =
         val peers = initialState.params.multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val startEpoch = initialState.currentModelTime.getEpochSecond
 
@@ -53,65 +61,76 @@ object Stage4Runner:
 
         val peerRegex = "peer=(\\d+)".r
 
-        // Collect (genSeqNum, cmd, nextState) for all non-NoOp commands
-        val rows = commands.zipWithIndex
-            .foldLeft(
-              (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
-            ) { case ((state, acc), (cmd, idx)) =>
-                val nextState = cmd.advanceState(state)
-                val entry = if cmd.label != "NoOp" then acc :+ (idx + 1, cmd, nextState) else acc
-                (nextState, entry)
-            }
-            ._2
-
-        // Sort by global clock, ties broken by generation order. With the single global clock
-        // the model time after each command is shared across peers, so this sort matches the
-        // SUT virtual timeline.
-        val sorted = rows.sortBy { (genSeq, _, nextState) =>
-            (nextState.currentModelTime.getEpochSecond, genSeq)
-        }
-
-        val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
-            val actingPeer =
-                peerRegex.findFirstMatchIn(cmd.label).map(m => HeadPeerNumber(m.group(1).toInt))
-            s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
-                val cell =
-                    if actingPeer.contains(p) then
-                        val t = nextState.currentModelTime.getEpochSecond - startEpoch
-                        val d = cmd.delay.toSeconds
-                        s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
-                            .take(colWidth)
-                            .padTo(colWidth, ' ')
-                    else " " * colWidth
-                s" $cell |"
-            }.mkString
-        }
-
         val legend =
             "Legend: μ=mean inter-arrival  +t=peer clock since start  Δ=sampled delay  #N=gen order"
 
-        (List(divider, header, divider) ++ rowLines ++ List(divider, legend)).mkString("\n")
+        // Collect (genSeqNum, cmd, nextState) for all non-NoOp commands
+        commands.zipWithIndex
+            .foldLeft(IO.pure(
+              (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
+            )) { case (ioAcc, (cmd, idx)) =>
+                ioAcc.flatMap { case (state, acc) =>
+                    cmd.advanceState[IO](state).map { nextState =>
+                        val entry =
+                            if cmd.label != "NoOp" then acc :+ (idx + 1, cmd, nextState) else acc
+                        (nextState, entry)
+                    }
+                }
+            }
+            .map { case (_, rows) =>
+                // Sort by global clock, ties broken by generation order. With the single global clock
+                // the model time after each command is shared across peers, so this sort matches the
+                // SUT virtual timeline.
+                val sorted = rows.sortBy { (genSeq, _, nextState) =>
+                    (nextState.currentModelTime.getEpochSecond, genSeq)
+                }
+
+                val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
+                    val actingPeer =
+                        peerRegex.findFirstMatchIn(cmd.label).map(m => HeadPeerNumber(m.group(1).toInt))
+                    s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
+                        val cell =
+                            if actingPeer.contains(p) then
+                                val t = nextState.currentModelTime.getEpochSecond - startEpoch
+                                val d = cmd.delay.toSeconds
+                                s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
+                                    .take(colWidth)
+                                    .padTo(colWidth, ' ')
+                            else " " * colWidth
+                        s" $cell |"
+                    }.mkString
+                }
+
+                (List(divider, header, divider) ++ rowLines ++ List(divider, legend)).mkString("\n")
+            }
 
     def printTable(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
-    ): Unit =
-        println(renderTable(initialState, commands))
+    )(using ContraTracer[IO, Slf4jMsg]): IO[Unit] =
+        renderTable(initialState, commands).flatMap(s => IO(println(s)))
 
 @main def stage4PrintCommandSequence(): Unit =
-    LoggingControl.withSuppressedLogs("stage4 command sequence generation") {
-        val gen = Stage4Suite.genInitialState(
-          nPeers = 3,
-          meanInterArrivalTime = p =>
-              (p: Int) match
-                  case 0 => 30.seconds
-                  case 1 => 8.seconds
-                  case _ => 15.seconds
-        )
-        val initialState = LazyList.continually(gen.sample).flatten.head
-        val (_, commands) = Stage4Runner.generateCommands(initialState, 300)
-        Stage4Runner.printTable(initialState, commands)
+    given ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("stage4"))
+    val prop = LoggingControl.withSuppressedLogs("stage4 command sequence generation") {
+        PropertyM.monadicIO {
+            for
+                initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
+                    nPeers = 3,
+                    meanInterArrivalTime = p =>
+                        (p: Int) match
+                            case 0 => 30.seconds
+                            case 1 => 8.seconds
+                            case _ => 15.seconds
+                ))
+                commandsResult <- Stage4Runner.generateCommands(initialState, 300)
+                (_, commands)   = commandsResult
+                _              <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
+            yield Prop.passed
+        }
     }
+    val _ = Test.check(Test.Parameters.default.withMinSuccessfulTests(1), prop)
 
 // ===================================
 // Test entry points

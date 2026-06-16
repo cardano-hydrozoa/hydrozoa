@@ -4,8 +4,6 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import cats.implicits.toContravariantOps
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
@@ -14,6 +12,9 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
 import io.bullet.borer.Cbor
+import cats.Monad
+import cats.syntax.flatMap.*
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug}
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{TransactionInput, Utxos}
 import scalus.uplc.builtin.ByteString
@@ -22,11 +23,6 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 
 object Model {
-
-    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("Stage4.Model"))
-            .natTracer(Slf4jTracer.ioToId)
 
     case class Params(
         multiNodeConfig: MultiNodeConfig,
@@ -142,12 +138,16 @@ object Model {
     // ===================================
 
     given ModelCommand[DelayCommand, Unit, ModelState] with {
-        override def runState(cmd: DelayCommand, state: ModelState): (Unit, ModelState) =
+        override def runState[M[_]: Monad](
+            cmd: DelayCommand,
+            state: ModelState
+        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, ModelState)] = {
             import cmd.peerNum
-            logger.debug(s"MODEL>> DelayCommand(peer=$peerNum, duration=${cmd.duration})")
             val newTime = state.currentModelTime + cmd.duration
             val absorbed = absorbDeposits(newTime, state)
-            () -> absorbed.copy(currentModelTime = newTime)
+            log.debug(s"MODEL>> DelayCommand(peer=$peerNum, duration=${cmd.duration})") >>
+                Monad[M].pure(() -> absorbed.copy(currentModelTime = newTime))
+        }
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
             cmd.duration.finiteDuration
@@ -159,68 +159,60 @@ object Model {
         // Even the first command has a non-zero delay: Poisson first-arrival time ~ Exp(λ).
         override def delay(cmd: L2TxCommand): FiniteDuration = cmd.interArrivalDelay
 
-        override def runState(
+        override def runState[M[_]: Monad](
             cmd: L2TxCommand,
             state: ModelState
-        ): (ValidityFlag, ModelState) =
+        )(using log: ContraTracer[M, Slf4jMsg]): M[(ValidityFlag, ModelState)] = {
             import cmd.peerNum
-            logger.debug(s"MODEL>> L2TxCommand(peer=$peerNum, requestId=${cmd.request.requestId})")
-
             val newTime = state.currentModelTime + cmd.interArrivalDelay
             val stateAfterTime = absorbDeposits(newTime, state).copy(
               currentModelTime = newTime,
             )
-
             val nodeConfig = stateAfterTime.nodeConfigFor(peerNum)
-
             val l2Tx = L2Tx
                 .parse(
                   cmd.request.request.body.l2Payload.bytes,
                   nodeConfig.headConfig.cardanoNetwork
                 )
                 .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
-
             val mutatorResult = HydrozoaTransactionMutator.transit(
               config = nodeConfig.headConfig,
               time = stateAfterTime.currentModelTime,
               state = stateAfterTime.utxosL2Active,
               l2Tx = l2Tx
             )
-
-            val (flag, newL2Utxos) = mutatorResult match {
+            val (flag, newL2Utxos, mInvalidMsg) = mutatorResult match {
                 case Left(err) =>
-                    logger.debug(s"L2 tx ${cmd.request.requestId} invalid in model: $err")
-                    ValidityFlag.Invalid -> stateAfterTime.utxosL2Active
+                    (ValidityFlag.Invalid, stateAfterTime.utxosL2Active,
+                        Some(s"L2 tx ${cmd.request.requestId} invalid in model: $err"))
                 case Right(newUtxos) =>
-                    ValidityFlag.Valid -> newUtxos
+                    (ValidityFlag.Valid, newUtxos, None)
             }
-
-            flag -> stateAfterTime.copy(
+            val result = flag -> stateAfterTime.copy(
               utxosL2Active = newL2Utxos,
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
                   (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
               modelFlags = stateAfterTime.modelFlags + (cmd.request.requestId -> flag),
             )
+            log.debug(s"MODEL>> L2TxCommand(peer=$peerNum, requestId=${cmd.request.requestId})") >>
+                mInvalidMsg.fold(Monad[M].pure(()))(log.debug(_)) >>
+                Monad[M].pure(result)
+        }
     }
 
     given ModelCommand[RegisterAndSubmitDepositCommand, ValidityFlag, ModelState] with {
         override def delay(cmd: RegisterAndSubmitDepositCommand): FiniteDuration =
             cmd.interArrivalDelay
 
-        override def runState(
+        override def runState[M[_]: Monad](
             cmd: RegisterAndSubmitDepositCommand,
             state: ModelState
-        ): (ValidityFlag, ModelState) =
+        )(using log: ContraTracer[M, Slf4jMsg]): M[(ValidityFlag, ModelState)] = {
             import cmd.peerNum
-            logger.debug(
-              s"MODEL>> RegisterAndSubmitDepositCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
-            )
-
             val newTime = state.currentModelTime + cmd.interArrivalDelay
             val stateAfterTime = absorbDeposits(newTime, state).copy(
               currentModelTime = newTime,
             )
-
             val pending = PendingDeposit(
               requestId = cmd.request.requestId,
               absorptionStartTime = cmd.absorptionStartTime,
@@ -228,11 +220,9 @@ object Model {
               l2Payload = cmd.l2Payload,
               depositProduced = cmd.depositProduced
             )
-
             val spentL1Inputs = cmd.depositTxBytesSigned.body.value.inputs.toSet
             val updatedPeerL1 = stateAfterTime.peerUtxosL1(peerNum) -- spentL1Inputs
-
-            ValidityFlag.Valid -> stateAfterTime.copy(
+            val result = ValidityFlag.Valid -> stateAfterTime.copy(
               pendingDeposits = stateAfterTime.pendingDeposits +
                   (peerNum -> (stateAfterTime.pendingDeposits(peerNum) :+ pending)),
               nextRequestNumbers = stateAfterTime.nextRequestNumbers +
@@ -243,6 +233,10 @@ object Model {
               registeredDeposits =
                   stateAfterTime.registeredDeposits + (cmd.request.requestId -> pending),
             )
+            log.debug(
+              s"MODEL>> RegisterAndSubmitDepositCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
+            ) >> Monad[M].pure(result)
+        }
     }
 
 }

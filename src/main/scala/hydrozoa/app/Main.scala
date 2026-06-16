@@ -9,7 +9,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -185,7 +185,8 @@ object Main extends IOApp {
             _ <- log.info("Starting Cardano Blockfrost Backend...")
             backend <- CardanoBackendBlockfrost(
               network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
+              apiKey = env.blockfrostApiKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
             nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
               vKey = env.verificationKey,

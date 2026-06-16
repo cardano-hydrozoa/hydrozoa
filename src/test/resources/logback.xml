@@ -9,6 +9,7 @@
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="BlockWeaver" level="warn"/>
+    <logger name="CardanoBackend" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
     <logger name="PeerLiaison" level="warn"/>

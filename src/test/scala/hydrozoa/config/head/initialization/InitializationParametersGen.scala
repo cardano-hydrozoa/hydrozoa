@@ -12,7 +12,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
 import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
-import hydrozoa.lib.logging.debug
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
@@ -32,7 +31,6 @@ import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
 import test.Generators.Other.genValueDistributionWithMinAdaUtxo
-import test.Generators.loggerGenerators
 import test.{GenWithTestPeers, Generators, TestPeers, TestPeersSpec, given}
 
 // TODO: George: what do you think of expanding our shortening citizenship?
@@ -237,14 +235,10 @@ object InitializationParametersGenTopDown {
             contingency <- Gen.const(fallbackContingency.totalContingencyFor(headPeerNumber))
             minFunding <- Gen.const(Value(contingency) + Value(peerEquity) + Value.ada(20))
 
-            _ = loggerGenerators.debug(s"minFunding=$minFunding")
-
             fundingUtxos <- Gen
                 .pick(1, peerUtxos.asUtxoList)
                 .suchThat(ret => {
                     val selectedValue = Value.combine(ret.map(_.output.value))
-                    loggerGenerators.debug(s"selectedValue=$selectedValue")
-                    loggerGenerators.debug(s"ret.size=$selectedValue")
                     (selectedValue - minFunding).isPositive
                 })
 

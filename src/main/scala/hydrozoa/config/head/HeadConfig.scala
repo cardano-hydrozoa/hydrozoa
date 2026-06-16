@@ -20,7 +20,8 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -283,7 +284,11 @@ object HeadConfig {
                 }
 
                 cardanoBackend <- EitherT.liftF(
-                  CardanoBackendBlockfrost(blockfrostNetwork, privateConfig.blockfrostApiKey)
+                  CardanoBackendBlockfrost(
+                    blockfrostNetwork,
+                    privateConfig.blockfrostApiKey,
+                    tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                  )
                 )
 
                 bootstrapConfig <- Bootstrap.fromJson(bootstrapConfigStr, cardanoBackend)

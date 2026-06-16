@@ -1,14 +1,12 @@
 package test
 
 import cats.data.{NonEmptyList, NonEmptyVector}
-import cats.implicits.toContravariantOps
 import cats.syntax.all.toTraverseOps
 import cats.{Hash as _, *}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.value.coin.Distribution
 import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}
@@ -55,14 +53,6 @@ given genMonad: Monad[Gen] = new Monad[Gen] {
 //   We should lift the config into a `case class Generators(config : Generators.Config)` or a Reader Equivalent
 object Generators {
     export Generators.Hydrozoa.ArbitraryInstances.given
-
-    // This guy is used everywhere through tests to log some traces when generating various things.
-    // Use:
-    //   - trace level for diversity traces (z-print-results property)
-    val loggerGenerators: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("Generators"))
-            .natTracer(Slf4jTracer.ioToId)
 
     /** NOTE: generators here are opinionated. They are not directly suitable for upstreaming and
       * contain reasonable, hydrozoa-specific defaults.

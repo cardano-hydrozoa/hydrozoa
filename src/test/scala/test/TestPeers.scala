@@ -13,7 +13,6 @@ import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.lib.logging.trace
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import org.http4s.Uri
@@ -26,7 +25,6 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.|>
-import test.Generators.loggerGenerators
 
 type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
 
@@ -320,28 +318,9 @@ object TestPeersTest extends Properties("Test peers") {
     override def overrideParameters(p: Parameters): Parameters =
         p.withMinSuccessfulTests(500)
 
-    val distinct = mutable.Set.empty[TestPeers]
-    var hasLogged = false
-
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-    )(testPeers => {
-        val _ = distinct.add(testPeers)
-        true
-    })
-
-    val _ = property("z-print-results") = Prop.forAllNoShrink(Gen.const(())) { _ =>
-        if !hasLogged then {
-            loggerGenerators.trace(
-              distinct.toList
-                  .map(_.toString)
-                  .sorted
-                  .mkString("Unique values:", "\n\t-", "\n\n-----")
-            )
-            hasLogged = true
-        }
-        Prop.passed
-    }
+    )(testPeers => Prop.collect(testPeers)(Prop.passed))
 }

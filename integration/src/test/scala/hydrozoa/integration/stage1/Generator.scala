@@ -19,8 +19,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
-import cats.implicits.toContravariantOps
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
@@ -29,8 +27,13 @@ import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import org.scalacheck.Gen
+import cats.effect.IO
+import cats.syntax.contravariant.*
+import cats.syntax.flatMap.*
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
+import org.scalacheck.{Gen, PropertyM}
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
+import org.scalacheck.util.Pretty
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -52,10 +55,11 @@ import scala.math.Ordering.Implicits.infixOrderingOps
   */
 object CommandGenerators:
 
-    private val logger: ContraTracer[cats.Id, Slf4jMsg] =
-        Slf4jTracer.sink
-            .contramap(Slf4jMsgFormat.humanFormat("Stage1.CommandGenerators"))
-            .natTracer(Slf4jTracer.ioToId)
+    private given log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.CommandGenerators"))
+
+    private def pick[A](gen: Gen[A])(using pp: A => Pretty): PropertyM[IO, A] =
+        PropertyM.pick[IO, A](gen)
 
     // ===================================
     // Delay
@@ -320,7 +324,7 @@ object CommandGenerators:
         }
     } yield values
 
-    type L2txGen = (state: Model.State) => Gen[L2TxCommand]
+    type L2txGen = (state: Model.State) => PropertyM[IO, L2TxCommand]
 
     def genAuxiliaryData(
         outputs: List[TransactionOutput],
@@ -340,7 +344,8 @@ object CommandGenerators:
     def genValidNonPlutusL2Tx(
         txStrategy: TxStrategy,
         txMutator: TxMutator
-    )(state: Model.State): Gen[L2TxCommand] =
+    )(state: Model.State): PropertyM[IO, L2TxCommand] = {
+        import PropertyM.run
 
         val config = state.multiNodeConfig
         val cardanoNetwork: CardanoNetwork = config.headConfig.cardanoNetwork
@@ -353,20 +358,16 @@ object CommandGenerators:
             )
 
         for {
-            // Inputs
-            inputs <- genInputs(ownedUtxos, txStrategy)
-            totalValue = Value.combine(inputs.map(ownedUtxos(_).value))
-            _ = logger.trace(s"totalValue: $totalValue")
-
-            // Outputs
-            outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
-            _ = logger.trace(s"output values: $outputValues")
-            outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
-              outputValues
-                  .map(v => Gen.oneOf(l2AddressesInUse).map(a => Babbage(a, v)))
-            )
-
-            auxiliaryData <- genAuxiliaryData(outputs, txStrategy).map(Some.apply)
+            inputs       <- pick(genInputs(ownedUtxos, txStrategy))
+            totalValue   = Value.combine(inputs.map(ownedUtxos(_).value))
+            _            <- run(log.trace(s"totalValue: $totalValue"))
+            outputValues <- pick(genOutputValues(totalValue, txStrategy, generateCappedValueC))
+            _            <- run(log.trace(s"outputValues: $outputValues"))
+            outputs      <- pick(Gen.sequence[List[TransactionOutput], TransactionOutput](
+                                outputValues
+                                    .map(v => Gen.oneOf(l2AddressesInUse).map(a => Babbage(a, v)))
+                            ))
+            auxiliaryData <- pick(genAuxiliaryData(outputs, txStrategy).map(Some.apply))
 
             txUnsigned = TransactionBuilder
                 .build(
@@ -392,8 +393,7 @@ object CommandGenerators:
                 )
 
             txSigned = config.multisignTx(txUnsigned)
-
-            _ = logger.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}")
+            _        <- run(log.trace(s"signed l2Tx: ${HexUtil.encodeHexString(txSigned.toCbor)}"))
 
             body = TransactionRequestBody(
               l2Payload = ByteString.fromArray(txSigned.toCbor)
@@ -410,7 +410,6 @@ object CommandGenerators:
               bodyHash = body.hash
             )
 
-            // Get verification key for peer 0, though it's not needed for EUTXO ledger
             userVk = config.nodeConfigs(HeadPeerNumber.zero).ownWallet.exportVerificationKey
 
         } yield L2TxCommand(
@@ -425,6 +424,7 @@ object CommandGenerators:
           txStrategy = txStrategy,
           txMutator = txMutator
         )
+    }
 
     // ===================================
     // Register deposit command
@@ -432,7 +432,8 @@ object CommandGenerators:
 
     /** May fail if there is no enough funds in peer's utxos.
       */
-    def genRegisterDepositCommand(state: Model.State): Gen[Option[RegisterDepositCommand]] = {
+    def genRegisterDepositCommand(state: Model.State): PropertyM[IO, Option[RegisterDepositCommand]] = {
+        import PropertyM.run
         import state.multiNodeConfig
 
         val peerAddress = multiNodeConfig.addressOf(HeadPeerNumber.zero)
@@ -449,14 +450,13 @@ object CommandGenerators:
 
         val l1UtxoAvailable = state.peerUtxosL1 -- state.utxoLocked
         if l1UtxoAvailable.isEmpty
-        then Gen.const(None)
+        then pick(Gen.const(None))
         else
             for {
-                fundingUtxos <- Gen.atLeastOne(l1UtxoAvailable).map(_.toMap)
-                totalValue = Value.combine(fundingUtxos.map(_._2.value))
-
-                _ = logger.trace(s"fundingUtxos: $fundingUtxos")
-                _ = logger.trace(s"totalValue: $totalValue")
+                fundingUtxos <- pick(Gen.atLeastOne(l1UtxoAvailable).map(_.toMap))
+                totalValue   = Value.combine(fundingUtxos.map(_._2.value))
+                _            <- run(log.trace(s"fundingUtxos: $fundingUtxos"))
+                _            <- run(log.trace(s"totalValue: $totalValue"))
 
                 // Change should be big enough to make balancing of the DEPOSIT tx always possible
                 minimalChangeCoins = 1_500_000L
@@ -469,44 +469,37 @@ object CommandGenerators:
                     if ensureMinAdaLenientC(
                           totalValue
                         ) != totalValue || minimalTotalValueCoins > totalValue.coin.value
-                    then Gen.const(None)
+                    then pick(Gen.const(None))
                     else {
                         // Reserved to cover refund tx fee
                         val reserved = Value.lovelace(minimalDepositValueCoins)
                         val totalValueAvailable = totalValue - reserved
                         for {
-                            change <- generateCappedValueC(
-                              totalValueAvailable,
-                              Some(minimalChangeCoins),
-                              None,
-                              None
-                            )
-                            _ = logger.trace(s"change: $change")
-
+                            change       <- pick(generateCappedValueC(
+                                                totalValueAvailable,
+                                                Some(minimalChangeCoins),
+                                                None,
+                                                None
+                                            ))
                             depositValue = totalValue - change
-                            _ = logger.trace(s"depositValue: $depositValue")
 
                             ret <-
                                 if ensureMinAdaLenientC(depositValue) != depositValue
-                                then Gen.const(None)
+                                then pick(Gen.const(None))
                                 else
                                     for {
+                                        outputValues <- pick(genOutputValues(
+                                                          depositValue,
+                                                          TxStrategy.Regular,
+                                                          generateCappedValueC
+                                                        ))
 
-                                        outputValues <- genOutputValues(
-                                          depositValue,
-                                          TxStrategy.Regular,
-                                          generateCappedValueC
-                                        )
-
-                                        _ = logger.trace(s"outputValues: $outputValues")
-
-                                        outputs <- Gen
-                                            .sequence[List[TransactionOutput], TransactionOutput](
-                                              outputValues
-                                                  .map(v =>
-                                                      Gen.const(peerAddress).map(a => Babbage(a, v))
-                                                  )
-                                            )
+                                        outputs <- pick(Gen.sequence[List[TransactionOutput], TransactionOutput](
+                                                       outputValues
+                                                           .map(v =>
+                                                               Gen.const(peerAddress).map(a => Babbage(a, v))
+                                                           )
+                                                   ))
 
                                         l2Outputs = NonEmptyList.fromListUnsafe(
                                           outputs.map(
@@ -516,11 +509,7 @@ object CommandGenerators:
                                           )
                                         )
 
-                                        l2Value = Value.combine(
-                                          l2Outputs.toList.map(_.l2OutputValue)
-                                        )
-                                        _ = logger.trace(s"l2Value: $l2Value")
-
+                                        l2Value   = Value.combine(l2Outputs.toList.map(_.l2OutputValue))
                                         requestId = state.nextRequestId
 
                                         // This should be bigger than the longest possible block duration, see [[genCompleteBlock]].
@@ -554,9 +543,9 @@ object CommandGenerators:
                                               depositRefundSeq.depositTx.tx
                                             )
 
-                                        _ = logger.trace(
-                                          s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
-                                        )
+                                        _ <- run(log.trace(
+                                               s"deposit tx signed: ${HexUtil.encodeHexString(depositTxSigned.toCbor)}"
+                                             ))
 
                                         body = DepositRequestBody(
                                           l1Payload = ByteString
@@ -573,7 +562,6 @@ object CommandGenerators:
                                           bodyHash = body.hash
                                         )
 
-                                        // Get verification key for peer 0
                                         userVk = multiNodeConfig
                                             .nodeConfigs(HeadPeerNumber.zero)
                                             .ownWallet
@@ -607,30 +595,29 @@ object CommandGenerators:
 
     def genSubmitDepositsCommand(
         state: Model.State
-    ): Gen[SubmitDepositsCommand] = {
+    ): PropertyM[IO, SubmitDepositsCommand] = {
+        import PropertyM.run
         val registeredDeposits = state.deposits.depositsRegistered
 
         // Prefix is easier to think about, though we can pick up arbitrary elements
-        Gen.choose(1, registeredDeposits.size).map { n =>
-            logger.trace(
-              s"genSubmitDepositsCommand registered deposits: $registeredDeposits, n=$n"
-            )
-            val selected = registeredDeposits.take(n)
-
-            val partition = selected.partition { registered =>
-
-                val submissionDeadline = registered.cmd.request.request.header.validityEnd
-                val submissionRunway = state.getCurrentTime.instant + 20.seconds
-
-                logger.trace(s"genSubmitDepositsCommand: submissionDeadline=$submissionDeadline")
-                logger.trace(s"genSubmitDepositsCommand: submissionRunway=$submissionRunway")
-                submissionDeadline.convert > submissionRunway
-            }
-            SubmitDepositsCommand(
-              depositsForSubmission = partition._1,
-              depositsToDecline = partition._2
-            )
-        }
+        for {
+            n         <- pick(Gen.choose(1, registeredDeposits.size))
+            _         <- run(log.trace(
+                              s"genSubmitDepositsCommand registered deposits: $registeredDeposits, n=$n"
+                          ))
+            selected  = registeredDeposits.take(n)
+            partition = selected.partition { registered =>
+                            val submissionDeadline = registered.cmd.request.request.header.validityEnd
+                            val submissionRunway   = state.getCurrentTime.instant + 20.seconds
+                            submissionDeadline.convert > submissionRunway
+                        }
+            _         <- run(log.trace(
+                              s"genSubmitDepositsCommand: forSubmission=${partition._1.size} toDecline=${partition._2.size}"
+                          ))
+        } yield SubmitDepositsCommand(
+            depositsForSubmission = partition._1,
+            depositsToDecline = partition._2
+        )
     }
 
 end CommandGenerators
@@ -640,7 +627,10 @@ end CommandGenerators
 // ===================================
 
 object ScenarioGenerators:
-    
+
+    private def pick[A](gen: Gen[A])(using pp: A => Pretty): PropertyM[IO, A] =
+        PropertyM.pick[IO, A](gen)
+
     /** Produces L2 transactions (valid and non-valid) with no withdrawals.
       *
       * There is a customizable delay before starting every new block. If the delay happens to be
@@ -668,9 +658,10 @@ object ScenarioGenerators:
 
         override def genNextCommand(
             state: Model.State
-        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+        ): PropertyM[IO, AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
             import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -680,7 +671,7 @@ object ScenarioGenerators:
                                 state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genRandomDelay(
                                   currentTime = state.getCurrentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
@@ -688,15 +679,15 @@ object ScenarioGenerators:
                                   slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case Ready(blockNumber, _) =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genStartBlock(blockNumber, state.getCurrentTime.instant)
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case InProgress(blockNumber, _, _, _) if blockNumber == BlockNumber.zero =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
                                   state.multiNodeConfig.initialBlock.blockBrief.endTime,
@@ -704,27 +695,32 @@ object ScenarioGenerators:
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
                                 )
-                                .map(AnyCommand(_))
+                                .map(AnyCommand(_)))
 
                         case InProgress(blockNumber, _, _, _) =>
-                            Gen.frequency(
-                              1 -> CommandGenerators
-                                  .genCompleteBlock(
-                                    blockNumber,
-                                    state.getCurrentTime.instant,
-                                    state.competingFallbackStartTime,
-                                    state.multiNodeConfig,
-                                    state.reservedSubmissionDuration
-                                  )
-                                  .map(AnyCommand.apply),
-                              10 -> (if state.utxosL2Active.isEmpty
-                                     then Gen.const(noOp)
-                                     else generateL2Tx(state).map(AnyCommand.apply))
-                            )
+                            for {
+                                branch <- pick(Gen.frequency(1 -> 0, 10 -> 1))
+                                cmd    <- branch match {
+                                              case 0 =>
+                                                  pick(CommandGenerators
+                                                      .genCompleteBlock(
+                                                        blockNumber,
+                                                        state.getCurrentTime.instant,
+                                                        state.competingFallbackStartTime,
+                                                        state.multiNodeConfig,
+                                                        state.reservedSubmissionDuration
+                                                      )
+                                                      .map(AnyCommand.apply))
+                                              case _ =>
+                                                  if state.utxosL2Active.isEmpty
+                                                  then pick(Gen.const(noOp))
+                                                  else generateL2Tx(state).map(AnyCommand.apply)
+                                          }
+                            } yield cmd
 
-                        case HeadFinalized => Gen.const(noOp)
+                        case HeadFinalized => pick(Gen.const(noOp))
                     }
-                case _ => Gen.const(noOp)
+                case _ => pick(Gen.const(noOp))
             }
         }
 
@@ -732,9 +728,10 @@ object ScenarioGenerators:
 
         override def genNextCommand(
             state: Model.State
-        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+        ): PropertyM[IO, AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
             import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -745,20 +742,20 @@ object ScenarioGenerators:
                                   state.competingFallbackStartTime
                                 )
                             // We need to avoid fallbacks to finalize the head
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genStayOnHappyPathDelay(
                                   currentTime = state.getCurrentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime
                                 )
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case Ready(blockNumber, _) =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genStartBlock(blockNumber, state.getCurrentTime.instant)
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case InProgress(blockNumber, _, _, _) if blockNumber == BlockNumber.zero =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
                                   state.multiNodeConfig.initialBlock.blockBrief.endTime,
@@ -766,43 +763,40 @@ object ScenarioGenerators:
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
                                 )
-                                .map(AnyCommand(_))
+                                .map(AnyCommand(_)))
                         case InProgress(blockNumber, _, _, _) =>
-                            Gen.frequency(
-                              1 -> (if state.utxosL2Active.size >= minL2Utxos
-                                    then
-                                        CommandGenerators
-                                            .genCompleteBlockFinal(
-                                              blockNumber,
-                                              state.getCurrentTime.instant,
-                                              state.competingFallbackStartTime,
-                                              state.multiNodeConfig,
-                                              state.reservedSubmissionDuration
-                                            )
-                                            .map(AnyCommand.apply)
-                                    else
-                                        CommandGenerators
-                                            .genCompleteBlockRegular(
-                                              blockNumber,
-                                              state.getCurrentTime.instant,
-                                              state.competingFallbackStartTime,
-                                              state.multiNodeConfig,
-                                              state.reservedSubmissionDuration
-                                            )
-                                            .map(AnyCommand.apply)),
-                              10 -> CommandGenerators
-                                  .genValidNonPlutusL2Tx(
-                                    txStrategy = Dust(),
-                                    txMutator = Identity
-                                  )(
-                                    state = state
-                                  )
-                                  .map(AnyCommand.apply)
-                            )
+                            for {
+                                branch <- pick(Gen.frequency(1 -> 0, 10 -> 1))
+                                cmd    <- branch match {
+                                              case 0 =>
+                                                  pick((if state.utxosL2Active.size >= minL2Utxos
+                                                        then CommandGenerators.genCompleteBlockFinal(
+                                                            blockNumber,
+                                                            state.getCurrentTime.instant,
+                                                            state.competingFallbackStartTime,
+                                                            state.multiNodeConfig,
+                                                            state.reservedSubmissionDuration
+                                                        )
+                                                        else CommandGenerators.genCompleteBlockRegular(
+                                                            blockNumber,
+                                                            state.getCurrentTime.instant,
+                                                            state.competingFallbackStartTime,
+                                                            state.multiNodeConfig,
+                                                            state.reservedSubmissionDuration
+                                                        )).map(AnyCommand.apply))
+                                              case _ =>
+                                                  CommandGenerators
+                                                      .genValidNonPlutusL2Tx(
+                                                        txStrategy = Dust(),
+                                                        txMutator = Identity
+                                                      )(state)
+                                                      .map(AnyCommand.apply)
+                                          }
+                            } yield cmd
 
-                        case HeadFinalized => Gen.const(noOp)
+                        case HeadFinalized => pick(Gen.const(noOp))
                     }
-                case _ => Gen.const(noOp)
+                case _ => pick(Gen.const(noOp))
             }
         }
 
@@ -815,9 +809,10 @@ object ScenarioGenerators:
 
         override def genNextCommand(
             state: Model.State
-        ): Gen[AnyCommand[Model.State, Stage1Sut]] = {
+        ): PropertyM[IO, AnyCommand[Model.State, Stage1Sut]] = {
             import hydrozoa.integration.stage1.Model.BlockCycle.*
             import hydrozoa.integration.stage1.Model.CurrentTime.BeforeHappyPathExpiration
+
 
             state.getCurrentTime match {
                 case BeforeHappyPathExpiration(_) =>
@@ -827,7 +822,7 @@ object ScenarioGenerators:
                                 state.multiNodeConfig.headConfig.txTiming.newSettlementEndTime(
                                   state.competingFallbackStartTime
                                 )
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genRandomDelay(
                                   currentTime = state.getCurrentTime.instant,
                                   settlementExpirationTime = settlementExpirationTime,
@@ -835,15 +830,15 @@ object ScenarioGenerators:
                                   slotConfig = state.multiNodeConfig.headConfig.slotConfig,
                                   blockNumber = blockNumber
                                 )
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case Ready(blockNumber, _) =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genStartBlock(blockNumber, state.getCurrentTime.instant)
-                                .map(AnyCommand.apply)
+                                .map(AnyCommand.apply))
 
                         case InProgress(blockNumber, _, _, _) if blockNumber == BlockNumber.zero =>
-                            CommandGenerators
+                            pick(CommandGenerators
                                 .genCompleteBlock(
                                   blockNumber,
                                   state.multiNodeConfig.initialBlock.blockBrief.endTime,
@@ -851,43 +846,46 @@ object ScenarioGenerators:
                                   state.multiNodeConfig,
                                   state.reservedSubmissionDuration
                                 )
-                                .map(AnyCommand(_))
+                                .map(AnyCommand(_)))
                         case InProgress(blockNumber, _, _, _) =>
+                            for {
+                                branch <- pick(Gen.frequency(3 -> 0, 5 -> 1, 1 -> 2, 3 -> 3))
+                                cmd    <- branch match {
+                                              case 0 =>
+                                                  CommandGenerators
+                                                      .genRegisterDepositCommand(state)
+                                                      .map(_.fold(noOp)(AnyCommand.apply))
+                                              case 1 =>
+                                                  if state.deposits.depositsRegistered.nonEmpty
+                                                  then CommandGenerators
+                                                      .genSubmitDepositsCommand(state)
+                                                      .map(AnyCommand.apply)
+                                                  else pick(Gen.const(noOp))
+                                              case 2 =>
+                                                  pick(CommandGenerators
+                                                      .genCompleteBlock(
+                                                        blockNumber,
+                                                        state.getCurrentTime.instant,
+                                                        state.competingFallbackStartTime,
+                                                        state.multiNodeConfig,
+                                                        state.reservedSubmissionDuration
+                                                      )
+                                                      .map(AnyCommand.apply))
+                                              case _ =>
+                                                  if state.utxosL2Active.nonEmpty
+                                                  then CommandGenerators
+                                                      .genValidNonPlutusL2Tx(
+                                                        txStrategy = RandomWithdrawals,
+                                                        txMutator = Identity
+                                                      )(state)
+                                                      .map(AnyCommand.apply)
+                                                  else pick(Gen.const(noOp))
+                                          }
+                            } yield cmd
 
-                            Gen.frequency(
-                              3 -> CommandGenerators
-                                  .genRegisterDepositCommand(state)
-                                  .map(_.map(AnyCommand.apply(_))),
-                              5 -> (if state.deposits.depositsRegistered.nonEmpty
-                                    then
-                                        CommandGenerators
-                                            .genSubmitDepositsCommand(state)
-                                            .map(cmd => Some(AnyCommand.apply(cmd)))
-                                    else Gen.const(None)),
-                              1 -> CommandGenerators
-                                  .genCompleteBlock(
-                                    blockNumber,
-                                    state.getCurrentTime.instant,
-                                    state.competingFallbackStartTime,
-                                    state.multiNodeConfig,
-                                    state.reservedSubmissionDuration
-                                  )
-                                  .map(cmd => Some(AnyCommand.apply(cmd))),
-                              3 -> (if state.utxosL2Active.nonEmpty
-                                    then
-                                        CommandGenerators
-                                            .genValidNonPlutusL2Tx(
-                                              txStrategy = RandomWithdrawals,
-                                              txMutator = Identity
-                                            )(state)
-                                            .map(cmd => Some(AnyCommand.apply(cmd)))
-                                    else Gen.const(None))
-                            ).retryUntil(_.isDefined)
-                                .map(_.get)
-
-                        case HeadFinalized => Gen.const(noOp)
+                        case HeadFinalized => pick(Gen.const(noOp))
                     }
-                case _ => Gen.const(noOp)
+                case _ => pick(Gen.const(noOp))
             }
         }
 
