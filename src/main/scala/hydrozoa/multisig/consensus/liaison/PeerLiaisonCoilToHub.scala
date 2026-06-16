@@ -316,9 +316,35 @@ abstract class PeerLiaisonCoilToHub(
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
             highWater <- ownHardAckBacking.highWater
             _ <- ownHardAckLane.seedHighWater(highWater)
+            // Restore each inbound population cursor to next(max received), so on reconnect we pull
+            // only NEW entries — verify rejects a stale re-serve, which would otherwise re-dispatch
+            // to the consensus actors that ReplayActor already re-fed (CR8 persisted each inbound
+            // entry before its cursor advanced).
+            _ <- restoreInboundCursors
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
+
+    /** Restore the inbound population lanes' receive cursors to `next(max(persisted family))` (the
+      * full population the coil peer pulls from the hub). An empty store leaves a lane at its cold
+      * initial cursor.
+      */
+    private def restoreInboundCursors: IO[Unit] =
+        val backend = persistence.backend
+        OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreFrom) >>
+            OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreFrom) >>
+            requestLanes.toList.traverse_ { case (h, l) =>
+                OutboxBacking.request(backend, h).highWater.flatMap(l.restoreFrom)
+            } >>
+            softAckLanes.toList.traverse_ { case (h, l) =>
+                OutboxBacking.softAck(backend, h).highWater.flatMap(l.restoreFrom)
+            } >>
+            headHardAckLanes.toList.traverse_ { case (h, l) =>
+                OutboxBacking.hardAck(backend, h).highWater.flatMap(l.restoreFrom)
+            } >>
+            coilHardAckLanes.toList.traverse_ { case (h, l) =>
+                OutboxBacking.hubHardAck(backend, h).highWater.flatMap(l.restoreFrom)
+            }
 
     private def startResendTimer: IO[Unit] =
         (IO.sleep(

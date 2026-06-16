@@ -844,9 +844,9 @@ there is nothing to replay into them.
 
 A liaison instance serves exactly **one** remote peer (the peer↔peer boundary is three
 shapes over one shared `GetMsgBatch` / `NewMsgBatch` protocol, `coil-network.md` §5.5).
-All three recover the **same way** — restore the outbound high-water, leave the queues
-empty, and serve the outbox as a **DB-backed view** — differing only in which lanes each
-serves.
+All three recover the **same way** — restore the outbound high-water and the inbound
+receive cursors, leave the queues empty, and serve the outbox as a **DB-backed view** —
+differing only in which lanes each serves.
 
 - **State:**
   - the **receive cursors** (one per lane) — the `GetMsgBatch` fields: `batchNum`,
@@ -879,6 +879,18 @@ serves.
     to round-2 `= n1 + 1`) is a **no-op**, not an out-of-order error — the lane serves
     that entry from the family. The strict gap-free check applies only to genuinely new
     items (above the high-water).
+  - **Inbound receive cursors are restored**, to `next(max(persisted family))` — the
+    inbound counterpart of the high-water (`LaneInbound.restoreFrom`, off the same
+    `OutboxBacking.highWater` read; `next` is `+1` on a contiguous lane, the remote's
+    leader schedule on a sparse spine). This is **load-bearing, not an optimization**:
+    each inbound family entry is persisted before its cursor advanced (CR8), and the
+    `ReplayActor` re-feeds the consensus actors from those families on boot — so if the
+    lane stayed at its cold initial cursor it would **re-pull and re-dispatch** the same
+    entries the `ReplayActor` already replayed (the liaison has no dedup; it forwards
+    whatever `verify` accepts). With the cursor restored, the remote is re-pulled only
+    for **new** items, and a stale re-serve of an already-held entry falls *below* the
+    cursor, so `verify` rejects it (never dispatched). The receiving liaison is the only
+    side that restores this; `ReplayActor` remains the single consensus re-feeder.
 - In steady state the queue is a write-through cache, so a cold cache *is* recovery —
   same procedure. The whitepaper already prunes these outboxes by **remote
   `GetMsgBatch` cursors**, not local confirmation, *"so that messages can be

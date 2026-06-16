@@ -33,6 +33,7 @@ final class LaneBidirectional[T, N] private (
     def verify(items: List[T], current: N): Either[LaneInbound.Mismatch[N], N] =
         in.verify(items, current)
     def advanceTo(next: N): IO[Unit] = in.advanceTo(next)
+    def restoreInbound(lastReceived: Option[N]): IO[Unit] = in.restoreFrom(lastReceived)
 }
 
 object LaneBidirectional {

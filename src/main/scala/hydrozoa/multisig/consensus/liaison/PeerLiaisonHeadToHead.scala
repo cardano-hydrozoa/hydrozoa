@@ -325,6 +325,25 @@ abstract class PeerLiaisonHeadToHead(
             hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox) >>
             hubHardAckBacking.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
 
+    /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
+      * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
+      * otherwise re-dispatch to the consensus actors that `ReplayActor` already re-fed, CR8). The
+      * satellites read the **remote**'s own-keyed family; the sparse spines read the overall family
+      * max (the inbound lane's leader-schedule successor picks the remote's next-led number). An
+      * empty store leaves a lane at its cold initial cursor.
+      */
+    private def restoreInboundCursors: IO[Unit] =
+        val remoteNum = remoteHead.peerNum
+        OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreInbound) >>
+            OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreInbound) >>
+            OutboxBacking.request(backend, remoteNum).highWater.flatMap(requestLane.restoreInbound) >>
+            OutboxBacking.softAck(backend, remoteNum).highWater.flatMap(softAckLane.restoreInbound) >>
+            OutboxBacking.hardAck(backend, remoteNum).highWater.flatMap(hardAckLane.restoreInbound) >>
+            OutboxBacking
+                .hubHardAck(backend, remoteNum)
+                .highWater
+                .flatMap(hubHardAckLane.restoreInbound)
+
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
 
@@ -350,6 +369,8 @@ abstract class PeerLiaisonHeadToHead(
             // from the store on the remote's Mesh.Get, and replay / live production re-appends the
             // tail. An empty store leaves every lane cold.
             _ <- restoreHighWaters
+            // Restore the inbound receive cursors so we re-pull only NEW remote entries.
+            _ <- restoreInboundCursors
             _ <- puller.start
             _ <- startResendTimer
         } yield ()

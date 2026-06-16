@@ -63,12 +63,15 @@ final class LaneInbound[T, N] private (
     /** Commit a verified cursor. Call only with the `Right` value from [[verify]]. */
     def advanceTo(next: N): IO[Unit] = inboundCursor.set(next)
 
-    /** Restore the receive cursor on recovery to the next number expected after the last durably
-      * received item — so the remote is re-pulled only for *new* items and [[verify]] rejects any
-      * stale re-serve of what we already hold. `cursor` is the recovered next-expected (e.g.
-      * `max(persisted) + 1`).
+    /** Restore the receive cursor on recovery from the last durably-received number — the cursor
+      * becomes its [[next]] (`max(persisted family) + 1` for a contiguous lane; the remote's
+      * next-led number for a sparse one), or the cold [[initialCursor]] when nothing was received.
+      * So after a crash the remote is re-pulled only for **new** items, and [[verify]] rejects any
+      * stale re-serve of what we already hold (which would otherwise be re-dispatched to the
+      * consensus actors that `ReplayActor` already re-fed).
       */
-    def seedCursor(cursor: N): IO[Unit] = inboundCursor.set(cursor)
+    def restoreFrom(lastReceived: Option[N]): IO[Unit] =
+        inboundCursor.set(lastReceived.flatMap(next).getOrElse(initialCursor))
 }
 
 object LaneInbound {

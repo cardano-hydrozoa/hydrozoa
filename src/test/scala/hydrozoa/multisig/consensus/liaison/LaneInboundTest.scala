@@ -39,6 +39,30 @@ class LaneInboundTest extends AnyFunSuite {
         assert(lane.cursor.unsafeRunSync() == 1)
     }
 
+    test("restoreFrom sets the cursor to next(last received), so stale re-serves are rejected") {
+        val lane = contiguousFrom(0)
+        // Recovered: we durably received up to 5. The cursor resumes at 6 — only NEW items.
+        lane.restoreFrom(Some(5)).unsafeRunSync()
+        val _ = assert(lane.cursor.unsafeRunSync() == 6)
+        // A stale re-serve of an already-held item is below the cursor → rejected (not dispatched).
+        val _ = assert(lane.verify(List(3), 6) == Left(Mismatch(6, 3)))
+        // The next genuinely-new item is accepted.
+        assert(lane.verify(List(6), 6) == Right(7))
+    }
+
+    test("restoreFrom with nothing received leaves the cold initial cursor") {
+        val lane = contiguousFrom(0)
+        lane.restoreFrom(None).unsafeRunSync()
+        assert(lane.cursor.unsafeRunSync() == 0)
+    }
+
+    test("restoreFrom on a sparse lane resumes at the remote's next led item") {
+        val lane = sparseRemote
+        // Last received remote-led item = 3; the remote's next led item is 5.
+        lane.restoreFrom(Some(3)).unsafeRunSync()
+        assert(lane.cursor.unsafeRunSync() == 5)
+    }
+
     test(
       "sparse inbound: initial cursor is the remote's first led item; successor follows schedule"
     ) {

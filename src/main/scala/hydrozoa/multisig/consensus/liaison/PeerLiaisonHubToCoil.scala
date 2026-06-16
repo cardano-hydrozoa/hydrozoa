@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.OutboxBacking
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
@@ -332,12 +332,11 @@ abstract class PeerLiaisonHubToCoil(
             // from the store on the coil peer's Population.Get, and live CoilRelay production
             // re-appends the tail. An empty store leaves every lane cold.
             _ <- restoreHighWaters
-            // Restore the inbound coil-ack receive cursor to max(CoilHardAck) + 1 (CR8 persisted
+            // Restore the inbound coil-ack receive cursor to next(max(CoilHardAck)) (CR8 persisted
             // each ack before the cursor advanced), so we re-pull only NEW acks: the hub's
             // CoilAckSequencer stamps any received-but-unstamped tail from the store, and verify
             // rejects a stale re-serve — we must not re-receive (and re-stamp) what we already hold.
-            received <- Markers.recoverCoilHardAcked(backend, coil)
-            _ <- received.traverse_(hw => ownHardAckLane.seedCursor(hw.increment))
+            _ <- OutboxBacking.coilHardAck(backend, coil).highWater.flatMap(ownHardAckLane.restoreFrom)
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
