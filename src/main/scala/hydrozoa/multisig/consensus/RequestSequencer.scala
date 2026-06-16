@@ -77,7 +77,7 @@ trait RequestSequencer(
               (userRequest: UserRequest) =>
                   for {
                       conn <- getConnections
-                      newNum <- state.nextLedgerEventNum()
+                      newNum <- state.nextRequestNum()
                       // The user-request surface is head-only, so the author is always a head peer.
                       ownHeadPeerNum <- config.ownPeerId match {
                           case PeerId.Head(n) => IO.pure(n)
@@ -131,18 +131,18 @@ trait RequestSequencer(
             // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
             // empty store -> RequestNumber(0), the same cold value.
             next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
-            _ <- state.seedNextRequestNumber(next)
+            _ <- state.seedNextRequestNum(next)
         } yield ()
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
+        private val nextRequestNumRef = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
-        def nextLedgerEventNum(): IO[RequestNumber] =
-            nLedgerEvent.getAndUpdate(_.increment)
+        def nextRequestNum(): IO[RequestNumber] =
+            nextRequestNumRef.getAndUpdate(_.increment)
 
         /** Seed the next-to-assign request number on recovery (R3). */
-        def seedNextRequestNumber(next: RequestNumber): IO[Unit] =
-            nLedgerEvent.set(next)
+        def seedNextRequestNum(next: RequestNumber): IO[Unit] =
+            nextRequestNumRef.set(next)
     }
 }
 
