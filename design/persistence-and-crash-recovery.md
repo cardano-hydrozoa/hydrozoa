@@ -1667,9 +1667,11 @@ the JVM, not from a separate writer staying up.)
 
 ## 8. Boot sequence
 
-Executed in/around `MultisigRegimeManager.preStartLocal`, before
-`pendingConnections.complete`. **All actors start together**; the two recovery
-mechanisms (replay / restore) run concurrently (§5).
+Executed in/around the regime manager's `preStartLocal`, before
+`pendingConnections.complete` — `MultisigRegimeManager` on a head peer,
+`CoilMultisigRegimeManager` on a coil peer (the two run the parallel head / coil
+replay seams; §6, §10). **All actors start together**; the two recovery mechanisms
+(replay / restore) run concurrently (§5).
 
 1. Open the store; verify version; **bump the arrival-stamp `generation`** — read
    the `Cf.Meta` counter, increment, persist (once per store-open), so every family
@@ -1844,7 +1846,7 @@ peers).
 | P6 | `ReplayActor` + total-order merge (§5.4) + indices algorithm (§5.3); pre-populate-mailboxes mechanism + suspend barrier (§5.6); seeds the first `PollResults` straight from `CardanoBackend` so deposit decisions don't wait on `CardanoLiaison`'s poll cadence (§5.5). | ✅ — suspend barrier reuses the `Connections` barrier (Q1) |
 | P7 | L1 reconciliation + live re-sample in `CardanoLiaison` (§5.5, §8 step 6 — post-barrier). | ✅ |
 | P8 | Boot sequence end-to-end (§8); fail-safe paths (CR6/CR7). | ✅ — CR7 catch-up-budget abort **deferred** |
-| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped (R4) |
+| P9 | Crash-restart integration action + one-by-one oracle + observational-equivalence property (§9). | 📋 scoped, not started — deferred |
 | — | Slow-side schema (over `StackComposer` types) — unblocked: the slow-consensus types and Bootstrap have landed (§6 `StackComposer`). | ✅ |
 | P10 | **Coil boundary recovery:** `CoilAckSequencer` recovers `nextSeq = max(HubHardAck)+1` + per-coil stamped marks (`CoilStampMark`); the `ReplayActor` re-feeds the unstamped `CoilHardAck` gap to it (§6.1.4); `PeerLiaison*` lazy outbox recovery + hub→coil receive-cursor restore (§6.1.2). | ✅ |
 | P11 | **Coil fast-side anchor:** un-gate `JointLedger`'s per-block snapshot bundle on coil; `coilBlockMark = max(BlockResult)`; coil JL recover off it (§6 `JointLedger`). | ✅ |
