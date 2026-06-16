@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage1
 
 import cats.*
+import cats.data.StateT
 import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.*
@@ -237,26 +238,31 @@ object Model:
 
     given ModelCommand[DelayCommand, Unit, State] with {
 
-        override def runState[M[_]: Monad](
-            cmd: DelayCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, State)] = {
-            val newBlock = state.blockCycle match {
-                case BlockCycle.Done(blockNumber, version) =>
-                    BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version)
-                case _ => throw Error.UnexpectedState("DelayCommand requires BlockCycle.Done")
+        override def runState[M[_]: MonadThrow](
+            cmd: DelayCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
+            StateT { state =>
+                val newBlockM = state.blockCycle match {
+                    case BlockCycle.Done(blockNumber, version) =>
+                        MonadThrow[M].pure(BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version))
+                    case _ =>
+                        MonadThrow[M].raiseError(
+                          Error.UnexpectedState("DelayCommand requires BlockCycle.Done")
+                        )
+                }
+                for
+                    newBlock <- newBlockM
+                    instant = state.getCurrentTime.instant + cmd.delaySpec.duration
+                    newState = state.copy(blockCycle = newBlock).advanceCurrentTime(instant)
+                    _ <- log.debug(s"MODEL>> DelayCommand: ${cmd.delaySpec}")
+                    _ <- newState.getCurrentTime match {
+                        case CurrentTime.InSilencePeriod(_) |
+                            CurrentTime.AfterCompetingFallbackStartTime(_) =>
+                            log.warn(s"MODEL>> DelayCommand: model time entering silence/fallback zone")
+                        case _ => MonadThrow[M].pure(())
+                    }
+                yield newState -> ()
             }
-            val instant = state.getCurrentTime.instant + cmd.delaySpec.duration
-            val newState = state.copy(blockCycle = newBlock).advanceCurrentTime(instant)
-            val warnIfSilence = newState.getCurrentTime match {
-                case CurrentTime.InSilencePeriod(_) | CurrentTime.AfterCompetingFallbackStartTime(_) =>
-                    log.warn(s"MODEL>> DelayCommand: model time entering silence/fallback zone")
-                case _ => Monad[M].pure(())
-            }
-            log.debug(s"MODEL>> DelayCommand: ${cmd.delaySpec}") >>
-                warnIfSilence >>
-                Monad[M].pure(() -> newState)
-        }
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
             cmd.delaySpec.duration.finiteDuration
@@ -268,29 +274,41 @@ object Model:
 
     given ModelCommand[StartBlockCommand, Unit, State] with {
 
-        override def runState[M[_]: Monad](
-            cmd: StartBlockCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, State)] =
-            state.getCurrentTime match {
-                case CurrentTime.BeforeHappyPathExpiration(_) =>
-                    val newBlock = state.blockCycle match {
-                        case BlockCycle.Ready(prevBlockNumber, prevVersion)
-                            if prevBlockNumber.increment == cmd.blockNumber =>
-                            BlockCycle.InProgress(
-                              blockNumber = cmd.blockNumber,
-                              blockStartTime = BlockCreationStartTime(state.getCurrentTime.instant),
-                              prevVersion = prevVersion
+        override def runState[M[_]: MonadThrow](
+            cmd: StartBlockCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
+            StateT { state =>
+                state.getCurrentTime match {
+                    case CurrentTime.BeforeHappyPathExpiration(_) =>
+                        val newBlockM = state.blockCycle match {
+                            case BlockCycle.Ready(prevBlockNumber, prevVersion)
+                                if prevBlockNumber.increment == cmd.blockNumber =>
+                                MonadThrow[M].pure(
+                                  BlockCycle.InProgress(
+                                    blockNumber = cmd.blockNumber,
+                                    blockStartTime =
+                                        BlockCreationStartTime(state.getCurrentTime.instant),
+                                    prevVersion = prevVersion
+                                  )
+                                )
+                            case _ =>
+                                MonadThrow[M].raiseError(
+                                  UnexpectedState("StartBlockCommand requires BlockCycle.Ready")
+                                )
+                        }
+                        for
+                            newBlock <- newBlockM
+                            _ <- log.debug(
+                              s"MODEL>> StartBlockCommand for block number: ${cmd.blockNumber}"
                             )
-                        case _ =>
-                            throw UnexpectedState("StartBlockCommand requires BlockCycle.Ready")
-                    }
-                    log.debug(s"MODEL>> StartBlockCommand for block number: ${cmd.blockNumber}") >>
-                        Monad[M].pure(() -> state.copy(blockCycle = newBlock))
-                case _ =>
-                    throw Error.UnexpectedState(
-                      "StartBlockCommand requires CurrentTime.BeforeHappyPathExpiration"
-                    )
+                        yield state.copy(blockCycle = newBlock) -> ()
+                    case _ =>
+                        MonadThrow[M].raiseError(
+                          Error.UnexpectedState(
+                            "StartBlockCommand requires CurrentTime.BeforeHappyPathExpiration"
+                          )
+                        )
+                }
             }
     }
 
@@ -300,54 +318,58 @@ object Model:
 
     given ModelCommand[CompleteBlockCommand, BlockBrief, State] with {
 
-        override def runState[M[_]: Monad](
-            cmd: CompleteBlockCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(BlockBrief, State)] =
-            state.blockCycle match {
-                case BlockCycle.InProgress(blockNumber, _creationTime, prevVersion, accumulator) =>
-                    val events: List[(RequestId, ValidityFlag)] =
-                        accumulator.map((le, _, flag) => le.requestId -> flag)
+        override def runState[M[_]: MonadThrow](
+            cmd: CompleteBlockCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, BlockBrief] =
+            StateT { state =>
+                state.blockCycle match {
+                    case BlockCycle.InProgress(blockNumber, _creationTime, prevVersion, accumulator) =>
+                        val events: List[(RequestId, ValidityFlag)] =
+                            accumulator.map((le, _, flag) => le.requestId -> flag)
 
-                    val s: cats.data.State[State, BlockBrief] =
-                        for {
-                            regOrReject <- registerOrReject(events)
-                            registeredThisBlock = regOrReject._1
-                            rejectedThisBlock = regOrReject._2
+                        val s: cats.data.State[State, BlockBrief] =
+                            for {
+                                regOrReject <- registerOrReject(events)
+                                registeredThisBlock = regOrReject._1
+                                rejectedThisBlock = regOrReject._2
 
-                            absorbedThisBlock <- absorb(cmd.blockCreationEndTime)
+                                absorbedThisBlock <- absorb(cmd.blockCreationEndTime)
 
-                            refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
+                                refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
 
-                            blockBrief <- mkBlockBrief(
-                              cmd.isFinal,
-                              cmd.blockCreationEndTime,
-                              cmd.blockNumber,
-                              prevVersion,
-                              accumulator,
-                              absorbedThisBlock,
-                              refundedThisBlock
-                            )
+                                blockBrief <- mkBlockBrief(
+                                  cmd.isFinal,
+                                  cmd.blockCreationEndTime,
+                                  cmd.blockNumber,
+                                  prevVersion,
+                                  accumulator,
+                                  absorbedThisBlock,
+                                  refundedThisBlock
+                                )
 
-                            // tick time
-                            _ <- cats.data.State.modify[State](state =>
-                                state.advanceCurrentTime(cmd.blockCreationEndTime.convert)
-                            )
+                                // tick time
+                                _ <- cats.data.State.modify[State](state =>
+                                    state.advanceCurrentTime(cmd.blockCreationEndTime.convert)
+                                )
 
-                            // update block cycle
-                            _ <- cats.data.State.modify[State](state => {
-                                val nextBlockCycle =
-                                    if cmd.isFinal then BlockCycle.HeadFinalized
-                                    else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
-                                state.copy(blockCycle = nextBlockCycle)
-                            })
+                                // update block cycle
+                                _ <- cats.data.State.modify[State](state => {
+                                    val nextBlockCycle =
+                                        if cmd.isFinal then BlockCycle.HeadFinalized
+                                        else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
+                                    state.copy(blockCycle = nextBlockCycle)
+                                })
 
-                        } yield blockBrief
+                            } yield blockBrief
 
-                    log.debug(s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}") >>
-                        Monad[M].pure(s.run(state).swapF.value)
-                case _ =>
-                    throw UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
+                        log.debug(
+                          s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
+                        ) >> MonadThrow[M].pure(s.run(state).value)
+                    case _ =>
+                        MonadThrow[M].raiseError(
+                          UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
+                        )
+                }
             }
 
         private def getBlockCreationStartTime: cats.data.State[State, BlockCreationStartTime] =
@@ -651,53 +673,55 @@ object Model:
 
     given ModelCommand[L2TxCommand, Unit, State] with {
 
-        override def runState[M[_]: Monad](
-            cmd: L2TxCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, State)] = {
-            val l2Tx: L2Tx = L2Tx
-                .parse(
-                  cmd.request.request.body.l2Payload.bytes,
-                  state.multiNodeConfig.cardanoNetwork
-                )
-                .fold(err => throw RuntimeException(s"Failed to parse L2Tx: $err"), identity)
-
-            val ret = HydrozoaTransactionMutator.transit(
-              config = state.multiNodeConfig.headConfig,
-              time = state.getCurrentTime.instant,
-              state = state.utxosL2Active,
-              l2Tx = l2Tx
-            )
-
-            val (newState, mInvalidMsg) = ret match {
-                case Left(err) =>
-                    (
-                      blockCycleLens
-                          .andThen(contentLens)
-                          .modify(_ :+ (cmd.request, l2Tx, ValidityFlag.Invalid))(state),
-                      Some(s"invalid L2 tx ${cmd.request.requestId}: $err")
+        override def runState[M[_]: MonadThrow](
+            cmd: L2TxCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
+            StateT { state =>
+                for
+                    l2Tx <- L2Tx
+                        .parse(
+                          cmd.request.request.body.l2Payload.bytes,
+                          state.multiNodeConfig.cardanoNetwork
+                        )
+                        .fold(
+                          err =>
+                              MonadThrow[M].raiseError(
+                                RuntimeException(s"Failed to parse L2Tx: $err")
+                              ),
+                          MonadThrow[M].pure(_)
+                        )
+                    ret = HydrozoaTransactionMutator.transit(
+                      config = state.multiNodeConfig.headConfig,
+                      time = state.getCurrentTime.instant,
+                      state = state.utxosL2Active,
+                      l2Tx = l2Tx
                     )
-                case Right(mutatorState) =>
-                    (
-                      state
-                          .pipe(
-                            blockCycleLens
-                                .andThen(contentLens)
-                                .modify(_ :+ (cmd.request, l2Tx, ValidityFlag.Valid))
-                          )
-                          .focus(_.utxosL2Active)
-                          .replace(mutatorState),
-                      None
-                    )
+                    (newState, mInvalidMsg) = ret match {
+                        case Left(err) =>
+                            (
+                              blockCycleLens
+                                  .andThen(contentLens)
+                                  .modify(_ :+ (cmd.request, l2Tx, ValidityFlag.Invalid))(state),
+                              Some(s"invalid L2 tx ${cmd.request.requestId}: $err")
+                            )
+                        case Right(mutatorState) =>
+                            (
+                              state
+                                  .pipe(
+                                    blockCycleLens
+                                        .andThen(contentLens)
+                                        .modify(_ :+ (cmd.request, l2Tx, ValidityFlag.Valid))
+                                  )
+                                  .focus(_.utxosL2Active)
+                                  .replace(mutatorState),
+                              None
+                            )
+                    }
+                    finalState = newState.focus(_.nextRequestNumber).modify(_.increment)
+                    _ <- log.debug(s"MODEL>> L2TxCommand for event ID: ${cmd.request.requestId}")
+                    _ <- mInvalidMsg.fold(MonadThrow[M].pure(()))(log.debug(_))
+                yield finalState -> ()
             }
-
-            val finalState = newState.focus(_.nextRequestNumber).modify(_.increment)
-
-            for {
-                _ <- log.debug(s"MODEL>> L2TxCommand for event ID: ${cmd.request.requestId}")
-                _ <- mInvalidMsg.fold(Monad[M].pure(()))(log.debug(_))
-            } yield () -> finalState
-        }
     }
 
     // ===================================
@@ -705,54 +729,56 @@ object Model:
     // ===================================
 
     given ModelCommand[RegisterDepositCommand, Unit, State] with {
-        override def runState[M[_]: Monad](
-            cmd: RegisterDepositCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, State)] = {
-            import cmd.request as req
-            import state.multiNodeConfig as config
+        override def runState[M[_]: MonadThrow](
+            cmd: RegisterDepositCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
+            StateT { state =>
+                import cmd.request as req
+                import state.multiNodeConfig as config
 
-            val BlockCycle.InProgress(_, blockStartTime, _, _) = state.blockCycle: @unchecked
+                val BlockCycle.InProgress(_, blockStartTime, _, _) = state.blockCycle: @unchecked
 
-            val requestValidityEndTime = req.request.header.validityEnd
+                val requestValidityEndTime = req.request.header.validityEnd
 
-            val seq =
-                DepositRefundTxSeq
-                    .Parse(config.headConfig)(
-                      depositTxBytes = req.request.body.l1Payload,
-                      l2Payload = req.request.body.l2Payload,
-                      requestId = req.requestId,
-                      requestValidityEndTime = requestValidityEndTime
+                for
+                    seq <- DepositRefundTxSeq
+                        .Parse(config.headConfig)(
+                          depositTxBytes = req.request.body.l1Payload,
+                          l2Payload = req.request.body.l2Payload,
+                          requestId = req.requestId,
+                          requestValidityEndTime = requestValidityEndTime
+                        )
+                        .result
+                        .fold(
+                          e => MonadThrow[M].raiseError(RuntimeException(e)),
+                          MonadThrow[M].pure(_)
+                        )
+                    depositAbsorptionEndTime =
+                        config.headConfig.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
+                    // For now, all deposits request should be valid by construction
+                    _ <- MonadThrow[M].raiseUnless(
+                           blockStartTime < seq.depositTx.submissionDeadline
+                         )(RuntimeException("deposit past submissionDeadline"))
+                    _ <- MonadThrow[M].raiseUnless(blockStartTime < depositAbsorptionEndTime)(
+                           RuntimeException("deposit past absorptionEndTime")
+                         )
+                    depositUtxo = seq.depositTx.depositProduced
+                    newState = state
+                        .pipe(
+                          blockCycleLens
+                              .andThen(contentLens)
+                              .modify(_ :+ (cmd.request, depositUtxo, ValidityFlag.Valid))
+                        )
+                        .pipe(DepositStatus.Enqueued.enqueue(Queue(cmd)))
+                        .focus(_.utxoLocked)
+                        .modify(_ ++ seq.depositTx.tx.body.value.inputs.toSeq)
+                        .focus(_.nextRequestNumber)
+                        .modify(_.increment)
+                    _ <- log.debug(
+                      s"MODEL>> RegisterDepositCommand for event ID: ${cmd.request.requestId}"
                     )
-                    .result
-                    .fold(e => throw RuntimeException(e), identity)
-
-            // For now, all deposits request should be valid by construction
-            require(blockStartTime < seq.depositTx.submissionDeadline)
-
-            val depositAbsorptionEndTime = config.headConfig.txTiming.depositAbsorptionEndTime(
-              requestValidityEndTime
-            )
-            require(blockStartTime < depositAbsorptionEndTime)
-
-            val depositUtxo = seq.depositTx.depositProduced
-
-            val newState: State = state
-                .pipe(
-                  blockCycleLens
-                      .andThen(contentLens)
-                      .modify(_ :+ (cmd.request, depositUtxo, ValidityFlag.Valid))
-                )
-                .pipe(DepositStatus.Enqueued.enqueue(Queue(cmd)))
-                .focus(_.utxoLocked)
-                .modify(_ ++ seq.depositTx.tx.body.value.inputs.toSeq)
-                .focus(_.nextRequestNumber)
-                .modify(_.increment)
-
-            log.debug(
-              s"MODEL>> RegisterDepositCommand for event ID: ${cmd.request.requestId}"
-            ) >> Monad[M].pure(() -> newState)
-        }
+                yield newState -> ()
+            }
     }
 
     // ===================================
@@ -760,20 +786,20 @@ object Model:
     // ===================================
 
     given ModelCommand[SubmitDepositsCommand, Unit, State] with {
-        override def runState[M[_]: Monad](
-            cmd: SubmitDepositsCommand,
-            state: State
-        )(using log: ContraTracer[M, Slf4jMsg]): M[(Unit, State)] = {
-            val s: cats.data.State[State, Unit] = for {
-                _ <- DepositStatus.Submitted.submit(cmd.depositsForSubmission)
-                _ <- DepositStatus.Declined.decline(cmd.depositsToDecline)
-            } yield ()
-            val (newState, _) = s.run(state).value
-            log.debug(
-              s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
-                  s"for rejection: ${cmd.depositsToDecline.size}"
-            ) >> Monad[M].pure(() -> newState)
-        }
+        override def runState[M[_]: MonadThrow](
+            cmd: SubmitDepositsCommand
+        )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
+            StateT { state =>
+                val s: cats.data.State[State, Unit] = for {
+                    _ <- DepositStatus.Submitted.submit(cmd.depositsForSubmission)
+                    _ <- DepositStatus.Declined.decline(cmd.depositsToDecline)
+                } yield ()
+                val (newState, _) = s.run(state).value
+                log.debug(
+                  s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
+                      s"for rejection: ${cmd.depositsToDecline.size}"
+                ) >> MonadThrow[M].pure(newState -> ())
+            }
     }
 
     enum Error extends Throwable:

@@ -1,10 +1,11 @@
 package org.scalacheck.commands
 
+import cats.data.StateT
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
-import cats.Monad
+import cats.MonadThrow
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, error, info, warn}
 import org.scalacheck.{Gen, Prop, PropertyM}
 
@@ -29,7 +30,7 @@ trait ModelCommand[Cmd, Result, State] {
     /** Returns the result and the new [[State]] after this command has run. The effect monad [[M]]
       * and tracer are supplied by the caller.
       */
-    def runState[M[_]: Monad](cmd: Cmd, state: State)(using ContraTracer[M, Slf4jMsg]): M[(Result, State)]
+    def runState[M[_]: MonadThrow](cmd: Cmd)(using ContraTracer[M, Slf4jMsg]): StateT[M, State, Result]
 
     /** Precondition that decides if this command is allowed to run when the model is in the
       * provided state.
@@ -57,12 +58,12 @@ trait SutCommand[Cmd, Result, Sut] {
   */
 trait CommandProp[Cmd, Result, State] {
 
-    def postCondition[M[_]: Monad](
+    def postCondition[M[_]: MonadThrow](
         cmd: Cmd,
         stateBefore: State,
         result: Either[Throwable, Result]
     )(using mc: ModelCommand[Cmd, Result, State], tracer: ContraTracer[M, Slf4jMsg]): M[Prop] =
-        mc.runState[M](cmd, stateBefore).map { case (expectedResult, stateAfter) =>
+        mc.runState[M](cmd).run(stateBefore).map { case (stateAfter, expectedResult) =>
             result match
                 case Right(realResult) =>
                     onSuccessCheck(cmd, expectedResult, stateBefore, stateAfter, realResult)
@@ -110,7 +111,7 @@ trait CommandLabel[Cmd]:
   * tracer at use time.
   */
 trait AdvanceState[State]:
-    def apply[M[_]: Monad](state: State)(using ContraTracer[M, Slf4jMsg]): M[State]
+    def apply[M[_]: MonadThrow](state: State)(using ContraTracer[M, Slf4jMsg]): M[State]
 
 // ===================================
 // AnyCommand — type-erased command wrapper
@@ -153,8 +154,8 @@ object AnyCommand {
         new AnyCommand(
           preCondition = state => mc.preCondition(cmd, state),
           advanceState = new AdvanceState[State]:
-              def apply[M[_]: Monad](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
-                  mc.runState[M](cmd, s).map(_._2),
+              def apply[M[_]: MonadThrow](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
+                  mc.runState[M](cmd).runS(s),
           delay = mc.delay(cmd),
           runPC = (sut, tracer) =>
               given ContraTracer[IO, Slf4jMsg] = tracer
@@ -176,8 +177,8 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
     new AnyCommand(
       preCondition = _ => true,
       advanceState = new AdvanceState[State]:
-          def apply[M[_]: Monad](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
-              Monad[M].pure(s),
+          def apply[M[_]: MonadThrow](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
+              MonadThrow[M].pure(s),
       delay = Duration.Zero,
       runPC = (_, _) => IO.pure(_ => IO.pure(Prop.passed)),
       repr = "NoOp",
