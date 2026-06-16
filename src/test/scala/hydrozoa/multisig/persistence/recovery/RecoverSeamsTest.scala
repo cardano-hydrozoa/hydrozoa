@@ -11,8 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaison, StackComposer}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
@@ -36,7 +35,8 @@ import scalus.uplc.builtin.ByteString
   * `StackComposer`'s passive state after a crash. Each test seeds a store with the typed values the
   * producers write (`persistOwnAckBundle` / `persistOwnStackClose` /
   * `PeerLiaisonHeadToHead.persistInbound`) and asserts the recovered state equals the crash-time
-  * value. Markers / `softAcked` are passed directly — the marker-derivation → recover wiring is R3.
+  * value. Markers / `fastBlockMark` are passed directly — the marker-derivation → recover wiring is
+  * R3.
   */
 class RecoverSeamsTest extends AnyFunSuite:
 
@@ -63,7 +63,7 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     // ---- JointLedger ----
 
-    test("JointLedger.recover / recoverState return None for an empty store (no own soft-ack)") {
+    test("JointLedger.recover / recoverState return None for an empty store (no BlockResult)") {
         withStore { p =>
             for
                 store <- InMemoryL2Store.create
@@ -74,13 +74,13 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    test("JointLedger.recoverState rebuilds Done from the softAcked block brief + deposits") {
+    test("JointLedger.recoverState rebuilds Done from the fastBlockMark block brief + deposits") {
         withStore { p =>
             for
                 brief <- blockBrief(4)
                 _ <- p.put(FamilyKey.Block(BlockNumber(4)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
-                done <- JointLedger.State.recoverState(p, Some(SoftAckNumber(4)))
+                done <- JointLedger.State.recoverState(p, Some(BlockNumber(4)))
             yield assert(
               done.exists(d =>
                   d.previousBlockHeader == brief.header && d.deposits == DepositsMap.empty
@@ -89,7 +89,7 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    test("JointLedger.recover co-anchors the L2 ledger to the softAcked command number") {
+    test("JointLedger.recover co-anchors the L2 ledger to the fastBlockMark command number") {
         withStore { p =>
             for
                 store <- InMemoryL2Store.create
@@ -98,30 +98,20 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- (1 to 3).toList.traverse_(i =>
                     ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                 )
-                // Crash boundary: softAcked = block 2, recorded at L2 command number 2.
+                // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
                 _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                done <- JointLedger.State.recover(p, ledger, Some(SoftAckNumber(2)))
+                done <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
                 anchored <- ledger.currentCommandNumber
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
         }
     }
 
-    test("JointLedger.recoverCoil returns None for an empty store (no BlockResult)") {
-        withStore { p =>
-            for
-                store <- InMemoryL2Store.create
-                ledger <- EutxoL2Ledger(config, store)
-                recovered <- JointLedger.State.recoverCoil(p, ledger, None)
-            yield assert(recovered.isEmpty)
-        }
-    }
-
     test(
-      "JointLedger.recoverCoil rebuilds Done from the coilBlockMark BlockResult + deposits, " +
-          "co-anchoring the L2 ledger"
+      "JointLedger.recover rebuilds Done from the fastBlockMark block brief + deposits, " +
+          "co-anchoring the L2 ledger (the shared head/coil fast anchor)"
     ) {
         withStore { p =>
             for
@@ -131,19 +121,18 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- (1 to 3).toList.traverse_(i =>
                     ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                 )
-                // Coil crash boundary: coilBlockMark = block 2 (max BlockResult), recorded at L2
-                // command number 2. The persisted BlockResult holds only the deltas; the header is
-                // read from the Block family (a coil peer has it inbound), so seed Block(2) too.
-                br <- blockResult(2)
-                _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)
-                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, br.brief))
+                // Crash boundary: fastBlockMark = block 2 (max BlockResult), recorded at L2 command
+                // number 2. The header is read from the Block family (present inbound on any peer),
+                // so seed Block(2).
+                brief <- blockBrief(2)
+                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
-                recovered <- JointLedger.State.recoverCoil(p, ledger, Some(BlockNumber(2)))
+                recovered <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
                 anchored <- ledger.currentCommandNumber
             yield assert(
               recovered.exists(d =>
-                  d.previousBlockHeader == br.brief.header && d.deposits == DepositsMap.empty
+                  d.previousBlockHeader == brief.header && d.deposits == DepositsMap.empty
               ) && anchored == L2CommandNumber(2L)
             )
         }
@@ -181,7 +170,6 @@ class RecoverSeamsTest extends AnyFunSuite:
                 markers = Markers(
                   softConfirmed = None,
                   hardConfirmed = Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
-                  softAcked = None,
                   hardAcked = Some(HardAckNumber(hardAckNum))
                 )
                 recovered <- StackComposer.State.recover(
@@ -235,7 +223,6 @@ class RecoverSeamsTest extends AnyFunSuite:
                 markers = Markers(
                   softConfirmed = None,
                   hardConfirmed = Some(StackNumber(0)), // below stack 1 → gate disarmed
-                  softAcked = None,
                   hardAcked = Some(HardAckNumber(0))
                 )
                 recovered <- StackComposer.State.recover(
@@ -329,16 +316,18 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     // ---- corruption (fail-safe) ----
 
-    test("JointLedger.recoverState throws on a non-empty store missing the softAcked block brief") {
+    test(
+      "JointLedger.recoverState throws on a non-empty store missing the fastBlockMark block brief"
+    ) {
         withStore { p =>
             JointLedger.State
-                .recoverState(p, Some(SoftAckNumber(2)))
+                .recoverState(p, Some(BlockNumber(2)))
                 .attempt
                 .map(r => assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException])))
         }
     }
 
-    test("JointLedger.recover throws when the softAcked block's L2 command number is missing") {
+    test("JointLedger.recover throws when the fastBlockMark block's L2 command number is missing") {
         withStore { p =>
             for
                 store <- InMemoryL2Store.create
@@ -347,7 +336,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
-                r <- JointLedger.State.recover(p, ledger, Some(SoftAckNumber(2))).attempt
+                r <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2))).attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }
     }
@@ -362,7 +351,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, sb))
                 // Treasury intentionally not written
-                markers = Markers(None, Some(StackNumber(1)), None, Some(HardAckNumber(0)))
+                markers = Markers(None, Some(StackNumber(1)), Some(HardAckNumber(0)))
                 r <- StackComposer.State
                     .recover(p, markers.hardAcked, markers.hardConfirmed, own)
                     .attempt
@@ -437,16 +426,16 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     // ---- CardanoLiaison (HardConfirmation fold) ----
 
-    test("Markers.recoverCoilBlockMark returns None for an empty store, else max(BlockResult)") {
+    test("Markers.recoverFastBlockMark returns None for an empty store, else max(BlockResult)") {
         withStore { p =>
             for
-                empty <- Markers.recoverCoilBlockMark(p.backend)
+                empty <- Markers.recoverFastBlockMark(p.backend)
                 _ <- List(2, 5, 3).traverse_(n =>
                     blockResult(n).flatMap(br =>
                         p.put(StoreKey.BlockResult(BlockNumber(n)))(br.persisted)
                     )
                 )
-                mark <- Markers.recoverCoilBlockMark(p.backend)
+                mark <- Markers.recoverFastBlockMark(p.backend)
             yield assert(empty.isEmpty && mark.contains(BlockNumber(5)))
         }
     }

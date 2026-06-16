@@ -8,12 +8,12 @@ import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.FamilyKey
 
 /** A coil peer's recovery scan / feed cursors — the coil counterpart of [[ReplayCursors]] (§5.3,
-  * §10 Q10). The head primitives are rigidly `HeadPeerNumber`-typed and anchor the fast/slow sides
-  * on `softAcked` / `hardAcked`; a coil peer differs in three ways, so it gets a parallel type
-  * rather than a `PeerId`-widened one:
+  * §10 Q10). The head primitives are rigidly `HeadPeerNumber`-typed and anchor the slow side on
+  * `hardAcked`; a coil peer differs in three ways, so it gets a parallel type rather than a
+  * `PeerId`-widened one:
   *
-  *   - **fast-side ledger floor** is `coilBlockMark + 1`, not `softAcked + 1` (a coil peer authors
-  *     no soft-ack; its fast anchor is `max(BlockResult)`, §6 `JointLedger`);
+  *   - **fast-side ledger floor** is `coilBlockMark + 1`, the shared fast anchor
+  *     `max(BlockResult)` (a coil peer authors no soft-ack, §6 `JointLedger`);
   *   - **slow-side composer floor** is `coilHardAckedStack + 1`, sourced from the last own
   *     `CoilHardAck` value (not `HardAck`, §6 `StackComposer`);
   *   - it additionally replays the **`HubHardAck`** families (one per hub) — the coil quorum its

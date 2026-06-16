@@ -92,18 +92,19 @@ class FamilyScanTest extends AnyFunSuite:
             val markers = Markers(
               softConfirmed = Some(BlockNumber(2)), // block floor 3, soft-ack floor 3
               hardConfirmed = Some(StackNumber(1)), // stack floor 2
-              softAcked = Some(SoftAckNumber(4)),
               hardAcked = Some(HardAckNumber(4))
             )
             val highWater = Map(
               HeadPeerNumber(0) -> RequestNumber(4), // request floor 5
               HeadPeerNumber(200) -> RequestNumber(1) // request floor 2; peer 1 absent -> floor 0
             )
-            // scanFamilies uses the lower (confirmed) spine floors, so the acked stack is irrelevant
-            // to this round-trip; pass an arbitrary present value.
+            // scanFamilies uses the lower (confirmed) spine floors, so the fast anchor and the acked
+            // stack (the ledger/composer floors) are irrelevant to this round-trip; pass arbitrary
+            // values.
             val cursors =
                 ReplayCursors.derive(
                   markers,
+                  fastBlockMark = None,
                   peers,
                   Nil,
                   highWater,

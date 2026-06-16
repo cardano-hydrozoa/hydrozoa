@@ -17,7 +17,7 @@ import hydrozoa.lib.logging.{ContraTracer, Traced}
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
-import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -204,37 +204,17 @@ final case class JointLedger(
             // On a non-empty store restore the passive `Done` and co-anchor the L2 ledger to the
             // fast anchor. Cold start (empty store) leaves `State.initialize`. The
             // `[anchor + 1, head]` block tail is re-driven by BlockWeaver, not restored here. The
-            // anchor differs by peer type: a head peer's is `softAcked = max(own SoftAck)`; a coil
-            // peer authors no soft-ack, so its is `coilBlockMark = max(BlockResult)` (§6).
-            _ <- config.ownPeerId match {
-                case PeerId.Head(peerNum) =>
-                    for {
-                        markers <- Markers.derive(persistence.backend, peerNum)
-                        recovered <- State.recover(persistence, l2Ledger, markers.softAcked)
-                        _ <- recovered match {
-                            case Some(done) =>
-                                state.set(done) >> tracer.traceWith(
-                                  JointLedgerEvent.PassiveStateRecovered(
-                                    done.previousBlockHeader.blockNum
-                                  )
-                                )
-                            case None => IO.unit
-                        }
-                    } yield ()
-                case PeerId.Coil(_) =>
-                    for {
-                        coilBlockMark <- Markers.recoverCoilBlockMark(persistence.backend)
-                        recovered <- State.recoverCoil(persistence, l2Ledger, coilBlockMark)
-                        _ <- recovered match {
-                            case Some(done) =>
-                                state.set(done) >> tracer.traceWith(
-                                  JointLedgerEvent.PassiveStateRecovered(
-                                    done.previousBlockHeader.blockNum
-                                  )
-                                )
-                            case None => IO.unit
-                        }
-                    } yield ()
+            // fast anchor is `fastBlockMark = max(BlockResult)` (§6), shared by head and coil peers:
+            // on a head peer it coincides with `max(own SoftAck)` (both written in the same atomic
+            // per-block batch); a coil peer authors no soft-ack and anchors on it directly.
+            fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
+            recovered <- State.recover(persistence, l2Ledger, fastBlockMark)
+            _ <- recovered match {
+                case Some(done) =>
+                    state.set(done) >> tracer.traceWith(
+                      JointLedgerEvent.PassiveStateRecovered(done.previousBlockHeader.blockNum)
+                    )
+                case None => IO.unit
             }
         } yield ()
 
@@ -968,11 +948,14 @@ object JointLedger {
         )
 
         /** Reconstruct the passive [[Done]] state after a crash and co-anchor the L2 ledger to the
-          * same `softAcked` boundary, or `None` if the store holds no own soft-ack yet (cold
-          * start).
+          * same `fastBlockMark = max(BlockResult)` boundary, or `None` for an empty store (no
+          * `BlockResult` yet — cold start). Shared by head and coil peers: on a head peer the fast
+          * anchor coincides with `max(own SoftAck)` (both written in the same atomic per-block
+          * batch), and a coil peer authors no soft-ack, so `max(BlockResult)` is its sole fast
+          * anchor.
           *
           * Beyond rebuilding `Done` from the store ([[recoverState]]), this reads the L2 command
-          * number recorded for the `softAcked` block and calls [[L2Ledger.restoreTo]] — the only
+          * number recorded for the `fastBlockMark` block and calls [[L2Ledger.restoreTo]] — the only
           * effect on the L2 ledger. The consensus → L2 mapping stays wholly on this side; only the
           * recorded command number crosses, never an ack (§R2b). A `RemoteL2Ledger` owns its own
           * recovery and leaves `restoreTo` unsupported, so this path is for the EUTXO reference
@@ -981,12 +964,11 @@ object JointLedger {
         def recover(
             persistence: Persistence[IO],
             l2Ledger: L2Ledger[IO],
-            softAcked: Option[SoftAckNumber]
+            fastBlockMark: Option[BlockNumber]
         )(using CardanoNetwork.Section): IO[Option[Done]] =
-            softAcked match
+            fastBlockMark match
                 case None => IO.pure(None)
-                case Some(ackNum) =>
-                    val blockNum = ackNum.blockNum
+                case Some(blockNum) =>
                     for {
                         done <- doneAt(persistence, blockNum)
                         commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
@@ -994,17 +976,17 @@ object JointLedger {
                     } yield Some(done)
 
         /** The store-only half of [[recover]]: rebuild `Done(previousBlockHeader, deposits)` from
-          * the `softAcked` block's persisted brief + the deposits snapshot, with no L2 effect.
+          * the `fastBlockMark` block's persisted brief + the deposits snapshot, with no L2 effect.
           * `None` for an empty store. Exposed for tests that exercise the state reconstruction
           * independently of the L2 ledger.
           */
         def recoverState(
             persistence: Persistence[IO],
-            softAcked: Option[SoftAckNumber]
+            fastBlockMark: Option[BlockNumber]
         )(using CardanoNetwork.Section): IO[Option[Done]] =
-            softAcked match
-                case None         => IO.pure(None)
-                case Some(ackNum) => doneAt(persistence, ackNum.blockNum).map(Some(_))
+            fastBlockMark match
+                case None           => IO.pure(None)
+                case Some(blockNum) => doneAt(persistence, blockNum).map(Some(_))
 
         /** Build `Done` from the brief persisted at `blockNum` (its header) and the deposits
           * snapshot. Both are present in any non-empty store — the brief in the `Block` family via
@@ -1020,27 +1002,6 @@ object JointLedger {
                 brief <- persistence.getOrFail(FamilyKey.Block(blockNum))
                 deposits <- persistence.getOrFail(StoreKey.DepositMap)
             } yield Done(brief.payload.header, deposits)
-
-        /** Coil counterpart of [[recover]]: a coil peer authors no soft-ack, so it anchors on
-          * `coilBlockMark = max(BlockResult)`. It then rebuilds `Done` exactly as a head peer does
-          * — the brief comes from the `Block` family, which a coil peer holds inbound (via
-          * `PeerLiaisonCoilToHub.persistInbound`), so [[doneAt]] is shared — and co-anchors the L2
-          * ledger to `L2CommandNumber[coilBlockMark]`. `None` for an empty store (no
-          * `BlockResult`).
-          */
-        def recoverCoil(
-            persistence: Persistence[IO],
-            l2Ledger: L2Ledger[IO],
-            coilBlockMark: Option[BlockNumber]
-        )(using CardanoNetwork.Section): IO[Option[Done]] =
-            coilBlockMark match
-                case None => IO.pure(None)
-                case Some(blockNum) =>
-                    for {
-                        done <- doneAt(persistence, blockNum)
-                        commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
-                        _ <- l2Ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
-                    } yield Some(done)
     }
 
     final case class Done private[JointLedger] (

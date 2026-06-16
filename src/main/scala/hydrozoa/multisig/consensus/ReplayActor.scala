@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -74,19 +74,20 @@ object ReplayActor:
         val backend = persistence.backend
         for
             markers <- Markers.derive(backend, own)
+            fastBlockMark <- Markers.recoverFastBlockMark(backend)
             hardAckedStack <- markers.hardAcked.traverse(n =>
                 persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
             )
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
-            _ <- validateInvariants(markers, hardAckedStack)
+            _ <- validateInvariants(markers, fastBlockMark, hardAckedStack)
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
             _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- reconstructInflightHandoff(persistence, own, markers.hardConfirmed, hardAckedStack)
                 .flatMap(_.traverse_(targets.slowConsensusActor ! _))
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
-            highWater <- recoverHighWater(persistence, markers.softAcked)
-            cursors = ReplayCursors.derive(markers, peers, hubs, highWater, hardAckedStack)
+            highWater <- recoverHighWater(persistence, fastBlockMark)
+            cursors = ReplayCursors.derive(markers, fastBlockMark, peers, hubs, highWater, hardAckedStack)
             perLane <- FamilyScan.scanFamilies(backend, cursors)
             _ <- ArrivalOrderedMerge
                 .merge(perLane)
@@ -146,7 +147,7 @@ object ReplayActor:
         for
             softConfirmed <- Markers.recoverSoftConfirmed(backend)
             hardConfirmed <- Markers.recoverHardConfirmed(backend)
-            coilBlockMark <- Markers.recoverCoilBlockMark(backend)
+            coilBlockMark <- Markers.recoverFastBlockMark(backend)
             coilHardAcked <- Markers.recoverCoilHardAcked(backend, own)
             coilHardAckedStack <- coilHardAcked.traverse(n =>
                 persistence.getOrFail(FamilyKey.CoilHardAck(own, n)).map(_.payload.stackNum)
@@ -165,7 +166,7 @@ object ReplayActor:
                 .flatMap(_.traverse_(targets.slowConsensusActor ! _))
             // 3. Derive coil cursors, scan all lanes (head families + hubs' HubHardAck + own
             //    CoilHardAck), total-order, route the tail into mailboxes.
-            highWater <- recoverHighWaterCoil(persistence, coilBlockMark)
+            highWater <- recoverHighWater(persistence, coilBlockMark)
             cursors = CoilReplayCursors.deriveCoil(
               softConfirmed,
               hardConfirmed,
@@ -197,19 +198,19 @@ object ReplayActor:
       */
     private def validateInvariants(
         markers: Markers,
+        fastBlockMark: Option[BlockNumber],
         hardAckedStack: Option[StackNumber]
     ): IO[Unit] =
-        val softOk = (markers.softConfirmed, markers.softAcked) match
-            case (Some(confirmed), Some(acked)) =>
-                Ordering[BlockNumber].lteq(confirmed, acked.blockNum)
-            case _ => true
+        val softOk = (markers.softConfirmed, fastBlockMark) match
+            case (Some(confirmed), Some(acked)) => Ordering[BlockNumber].lteq(confirmed, acked)
+            case _                              => true
         val hardOk = (markers.hardConfirmed, hardAckedStack) match
             case (Some(confirmed), Some(acked)) => Ordering[StackNumber].lteq(confirmed, acked)
             case _                              => true
         IO.raiseUnless(softOk && hardOk)(
           new IllegalStateException(
             s"Recovery refused: store inconsistency (confirmed > acked). markers=$markers, " +
-                s"hardAckedStack=$hardAckedStack"
+                s"fastBlockMark=$fastBlockMark, hardAckedStack=$hardAckedStack"
           )
         )
 
@@ -259,16 +260,17 @@ object ReplayActor:
             .scan(persistence.backend, k)
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
-    /** The per-peer request high-water at `softAcked` (the RequestLane resume floor source, §5.3),
-      * or empty for a cold store.
+    /** The per-peer request high-water at `fastBlockMark` (the fast anchor; the RequestLane resume
+      * floor source, §5.3), or empty for a cold store. Shared by the head [[replay]] and coil
+      * [[replayCoil]] — both anchor the request high-water on `max(BlockResult)`.
       */
     private def recoverHighWater(
         persistence: Persistence[IO],
-        softAcked: Option[SoftAckNumber]
+        fastBlockMark: Option[BlockNumber]
     )(using CardanoNetwork.Section): IO[Map[HeadPeerNumber, RequestNumber]] =
-        softAcked match
-            case None      => IO.pure(Map.empty)
-            case Some(ack) => persistence.getOrFail(StoreKey.RequestHighWater(ack.blockNum))
+        fastBlockMark match
+            case None    => IO.pure(Map.empty)
+            case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
 
     /** Coil counterpart of [[validateInvariants]]: a confirmed mark must not exceed the coil peer's
       * anchors (`softConfirmed ≤ coilBlockMark`, `hardConfirmed ≤ coilHardAckedStack`).
@@ -321,17 +323,6 @@ object ReplayActor:
         FamilyScan
             .scan(persistence.backend, k)
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
-
-    /** The per-peer request high-water at `coilBlockMark` (the coil fast anchor), or empty for a
-      * cold store — the coil counterpart of [[recoverHighWater]] (which keys on `softAcked`).
-      */
-    private def recoverHighWaterCoil(
-        persistence: Persistence[IO],
-        coilBlockMark: Option[BlockNumber]
-    )(using CardanoNetwork.Section): IO[Map[HeadPeerNumber, RequestNumber]] =
-        coilBlockMark match
-            case None    => IO.pure(Map.empty)
-            case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
 
     /** Route one decoded lane entry into the reading actor's mailbox. Family-agnostic (shared by
       * the head [[replay]] and the coil [[replayCoil]]): spines fan out to two roles, sliced by the

@@ -63,20 +63,29 @@ class ReplayCursorsTest extends AnyFunSuite:
         val markers = Markers(
           softConfirmed = Some(BlockNumber(5)),
           hardConfirmed = Some(StackNumber(3)),
-          softAcked = Some(SoftAckNumber(6)),
           hardAcked =
               Some(HardAckNumber(4)) // the counter — derive ignores it; acked stack is a param
         )
         val hw = Map(HeadPeerNumber(0) -> RequestNumber(7), HeadPeerNumber(1) -> RequestNumber(2))
         val cursors =
-            ReplayCursors.derive(markers, peers, Nil, hw, hardAckedStack = Some(StackNumber(4)))
+            ReplayCursors.derive(
+              markers,
+              fastBlockMark = Some(BlockNumber(6)),
+              peers,
+              Nil,
+              hw,
+              hardAckedStack = Some(StackNumber(4))
+            )
 
-        // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = softAcked + 1.
+        // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = fastBlockMark + 1.
         assert(
           cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(6)),
           "softConfirmed 5 + 1"
         )
-        assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(7)), "softAcked 6 + 1")
+        assert(
+          cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(7)),
+          "fastBlockMark 6 + 1"
+        )
         // StackSpine: aggregator floor = hardConfirmed + 1; composer floor = hardAckedStack + 1.
         assert(
           cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(4)),
@@ -113,19 +122,19 @@ class ReplayCursorsTest extends AnyFunSuite:
         val markers = Markers(
           softConfirmed = None,
           hardConfirmed = None,
-          softAcked = Some(SoftAckNumber(5)),
           hardAcked = Some(HardAckNumber(5))
         )
         val cursors =
             ReplayCursors.derive(
               markers,
+              fastBlockMark = Some(BlockNumber(5)),
               peers,
               Nil,
               Map.empty,
               hardAckedStack = Some(StackNumber(2))
             )
         assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
-        assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(6)), "softAcked 5 + 1")
+        assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(6)), "fastBlockMark 5 + 1")
         assert(cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(0)))
         assert(
           cursors.stackSpineForComposer == FamilyKey.Stack(StackNumber(3)),
@@ -135,8 +144,15 @@ class ReplayCursorsTest extends AnyFunSuite:
     }
 
     test("derive: empty store (all None, no acked stack) yields index-0 floors everywhere") {
-        val markers = Markers(None, None, None, None)
-        val cursors = ReplayCursors.derive(markers, peers, Nil, Map.empty, hardAckedStack = None)
+        val markers = Markers(None, None, None)
+        val cursors = ReplayCursors.derive(
+          markers,
+          fastBlockMark = None,
+          peers,
+          Nil,
+          Map.empty,
+          hardAckedStack = None
+        )
 
         assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
         assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(0)))
@@ -151,7 +167,7 @@ class ReplayCursorsTest extends AnyFunSuite:
 
     test("scanFloors enumerates exactly 2 + 3N families (no hubs; spines collapse to confirmed)") {
         val cursors =
-            ReplayCursors.derive(Markers(None, None, None, None), peers, Nil, Map.empty, None)
+            ReplayCursors.derive(Markers(None, None, None), None, peers, Nil, Map.empty, None)
         assert(cursors.scanFloors.size == 2 + 3 * peers.size)
         // The spines in scanFloors are the lower (aggregator) floor, not the ledger one.
         assert(cursors.scanFloors.contains(cursors.blockSpineForAggregator))
@@ -161,7 +177,7 @@ class ReplayCursorsTest extends AnyFunSuite:
     test("derive: hub HubHardAck cursors scan from 0; scanFloors grows to 2 + 3N + H") {
         val hubs = List(HeadPeerNumber(0), HeadPeerNumber(1))
         val cursors =
-            ReplayCursors.derive(Markers(None, None, None, None), peers, hubs, Map.empty, None)
+            ReplayCursors.derive(Markers(None, None, None), None, peers, hubs, Map.empty, None)
         hubs.foreach(h =>
             assert(cursors.hubHardAcks(h) == FamilyKey.HubHardAck(h, HubHardAckNumber.zero))
         )

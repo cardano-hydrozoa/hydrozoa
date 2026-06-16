@@ -12,7 +12,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAckNumber}
+import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockResult, BlockVersion}
@@ -54,7 +54,7 @@ class ReplayActorTest extends AnyFunSuite:
     ) {
         val c = runReplay(seedRecoverable)
         assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
-        // BlockWeaver: first PollResults + the block brief (>= softAcked+1 = 0).
+        // BlockWeaver: first PollResults + the block brief (>= fastBlockMark+1 = 0).
         assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
         assert(hasBlock(c.bw, 5), "BW block 5")
         // FastConsensusActor: the block brief (aggregator floor softConfirmed+1).
@@ -282,22 +282,19 @@ class ReplayActorTest extends AnyFunSuite:
             _ <- p.put(FamilyKey.Stack(StackNumber(2)))(FamilyValue(stamp, s2))
         } yield ()
 
-    /** softConfirmed = 5 but softAcked = 2 → confirmed > acked, a torn store. Markers read only the
-      * keys, so dummy value bytes suffice.
+    /** softConfirmed = 5 but fastBlockMark = max(BlockResult) = 2 → confirmed > acked, a torn store.
+      * `validateInvariants` reads only the SoftConfirmation key and the BlockResult key, so a dummy
+      * value byte suffices for the former and a real `BlockResult` for the latter.
       */
     private def seedInconsistent(p: Persistence[IO]): IO[Unit] =
-        val own = ownNum
         for {
             _ <- p.backend.put(
               Cf.SoftConfirmation,
               StoreKey.SoftConfirmation(BlockNumber(5)).encode,
               Array[Byte](0)
             )
-            _ <- p.backend.put(
-              Cf.SoftAck(own),
-              FamilyKey.SoftAck(own, SoftAckNumber(2)).encode,
-              Array[Byte](0)
-            )
+            br <- blockResult(2)
+            _ <- p.put(StoreKey.BlockResult(BlockNumber(2)))(br.persisted)
         } yield ()
 
     /** Coil store: stack 0 hard-confirmed (`hardConfirmed = 0`); stack 1 acked-not-confirmed via

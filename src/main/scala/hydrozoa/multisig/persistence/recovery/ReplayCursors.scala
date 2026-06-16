@@ -31,9 +31,10 @@ import hydrozoa.multisig.persistence.{FamilyKey, Markers}
   * Per-family floors (from [[Markers]] + the acked stack + the request high-water; §5.3):
   *
   *   - **BlockSpine** — `blockSpineForAggregator = softConfirmed + 1` (FastConsensusActor),
-  *     `blockSpineForLedger = softAcked + 1` (BlockWeaver → JointLedger). `softAcked` is a
-  *     `SoftAckNumber`, which coincides with the block number (one ack per block, §3.1), so it
-  *     converts straight to a `BlockNumber`.
+  *     `blockSpineForLedger = fastBlockMark + 1` (BlockWeaver → JointLedger). The fast anchor
+  *     `fastBlockMark = max(BlockResult)` is read by the caller (it is not a [[Markers]] field); on
+  *     a head peer it coincides with `max(own SoftAck)` (both written in the same atomic per-block
+  *     batch), so this is the same boundary the ledger re-drives from.
   *   - **StackSpine** — `stackSpineForAggregator = hardConfirmed + 1` (SlowConsensusActor),
   *     `stackSpineForComposer = hardAckedStack + 1` (StackComposer). The acked **stack** is *not*
   *     in [[Markers]] (`Markers.hardAcked` is the author's `HardAckNumber` counter, not a
@@ -80,13 +81,15 @@ final case class ReplayCursors(
 
 object ReplayCursors:
 
-    /** Derive all `4 + 3N + H` cursors. Pure — the caller (R3) supplies the three values it must
-      * read itself: the recovery [[Markers]] (CF scans), the per-peer request high-water (the
+    /** Derive all `4 + 3N + H` cursors. Pure — the caller (R3) supplies the four values it must
+      * read itself: the recovery [[Markers]] (CF scans), `fastBlockMark = max(BlockResult)` (the
+      * fast-side ledger anchor; see the class docstring), the per-peer request high-water (the
       * persisted counter), and `hardAckedStack` (the acked stack, unpacked from the last own
-      * `HardAck` value; see the class docstring).
+      * `HardAck` value).
       */
     def derive(
         markers: Markers,
+        fastBlockMark: Option[BlockNumber],
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         highestIncludedRequest: Map[HeadPeerNumber, RequestNumber],
@@ -94,9 +97,9 @@ object ReplayCursors:
     ): ReplayCursors =
         val softConfirmedFloor: BlockNumber =
             markers.softConfirmed.map(_.increment).getOrElse(BlockNumber(0))
-        // softAcked is a SoftAckNumber == blockNum (§3.1), so it converts straight to a BlockNumber.
-        val softAckedFloor: BlockNumber =
-            markers.softAcked.map(a => BlockNumber((a: Int) + 1)).getOrElse(BlockNumber(0))
+        // The fast-side ledger floor is the fast anchor (max(BlockResult)) + 1.
+        val fastBlockFloor: BlockNumber =
+            fastBlockMark.map(_.increment).getOrElse(BlockNumber(0))
         val hardConfirmedFloor: StackNumber =
             markers.hardConfirmed.map(_.increment).getOrElse(StackNumber(0))
         val hardAckedFloor: StackNumber =
@@ -108,7 +111,7 @@ object ReplayCursors:
 
         ReplayCursors(
           blockSpineForAggregator = FamilyKey.Block(softConfirmedFloor),
-          blockSpineForLedger = FamilyKey.Block(softAckedFloor),
+          blockSpineForLedger = FamilyKey.Block(fastBlockFloor),
           stackSpineForAggregator = FamilyKey.Stack(hardConfirmedFloor),
           stackSpineForComposer = FamilyKey.Stack(hardAckedFloor),
           requests = peers.map { p =>
