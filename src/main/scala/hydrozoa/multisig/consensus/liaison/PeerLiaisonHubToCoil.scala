@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.OutboxBacking
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBackfill}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
@@ -78,16 +78,16 @@ abstract class PeerLiaisonHubToCoil(
     // or inbound-replicated), so a reply hot-loads entries below the in-memory outbox floor and
     // preStart restores only the high-water; the hub serves every author (no own-led filter).
     private val backend = persistence.backend
-    private val blockBacking = OutboxBacking.block(backend, _ => true)
-    private val stackBacking = OutboxBacking.stack(backend, _ => true)
+    private val blockBacking = LaneOutgoingBackfill.block(backend, _ => true)
+    private val stackBacking = LaneOutgoingBackfill.stack(backend, _ => true)
     private val requestBackings =
-        headPeerNums.map(h => h -> OutboxBacking.request(backend, h)).toMap
+        headPeerNums.map(h => h -> LaneOutgoingBackfill.request(backend, h)).toMap
     private val softAckBackings =
-        headPeerNums.map(h => h -> OutboxBacking.softAck(backend, h)).toMap
+        headPeerNums.map(h => h -> LaneOutgoingBackfill.softAck(backend, h)).toMap
     private val headHardAckBackings =
-        headPeerNums.map(h => h -> OutboxBacking.hardAck(backend, PeerId.Head(h))).toMap
+        headPeerNums.map(h => h -> LaneOutgoingBackfill.hardAck(backend, PeerId.Head(h))).toMap
     private val coilHardAckBackings =
-        hubNums.map(h => h -> OutboxBacking.hubHardAck(backend, h)).toMap
+        hubNums.map(h => h -> LaneOutgoingBackfill.hubHardAck(backend, h)).toMap
 
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
@@ -309,8 +309,8 @@ abstract class PeerLiaisonHubToCoil(
 
     /** Restore each population outbox lane's high-water from its backing journal, leaving the
       * queues empty. The Server half answers the coil peer's `Population.Get` by hot-loading older
-      * entries from the store (`OutboxBacking.backfill`); live `CoilRelay` production re-appends
-      * the tail. An empty store leaves every lane cold.
+      * entries from the store (`LaneOutgoingBackfill.backfill`); live `CoilRelay` production
+      * re-appends the tail. An empty store leaves every lane cold.
       */
     private def restoreHighWaters: IO[Unit] =
         for {
@@ -338,9 +338,8 @@ abstract class PeerLiaisonHubToCoil(
       */
     private def restoreInboundCursors: IO[Unit] =
         for {
-            _ <- OutboxBacking
+            _ <- LaneIncomingCursors
                 .hardAck(backend, PeerId.Coil(coil))
-                .highWater
                 .flatMap(ownHardAckLane.restoreCursor)
         } yield ()
 

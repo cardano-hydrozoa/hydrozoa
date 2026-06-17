@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, 
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.OutboxBacking
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBackfill}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
@@ -76,12 +76,14 @@ abstract class PeerLiaisonHeadToHead(
     // The spines carry every leader's brief, so their backings keep only the ones THIS peer leads;
     // the satellites are this peer's own author (CF per author).
     private val backend = persistence.backend
-    private val blockBacking = OutboxBacking.block(backend, b => config.canLeadFast(b.blockNum))
-    private val stackBacking = OutboxBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
-    private val requestBacking = OutboxBacking.request(backend, ownHeadPeerNum)
-    private val softAckBacking = OutboxBacking.softAck(backend, ownHeadPeerNum)
-    private val hardAckBacking = OutboxBacking.hardAck(backend, PeerId.Head(ownHeadPeerNum))
-    private val hubHardAckBacking = OutboxBacking.hubHardAck(backend, ownHeadPeerNum)
+    private val blockBacking =
+        LaneOutgoingBackfill.block(backend, b => config.canLeadFast(b.blockNum))
+    private val stackBacking =
+        LaneOutgoingBackfill.stack(backend, s => config.canLeadSlow(s.stackNum))
+    private val requestBacking = LaneOutgoingBackfill.request(backend, ownHeadPeerNum)
+    private val softAckBacking = LaneOutgoingBackfill.softAck(backend, ownHeadPeerNum)
+    private val hardAckBacking = LaneOutgoingBackfill.hardAck(backend, PeerId.Head(ownHeadPeerNum))
+    private val hubHardAckBacking = LaneOutgoingBackfill.hubHardAck(backend, ownHeadPeerNum)
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
@@ -325,32 +327,27 @@ abstract class PeerLiaisonHeadToHead(
       * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
       * otherwise re-dispatch to the consensus actors that `ReplayActor` already re-fed, CR8). The
       * satellites read the **remote**'s own-keyed journal; the spines are a single shared CF (every
-      * leader's briefs, not per-author), so they read the overall journal max and the sparse lane's
-      * leader-schedule successor picks the remote's next-led number. The spine max reuses the
-      * outbound `blockBacking` / `stackBacking`: `highWater` is the whole-CF `lastKey`, independent
-      * of the backing's own-led `keep` (which filters only `backfill`). An empty store leaves a
-      * lane at its cold initial cursor.
+      * leader's briefs, not per-author), so the whole-CF max stands in and the sparse lane's
+      * leader-schedule successor picks the remote's next-led number. All reads go through
+      * [[LaneIncomingCursors]] (whole-CF `lastKey`, no `keep` and no payload decode). An empty
+      * store leaves a lane at its cold initial cursor.
       */
     private def restoreInboundCursors: IO[Unit] =
         val remoteNum = remoteHead.peerNum
         for {
-            _ <- blockBacking.highWater.flatMap(blockLane.restoreInbound)
-            _ <- stackBacking.highWater.flatMap(stackLane.restoreInbound)
-            _ <- OutboxBacking
+            _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreInbound)
+            _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreInbound)
+            _ <- LaneIncomingCursors
                 .request(backend, remoteNum)
-                .highWater
                 .flatMap(requestLane.restoreInbound)
-            _ <- OutboxBacking
+            _ <- LaneIncomingCursors
                 .softAck(backend, remoteNum)
-                .highWater
                 .flatMap(softAckLane.restoreInbound)
-            _ <- OutboxBacking
+            _ <- LaneIncomingCursors
                 .hardAck(backend, PeerId.Head(remoteNum))
-                .highWater
                 .flatMap(hardAckLane.restoreInbound)
-            _ <- OutboxBacking
+            _ <- LaneIncomingCursors
                 .hubHardAck(backend, remoteNum)
-                .highWater
                 .flatMap(hubHardAckLane.restoreInbound)
         } yield ()
 

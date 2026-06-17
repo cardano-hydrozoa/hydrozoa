@@ -11,23 +11,25 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.{BackendStore, Cf, JournalKey}
 import java.nio.ByteBuffer
 
-/** The store backing for one liaison outbound lane
+/** The store reads behind one liaison **outbound** lane
   * ([[hydrozoa.multisig.consensus.liaison.LaneOutbound]]): the durable journal the lane's own
-  * production lives in, surfaced as the two reads a lane needs to recover lazily rather than seed
-  * eagerly (§6, recovery doc).
+  * production lives in, surfaced as the two reads an outbound lane needs to recover lazily rather
+  * than seed eagerly (§6, recovery doc).
   *
-  *   - [[highWater]] — the lane's last durable number (`lastKey` of the journal), so `preStart`
-  *     seeds only the high-water (no payloads): the gap-free [[LaneOutbound.append]] check and the
-  *     out-of-bounds guard work, and replay can re-append the live tail on top.
+  *   - [[highWater]] — the lane's last own-produced number (`lastKey` of the journal), so
+  *     `preStart` seeds only the high-water (no payloads): the gap-free [[LaneOutbound.append]]
+  *     check and the out-of-bounds guard work, and replay can re-append the live tail on top.
   *   - [[backfill]] — up to `limit` payloads from a `from` number, so [[LaneOutbound.reply]] reads
   *     the prefix below its in-memory outbox floor when a remote pulls an old entry, instead of
   *     holding the whole own production in memory.
   *
   * `keep` filters a spine journal to this peer's own-led entries (a head-mesh liaison serves only
   * its own-led briefs); the satellites are already a single author per CF, and a hub→coil link
-  * serves every author, so both pass the default accept-all.
+  * serves every author, so both pass the default accept-all. Only [[backfill]] consults `keep`;
+  * [[highWater]] is the whole-CF `lastKey`. Restoring an **inbound** receive cursor needs neither
+  * `keep` nor a payload decode (nor a `CardanoNetwork.Section`) — see [[LaneIncomingCursors]].
   */
-final class OutboxBacking[T, N] private (
+final class LaneOutgoingBackfill[T, N] private (
     backend: BackendStore[IO],
     cf: Cf,
     seekKey: N => JournalKey,
@@ -35,14 +37,14 @@ final class OutboxBacking[T, N] private (
     decodePayload: Array[Byte] => T,
     keep: T => Boolean
 ):
-    /** The lane's last durable number, or `None` for an empty journal. */
+    /** The lane's last own-produced number, or `None` for an empty journal. */
     def highWater: IO[Option[N]] = backend.lastKey(cf).map(_.map(decodeNum))
 
     /** Up to `limit` own-produced payloads with number `>= from`, ascending. */
     def backfill(from: N, limit: Int): IO[List[T]] =
         JournalScan.loadFrom(backend, seekKey(from), decodePayload, keep, limit)
 
-object OutboxBacking:
+object LaneOutgoingBackfill:
 
     private def int(bytes: Array[Byte]): Int = ByteBuffer.wrap(bytes).getInt
     private def long(bytes: Array[Byte]): Long = ByteBuffer.wrap(bytes).getLong
@@ -50,8 +52,8 @@ object OutboxBacking:
     /** Backing for a `Block` spine outbound lane, keeping `keep`'s own-led blocks. */
     def block(backend: BackendStore[IO], keep: BlockBrief.Next => Boolean)(using
         CardanoNetwork.Section
-    ): OutboxBacking[BlockBrief.Next, BlockNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[BlockBrief.Next, BlockNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.Block,
           JournalKey.Block(_),
@@ -63,8 +65,8 @@ object OutboxBacking:
     /** Backing for a `Stack` spine outbound lane, keeping `keep`'s own-led stacks. */
     def stack(backend: BackendStore[IO], keep: StackBrief => Boolean)(using
         CardanoNetwork.Section
-    ): OutboxBacking[StackBrief, StackNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[StackBrief, StackNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.Stack,
           JournalKey.Stack(_),
@@ -76,8 +78,8 @@ object OutboxBacking:
     /** Backing for a per-author `Request` outbound lane (this peer's own requests). */
     def request(backend: BackendStore[IO], peer: HeadPeerNumber)(using
         CardanoNetwork.Section
-    ): OutboxBacking[UserRequestWithId, RequestNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[UserRequestWithId, RequestNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.Request(peer),
           JournalKey.Request(peer, _),
@@ -89,8 +91,8 @@ object OutboxBacking:
     /** Backing for a per-author `SoftAck` outbound lane (this peer's own soft-acks). */
     def softAck(backend: BackendStore[IO], peer: HeadPeerNumber)(using
         CardanoNetwork.Section
-    ): OutboxBacking[SoftAck, SoftAckNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[SoftAck, SoftAckNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.SoftAck(peer),
           JournalKey.SoftAck(peer, _),
@@ -105,8 +107,8 @@ object OutboxBacking:
       */
     def hardAck(backend: BackendStore[IO], peer: PeerId)(using
         CardanoNetwork.Section
-    ): OutboxBacking[HardAck, HardAckNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[HardAck, HardAckNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.HardAck(peer),
           JournalKey.HardAck(peer, _),
@@ -118,8 +120,8 @@ object OutboxBacking:
     /** Backing for a per-hub `HubHardAck` outbound lane (re-sequenced coil hard-acks). */
     def hubHardAck(backend: BackendStore[IO], hub: HeadPeerNumber)(using
         CardanoNetwork.Section
-    ): OutboxBacking[HardAckWithId, HubHardAckNumber] =
-        new OutboxBacking(
+    ): LaneOutgoingBackfill[HardAckWithId, HubHardAckNumber] =
+        new LaneOutgoingBackfill(
           backend,
           Cf.HubHardAck(hub),
           JournalKey.HubHardAck(hub, _),

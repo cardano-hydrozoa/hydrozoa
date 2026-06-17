@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsens
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.OutboxBacking
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBackfill}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `design/coil-network.md`)
@@ -130,7 +130,7 @@ abstract class PeerLiaisonCoilToHub(
     // it missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
-        OutboxBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
+        LaneOutgoingBackfill.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
     private val ownHardAckLane =
         LaneOutbound.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
@@ -328,19 +328,19 @@ abstract class PeerLiaisonCoilToHub(
     private def restoreInboundCursors: IO[Unit] =
         val backend = persistence.backend
         for {
-            _ <- OutboxBacking.block(backend, _ => true).highWater.flatMap(blockLane.restoreCursor)
-            _ <- OutboxBacking.stack(backend, _ => true).highWater.flatMap(stackLane.restoreCursor)
+            _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreCursor)
+            _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreCursor)
             _ <- requestLanes.toList.traverse_ { case (h, l) =>
-                OutboxBacking.request(backend, h).highWater.flatMap(l.restoreCursor)
+                LaneIncomingCursors.request(backend, h).flatMap(l.restoreCursor)
             }
             _ <- softAckLanes.toList.traverse_ { case (h, l) =>
-                OutboxBacking.softAck(backend, h).highWater.flatMap(l.restoreCursor)
+                LaneIncomingCursors.softAck(backend, h).flatMap(l.restoreCursor)
             }
             _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
-                OutboxBacking.hardAck(backend, PeerId.Head(h)).highWater.flatMap(l.restoreCursor)
+                LaneIncomingCursors.hardAck(backend, PeerId.Head(h)).flatMap(l.restoreCursor)
             }
             _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
-                OutboxBacking.hubHardAck(backend, h).highWater.flatMap(l.restoreCursor)
+                LaneIncomingCursors.hubHardAck(backend, h).flatMap(l.restoreCursor)
             }
         } yield ()
 

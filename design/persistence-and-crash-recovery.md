@@ -876,14 +876,14 @@ differing only in which lanes each serves.
     production appends new items, and `reply` hot-loads anything else from the journal
     on demand.
   - **One scalar is restored** — the high-water number (`lastAppended = max(journal
-    key)`, payload-free — `OutboxBacking.highWater`). It is not state to serve; it
+    key)`, payload-free — `LaneOutgoingBackfill.highWater`). It is not state to serve; it
     exists so (a) the first post-crash `append` is legal — live production resumes at
     `high-water + 1`, and `append` is gap-free (requires `next(lastAppended)`), so a
     cold `None` would make it throw — and (b) it is `reply`'s out-of-bounds bound
     (`next(lastAppended)`) for a remote that re-pulls before we append anything.
   - **Serving is a DB-backed view.** On `GetMsgBatch` from R, `LaneOutbound.reply`
     returns the in-memory tail if it holds R's cursor, else hot-loads the prefix from
-    the journal (`OutboxBacking.load`). Because every served entry is persisted, the
+    the journal (`LaneOutgoingBackfill.backfill`). Because every served entry is persisted, the
     journal always backs it — the cache need never be authoritative.
   - **`append` is idempotent below the high-water.** A consensus actor re-emitting an
     already-durable entry during replay (e.g. `SlowConsensusActor` re-broadcasting the
@@ -892,9 +892,9 @@ differing only in which lanes each serves.
     that entry from the journal. The strict gap-free check applies only to genuinely new
     items (above the high-water).
   - **Inbound receive cursors are restored**, to `next(max(persisted journal))` — the
-    inbound counterpart of the high-water (`LaneInbound.restoreFrom`, off the same
-    `OutboxBacking.highWater` read; `next` is `+1` on a contiguous lane, the remote's
-    leader schedule on a sparse spine). This is **load-bearing, not an optimization**:
+    inbound counterpart of the high-water (`LaneInbound.restoreCursor`, off a
+    `LaneIncomingCursors` read — whole-CF `lastKey`, no `keep` and no payload decode;
+    `next` is `+1` on a contiguous lane, the remote's leader schedule on a sparse spine). This is **load-bearing, not an optimization**:
     each inbound journal entry is persisted before its cursor advanced (CR8), and the
     `ReplayActor` re-feeds the consensus actors from those journals on boot — so if the
     lane stayed at its cold initial cursor it would **re-pull and re-dispatch** the same
@@ -929,9 +929,10 @@ differing only in which lanes each serves.
 | `PeerLiaisonCoilToHub` (coil → hub) | this coil peer's own `HardAck` (one lane) | the **full** population (mirror of `HubToCoil` outbound) |
 
 > **Code reality (2026-06).** All three shapes recover the same way: each outbound
-> lane is built with an `OutboxBacking` over its journal, `preStart` restores the
+> lane is built with a `LaneOutgoingBackfill` over its journal, `preStart` restores the
 > lane high-waters (`seedHighWater`), and `LaneOutbound.reply` hot-loads below the
-> in-memory floor (`OutboxBacking.load`). No lane eagerly seeds its whole own
+> in-memory floor (`LaneOutgoingBackfill.backfill`); inbound receive cursors restore off a
+> `LaneIncomingCursors` read. No lane eagerly seeds its whole own
 > production. The earlier `recover` → `OutboxSeed` → `LaneOutbound.seed` (eager,
 > `HeadToHead`-only) is gone (GUM-153).
 
@@ -1829,7 +1830,7 @@ _Resolved questions have been folded into the sections they belong to ([§3](#3-
    field), the fast side anchoring on the `fastBlockMark = max(BlockResult)` on
    both peer types. The slow-side own-ack journal is now the one `PeerId`-keyed `HardAck`
    journal, so `own: PeerId` flows straight into `JournalKey.HardAck(own, n)` in `Markers`,
-   `StackComposer.recover`, `OutboxBacking.hardAck`, and `ReplayActor.route` (one
+   `StackComposer.recover`, `LaneOutgoingBackfill.hardAck`, and `ReplayActor.route` (one
    `case k: JournalKey.HardAck`) — no peer-type `own match` in the recovery machinery
    ([§5](#5-recovery-architecture), [§6](#6-per-actor-recovery-contracts) `JointLedger` / `StackComposer`). Remaining: confirm under load that
    `HardAck(PeerId.Coil)` `max + 1` + the in-flight-stack unpack behave as the head
