@@ -123,9 +123,9 @@ object ReplayActor:
         yield ()
 
     /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap
-      * floor per coil is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the
-      * tail is the coil's `HardAck` entries above it (the hub's per-coil receive copy), which the
-      * sequencer stamps via its normal `HardAck` path. The scan stays partitioned per coil — each
+      * floor per coil peer is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the
+      * tail is the coil's `HardAck` entries above it (the hub's per-coil-peer receive copy), which the
+      * sequencer stamps via its normal `HardAck` path. The scan stays partitioned per coil peer — each
       * coil's family is its own CF and its `CoilStampMark` is its own floor.
       */
     private def replayCoilAckGap(

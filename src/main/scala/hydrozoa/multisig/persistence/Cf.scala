@@ -46,11 +46,13 @@ object Cf:
     case object HardConfirmation extends Cf:
         def name = "HardConfirmation"
 
-    /** JL cumulative per-peer request high-water, keyed by `blockNum`. */
+    /** JL per-peer request high-water: the highest request from each peer **included in any block up
+      * to** the key `blockNum` (cumulative, monotone in `blockNum`).
+      */
     case object RequestHighWater extends Cf:
         def name = "RequestHighWater"
 
-    /** Singleton CF (hub-only): per-coil stamped-high-water marks for `CoilAckSequencer` — the
+    /** Singleton CF (hub-only): per-coil-peer stamped-high-water marks for `CoilAckSequencer` — the
       * highest coil `HardAckNumber` this hub has sequenced onto its `HubHardAck` spine, per coil
       * peer. Written in the same atomic batch as each `HubHardAck`, so recovery knows which durable
       * inbound coil hard-acks (the coil's `HardAck` receive copy) still need stamping (§6

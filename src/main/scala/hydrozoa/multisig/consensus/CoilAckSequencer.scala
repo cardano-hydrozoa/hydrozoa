@@ -32,17 +32,17 @@ import org.typelevel.log4cats.Logger
   *
   * **Persistence / recovery** (`persistence-and-crash-recovery.md` §6 CoilAckSequencer). Each
   * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` family in the **same atomic
-  * batch** as the per-coil **stamped-high-water** mark (`StoreKey.CoilStampMark`), **before** it
+  * batch** as the per-coil-peer **stamped-high-water** mark (`StoreKey.CoilStampMark`), **before** it
   * fans out (CR4 write-before-send): a re-stamp would equivocate on the `HubHardAck` spine (two
   * `HubHardAckNumber`s for one coil ack). The receive-cursor advance (in the liaison, CR8) and the
   * stamp are separate writes, so a crash between them can leave a coil ack **durably received** (in
   * the coil's `HardAck` receive copy, persisted by the liaison) but **unstamped** — and never
   * re-served. On boot the sequencer restores only its state — `nextSeq = max(HubHardAck where hub ==
-  * own) + 1` and the per-coil marks from `CoilStampMark`. The unstamped gap is **replayed by the
+  * own) + 1` and the per-coil-peer marks from `CoilStampMark`. The unstamped gap is **replayed by the
   * `ReplayActor`**: using each coil's mark as the floor, it scans the coil's `HardAck` tail above
   * it and re-feeds those acks through the normal `HardAck` path here, closing the gap from a store
   * read rather than from a re-delivery that cannot come. No idempotency index: the restored receive
-  * cursor makes re-delivery impossible, so a scalar mark per coil suffices.
+  * cursor makes re-delivery impossible, so a scalar mark per coil peer suffices.
   */
 trait CoilAckSequencer(
     config: Config,
@@ -90,7 +90,7 @@ trait CoilAckSequencer(
 
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case CoilAckSequencer.PreStart =>
-            // Restore the counter + per-coil marks, then wire connections. The received-but-
+            // Restore the counter + per-coil-peer marks, then wire connections. The received-but-
             // unstamped coil-ack gap is re-fed by the ReplayActor through the HardAck path below
             // (using CoilStampMark as the floor), so the sequencer itself does not scan.
             for {
@@ -111,7 +111,7 @@ trait CoilAckSequencer(
     }
 
     /** Stamp one coil ack: assign the next `seqNum`, persist the `HardAckWithId` + the bumped
-      * per-coil mark in one atomic batch (CR4), advance the in-memory state, and return the stamped
+      * per-coil-peer mark in one atomic batch (CR4), advance the in-memory state, and return the stamped
       * ack for fan-out. A crash before [[fanOut]] is safe — the head mesh re-pulls the durable
       * `HubHardAck`.
       */
@@ -126,7 +126,7 @@ trait CoilAckSequencer(
         } yield hubAck
 
     /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` family **and** the
-      * per-coil stamped-high-water mark in one atomic `WriteBatch` — CR4 write-before-send (durable
+      * per-coil-peer stamped-high-water mark in one atomic `WriteBatch` — CR4 write-before-send (durable
       * before it fans out), and the mark stays consistent with the spine across a crash.
       */
     private def persistStamp(
@@ -155,7 +155,7 @@ trait CoilAckSequencer(
         private val marksRef =
             Ref.unsafe[IO, Map[CoilPeerNumber, HardAckNumber]](Map.empty)
 
-        /** Seed the counter + per-coil marks from recovery (boot only). */
+        /** Seed the counter + per-coil-peer marks from recovery (boot only). */
         def seed(recovered: Recovered): IO[Unit] =
             nextSeqRef.set(recovered.nextSeq) >> marksRef.set(recovered.marks)
 
@@ -180,7 +180,7 @@ object CoilAckSequencer {
     // shape as `RequestSequencer.Config`).
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section
 
-    /** The sequencer's recoverable state: the next sequence number to assign and the per-coil
+    /** The sequencer's recoverable state: the next sequence number to assign and the per-coil-peer
       * stamped-high-water marks, derived from this hub's own `HubHardAck` family and the
       * `CoilStampMark` blob (§6).
       */
@@ -190,7 +190,7 @@ object CoilAckSequencer {
     )
 
     /** Derive [[Recovered]]: `nextSeq = max(HubHardAck seqNum) + 1` (empty → `zero`, the last key
-      * of the own-hub CF), and the per-coil marks from the `CoilStampMark` singleton (empty → no
+      * of the own-hub CF), and the per-coil-peer marks from the `CoilStampMark` singleton (empty → no
       * marks). Both are cheap reads — no full-family scan.
       */
     def recover(persistence: Persistence[IO], hub: HeadPeerNumber): IO[Recovered] =

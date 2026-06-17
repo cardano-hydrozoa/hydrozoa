@@ -15,7 +15,7 @@ object StoreVersion:
       * author embedded in the CF name and dropped from the key; incompatible with v1's combined
       * author-prefixed satellite CFs.
       *
-      * v3: adds the `CoilStampMark` singleton CF (a hub's per-coil stamped-high-water marks, §6
+      * v3: adds the `CoilStampMark` singleton CF (a hub's per-coil-peer stamped-high-water marks, §6
       * `CoilAckSequencer`); the CF set differs from v2, so a v2 store cannot be opened with the v3
       * descriptor list.
       *

@@ -158,9 +158,9 @@ object StoreKey:
         val cf: Cf = Cf.RequestHighWater
         def encode: Array[Byte] = FamilyKey.intBytes(num)
 
-    /** Key for [[Cf.CoilStampMark]] — a hub's per-coil stamped-high-water blob
+    /** Key for [[Cf.CoilStampMark]] — a hub's per-coil-peer stamped-high-water blob
       * `Map[CoilPeerNumber, HardAckNumber]` (the highest coil `HardAckNumber` sequenced onto this
-      * hub's `HubHardAck` spine, per coil), rewritten in the same atomic batch as each
+      * hub's `HubHardAck` spine, per coil peer), rewritten in the same atomic batch as each
       * `HubHardAck`. `CoilAckSequencer.recover` reads it to stamp the durable inbound coil
       * hard-acks (the coil's `HardAck` receive copy) above each mark that a crash left unstamped
       * (§6). A singleton.

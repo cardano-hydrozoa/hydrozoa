@@ -4,7 +4,7 @@ import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
 import io.circe.{Decoder, Encoder}
 
-/** Persistence-layer JSON codec for the value at `StoreKey.CoilStampMark` — a hub's per-coil
+/** Persistence-layer JSON codec for the value at `StoreKey.CoilStampMark` — a hub's per-coil-peer
   * stamped-high-water blob `Map[CoilPeerNumber, HardAckNumber]`, rewritten on each `HubHardAck`
   * stamp. `CoilAckSequencer.recover` reads it to find the durable coil hard-acks (the coil's
   * `HardAck` receive copy) still needing stamping after a crash (§6).
