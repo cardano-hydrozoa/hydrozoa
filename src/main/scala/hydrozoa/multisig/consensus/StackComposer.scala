@@ -12,7 +12,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
@@ -47,7 +47,7 @@ import scala.annotation.tailrec
   */
 final case class StackComposer(
     config: StackComposer.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | StackComposer.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, StackComposer.Request] {
@@ -334,7 +334,7 @@ final case class StackComposer(
       *   1. **Structural divergence** — `firstBlockNum != lastClosedBlockNum + 1` (the leader is
       *      composing from a different single-flight position) or `last < first`. This is an
       *      unrecoverable consensus break: warn and panic to halt the node, so the
-      *      [[MultisigRegimeManager]] hands over to the rule-based regime.
+      *      [[HeadMultisigRegimeManager]] hands over to the rule-based regime.
       *   2. **Not yet covered** — structurally fine, but this follower hasn't paired every block in
       *      `[first, last]` yet (a constituent block's `BlockResult` or its `Block.SoftConfirmed`
       *      is still in flight). This is the common, benign case — NOT a divergence. Do nothing and
@@ -356,7 +356,7 @@ final case class StackComposer(
                 if !structurallyConsistent then
                     // (1) genuine divergence — leader's composition is inconsistent with our
                     // single-flight position. Unrecoverable: warn, then panic to halt the node so
-                    // the MultisigRegimeManager hands over to the rule-based regime.
+                    // the HeadMultisigRegimeManager hands over to the rule-based regime.
                     tracer.traceWith(
                       StackComposerEvent.StructuralDivergence(
                         nextStackNum,
@@ -684,12 +684,12 @@ final case class StackComposer(
         )(IO.pure)
     } yield conn
 
-    // Halt the node by failing the actor, so the MultisigRegimeManager (which watches this child)
+    // Halt the node by failing the actor, so the HeadMultisigRegimeManager (which watches this child)
     // can hand over to the rule-based regime. Mirrors `JointLedger.panic`.
     private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 c <- x.get
                 _ <- connections.set(

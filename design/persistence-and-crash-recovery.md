@@ -1571,7 +1571,7 @@ Notes / decisions:
   `Treasury` / `EvacuationMap` / `Meta`) need their own codecs (no wire form,
   no stamp prefix).
 - **Interface:** a `Persistence[F[_]]` capability (tagless / cats-effect), injected
-  like `CardanoBackend` — `MultisigRegimeManager` already reserves a
+  like `CardanoBackend` — `HeadMultisigRegimeManager` already reserves a
   `Dependencies.Persistence` enum case and termination handler, so the seam exists.
 - **Layout:** one store per head instance, keyed by head ID, path from `NodeConfig`.
 - **Versioning** from day one; recovery refuses to load an incompatible version. The
@@ -1684,7 +1684,7 @@ the JVM, not from a separate writer staying up.)
 ## 8. Boot sequence
 
 Executed in/around the regime manager's `preStartLocal`, before
-`pendingConnections.complete` — `MultisigRegimeManager` on a head peer,
+`pendingConnections.complete` — `HeadMultisigRegimeManager` on a head peer,
 `CoilMultisigRegimeManager` on a coil peer (both run the single `PeerId`-parameterized
 replay seam; [§6](#6-per-actor-recovery-contracts), [§10](#10-open-questions)). **All actors start together**; the two recovery mechanisms
 (replay / restore) run concurrently ([§5](#5-recovery-architecture)).
@@ -1746,7 +1746,7 @@ operator / trigger evacuation rather than rejoin stale.
 
 **Coil peers and hubs run the same sequence.** A coil peer boots through
 `CoilMultisigRegimeManager.preStartLocal` (the head path is
-`MultisigRegimeManager.preStartLocal`); the steps are identical with three coil
+`HeadMultisigRegimeManager.preStartLocal`); the steps are identical with three coil
 adaptations: step 2's fast anchor `fastBlockMark = max(BlockResult)` is the same on head and coil, and
 `hardAcked` derives from the same `PeerId`-keyed `HardAck(own)` journal on both peer
 types — `HardAck(PeerId.Coil)` on a coil peer, `HardAck(PeerId.Head)` on a head peer ([§5.1](#51-the-markers--all-derived-none-stored));
@@ -1757,7 +1757,7 @@ the own `HardAck(PeerId.Coil)` tail and admits the inbound `HubHardAck` journals
 `CoilAckSequencer` (`nextSeq` + per-coil-peer stamped marks) and has the `ReplayActor`
 re-feed it any unstamped `HardAck(PeerId.Coil)` receive tail ([§6](#6-per-actor-recovery-contracts)), and restores its
 `PeerLiaisonHubToCoil` outboxes + coil-ack receive cursors. Both regime managers
-(`MultisigRegimeManager` and `CoilMultisigRegimeManager`) drive the single
+(`HeadMultisigRegimeManager` and `CoilMultisigRegimeManager`) drive the single
 `ReplayActor.replay(own: PeerId, …)` seam, the `CoilAckSequencer` recover, and all
 three liaisons' outbox recover ([§6](#6-per-actor-recovery-contracts)).
 
@@ -1865,7 +1865,7 @@ peers).
 
 | Step | Deliverable | Status |
 |---|---|---|
-| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `JournalId`/`JournalKey` layout ([§7.1](#71-key-layout--journal-ids)); versioning; wired through `MultisigRegimeManager.Dependencies.Persistence`. | ✅ |
+| P1 | **Foundation (prerequisite for all below).** `Persistence[F]` + RocksDB backend skeleton; `JournalId`/`JournalKey` layout ([§7.1](#71-key-layout--journal-ids)); versioning; wired through `HeadMultisigRegimeManager.Dependencies.Persistence`. | ✅ |
 | P2 | **First priority — the rule-based regime's read-set = the R10 floor.** `SlowConsensusActor` writes `HardConfirmation` records **in full** (multisigned effects / SECs / fallbacks) as it produces them (CR4); `StackComposer`'s `Treasury` + `EvacuationMap` snapshots ride alongside ([§6](#6-per-actor-recovery-contracts) `StackComposer`); the rule-based regime's **read path** loads `HardConfirmation` + `Treasury` + `EvacuationMap` once on handover and runs off live L1 ([§5.7](#57-the-recovery-priority-ladder-graceful-degradation)). Custody-safe in isolation — needs no replay, no fast-side state. | ✅ write side · **read path → Peter** |
 | P3 | Boundary persistence: `RequestSequencer` write-before-tell-user (CR1/CR4); `PeerLiaison*` inbound write-before-advance + cursors (CR8), with the 12-byte `ArrivalStamp` prefix on each journal value ([§5.4](#54-total-order-of-the-replayed-streams)). | ✅ |
 | P4 | Equivocation guard at the peer boundary (CR2) + counter recovery (CR3); unit tests. | ✅ |
@@ -1889,7 +1889,7 @@ peers).
   (replicated log, outbox/cursor recovery note); `…/replicated-state-machine`
   (deterministic replay); `…/consensus/{fast,slow}-consensus`, `…/finality`;
   `future-work/user-experience/anti-censorship` (lying-peer proof).
-- Code: `multisig/MultisigRegimeManager.scala` (actor topology, `Persistence`
+- Code: `multisig/HeadMultisigRegimeManager.scala` (actor topology, `Persistence`
   dependency seam); `multisig/consensus/{FastConsensusActor,SlowConsensusActor,StackComposer,
   BlockWeaver,RequestSequencer,CardanoLiaison}.scala`,
   `multisig/consensus/liaison/PeerLiaison{HeadToHead,HubToCoil,CoilToHub}.scala`,

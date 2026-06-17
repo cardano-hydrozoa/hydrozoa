@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
@@ -37,7 +37,8 @@ import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, Wri
 abstract class PeerLiaisonHubToCoil(
     config: PeerLiaisonHubToCoil.Config,
     coil: CoilPeerNumber,
-    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+        PeerLiaisonHubToCoil.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
@@ -51,7 +52,7 @@ abstract class PeerLiaisonHubToCoil(
       */
     private def resolveConnections: IO[PeerLiaisonHubToCoil.Connections] =
         pendingConnections match {
-            case shared: MultisigRegimeManager.PendingConnections =>
+            case shared: HeadMultisigRegimeManager.PendingConnections =>
                 shared.get.flatMap(s =>
                     s.coilAckSequencer.fold(
                       IO.raiseError(
@@ -368,7 +369,7 @@ object PeerLiaisonHubToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHubToCoil] =

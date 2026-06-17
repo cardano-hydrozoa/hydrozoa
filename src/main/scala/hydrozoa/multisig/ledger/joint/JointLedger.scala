@@ -14,7 +14,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Traced}
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.ack.SoftAck
@@ -44,7 +44,7 @@ private case class UserRequestState(
 
 final case class JointLedger(
     config: JointLedger.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, JointLedgerEvent],
     persistence: Persistence[IO]
@@ -110,7 +110,7 @@ final case class JointLedger(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(

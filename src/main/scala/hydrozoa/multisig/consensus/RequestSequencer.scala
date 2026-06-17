@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -24,7 +24,7 @@ import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persist
   */
 trait RequestSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
@@ -48,7 +48,7 @@ trait RequestSequencer(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(
@@ -152,7 +152,7 @@ trait RequestSequencer(
 object RequestSequencer {
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections,
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
     ): IO[RequestSequencer] =

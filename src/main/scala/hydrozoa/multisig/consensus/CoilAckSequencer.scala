@@ -8,7 +8,7 @@ import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
@@ -47,7 +47,7 @@ import org.typelevel.log4cats.Logger
 trait CoilAckSequencer(
     config: Config,
     persistence: Persistence[IO],
-    pendingConnections: MultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
@@ -75,7 +75,7 @@ trait CoilAckSequencer(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             x.get.flatMap(c =>
                 connections.set(
                   Some(Connections(liaisons = c.headPeerLiaisons, coilRelay = c.coilRelay))
@@ -172,7 +172,7 @@ object CoilAckSequencer {
     def apply(
         config: Config,
         persistence: Persistence[IO],
-        pendingConnections: MultisigRegimeManager.PendingConnections
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections
     ): IO[CoilAckSequencer] =
         IO(new CoilAckSequencer(config, persistence, pendingConnections) {})
 

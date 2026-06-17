@@ -6,7 +6,7 @@ package hydrozoa.multisig.consensus.liaison
   *
   * One event type covers all three liaison kinds — they speak the same batch protocol, and the
   * per-liaison / per-remote identity comes from the wiring layer's `contramap` wrapper (e.g.
-  * `MultisigRegimeManagerEvent.PL`), not from separate event ADTs.
+  * `HeadMultisigRegimeManagerEvent.PL`), not from separate event ADTs.
   */
 sealed trait PeerLiaisonEvent
 

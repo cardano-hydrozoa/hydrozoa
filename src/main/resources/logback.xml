@@ -27,7 +27,7 @@
     <logger name="PeerLiaison.HubToCoil" level="trace"/>
     <logger name="PeerLiaison.CoilToHub" level="trace"/>
     <logger name="JointLedger" level="trace"/>
-    <logger name="MultisigRegimeManager" level="trace"/>
+    <logger name="HeadMultisigRegimeManager" level="trace"/>
     <logger name="DisputeActor" level="trace"/>
     <logger name="EvacuationActor" level="trace"/>
     <logger name="Limiter" level="trace"/>

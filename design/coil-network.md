@@ -240,7 +240,7 @@ the same configuration head peers use (byte-deterministic across head and coil).
 
 ### 5.2 Actor topology
 
-The head-peer **multisig-regime** actor set (`MultisigRegimeManager`) is the
+The head-peer **multisig-regime** actor set (`HeadMultisigRegimeManager`) is the
 reference. A coil peer's multisig regime is a strict subset (separate manager —
 `CoilMultisigRegimeManager`); the **rule-based regime** is **shared** —
 `RuleBasedRegimeManager` runs identically on head and coil peers.
@@ -399,7 +399,7 @@ There is no `(coil, coil)` shape — coil peers only ever link to their hub.
 
 ### 5.6 Spawning actors
 
-- A **hub** head peer's `MultisigRegimeManager` spawns, beyond its mesh
+- A **hub** head peer's `HeadMultisigRegimeManager` spawns, beyond its mesh
   `PeerLiaisonHeadToHead`s: one `PeerLiaisonHubToCoil` per coil peer it hubs
   (`coilPeers.filter(_.hub == ownHeadPeerNum)`), one `CoilAckSequencer`, and one
   `CoilRelay`.
@@ -474,7 +474,7 @@ Coil-peer follow-ups outside the implemented spine, each tracked separately:
 - **`CoilPeerNumber`** opaque type — stable ordering for the multisig native
   script.
 - **`CoilMultisigRegimeManager`** — coil-side counterpart to head's
-  `MultisigRegimeManager`, spawning the present-actor subset with one uplink
+  `HeadMultisigRegimeManager`, spawning the present-actor subset with one uplink
   liaison.
 - **`CoilRelay`** + **`CoilAckSequencer`** — hub-side relay actors (§5.3, §5.4).
 - The three liaison shapes (§5.5): `PeerLiaisonHeadToHead`, `PeerLiaisonHubToCoil`,

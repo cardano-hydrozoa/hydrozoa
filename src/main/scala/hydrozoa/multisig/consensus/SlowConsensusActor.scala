@@ -9,7 +9,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
@@ -54,7 +54,8 @@ import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
   */
 final case class SlowConsensusActor(
     config: SlowConsensusActor.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | SlowConsensusActor.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+        SlowConsensusActor.Connections,
     tracer: ContraTracer[IO, SlowConsensusActorEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, SlowConsensusActor.Request] {
@@ -444,7 +445,7 @@ final case class SlowConsensusActor(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 c <- x.get
                 _ <- connections.set(

@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
@@ -33,7 +33,7 @@ import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, Wri
 abstract class PeerLiaisonHeadToHead(
     config: PeerLiaisonHeadToHead.Config,
     remoteHead: HeadPeerId,
-    pendingConnections: MultisigRegimeManager.PendingConnections |
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         PeerLiaisonHeadToHead.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
@@ -56,7 +56,7 @@ abstract class PeerLiaisonHeadToHead(
       */
     private def resolveConnections: IO[PeerLiaisonHeadToHead.Connections] =
         pendingConnections match {
-            case shared: MultisigRegimeManager.PendingConnections =>
+            case shared: HeadMultisigRegimeManager.PendingConnections =>
                 shared.get.map(s =>
                     PeerLiaisonHeadToHead.Connections(
                       blockWeaver = s.blockWeaver,
@@ -392,7 +392,7 @@ object PeerLiaisonHeadToHead {
     def apply(
         config: Config,
         remoteHead: HeadPeerId,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHeadToHead] =

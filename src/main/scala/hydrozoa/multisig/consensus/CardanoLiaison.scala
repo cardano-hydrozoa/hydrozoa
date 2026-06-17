@@ -11,7 +11,7 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -52,7 +52,8 @@ object CardanoLiaison:
     def apply(
         config: Config,
         cardanoBackend: CardanoBackend[IO],
-        pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+            CardanoLiaison.Connections,
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[CardanoLiaison] =
@@ -340,7 +341,7 @@ end CardanoLiaison
 trait CardanoLiaison(
     config: CardanoLiaison.Config,
     cardanoBackend: CardanoBackend[IO],
-    pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
 ) extends Actor[IO, CardanoLiaison.Request]:
@@ -359,7 +360,7 @@ trait CardanoLiaison(
     )
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(

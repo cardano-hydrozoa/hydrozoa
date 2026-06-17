@@ -11,7 +11,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -23,7 +23,8 @@ import scala.collection.immutable.Queue
 
 final case class BlockWeaver(
     config: BlockWeaver.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | BlockWeaver.ConnectionsPartial,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+        BlockWeaver.ConnectionsPartial,
     tracer: ContraTracer[IO, BlockWeaverEvent],
 ) extends Actor[IO, BlockWeaver.Request] {
     import BlockWeaver.*
@@ -58,7 +59,7 @@ final case class BlockWeaver(
     }
 
     private def initializeConnections: IO[BlockWeaver.Connections] = pendingConnections match {
-        case pc: MultisigRegimeManager.PendingConnections =>
+        case pc: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 c <- pc.get
             } yield BlockWeaver.Connections(

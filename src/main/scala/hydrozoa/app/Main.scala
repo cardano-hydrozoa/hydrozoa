@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence}
 import hydrozoa.multisig.server.HydrozoaServer
-import hydrozoa.multisig.{MultisigRegimeManager, MultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -237,19 +237,19 @@ object Main extends IOApp {
             // so the peer index is this node's head peer number.
             val mrmTracer =
                 Slf4jTracer.sink.contramap(
-                  MultisigRegimeManagerEventFormat.humanFormat(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(
                     HeadPeerNumber(nodeConfig.ownPeerIndex)
                   )
                 )
             for {
-                mrm <- MultisigRegimeManager.apply(
+                mrm <- HeadMultisigRegimeManager.apply(
                   nodeConfig,
                   backend,
                   remoteL2Ledger,
                   persistence,
                   mrmTracer
                 )
-                _ <- system.actorOf(mrm, "MultisigRegimeManager")
+                _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
                 _ <- logger.info("Hydrozoa node started successfully")
 
                 // Start HTTP server once RequestSequencer is available

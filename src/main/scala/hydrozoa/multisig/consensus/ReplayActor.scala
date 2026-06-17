@@ -15,12 +15,12 @@ import hydrozoa.multisig.persistence.{JournalKey, Markers, Persistence, StoreKey
 import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
-  * one-shot routine `MultisigRegimeManager` runs **inline** after spawning the consensus actors and
-  * **before** completing the start barrier (`pendingConnections`). That ordering is load-bearing
-  * (Plan A): each consensus actor enqueues a `PreStart` message then blocks on the barrier inside
-  * that handler, so every message [[replay]] sends now queues in the actor's mailbox *behind*
-  * `PreStart` and drains in order once the barrier opens — recover-then-replay, deterministically.
-  * A spawned actor would race the barrier; an inline routine cannot.
+  * one-shot routine `HeadMultisigRegimeManager` runs **inline** after spawning the consensus actors
+  * and **before** completing the start barrier (`pendingConnections`). That ordering is
+  * load-bearing (Plan A): each consensus actor enqueues a `PreStart` message then blocks on the
+  * barrier inside that handler, so every message [[replay]] sends now queues in the actor's mailbox
+  * *behind* `PreStart` and drains in order once the barrier opens — recover-then-replay,
+  * deterministically. A spawned actor would race the barrier; an inline routine cannot.
   *
   * What it does, in order:
   *
@@ -168,11 +168,11 @@ object ReplayActor:
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
       * (`confirmed ≤ acked` — we confirm only what we have acked). A violation means a torn or
-      * regressed store, so refuse to start — the raise fails `MultisigRegimeManager.preStartLocal`.
-      * (The recover seams already fail-safe on a missing snapshot via `getOrFail`; this catches the
-      * marker-vs-marker inconsistency before any replay is fed.) Shared by both peer types: the
-      * fast arm checks `softConfirmed ≤ fastBlockMark`, the slow arm
-      * `hardConfirmed ≤ hardAckedStack`.
+      * regressed store, so refuse to start — the raise fails
+      * `HeadMultisigRegimeManager.preStartLocal`. (The recover seams already fail-safe on a missing
+      * snapshot via `getOrFail`; this catches the marker-vs-marker inconsistency before any replay
+      * is fed.) Shared by both peer types: the fast arm checks `softConfirmed ≤ fastBlockMark`, the
+      * slow arm `hardConfirmed ≤ hardAckedStack`.
       */
     private def validateInvariants(
         softConfirmed: Option[BlockNumber],

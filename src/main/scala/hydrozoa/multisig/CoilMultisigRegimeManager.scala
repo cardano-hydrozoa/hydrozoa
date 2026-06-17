@@ -8,9 +8,9 @@ import com.suprnation.actor.SupervisorStrategy.Escalate
 import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager.*
-import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
-import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
+import hydrozoa.multisig.HeadMultisigRegimeManager.*
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as MRMEvent
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
@@ -21,43 +21,44 @@ import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
 
-/** Coil-peer counterpart to [[MultisigRegimeManager]]. A coil runs the same multisig-regime actor
-  * set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated entirely
-  * in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
+/** Coil-peer counterpart to [[HeadMultisigRegimeManager]]. A coil runs the same multisig-regime
+  * actor set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated
+  * entirely in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
   *   - exactly one liaison ([[liaison.PeerLiaisonCoilToHub]]), toward the coil peer's hub head peer
   *     (§5.5) [doc-ref], instead of the head mesh;
   *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
   *     it, and a coil peer authors no requests).
   *
-  * It completes the shared [[MultisigRegimeManager.Connections]] so the reused child actors resolve
-  * their slots exactly as on a head.
+  * It completes the shared [[HeadMultisigRegimeManager.Connections]] so the reused child actors
+  * resolve their slots exactly as on a head.
   */
 trait CoilMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
+    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
 ) extends Actor[IO, Request] {
 
     /** Specialize the regime-wide tracer down to per-actor channels, exactly as
-      * [[MultisigRegimeManager]] does — the reused child actors emit the same event types on a coil
-      * peer, so the same roll-up reaches the single sink composition the wiring layer assembled.
+      * [[HeadMultisigRegimeManager]] does — the reused child actors emit the same event types on a
+      * coil peer, so the same roll-up reaches the single sink composition the wiring layer
+      * assembled.
       */
     private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.BW.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.BW.apply)
     private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.JL.apply)
     private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.FCA.apply)
     private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.CL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.CL.apply)
     private val scTracer: ContraTracer[IO, StackComposerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.SC.apply)
     private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.SCA.apply)
     private def plTracer(remotePeerId: PeerId): ContraTracer[IO, PeerLiaisonEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.PL(remotePeerId, _))
+        tracer.contramap(HeadMultisigRegimeManagerEvent.PL(remotePeerId, _))
 
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
 
@@ -201,7 +202,7 @@ object CoilMultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, MultisigRegimeManagerEvent]
+        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
     ): IO[CoilMultisigRegimeManager] =
         IO(
           new CoilMultisigRegimeManager(

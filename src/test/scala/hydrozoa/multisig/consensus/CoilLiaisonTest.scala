@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
-import hydrozoa.multisig.{MultisigRegimeManager, NoopActor}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 import test.{SeedPhrase, TestPeers, genMonad}
@@ -112,7 +112,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     private def baseConnections(
         system: ActorSystem[IO],
         slowConsensus: SlowConsensusActor.Handle,
-    ): IO[MultisigRegimeManager.Connections] =
+    ): IO[HeadMultisigRegimeManager.Connections] =
         for {
             blockWeaver <- noop[BlockWeaver.Request](system)
             cardanoLiaison <- noop[CardanoLiaison.Request](system)
@@ -120,7 +120,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             requestSequencer <- noop[RequestSequencer.Request](system)
             jointLedger <- noop[JointLedger.Requests.Request](system)
             stackComposer <- noop[StackComposer.Request](system)
-        } yield MultisigRegimeManager.Connections(
+        } yield HeadMultisigRegimeManager.Connections(
           blockWeaver = blockWeaver,
           blockWeaverLimiter = blockWeaver,
           cardanoLiaison = cardanoLiaison,
@@ -135,7 +135,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     /** Per-coil actors + the Ref recording what its slow-consensus slot receives. */
     private final case class CoilParts(
         coilNum: CoilPeerNumber,
-        pending: Deferred[IO, MultisigRegimeManager.Connections],
+        pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
         coilLiaison: PeerLiaisonCoilToHub.Handle,
@@ -157,7 +157,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                 Persistence.fromBackend(backend).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
-                            headPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                            headPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
@@ -174,7 +174,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         )
                                 }
                                 for {
-                                    pending <- Deferred[IO, MultisigRegimeManager.Connections]
+                                    pending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)
