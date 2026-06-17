@@ -4,6 +4,7 @@ import cats.effect.IO
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerWallet
@@ -147,6 +148,7 @@ object Janitor:
                     .fold(err => throw RuntimeException(err.toString), identity)
 
                 balanced = unbalanced
+                    .addExpectedSigners(config.headMultisigScript.requiredSigners)
                     .balanceContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         _,

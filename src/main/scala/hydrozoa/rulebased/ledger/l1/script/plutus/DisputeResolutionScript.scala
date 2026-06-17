@@ -19,6 +19,7 @@ import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
+import scalus.compiler.Compile
 import scalus.uplc.PlutusV3
 import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.uplc.builtin.Data.toData

@@ -42,8 +42,7 @@ final case class RuleBasedTreasuryUtxo(
       ThreeArgumentPlutusScriptWitness(
         PlutusScriptAttached,
         redeemer.toData,
-        DatumInlined,
-        Set.empty
+        DatumInlined
       )
     )
 }

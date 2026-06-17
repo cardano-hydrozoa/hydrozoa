@@ -7,6 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, InitializationTxEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx.InitializationTxOps.Parse.Error.MetadataParseError
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
@@ -105,7 +106,9 @@ object InitializationTx {
 
                 finalized <- time("finalizeContext") {
                     TxBuilder
-                        .finalizeContext(unbalanced)
+                        .finalizeContext(
+                          unbalanced.addExpectedSigners(config.headMultisigScript.requiredSigners)
+                        )
                         .explainConst("Initialization tx failed to finalize")
                 }
 

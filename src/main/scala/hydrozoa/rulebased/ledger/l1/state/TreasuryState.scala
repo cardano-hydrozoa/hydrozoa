@@ -5,9 +5,9 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
-import scalus.Compile
 import scalus.cardano.onchain.plutus.prelude.List
 import scalus.cardano.onchain.plutus.v3.*
+import scalus.compiler.Compile
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 @Compile

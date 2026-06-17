@@ -18,7 +18,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AddrKeyHash, Coin, MultiAsset, TransactionInput, Utxo, Value}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
-import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness}
+import scalus.cardano.txbuilder.{ScriptSource, ThreeArgumentPlutusScriptWitness}
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
 
@@ -95,45 +95,48 @@ final case class BallotBox[Status <: VoteStatus](
     def toUtxo(using config: BallotBoxConfig): Utxo =
         Utxo(input, ballotBoxOutput.toOutput)
 
-    def spend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
-        val expectedSigner = ExpectedSigner(config.ownWallet.exportVerificationKey.addrKeyHash)
+    /** Verification-key hash this spend is expected to be signed by, for witness-set fee sizing.
+      * Inject into the build context via `addExpectedSigners` before finalizing.
+      */
+    def spendSigners(using config: BallotBoxConfig): Set[AddrKeyHash] =
+        Set(config.ownWallet.exportVerificationKey.addrKeyHash)
+
+    def spend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend =
         Spend(
           this.toUtxo,
           ThreeArgumentPlutusScriptWitness(
             scriptSource = ScriptSource.PlutusScriptAttached,
             redeemer = redeemer.toData,
-            datum = DatumInlined,
-            additionalSigners = Set(expectedSigner)
+            datum = DatumInlined
           )
         )
-    }
 }
 
 extension (unvoted: BallotBox[AwaitingVote]) {
 
-    def votingSpend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend = {
-        val signers =
-            if unvoted.ballotBoxOutput.key == BigInt(0) then
-                // Public ballot box: synthetic all-zeros signer for fee estimation; on-chain check is skipped.
-                Set(ExpectedSigner(AddrKeyHash(ByteString.fromArray(new Array[Byte](28)))))
-            else
-                Set(
-                  ExpectedSigner(
-                    AddrKeyHash(
-                      unvoted.ballotBoxOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash
-                    )
-                  )
-                )
+    /** Signer expected for a vote spend, for witness-set fee sizing. Inject into the build context
+      * via `addExpectedSigners` before finalizing.
+      */
+    def votingSigners(using config: BallotBoxConfig): Set[AddrKeyHash] =
+        if unvoted.ballotBoxOutput.key == BigInt(0) then
+            // Public ballot box: synthetic all-zeros signer for fee estimation; on-chain check is skipped.
+            Set(AddrKeyHash(ByteString.fromArray(new Array[Byte](28))))
+        else
+            Set(
+              AddrKeyHash(
+                unvoted.ballotBoxOutput.datum.voteStatus.asInstanceOf[AwaitingVote].peer.hash
+              )
+            )
+
+    def votingSpend(redeemer: DisputeRedeemer)(using config: BallotBoxConfig): Spend =
         Spend(
           unvoted.toUtxo,
           ThreeArgumentPlutusScriptWitness(
             scriptSource = ScriptSource.PlutusScriptAttached,
             redeemer = redeemer.toData,
-            datum = DatumInlined,
-            additionalSigners = signers
+            datum = DatumInlined
           )
         )
-    }
 }
 
 // TODO: Coin seems like it must be either the default vote contingency, individual vote contingency, or

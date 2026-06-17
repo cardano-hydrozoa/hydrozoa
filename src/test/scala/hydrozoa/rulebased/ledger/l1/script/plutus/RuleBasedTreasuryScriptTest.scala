@@ -6,7 +6,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scala.io.Source
 import scalus.cardano.onchain.plutus.prelude.List
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G1
 import scalus.cardano.onchain.plutus.v3.ScriptContext
 import scalus.uplc.builtin.bls12_381.*
 import scalus.uplc.builtin.{ByteString, Data}

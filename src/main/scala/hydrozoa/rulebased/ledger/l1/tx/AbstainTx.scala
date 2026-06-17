@@ -6,7 +6,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.l1.tx.Tx
@@ -80,18 +80,20 @@ private object AbstainTxOps {
                     collateralUtxo.add,
                     collateralUtxo.spend,
                     collateralUtxo.collateralOutput.send,
-                    // Spend the vote utxo with the Abstain redeemer; votingSpend wires the peer
-                    // (read from the AwaitingVote(peer) datum) into expected signers.
+                    // Spend the vote utxo with the Abstain redeemer.
                     uncastBallotBox.votingSpend(redeemer),
                     // Continuing vote utxo with status flipped to Abstain.
                     abstainOutput.send
                   )
                 )
 
-                finalized <- context.finalizeContext(
-                  diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
-                  validators = nonSigningValidators
-                )
+                // The peer (read from the AwaitingVote(peer) datum) is the expected signer.
+                finalized <- context
+                    .addRequiredSigners(uncastBallotBox.votingSigners)
+                    .finalizeContext(
+                      diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
+                      validators = nonSigningValidators
+                    )
 
             } yield AbstainTx(
               ballotBoxSpent = uncastBallotBox,

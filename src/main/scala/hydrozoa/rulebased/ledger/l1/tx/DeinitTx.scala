@@ -4,7 +4,7 @@ import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
@@ -100,7 +100,10 @@ private object DeinitTxOps {
                   ) ++ treasuryUtxo.treasuryOutput.burnHeadTokens
                 )
 
+                // Head tokens are burned under the multisig native script; declare its signers as
+                // expected so the witness set is sized into the fee.
                 finalized <- context
+                    .addExpectedSigners(config.headMultisigScript.requiredSigners)
                     .finalizeContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         0

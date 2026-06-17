@@ -6,6 +6,7 @@ import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.SettlementTxEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
@@ -205,9 +206,13 @@ private object SettlementTxOps {
                       s"Too many deposits were included. You passed ${depositsToSpend.length}, but we can have " +
                           s"at most ${config.maxDepositsAbsorbedPerBlock}."
                     )
-                ctx <- TransactionBuilder
+                ctx0 <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("definite steps failed")
+                // Treasury / deposits are spent under the multisig native script; declare its
+                // signers as expected so the witness set is sized into the fee. Propagates to all
+                // derived contexts.
+                ctx = ctx0.addExpectedSigners(config.headMultisigScript.requiredSigners)
                 addedPessimisticRollout <- BasePessimistic
                     .mbApplySendRollout(ctx)
                     .explainConst("sending the rollout tx failed in base pessimistic")
