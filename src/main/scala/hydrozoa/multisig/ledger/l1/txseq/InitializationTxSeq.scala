@@ -6,7 +6,6 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
-import monocle.Focus.focus
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos

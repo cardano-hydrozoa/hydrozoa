@@ -3,7 +3,6 @@ package hydrozoa.app
 import cats.effect.IO
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackend
@@ -75,7 +74,7 @@ object Janitor:
                 nonHeadTokensValue = Value(Coin.zero, MultiAsset(nonHeadTokensAssets))
 
                 // NB: for a multisig head it's always true
-                hasMultisigRefScript = true
+                _ = true
                 // hasMultisigRefScript = headUtxos.exists((_, o) =>
                 //    o.scriptRef.contains(ScriptRef(config.headMultisigScript._1))
                 // )

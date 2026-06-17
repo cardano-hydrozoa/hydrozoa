@@ -18,7 +18,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
                 for {
                     // Spawn actor inside TestControl
                     actorRef <- system.actorOf(new TimeActor, "time-actor")
-                    actorRef_ <- system.actorOf(new TimeActor, "time-actor_")
+                    _ <- system.actorOf(new TimeActor, "time-actor_")
 
                     // Get initial time (should be epoch 0)
                     reply1 <- Deferred[IO, Instant]
@@ -53,7 +53,7 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
 
                 // Spawn actor inside TestControl
                 actorRef <- system.actorOf(new TimeActor, "time-actor")
-                actorRef_ <- system.actorOf(new TimeActor, "time-actor_")
+                _ <- system.actorOf(new TimeActor, "time-actor_")
 
                 // Get initial time (should be epoch 0)
                 reply1 <- Deferred[IO, Instant]

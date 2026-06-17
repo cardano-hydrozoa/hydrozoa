@@ -7,7 +7,6 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import io.circe.*
-import io.circe.generic.semiauto.*
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.crypto.ed25519.VerificationKey

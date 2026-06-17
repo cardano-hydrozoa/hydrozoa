@@ -200,7 +200,7 @@ object DisputeResolutionValidator extends Validator {
                 // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
                 val voteInput = voteOutref.resolved
-                val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
+                val (headMp, disputeId, _) = voteInput.value.onlyNonAdaAsset
 
                 // Verify the treasury reference input
                 // Find a reference input that holds a CIP-67-HYDR-prefixed token under the same
@@ -624,9 +624,9 @@ object DisputeResolutionValidator extends Validator {
                     case Abstain => a
                     case _       => b
                 }
-            case Voted(_commitmentA, versionMinorA) =>
+            case Voted(_, versionMinorA) =>
                 b match {
-                    case Voted(_commitmentB, versionMinorB) =>
+                    case Voted(_, versionMinorB) =>
                         if versionMinorA > versionMinorB then a else b
                     case _ => a
                 }

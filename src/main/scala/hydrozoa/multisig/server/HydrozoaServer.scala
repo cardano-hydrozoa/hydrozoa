@@ -1,7 +1,6 @@
 package hydrozoa.multisig.server
 
 import cats.effect.{IO, Resource}
-import cats.syntax.all.*
 import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.Logging

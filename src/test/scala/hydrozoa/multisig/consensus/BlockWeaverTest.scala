@@ -638,10 +638,10 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
             case s: StartBlock =>
                 // IO.println(s"mock: StartBlock: $s") >>
                 IO { startBlockNums.updateAndGet(_ :+ s.blockNum) }
-            case c: CompleteBlockRegular =>
+            case _: CompleteBlockRegular =>
                 // IO.println(s"mock: CompleteBlockRegular: ${c.referenceBlock}") >>
                 IO.pure(())
-            case f: CompleteBlockFinal =>
+            case _: CompleteBlockFinal =>
                 // IO.println("mock:CompleteBlockFinal") >>
                 IO.pure(())
         }

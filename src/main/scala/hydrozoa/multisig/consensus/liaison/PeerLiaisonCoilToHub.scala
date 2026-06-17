@@ -36,8 +36,6 @@ abstract class PeerLiaisonCoilToHub(
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.CoilToHubRequest] {
-    import PeerLiaisonCoilToHub.Config
-
     // `config` is a `CardanoNetwork.Section`; expose it as a given so the inbound-lane `WriteBatch`
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config

@@ -2,6 +2,7 @@ package hydrozoa.lib.petri.net
 
 import cats.data.NonEmptyList
 import hydrozoa.lib.petri.net.components.*
+import scala.annotation.unused
 
 /** An opaque refinement of a [[Simulator]] instance that has passed all validity checks.
   *
@@ -77,14 +78,16 @@ object ValidatedSimulator {
       * constraint if any check fails; [[scala.util.Right]] with the wrapped simulator otherwise.
       */
     def validate[
-        ArcId: Ordering,
+        ArcId,
         PlaceId,
         TransitionId,
         A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
         S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-    ](s: S): Either[NonEmptyList[ValidationError], ValidatedSimulator[S]] = {
+    ](s: S)(using
+        @unused ordArcId: Ordering[ArcId]
+    ): Either[NonEmptyList[ValidationError], ValidatedSimulator[S]] = {
         val errors: List[ValidationError] =
             NonEmptyList
                 .fromList(s.topologyErrors)
@@ -106,14 +109,14 @@ object ValidatedSimulator {
     // =========================================================================
 
     extension [
-        ArcId: Ordering,
+        ArcId,
         PlaceId,
         TransitionId,
         A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
         S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-    ](vs: ValidatedSimulator[S])
+    ](vs: ValidatedSimulator[S])(using @unused ordArcId: Ordering[ArcId])
 
         /** Fire transition `t`. On success, the returned [[ValidatedSimulator]] is guaranteed valid
           * by the firing-preservation invariant (see type-level Scaladoc): firing only updates

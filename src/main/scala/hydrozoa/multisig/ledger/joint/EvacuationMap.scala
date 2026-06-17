@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.joint
 
-import cats.implicits.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
@@ -61,7 +60,7 @@ object EvacuationKey:
     given evacuationKeyKeyDecoder: KeyDecoder[EvacuationKey] with {
         override def apply(s: String): Option[EvacuationKey] =
             for {
-                hex <- KeyDecoder.decodeKeyString(s)
+                _ <- KeyDecoder.decodeKeyString(s)
                 bytes <- Try(ByteString.fromHex(s)).toOption
                 ek <- EvacuationKey(bytes)
             } yield ek

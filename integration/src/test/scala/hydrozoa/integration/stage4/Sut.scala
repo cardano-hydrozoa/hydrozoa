@@ -1,7 +1,6 @@
 package hydrozoa.integration.stage4
 
 import cats.effect.{Fiber, IO, IOLocal, Ref}
-import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.Slf4jTracer

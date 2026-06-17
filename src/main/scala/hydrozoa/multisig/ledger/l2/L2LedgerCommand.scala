@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l2
 
 // see: https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events
 
-import cats.syntax.all.*
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx
@@ -136,8 +135,6 @@ object L2LedgerCommand {
     ) extends L2LedgerCommand.Real
 
     object ApplyTransaction {
-        import RequestId.given
-        import BlockNumber.given
         import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 
         // TODO: can be removed if we just rename the userVk field?
@@ -158,7 +155,6 @@ object L2LedgerCommand {
 
     object ProxyBlockConfirmation {
         given Codec[L2LedgerCommand.ProxyBlockConfirmation] = {
-            import RequestId.given
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
 
             io.circe.generic.semiauto.deriveCodec

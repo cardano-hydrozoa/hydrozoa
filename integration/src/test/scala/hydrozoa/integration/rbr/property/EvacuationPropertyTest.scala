@@ -204,10 +204,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 case _                                      => IO.unit
             }
 
-            baseEvacTracer: ContraTracer[IO, EvacuationActorEvent] =
+            _: ContraTracer[IO, EvacuationActorEvent] =
                 Slf4jTracer.sink.contramap(EvacuationActorEventFormat.humanFormat(peerNum))
 
-            baseDisputeTracer: ContraTracer[IO, DisputeActorEvent] =
+            _: ContraTracer[IO, DisputeActorEvent] =
                 Slf4jTracer.sink.contramap(DisputeActorEventFormat.humanFormat(peerNum))
 
             terminalUtxos <- lift {

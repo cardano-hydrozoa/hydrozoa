@@ -5,7 +5,6 @@ import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
-import hydrozoa.config.head.network
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.stage1.Commands.*
@@ -37,6 +36,7 @@ import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
 import scalus.cardano.ledger.{BlockHeader as _, *}
 
+import scala.annotation.unused
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
@@ -330,7 +330,7 @@ object Model:
 
                 case BlockCycle.InProgress(
                       blockNumber,
-                      _creationTime,
+                      _,
                       prevVersion,
                       accumulator,
                     ) =>
@@ -346,8 +346,8 @@ object Model:
                     val s: cats.data.State[State, BlockBrief] =
                         for {
                             regOrReject <- registerOrReject(events)
-                            registeredThisBlock = regOrReject._1
-                            rejectedThisBlock = regOrReject._2
+                            _ = regOrReject._1
+                            _ = regOrReject._2
 
                             absorbedThisBlock <- absorb(cmd.blockCreationEndTime)
 
@@ -438,7 +438,7 @@ object Model:
         } yield (registered, rejected)
 
         def absorb(
-            blockCreationEndTime: BlockCreationEndTime
+            @unused blockCreationEndTime: BlockCreationEndTime
         ): cats.data.State[State, Queue[Absorbed]] =
             // The fast cycle does not rotate the treasury, so no deposit ever transitions to
             // Absorbed. Mature Submitted deposits flow to `refund` instead (see SUT's

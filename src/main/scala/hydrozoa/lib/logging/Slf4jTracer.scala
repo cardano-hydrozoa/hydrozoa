@@ -4,6 +4,7 @@ import cats.effect.{ExitCode, IO, IOApp, IOLocal}
 import cats.implicits.*
 import cats.{effect, *}
 import hydrozoa.lib.logging.Level.Info
+import scala.annotation.unused
 
 import ContraTracerSyntax.*
 
@@ -159,7 +160,7 @@ object Slf4jTracer:
     def warn(msg: => String)(using local: IOLocal[Slf4jTracer]): IO[Unit] =
         levelMap(Level.Warn)(msg)
 
-    def error(msg: => String, cause: Option[Throwable] = None)(using
+    def error(msg: => String, @unused cause: Option[Throwable] = None)(using
         local: IOLocal[Slf4jTracer]
     ): IO[Unit] = levelMap(Level.Error)(msg)
 
@@ -186,7 +187,7 @@ object TracerDemo extends IOApp {
 
     def blockProductionContramap(
         blockProductionCtx: BlockProductionCtx
-    )(mockBlock: MockBlock): LogEvent =
+    )(@unused mockBlock: MockBlock): LogEvent =
         LogEvent(
           level = Info,
           msg = "block produced",

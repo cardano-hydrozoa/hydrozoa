@@ -8,7 +8,7 @@ import hydrozoa.lib.logging.Logging
 import org.scalacheck.{Gen, Prop, Shrink}
 import org.slf4j.LoggerFactory
 
-import scala.annotation.tailrec
+import scala.annotation.{tailrec, unused}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 /** Utility for temporarily changing log levels. */
@@ -76,7 +76,7 @@ trait ModelCommand[Cmd, Result, State] {
     /** Virtual-time delay to advance *before* this command's run is executed. Defaults to
       * [[Duration.Zero]] (no delay).
       */
-    def delay(cmd: Cmd): FiniteDuration = Duration.Zero
+    def delay(@unused cmd: Cmd): FiniteDuration = Duration.Zero
 }
 
 /** SUT-side facet: executes the command against the system under test. */
@@ -108,18 +108,18 @@ trait CommandProp[Cmd, Result, State] {
     }
 
     def onSuccessCheck(
-        cmd: Cmd,
-        expectedResult: Result,
-        stateBefore: State,
-        stateAfter: State,
-        result: Result
+        @unused cmd: Cmd,
+        @unused expectedResult: Result,
+        @unused stateBefore: State,
+        @unused stateAfter: State,
+        @unused result: Result
     ): Prop = Prop.passed
 
     def onFailureCheck(
-        cmd: Cmd,
-        expectedResult: Result,
-        stateBefore: State,
-        stateAfter: State,
+        @unused cmd: Cmd,
+        @unused expectedResult: Result,
+        @unused stateBefore: State,
+        @unused stateAfter: State,
         err: Throwable
     ): Prop = Prop.exception(err)
 }
@@ -296,7 +296,10 @@ trait ModelBasedSuite {
       * suites can override to print extra diagnostics (e.g. a per-peer command table) and may call
       * `super.onTestCaseGenerated(...)` to keep the default log alongside their own.
       */
-    def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): IO[Unit] =
+    def onTestCaseGenerated(
+        @unused initialState: State,
+        commands: List[AnyCommand[State, Sut]]
+    ): IO[Unit] =
         loggerIO.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
 
     // ===================================
@@ -485,7 +488,7 @@ trait ModelBasedSuite {
     ): Prop = {
         onTestCaseGenerated(testCase.initialState, testCase.commands).unsafeRunSync()
 
-        val (_sut, p, s, lastCmd, _) =
+        val (_, p, s, lastCmd, _) =
             if useTestControl
             then runCommandsWithTestControl(testCase, startupSut)
             else runCommandsPlain(testCase, startupSut)
@@ -687,7 +690,7 @@ trait ModelBasedSuite {
                     // 4. Otherwise, run per-command iteration.
                     // Note that the outer doesn't need the command object.
                     // It just needs to iterate the right number of times.
-                    testCase.commands.foldLeft(IO.unit) { (acc, _u) =>
+                    testCase.commands.foldLeft(IO.unit) { (acc, _) =>
                         acc >> tc.results.flatMap {
                             case Some(_) => IO.unit // already finished, skip remaining
                             case None =>

@@ -3,7 +3,6 @@ package hydrozoa.multisig.consensus.transport
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
-import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging

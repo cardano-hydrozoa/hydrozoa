@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import cats.*
 import cats.data.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -17,6 +16,7 @@ import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUt
 import java.util.concurrent.TimeUnit
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen}
+import scala.annotation.unused
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
@@ -36,10 +36,10 @@ import test.Generators.Other
 
 def genDepositDatum(network: CardanoNetwork.Section): Gen[DepositUtxo.Datum] = {
     for {
-        address <- genPubkeyAddress()(using network).map(
+        _ <- genPubkeyAddress()(using network).map(
           LedgerToPlutusTranslation.getAddress(_).credential
         )
-        datum <- genByteStringData
+        _ <- genByteStringData
         deadline <- Gen.posNum[BigInt]
         refundAddress <- genPubkeyAddress()(using network).map(
           LedgerToPlutusTranslation.getAddress(_)
@@ -78,7 +78,7 @@ def genDepositUtxo(
         dd <- genDepositDatum(config)
 
         // Mock utxo to calculate minAda
-        mockUtxo = Babbage(
+        _ = Babbage(
           address = headAddress_,
           value = Value.zero,
           datumOption = Some(Inline(dd.toData)),
@@ -120,7 +120,7 @@ def genDepositUtxo(
 
 /** Generate a "standalone" settlement tx. */
 def genSettlementTxSeqBuilder(config: HeadConfig)(
-    estimatedFee: Coin = Coin(5_000_000L),
+    @unused estimatedFee: Coin = Coin(5_000_000L),
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None,
@@ -129,7 +129,7 @@ def genSettlementTxSeqBuilder(config: HeadConfig)(
     ),
     currentMajorBlockOffsetDuration: QuantizedFiniteDuration =
         10.seconds.quantize(config.slotConfig),
-    txTiming: TxTiming = TxTiming.default(config.slotConfig)
+    @unused txTiming: TxTiming = TxTiming.default(config.slotConfig)
 ): Gen[SettlementTxSeq.Build] = {
     val fallbackTxStartTime =
         config.txTiming.newFallbackStartTime(previousMajorBlockCreationEndTime)
@@ -197,7 +197,7 @@ def genNextSettlementTxSeqBuilder(config: HeadConfig)(
     fallbackValidityStart: FallbackTxStartTime,
     blockCreationEndTime: BlockCreationEndTime,
     majorVersion: Int,
-    estimatedFee: Coin = Coin(5_000_000L),
+    @unused estimatedFee: Coin = Coin(5_000_000L),
     // If passed, the kzg commitment will be set to the value.
     // If not, its randomly generated
     kzgCommitment: Option[KzgCommitment] = None

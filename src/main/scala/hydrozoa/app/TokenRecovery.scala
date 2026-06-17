@@ -3,13 +3,12 @@ package hydrozoa.app
 import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.StandardCardanoNetwork
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
-import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, EvaluatorMode, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, PubKeyWitness, TransactionBuilder}

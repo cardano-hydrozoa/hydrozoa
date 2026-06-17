@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2
 
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
+import scala.annotation.unused
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
@@ -38,8 +39,8 @@ trait L2ConformanceValidator[L1]:
 object L2ConformanceValidator {
 
     def validate(
-        context: EutxoL2Ledger.Config,
-        state: Utxos,
+        @unused context: EutxoL2Ledger.Config,
+        @unused state: Utxos,
         event: L2Tx | L2Genesis
     ): Either[String, Unit] =
         event match {
@@ -80,7 +81,7 @@ given L2ConformanceValidator[Address] with
 given L2ConformanceValidator[DatumOption] with
     /** Only inline datums are allowed */
     def l2Validate(dat: DatumOption): Either[String, Unit] = dat match {
-        case (i: Inline) => Right(())
+        case (_: Inline) => Right(())
         case _           => Left("Datum not inline")
     }
 
@@ -104,8 +105,8 @@ given L2ConformanceValidator[TransactionOutput] with
 given L2ConformanceValidator[ScriptRef] with
     /** Only Native and PlutusV3 scripts are allowed */
     def l2Validate(l1: ScriptRef): Either[String, Unit] = l1.script match {
-        case ns: Script.Native    => Right(())
-        case pv3: Script.PlutusV3 => Right(())
+        case _: Script.Native   => Right(())
+        case _: Script.PlutusV3 => Right(())
         case _ => Left("Script ref contains a script that is not Native or PlutusV2")
     }
 

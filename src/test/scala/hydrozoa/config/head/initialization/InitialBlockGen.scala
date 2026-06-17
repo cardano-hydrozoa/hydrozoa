@@ -7,7 +7,6 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.{HeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
-import monocle.Focus.focus
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.DurationInt
@@ -19,7 +18,7 @@ def generateInitialBlock(
         currentTimeBlockCreationEndTime,
 ): GenWithTestPeers[InitialBlock] = {
     for {
-        testPeers <- ReaderT.ask
+        _ <- ReaderT.ask
         config <- genHeadConfigBootstrap
 
         blockCreationEndTime <- generateBlockCreationEndTime

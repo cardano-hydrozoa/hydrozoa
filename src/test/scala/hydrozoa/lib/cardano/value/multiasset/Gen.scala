@@ -66,8 +66,8 @@ object Gen {
             .map(MultiAsset.Inner.apply)
 
     private def genConfigurableMultiAssetPolymorphic[I](
-        minPolicies: Int = 1,
-        maxPolicies: Int = 8
+        minPolicies: Int,
+        maxPolicies: Int
     )(using innerArb: Arbitrary[I]): Gen0[SortedMap[PolicyId, I]] = for {
         policies <- Gen0.choose(minPolicies, maxPolicies)
         list <- Gen0.containerOfN[List, (PolicyId, I)](
@@ -80,8 +80,8 @@ object Gen {
     } yield list.to(SortedMap)
 
     private def genInnerPolymorphic[C](
-        minAssets: Int = 1,
-        maxAssets: Int = 8
+        minAssets: Int,
+        maxAssets: Int
     )(using coinArb: Arbitrary[C]): Gen0[SortedMap[AssetName, C]] = for {
         assets <- Gen0.choose(minAssets, maxAssets)
         list <- Gen0.containerOfN[List, (AssetName, C)](

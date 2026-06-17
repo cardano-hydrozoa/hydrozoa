@@ -40,7 +40,7 @@ object EvacuationActorTestHelpers {
                   .label("Full evacuation map at fallback")
             )
             // Also might be empty, even if the full map isn't
-            subset <- pick(
+            _ <- pick(
               Gen.someOf(evacMapFull.evacuationMap)
                   .flatMap(s => EvacuationMap(TreeMap.from(s)))
                   .label("subset toEvacuate")

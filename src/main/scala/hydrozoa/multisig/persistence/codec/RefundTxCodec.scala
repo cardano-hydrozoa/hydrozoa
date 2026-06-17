@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.persistence.codec.DestinationCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
+import scala.annotation.unused
 
 /** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest Tx wrapper (4 fields, no
   * `MultisigTreasuryUtxo` chain).
@@ -26,7 +27,7 @@ import io.circe.{Decoder, Encoder}
   */
 object RefundTxCodec:
 
-    given postDatedEncoder(using CardanoNetwork.Section): Encoder[RefundTx.PostDated] =
+    given postDatedEncoder(using @unused ev: CardanoNetwork.Section): Encoder[RefundTx.PostDated] =
         deriveEncoder[RefundTx.PostDated]
 
     given postDatedDecoder(using CardanoNetwork.Section): Decoder[RefundTx.PostDated] =

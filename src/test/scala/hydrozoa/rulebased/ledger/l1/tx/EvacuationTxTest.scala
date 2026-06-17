@@ -11,7 +11,6 @@ import hydrozoa.multisig.ledger.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -19,8 +18,9 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties, Test}
+import scala.annotation.unused
+import scalus.cardano.address.Network
 import scalus.cardano.address.ShelleyPaymentPart.Key
-import scalus.cardano.address.{Network, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.onchain.plutus.prelude
@@ -36,8 +36,8 @@ def genResolvedTreasuryUtxo(
     headMp: PolicyId,
     beaconTokenName: TokenName,
     utxosCommitment: KzgCommitment.KzgCommitment,
-    setupSize: Int,
-    network: Network
+    @unused setupSize: Int,
+    @unused network: Network
 ): Gen[RuleBasedTreasuryUtxo] =
     for {
         treasuryDatum <- genTreasuryResolvedDatum(headMp, utxosCommitment)
@@ -46,7 +46,7 @@ def genResolvedTreasuryUtxo(
         value = Value(Coin(coin)) + Value.asset(headMp, AssetName(beaconTokenName), 1)
         outputIx <- Gen.choose(0, 5)
         txId = TransactionInput(fallbackTxId, outputIx)
-        scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(network)
+        _ = HydrozoaBlueprint.mkTreasuryAddress(network)
     } yield RuleBasedTreasuryUtxo(
       utxoId = txId,
       treasuryOutput = RuleBasedTreasuryOutput(
@@ -57,7 +57,7 @@ def genResolvedTreasuryUtxo(
 
 /** Generator for resolved treasury datum */
 def genTreasuryResolvedDatum(
-    headMp: PolicyId,
+    @unused headMp: PolicyId,
     utxosCommitment: KzgCommitment.KzgCommitment,
 ): Gen[Resolved] =
     for {
@@ -119,7 +119,7 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
             .replace(sufficientTreasuryValue)
 
         // Generate validity slot
-        validityEndSlot <- Gen.choose(100L, 1000L)
+        _ <- Gen.choose(100L, 1000L)
 
         addr = config.nodeConfigs.head._2.ownWallet.exportVerificationKey
             .shelleyAddress()(using config.headConfig)
@@ -215,7 +215,7 @@ object EvacuationTxTest extends Properties("EvacuationTx Test") {
           _ <- assertWith(evacuationTx.tx != null, "Transaction should not be null")
 
           // Verify residual treasury value is correct
-          totalEvacuations =
+          _ =
               builder.evacuateesToTryNext.totalValue
           expectedResidual = builder.inputTreasuryUtxo.treasuryOutput.value - Value.combine(
             evacuationTx.evacuatedOutputs.map(_.value)

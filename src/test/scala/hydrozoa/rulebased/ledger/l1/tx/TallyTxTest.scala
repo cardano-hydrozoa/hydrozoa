@@ -12,6 +12,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
 import org.scalacheck.{Gen, Properties}
+import scala.annotation.unused
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
 import scalus.uplc.builtin.Builtins.blake2b_224
@@ -22,7 +23,7 @@ import scalus.uplc.builtin.ByteString
 def genCastVoteDatum(
     key: Int,
     link: Int,
-    versionMajor: BigInt
+    @unused versionMajor: BigInt
 ): Gen[VoteDatum] =
     for {
         versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
@@ -65,7 +66,7 @@ def genTallyBallotBox(
     fallbackTxId: TransactionHash,
     outputIndex: Int,
     voteDatum: VoteDatum,
-    voter: AddrKeyHash,
+    @unused voter: AddrKeyHash,
 )(using
     config: CardanoNetwork.Section & HasTokenNames & HeadPeers.Section
 ): Gen[BallotBox[VoteStatus]] = {

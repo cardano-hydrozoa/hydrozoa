@@ -87,42 +87,41 @@ final case class DepositsMap private[map] (
               s"\n\t settlementTxEndTime: $settlementTxEndTime" +
               s"\n\t pollResults: ${pollResults.utxos.asJson}"
         )
-        treeMap.foldLeft(DepositsMap.Partition.empty) {
-            case (outerAcc, (_absorptionStartTime, depositQueue)) =>
-                depositQueue.foldLeft(outerAcc) { case (innerAcc, entry) =>
-                    import DepositsMap.Partition.Compartment.*
-                    import entry.*
+        treeMap.foldLeft(DepositsMap.Partition.empty) { case (outerAcc, (_, depositQueue)) =>
+            depositQueue.foldLeft(outerAcc) { case (innerAcc, entry) =>
+                import DepositsMap.Partition.Compartment.*
+                import entry.*
 
-                    val isImmature = TxTiming.depositIsImmature(
-                      depositUtxo.absorptionStartTime,
-                      blockCreationEndTime
-                    )
+                val isImmature = TxTiming.depositIsImmature(
+                  depositUtxo.absorptionStartTime,
+                  blockCreationEndTime
+                )
 
-                    val isExpired = TxTiming.depositIsExpired(
-                      settlementTxEndTime,
-                      depositUtxo.absorptionEndTime
-                    )
+                val isExpired = TxTiming.depositIsExpired(
+                  settlementTxEndTime,
+                  depositUtxo.absorptionEndTime
+                )
 
-                    val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
+                val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
 
-                    val compartment =
-                        if isImmature then {
-                            logger.debug(s"$entry is immature.")
-                            Immature
-                        } else if isExpired then {
-                            logger.debug(s"$entry is expired (rejected).")
-                            Expired
-                        } else if isExistent then {
-                            logger.debug(s"$entry is eligible")
-                            Eligible
-                        } else {
-                            logger.debug(s"$entry is mature, but not in the poll results.")
-                            NotInPollResults
-                        }
+                val compartment =
+                    if isImmature then {
+                        logger.debug(s"$entry is immature.")
+                        Immature
+                    } else if isExpired then {
+                        logger.debug(s"$entry is expired (rejected).")
+                        Expired
+                    } else if isExistent then {
+                        logger.debug(s"$entry is eligible")
+                        Eligible
+                    } else {
+                        logger.debug(s"$entry is mature, but not in the poll results.")
+                        NotInPollResults
+                    }
 
-                    innerAcc.append(compartment, entry)
+                innerAcc.append(compartment, entry)
 
-                }
+            }
         }
     }
 }

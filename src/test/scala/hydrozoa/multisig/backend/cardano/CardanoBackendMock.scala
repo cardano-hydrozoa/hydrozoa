@@ -38,7 +38,6 @@ class CardanoBackendMock private (
     private val mutator: Mutator,
     private val mkContext: Long => Context
 ) extends CardanoBackend[MockStateF] {
-    import CardanoBackend.*
     import State.*
 
     override def resolve(

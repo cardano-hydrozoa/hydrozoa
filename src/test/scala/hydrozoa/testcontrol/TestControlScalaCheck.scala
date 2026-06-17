@@ -20,7 +20,7 @@ object TestControlScalaCheck extends Properties("TestControl/ScalaCheck") {
 
     val _ = property("minimal TestControl + ActorSystem test") = {
         val program = TestControl.executeEmbed {
-            ActorSystem[IO]("test-system").use { system =>
+            ActorSystem[IO]("test-system").use { _ =>
                 IO.sleep(1.hour) >> IO.realTimeInstant.flatMap(t => IO.println(s"time=$t"))
             }
         }
@@ -32,7 +32,7 @@ object TestControlScalaCheck extends Properties("TestControl/ScalaCheck") {
         forAll(Gen.const(())) { _ =>
             val program = TestControl.executeEmbed {
                 IO.sleep(30000.day) >>
-                    ActorSystem[IO]("test-system").use { system =>
+                    ActorSystem[IO]("test-system").use { _ =>
                         IO.sleep(1.day) >> IO.realTimeInstant.flatMap(t => IO.println(s"time=$t"))
                     }
             }

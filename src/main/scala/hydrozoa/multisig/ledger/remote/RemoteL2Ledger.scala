@@ -3,7 +3,6 @@ package hydrozoa.multisig.ledger.remote
 import cats.Monad
 import cats.data.EitherT
 import cats.effect.{Async, IO, Ref, Temporal}
-import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.ledger.joint.EvacuationDiff

@@ -2,7 +2,7 @@ package hydrozoa.lib.cardano.scalus.cardano.onchain.plutus
 
 import scalus.*
 import scalus.uplc.builtin.Builtins.*
-import scalus.uplc.builtin.{Builtins, ByteString}
+import scalus.uplc.builtin.ByteString
 
 @Compile
 object ByteStringExtension:

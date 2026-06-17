@@ -4,7 +4,6 @@ import cats.*
 import cats.data.*
 import cats.data.Validated.{Invalid, Valid}
 import cats.effect.*
-import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
@@ -30,6 +29,7 @@ import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
+import scala.annotation.unused
 import scala.collection.immutable.SortedSet
 import scalus.cardano.ledger.*
 import scalus.crypto.ed25519.VerificationKey
@@ -341,7 +341,7 @@ object HeadConfig {
         // - vkey -> connection address
         // - vkey -> equity
         // - vkey -> peer number
-        given headConfigBootstrapEncoder(using CardanoNetwork.Section): Encoder[
+        given headConfigBootstrapEncoder(using @unused ev: CardanoNetwork.Section): Encoder[
           HeadConfig.Bootstrap
         ] with {
             override def apply(hc: HeadConfig.Bootstrap): Json = {
@@ -546,7 +546,7 @@ object HeadConfig {
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
                 case Valid(()) => Valid(headConfigBootstrap)
-                case x @ Invalid(errors) => {
+                case Invalid(errors) => {
                     // We log in the constructor rather than the pattern match. If this causes spurious errors,
                     // it can be removed.
                     errors.toList.foreach(logger.error)

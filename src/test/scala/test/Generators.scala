@@ -23,6 +23,7 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import scala.annotation.unused
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.address.*
 import scalus.cardano.address.ShelleyPaymentPart.Key
@@ -96,7 +97,7 @@ object Generators {
                 mv <- Gen.posNum[BigInt]
                 // Verify that this is the correct length!
                 kzg <- genByteStringOfN(32)
-                paramsHash <- genByteStringOfN(32)
+                _ <- genByteStringOfN(32)
 
             } yield MultisigTreasuryUtxo.Datum(
               commit = kzg,
@@ -153,7 +154,7 @@ object Generators {
             config: HeadPeers.Section & CardanoNetwork.Section & HasTokenNames
         ): Gen[MultisigRegimeUtxo] = for {
             utxoId <- Arbitrary.arbitrary[TransactionInput]
-            hmrwToken = Value(
+            _ = Value(
               Coin.zero,
               MultiAsset(
                 SortedMap(
@@ -184,7 +185,7 @@ object Generators {
                 arbitrary[ByteString].map(b => Some(Inline(b.toData)))
         )(using network: CardanoNetwork.Section): Gen[Payout.Obligation] = {
             for {
-                l2Input <- arbitrary[TransactionInput]
+                _ <- arbitrary[TransactionInput]
 
                 address0 <- arbitrary[ShelleyAddress]
                 address = address0.copy(network = network.network)
@@ -288,7 +289,7 @@ object Generators {
           */
         def genL2WithdrawalFromUtxosAndPeer(
             inputUtxos: Utxos,
-            peer: TestPeerName
+            @unused peer: TestPeerName
         )(using config: CardanoNetwork.Section): Gen[L2Tx] =
             for {
                 addr <- genShelleyAddress
@@ -305,7 +306,7 @@ object Generators {
                   fee = Coin(0L)
                 )
 
-                txUnsigned: Transaction =
+                _: Transaction =
                     Transaction(
                       body = KeepRaw(txBody),
                       witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
@@ -348,7 +349,7 @@ object Generators {
                 L2Tx,
                 String | TransactionException
             ) =
-                (context, state, transaction) => {
+                (_, state, _) => {
                     // Generate a random TxId that is _not_ present in the state
                     val bogusInputId: TransactionHash = Hash(
                       genByteStringOfN(32)
@@ -465,7 +466,7 @@ object Generators {
               */
             given Arbitrary[Payout.Obligation] = Arbitrary {
                 for {
-                    l2Input <- arbitrary[TransactionInput]
+                    _ <- arbitrary[TransactionInput]
 
                     address <- arbitrary[ShelleyAddress]
                     coin <- arbitrary[Coin]
@@ -719,7 +720,7 @@ object GeneratorTests extends Properties("Generator Tests") {
           Gen.nonEmptyListOf(
             genPubKeyUtxo(address, genValue = Arbitrary.arbitrary[Value])
           )
-        )((amount, n, utxos) =>
+        )((amount, _, utxos) =>
             Prop.forAll(
               Generators.Other.genValueDistributionWithMinAdaUtxo(
                 value = amount,

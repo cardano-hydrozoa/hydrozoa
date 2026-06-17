@@ -8,7 +8,6 @@ import com.bloxbean.cardano.client.crypto.cip1852.DerivationPath.createExternalA
 import hydrozoa.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetworkGen.given_Arbitrary_CardanoNetwork
-import hydrozoa.config.head.peers.HeadPeers.*
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
@@ -295,7 +294,6 @@ enum PeersNumberSpec:
     case Exact(peersNumber: Int)
 
 object PeersNumberSpec:
-    import PeersNumberSpec.*
 
     def generate(): Gen[PeersNumberSpec] = Gen.oneOf(
       Gen.const(Random),

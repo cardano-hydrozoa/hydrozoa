@@ -22,7 +22,6 @@ import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
-import hydrozoa.multisig.ledger.JointLedgerTestHelpers.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -37,12 +36,12 @@ import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
 import java.util.concurrent.TimeUnit
-import monocle.Focus
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
+import scala.annotation.unused
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
@@ -242,7 +241,7 @@ object JointLedgerTestHelpers {
             pollResults: PollResults
         ): JLTest[Unit] =
             for {
-                env <- ask
+                _ <- ask
                 _ <- completeBlockRegular(
                   CompleteBlockRegular(
                     referenceBlock,
@@ -392,7 +391,7 @@ object JointLedgerTestHelpers {
 
                 } yield NonEmptyList.fromListUnsafe(utxos)).label("Funding Utxos"))
 
-                utxosFundingValue = Value.combine(utxosFunding.toList.map(_._2.value))
+                _ = Value.combine(utxosFunding.toList.map(_._2.value))
 
                 depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
@@ -426,7 +425,7 @@ object JointLedgerTestHelpers {
                   condition = depositRefundTxSeq.refundTx.tx.body.value.ttl.isEmpty
                 )
 
-                signTx = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
+                _ = env.multiNodeConfig.signTxAs(HeadPeerNumber.zero)
                 body: UserRequestBody.DepositRequestBody = UserRequestBody.DepositRequestBody(
                   l1Payload = ByteString.fromArray(depositRefundTxSeq.depositTx.tx.toCbor),
                   l2Payload = GenesisObligation.serialize(l2Outputs)
@@ -445,7 +444,7 @@ object JointLedgerTestHelpers {
 
                 userVk = userWallet.exportVerificationKey
 
-                signature: Signature =
+                _: Signature =
                     Signature.unsafeFromArray(
                       IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
                     )
@@ -491,7 +490,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
       testM = {
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
-              headAddress: ShelleyAddress,
+              @unused headAddress: ShelleyAddress,
               blockCreationStartTime: BlockCreationStartTime,
               blockCreationEndTime: BlockCreationEndTime
           ): Gen[
@@ -611,7 +610,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               eventStreamFullResults <- eventStreamActions.sequence
               // This is the format we actually care about; it's commensurate with the DappLedgerState
               eventStream: Queue[DepositsMap.Entry] = eventStreamFullResults.map {
-                  case (txSeq, event, obligations) =>
+                  case (txSeq, event, _) =>
                       DepositsMap.Entry(event.requestId, txSeq.depositTx.depositProduced)
               }
 
@@ -678,7 +677,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Joint Ledger Happy Path") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask
+          _ <- ask
 
           // Put the joint ledger in producing mode
           firstBlockNumber = BlockNumber.zero.increment
@@ -693,7 +692,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             requestId = RequestId(0, 1),
             blockCreationStartTime = firstBlockCreationStartTime
           )
-          (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
+          (depositRefundTxSeq, depositReq, _) = seqAndReq
           depositProduced = depositRefundTxSeq.depositTx.depositProduced
 
           _ <- for {
@@ -760,7 +759,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
             secondBlockCreationStartTime + 20.seconds
           )
 
-          secondBlockCreationStartTime <- startBlock(
+          _ <- startBlock(
             secondBlockNumber,
             secondBlockCreationStartTime
           )
@@ -796,7 +795,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           )
 
           _ <- for {
-              jlState <- getJointLedgerState
+              _ <- getJointLedgerState
 
               consensusAgentState <- getConsensusAgentState
               _ <- assertWith(
@@ -835,7 +834,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Accepts deposit registration with sensible submission deadline") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask
+          _ <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
 
           _ <- for {
@@ -856,7 +855,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 blockStartTime
               )
 
-              (depositRefundTxSeq, depositReq, genesisObligations) = seqAndReq
+              (depositRefundTxSeq, depositReq, _) = seqAndReq
               jlState <- unsafeGetProducing
 
               _ <- assertWith(
@@ -880,7 +879,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     val _ = property("Rejects deposit registration with expired submission deadline") = run(
       initializer = defaultInitializer,
       testM = for {
-          env <- ask
+          _ <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
 
           _ <- for {
@@ -901,7 +900,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                 blockStartTime
               )
 
-              (depositRefundTxSeq, depositReq, genesisObligation) = seqAndReq
+              (_, depositReq, _) = seqAndReq
               jlState <- unsafeGetProducing
 
               _ <- assertWith(

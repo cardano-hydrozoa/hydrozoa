@@ -121,7 +121,7 @@ class PersistenceTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             (for
-                tracerLocal <- Slf4jTracer.makeLocal
+                _ <- Slf4jTracer.makeLocal
                 result <- {
                     RocksDbBackendStore
                         .open(tempDir)

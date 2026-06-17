@@ -1,6 +1,5 @@
 package hydrozoa.integration.rbr.property
 
-import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant

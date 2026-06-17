@@ -2,7 +2,6 @@ package test
 
 import cats.*
 import cats.data.*
-import scalus.cardano.ledger.rules.CardanoMutator.{Context, Event, Result, State}
 import scalus.cardano.ledger.rules.{CardanoMutator, DefaultMutators, DefaultValidators, OutsideValidityIntervalValidator, STS}
 
 private type EitherThatOr[Error] = [X] =>> Either[Error, X]

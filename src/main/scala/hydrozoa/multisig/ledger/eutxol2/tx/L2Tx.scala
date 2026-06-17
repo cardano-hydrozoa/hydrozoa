@@ -4,6 +4,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import scala.annotation.unused
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.Metadatum.Int
@@ -47,16 +48,17 @@ private object L2TxOps:
     def build: Void = ???
 
     // TODO: use Either
-    def parse(bs: Array[Byte], network: CardanoNetwork.Section): Either[String, L2Tx] = for {
-        tx <- Try(Transaction.fromCbor(bs)).toEither.left.map(_.toString)
-        up <- utxoPartition(tx)
-    } yield L2Tx(
-      tx = tx,
-      l1utxos = up.l1Utxos,
-      l2utxos = up.l2Utxos,
-      // TODO:
-      resolvedUtxos = ResolvedUtxos.empty
-    )
+    def parse(bs: Array[Byte], @unused network: CardanoNetwork.Section): Either[String, L2Tx] =
+        for {
+            tx <- Try(Transaction.fromCbor(bs)).toEither.left.map(_.toString)
+            up <- utxoPartition(tx)
+        } yield L2Tx(
+          tx = tx,
+          l1utxos = up.l1Utxos,
+          l2utxos = up.l2Utxos,
+          // TODO:
+          resolvedUtxos = ResolvedUtxos.empty
+        )
 
     final case class UtxoPartition(
         l1Utxos: List[(TransactionInput, Babbage)],
