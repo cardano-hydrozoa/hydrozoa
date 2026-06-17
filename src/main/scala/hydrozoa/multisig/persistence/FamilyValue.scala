@@ -45,4 +45,4 @@ object FamilyValue:
             throw new IllegalArgumentException(
               s"framed family value too short for payload: ${framed.length} bytes"
             )
-        else java.util.Arrays.copyOfRange(framed, stampWidth, framed.length)
+        else framed.drop(stampWidth)
