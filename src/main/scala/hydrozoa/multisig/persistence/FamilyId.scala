@@ -2,7 +2,7 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 
-/** Identifies one single-writer family — the range-scan prefix.
+/** Identifies one append-only family — the range-scan prefix.
   *
   * Spines (Block, Stack) are head-global: there is exactly one of each family for the whole head,
   * round-robin-authored by all head peers. Satellite families (Request, SoftAck, HardAck) are

@@ -55,7 +55,7 @@ recovery contract — the `CoilAckSequencer` re-sequencing boundary ([§6](#6-pe
 - Durable storage for everything a peer needs to rebuild its crash-time state,
   which splits into two kinds:
     - **The common (consensus) data set** — this peer's replica of the *replicated
-      set*: the single-writer families that converge across **all** peers (the
+      set*: the append-only families that converge across **all** peers (the
       block / stack spines + the request / soft-ack / hard-ack satellites, where the
       hard-ack satellite is `PeerId`-keyed so it spans head and coil authors, plus the
       `HubHardAck` family; [§3](#3-consensus-data-the-families)). Every peer eventually holds
@@ -171,29 +171,29 @@ CR4). It rests on two facts about *recovery*:
 ## 3. Consensus data: the families
 
 What the whitepaper calls a *replicated log* is **not** a single Raft-style
-totally-ordered log. It is a replicated **set of single-writer families** — where
-**single-writer means single-writer-*per-entry*** (every entry has exactly one
-author; no two peers ever write the same slot), **not** one fixed author for an
-entire family. Two family shapes realize that:
+totally-ordered log. It is a replicated **set of append-only families**, each entry
+authored by exactly one peer (no two peers ever write the same slot) — **not**
+necessarily one fixed author for an entire family. Two family shapes realize that:
 
 - **Satellite families** (Request, SoftAck, HardAck — the last `PeerId`-keyed across
   head and coil authors — plus HubHardAck) — a **fixed** single author owns the whole
   family, keyed by its own monotonic `seqNum` and totally ordered within itself.
 - **Spines** (BlockSpine, StackSpine) — one global sequence (`BlockNumber` /
-  `StackNumber`) whose **sole writer rotates round-robin**: the leader for index
+  `StackNumber`) whose **author rotates round-robin**: the leader for index
   *i* is the only peer that writes entry *i*, but leadership rotates across the
   spine. No single peer authors the whole spine, yet every individual entry still
-  has exactly one writer (and each peer's own contribution is a **sparse**
+  has exactly one author (and each peer's own contribution is a **sparse**
   subsequence — gaps where others led; [§3.1](#31-the-families--one-cf-per-author)'s "per-writer gaps, globally gap-free").
 
-Either way the defining invariant is **one writer per entry**, so entries never
-conflict and every peer eventually holds a copy of *every* entry. "Replicated" =
-the set converges across peers; "single-writer" = no write-write race on any entry.
+Either way the defining invariant is **one author per entry**: entries are appended,
+never mutated, and never conflict, and every peer eventually holds a copy of *every*
+entry. "Replicated" = the set converges across peers; one author per entry = no
+write-write race on any slot.
 There is **no global cross-author order in the family layer** — total order over
 requests is imposed downstream by fast consensus (block briefs), not by the families.
 
-> **Vocabulary — "family" vs "lane".** A **family** is a single-writer sequence in
-> the *persistence/recovery* realm: one author, **one column family (CF)**, keyed by
+> **Vocabulary — "family" vs "lane".** A **family** is an append-only sequence in
+> the *persistence/recovery* realm: for a satellite, one author, **one column family (CF)**, keyed by
 > the author's own `seqNum`; the **replicated set** is the convergent union of all
 > families; a **spine** is one of the two round-robin families that carry consensus
 > order (blocks, stacks). The word **lane** is reserved for the *peer-liaison
@@ -681,9 +681,9 @@ own soft ack — the one place a snapshot is unavoidable on the fast side.
 
 **These index reads need no cross-CF atomicity.** They are taken family by family
 (each `highWater` / marker is its own `lastKey` scan), never under one snapshot. That
-is safe because every family is **append-only with a single serialized writer** (one
-author per CF — [§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)): a reader — even one running concurrently
-with that writer, e.g. a liaison re-seeding its lanes after the start barrier — sees a
+is safe because every family is **append-only** — entries are appended in index order
+and never mutated ([§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)): a reader — even one running concurrently
+with the writer, e.g. a liaison re-seeding its lanes after the start barrier — sees a
 consistent prefix. It can at worst miss the newest append, never a torn entry, and a
 stale high-water self-corrects through the normal `append` / `backfill` path (and the
 re-pull cursor protocol). The one read carrying a **cross-CF invariant** — the
@@ -1567,7 +1567,7 @@ Two types, kept distinct: a **`FamilyId`** names a family (the CF to scan); a
 `FamilyId` is the cursor/scan unit — [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors) derives exactly one resume cursor per family.
 
 ```scala
-/** Identifies one single-writer family = the CF to scan.
+/** Identifies one append-only family = the CF to scan.
   * Spines are head-global (no author); satellites are per author. */
 enum FamilyId:
     case BlockSpine                       // the one block spine
