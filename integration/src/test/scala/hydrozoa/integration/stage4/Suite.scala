@@ -20,7 +20,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import cats.effect.IOLocal
 import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
@@ -63,7 +63,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 private case class CoilWiring(
     coilNum: CoilPeerNumber,
     config: NodeConfig,
-    pending: Deferred[IO, MultisigRegimeManager.Connections],
+    pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
     stack: PeerStack,
     stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
     coilLiaison: PeerLiaisonCoilToHub.Handle,
@@ -209,7 +209,7 @@ case class Stage4Suite(
         val postSystem: IO[
           (
               CardanoBackend[IO],
-              Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+              Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
               Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
               Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]]
           )
@@ -235,7 +235,7 @@ case class Stage4Suite(
             // are started so cross-peer liaisons can be wired.
             pendingConnsMap <- peers
                 .traverse { peerNum =>
-                    Deferred[IO, MultisigRegimeManager.Connections].map(peerNum -> _)
+                    Deferred[IO, HeadMultisigRegimeManager.Connections].map(peerNum -> _)
                 }
                 .map(_.toMap)
             // Per-peer Ref capturing every BlockBrief.Intermediate the peer's JointLedger emits.
@@ -260,7 +260,7 @@ case class Stage4Suite(
             peerNum: HeadPeerNumber,
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
         ): Resource[IO, PeerStack] = {
@@ -302,7 +302,7 @@ case class Stage4Suite(
             // one per-peer store; `analyzePersistence` reads it back.
             openPeerBackend(
               peerNum,
-              Cf.all(
+              Cf.mkAll(
                 headPeers = multiNodeConfig.headConfig.headPeerNums.toList,
                 coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
                 hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
@@ -351,7 +351,7 @@ case class Stage4Suite(
         def postStack(
             system: ActorSystem[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
         ): IO[Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]]] = {
             for {
             // Create one local PeerLiaisonHeadToHead per (local, remote) pair.
@@ -442,7 +442,7 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             ws: WsNetwork,
         ): IO[(Option[CoilAckSequencer.Handle], Option[CoilRelay.Handle], List[CoilWiring])] = {
             val hubConfig = multiNodeConfig.nodeConfigs(hubNum)
@@ -501,7 +501,7 @@ case class Stage4Suite(
                               .humanFormat(PeerId.Head(hubNum), PeerId.Coil(coilNum))
                         )
                     for
-                        coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                        coilPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                         // The coil peer gets its own per-peer store (in-memory for the test).
                         coilBackendStore <- InMemoryBackendStore.open.allocated.map(_._1)
                         coilPersistence <- {
@@ -604,7 +604,7 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
             peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
@@ -646,7 +646,7 @@ case class Stage4Suite(
                     )
                     _ <- pendingConnsMap(peerNum)
                         .complete(
-                          MultisigRegimeManager.Connections(
+                          HeadMultisigRegimeManager.Connections(
                             blockWeaver = stack.blockWeaver,
                             blockWeaverLimiter = blockWeaverLimiter,
                             cardanoLiaison = stack.cardanoLiaison,
@@ -685,7 +685,7 @@ case class Stage4Suite(
                     )
                     _ <- c.pending
                         .complete(
-                          MultisigRegimeManager.Connections(
+                          HeadMultisigRegimeManager.Connections(
                             blockWeaver = c.stack.blockWeaver,
                             blockWeaverLimiter = blockWeaverLimiter,
                             cardanoLiaison = c.stack.cardanoLiaison,
