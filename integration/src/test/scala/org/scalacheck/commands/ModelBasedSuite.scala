@@ -505,9 +505,17 @@ trait ModelBasedSuite {
                                             if hasFailed then IO.pure((sut, p, s, lastCmd, true))
                                             else for {
                                                 _        <- IO.sleep(c.delay)
-                                                pred     <- c.runPC(sut, log)
+                                                // Predicate evaluation re-runs the model-side
+                                                // runState internally; advanceState walks the
+                                                // model forward. Silence model-side logs from
+                                                // both — they would duplicate the per-command
+                                                // logs already emitted by the SUT side.
+                                                pred     <- c.runPC(sut, ContraTracer.nullTracer)
                                                 pp       <- pred(s)
-                                                newState <- c.advanceState[IO](s)
+                                                newState <- c.advanceState[IO](s)(using
+                                                                MonadThrow[IO],
+                                                                ContraTracer.nullTracer
+                                                            )
                                                 predResult = pp.apply(Gen.Parameters.default)
                                             } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
                                         }
@@ -572,9 +580,15 @@ trait ModelBasedSuite {
                                           _        <- log.info("Suspend on the gate...")
                                           _        <- gate.get
                                           _        <- log.info("Running the command...")
-                                          predFn   <- c.runPC(sut, log)
+                                          // Silence model-side logs from predicate evaluation +
+                                          // state advancement — see runCommandsPlain for the
+                                          // rationale.
+                                          predFn   <- c.runPC(sut, ContraTracer.nullTracer)
                                           pp       <- predFn(s)
-                                          newState <- c.advanceState[IO](s)
+                                          newState <- c.advanceState[IO](s)(using
+                                                          MonadThrow[IO],
+                                                          ContraTracer.nullTracer
+                                                      )
                                           predResult = pp.apply(Gen.Parameters.default)
                                       } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
                                   }
@@ -610,7 +624,8 @@ trait ModelBasedSuite {
               IO(pendingDelay.get().isDefined).flatMap { pending =>
                   if pending then IO.pure(true)
                   else tc.results.map(_.isDefined)
-              }
+              },
+              advanceTracer = log
             )
 
             // 3. Guard: if the inner already finished (empty command list), skip the loop.
@@ -658,7 +673,11 @@ trait ModelBasedSuite {
             _ <- IO(pendingDelay.getAndSet(None)).flatMap {
                 case Some((_, gate)) => gate.complete(())
                 case None            => IO.unit
-            } >> tickUntilAdvancing(tc, tc.results.map(_.isDefined))
+            } >> tickUntilAdvancing(
+              tc,
+              tc.results.map(_.isDefined),
+              advanceTracer = ContraTracer.nullTracer
+            )
 
             // 10. Extract the result
             result <- tc.results
@@ -699,12 +718,23 @@ trait ModelBasedSuite {
         }
 
     /** Drives the inner until all immediately-eligible fibers are exhausted, then checks `done`.
-      * Falls back to `tc.nextInterval` when no fiber is immediately eligible and `done` is false —
-      * logs a warning each time, since this should only occur during startup (`IO.sleep` advances).
+      * Falls back to `tc.nextInterval` when no fiber is immediately eligible and `done` is false.
+      *
+      * Used in two legitimate phases: the startup pump (fast-forwards `IO.sleep` to the current
+      * time — one or two advances per trial, worth logging) and the shutdown drain (`waitForIdle`
+      * polls with `IO.sleep`, per-actor 1-second ping loops fire — hundreds to thousands of small
+      * advances per trial, would drown the log). The caller passes the tracer that the per-advance
+      * warn should route through: [[log]] from the startup pump, [[ContraTracer.nullTracer]] from
+      * the shutdown drain. A genuine deadlock (no eligible fibers + `nextInterval == 0`) is still
+      * surfaced via the framework [[log]] and `IO.raiseError` regardless of the passed tracer.
       */
-    private def tickUntilAdvancing[A](tc: TestControl[A], done: IO[Boolean]): IO[Unit] =
+    private def tickUntilAdvancing[A](
+        tc: TestControl[A],
+        done: IO[Boolean],
+        advanceTracer: ContraTracer[IO, Slf4jMsg]
+    ): IO[Unit] =
         tc.tickOne.flatMap {
-            case true => tickUntilAdvancing(tc, done)
+            case true => tickUntilAdvancing(tc, done, advanceTracer)
             case false =>
                 done.flatMap {
                     case true =>
@@ -712,9 +742,9 @@ trait ModelBasedSuite {
                     case false =>
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
-                                log.warn(
+                                advanceTracer.warn(
                                   s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
-                                ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
+                                ) >> tc.advance(next) >> tickUntilAdvancing(tc, done, advanceTracer)
                             else {
                                 val msg =
                                     "TestControl deadlock: no eligible fibers and predicate not satisfied"
