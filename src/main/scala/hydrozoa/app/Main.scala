@@ -211,7 +211,7 @@ object Main extends IOApp {
             // actor topology consumes.
             backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb"),
-              Cf.all(
+              Cf.mkAll(
                 headPeers = nodeConfig.headConfig.headPeerNums.toList,
                 coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
                 hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers

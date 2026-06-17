@@ -131,7 +131,7 @@ class StoreDumpTest extends AnyFunSuite:
 
     /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
     private val testCfs: List[Cf] =
-        Cf.all((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     private def newTempDir(): Path =
         Files.createTempDirectory("hydrozoa-rocksdb-dump-test-")

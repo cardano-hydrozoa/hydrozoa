@@ -65,7 +65,7 @@ object StoreDump:
 
     /** Walk every CF in `cfs` and tally entry counts + key/value byte totals. With the per-author
       * split the CF set is config-derived (§7.1), so the caller supplies it (e.g.
-      * `Cf.all(headPeers, coilPeers, hubs)`).
+      * `Cf.mkAll(headPeers, coilPeers, hubs)`).
       */
     def stats(p: BackendStore[IO], cfs: List[Cf]): IO[Stats] =
         cfs.traverse(statsFor(p, _)).map(Stats.apply)

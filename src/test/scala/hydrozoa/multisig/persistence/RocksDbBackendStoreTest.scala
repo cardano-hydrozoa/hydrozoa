@@ -203,7 +203,7 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
       * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
       */
     private val testCfs: List[Cf] =
-        Cf.all((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
+        Cf.mkAll((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =

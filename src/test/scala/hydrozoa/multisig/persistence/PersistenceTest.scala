@@ -149,7 +149,7 @@ class PersistenceTest extends AnyFunSuite:
       * touch (fixed CFs plus a few per-author satellites).
       */
     private val testCfs: List[Cf] =
-        Cf.all((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()

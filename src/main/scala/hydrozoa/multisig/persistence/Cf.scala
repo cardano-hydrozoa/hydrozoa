@@ -8,7 +8,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
   * **Satellite families are split one CF per author** (§3.1, §7.1): the CF *is* the author
   * discriminant, so the on-disk key carries no author prefix and each author's CF is a single
   * monotonic append stream (non-overlapping L0 → near-zero compaction — decisive at the request
-  * rate). The set of CFs is therefore **config-derived** (`Cf.all`): the fixed-shape CFs (the two
+  * rate). The set of CFs is therefore **config-derived** (`Cf.mkAll`): the fixed-shape CFs (the two
   * spines, the spine-indexed working/confirmation CFs, the snapshots, `Meta`) plus one CF per
   * satellite author derived from the head's membership. Membership changes by closing and
   * re-opening a fresh head, so the set is constant for a store's lifetime.
@@ -129,7 +129,7 @@ object Cf:
       * (`HardAck` per head peer and per coil peer — the author is a [[PeerId]]), and each hub
       * (HubHardAck). This is the descriptor list the backend opens (§7).
       */
-    def all(
+    def mkAll(
         headPeers: List[HeadPeerNumber],
         coilPeers: List[CoilPeerNumber],
         hubs: List[HeadPeerNumber]
