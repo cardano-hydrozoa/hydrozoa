@@ -412,185 +412,164 @@ case class Suite(
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: Model.State): Resource[IO, Sut] = Resource.eval {
-
+    override def startupSut(state: Model.State): Resource[IO, Sut] = {
         val multiNodeConfig = state.multiNodeConfig
-
         val runId = java.util.UUID.randomUUID().toString.take(8)
-
-        for {
-            _ <- log.info(s"Creating new SUT [${label}/${runId}]")
-
-            // Fast-forward to the current time if TestControl is used
-            _ <- IO.whenA(useTestControl)(for {
-                _ <- log.debug("Fast-forward to the current time...")
-
-                // Before creating the actor system, if we are in the TestControl we need
-                // to fast-forward to the zero block creation time.
-                // Will take almost forever if is run after the actor system is spun up
-                _ <- IO.sleep(
-                  FiniteDuration(
-                    state.getCurrentTime.instant.instant.toEpochMilli,
-                    TimeUnit.MILLISECONDS
+        val headPeerNum = HeadPeerNumber.zero
+        val nodeConfig = multiNodeConfig.nodeConfigs(headPeerNum)
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        // Run cardano L1 backend - a mock or Yaci
+        val cardanoBackendConfig = suiteCardano match {
+            case Mock(_) =>
+                CardanoBackendConfig.Mock(
+                  network = multiNodeConfig.headConfig.cardanoInfo.network,
+                  slotConfig = multiNodeConfig.headConfig.cardanoInfo.slotConfig,
+                  protocolParams = multiNodeConfig.headConfig.cardanoInfo.protocolParams,
+                  genesisUtxos = state.preinitPeerUtxosL1
+                )
+            case Yaci(url, _) =>
+                CardanoBackendConfig.Blockfrost(
+                  network = Right(
+                    (
+                      CardanoNetwork.Custom(
+                        multiNodeConfig.headConfig.cardanoInfo,
+                        devnetInfo().protocolMagic
+                      ),
+                      url
+                    )
                   )
                 )
-                now <- IO.realTimeInstant
-                _ <- log.info(s"[startupSut] Current time: ${now.toEpochMilli}")
-            } yield ())
-
-            // For real-blockchain modes: sleep until takeoff time so the model clock and the
-            // Yaci clock are synchronized at command execution start. Abort if we are already late.
-            _ <- state.takeoffTime match {
-                case None => IO.unit
-                case Some(t) =>
-                    IO.realTimeInstant.flatMap { now =>
-                        if now.isAfter(t) then
-                            IO.raiseError(
-                              RuntimeException(
-                                s"Suite aborted: initialization took too long " +
-                                    s"(takeoff: $t, now: $now)"
-                              )
-                            )
-                        else
-                            val sleepMs = t.toEpochMilli - now.toEpochMilli
-                            log.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
-                                IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
-                    }
-            }
-
-            _ <- log.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
-
-            headPeerNum = HeadPeerNumber.zero
-            nodeConfig = multiNodeConfig.nodeConfigs(headPeerNum)
-
-            // Actor system
-            system <- ActorSystem[IO]("Stage1").allocated.map(_._1)
-
-            // Note: Actor exceptions are logged by the supervision strategy but don't
-            // automatically fail tests. To treat them as test failures check that the
-            // system was not terminated in the [[shutdownSut]] action.
-
-            // Run cardano L1 backend - a mock or Yaci
-            cardanoBackendConfig = suiteCardano match {
-                case Mock(_) =>
-                    CardanoBackendConfig.Mock(
-                      network = multiNodeConfig.headConfig.cardanoInfo.network,
-                      slotConfig = multiNodeConfig.headConfig.cardanoInfo.slotConfig,
-                      protocolParams = multiNodeConfig.headConfig.cardanoInfo.protocolParams,
-                      genesisUtxos = state.preinitPeerUtxosL1
-                    )
-                case Yaci(url, _) =>
-                    CardanoBackendConfig.Blockfrost(
-                      network = Right(
-                        (
-                          CardanoNetwork.Custom(
-                            multiNodeConfig.headConfig.cardanoInfo,
-                            devnetInfo().protocolMagic
-                          ),
-                          url
-                        )
+            case Public(_, cardanoNetwork, blockfrostKey) =>
+                CardanoBackendConfig.Blockfrost(
+                  network = Left(cardanoNetwork),
+                  blockfrostKey = blockfrostKey
+                )
+        }
+        for {
+            _ <- Resource.eval(for {
+                _ <- log.info(s"Creating new SUT [${label}/${runId}]")
+                // Fast-forward to the current time if TestControl is used
+                _ <- IO.whenA(useTestControl)(for {
+                    _ <- log.debug("Fast-forward to the current time...")
+                    // Before creating the actor system, if we are in the TestControl we need
+                    // to fast-forward to the zero block creation time.
+                    // Will take almost forever if is run after the actor system is spun up
+                    _ <- IO.sleep(
+                      FiniteDuration(
+                        state.getCurrentTime.instant.instant.toEpochMilli,
+                        TimeUnit.MILLISECONDS
                       )
                     )
-                case Public(_, cardanoNetwork, blockfrostKey) =>
-                    CardanoBackendConfig.Blockfrost(
-                      network = Left(cardanoNetwork),
-                      blockfrostKey = blockfrostKey
-                    )
-
-            }
-            cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
-
-            fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(headPeerNum))
-            clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
-
-            // Weaver stub — emits leader_started for tracing
-            blockWeaver <- system.actorOf(
-              new BlockWeaverMock(
-                fcaTracer,
-                headPeerNum,
-                nodeConfig.headPeers.nHeadPeers: Int
-              )
-            )
-
-            // Cardano liaison
-            cardanoLiaison <- system.actorOf(
-              CardanoLiaison(
-                nodeConfig,
-                cardanoBackend,
-                CardanoLiaison.Connections(blockWeaver),
-                clTracer
-              )
-            )
-
-            // Request sequencer stub
-            requestSequencerStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
-                override def receive: Receive[IO, RequestSequencer.Request] = _ => IO.pure(())
-            })
-
-            // Agent actor
-            jointLedgerD <- IO.deferred[JointLedger.Handle]
-            consensusActorD <- IO.deferred[FastConsensusActor.Handle]
-
-            agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
-
-            // StackComposer stub — stage1 does not exercise slow consensus.
-            stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
-                override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
-            })
-
-            jointLedgerConnections = JointLedger.Connections(
-              fastConsensusActor = agent,
-              stackComposer = stackComposerStub,
-              headPeerLiaisons = List(),
-            )
-
-            l2Ledger <- EutxoL2Ledger(nodeConfig)
-            // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-            // need a handle.
-            persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-            persistenceBackend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
-            persistence <- {
-                given CardanoNetwork.Section = nodeConfig
-                Persistence.fromBackend(persistenceBackend, persistenceTracer)
-            }
-            jointLedger <- system.actorOf(
-              JointLedger(
-                nodeConfig,
-                jointLedgerConnections,
-                l2Ledger,
-                ContraTracer.nullTracer[IO, JointLedgerEvent],
-                persistence
-              )
-            )
-
-            _ <- jointLedgerD.complete(jointLedger)
-
-            // Consensus actor
-            consensusConnections = FastConsensusActor.Connections(
-              blockWeaver = blockWeaver,
-              cardanoLiaison = cardanoLiaison,
-              requestSequencer = requestSequencerStub,
-              headPeerLiaisons = List.empty,
-              jointLedger = jointLedger,
-              stackComposer = stackComposerStub,
-            )
-
-            consensusActor <- system.actorOf(
-              FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
-            )
-
-            _ <- consensusActorD.complete(consensusActor)
-
-        } yield Stage1Sut(
-          headAddress = multiNodeConfig.headConfig.headMultisigAddress,
-          system = system,
-          cardanoBackend = cardanoBackend,
-          agent = agent,
-          log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
-          runId = runId,
-        )
+                    now <- IO.realTimeInstant
+                    _ <- log.info(s"[startupSut] Current time: ${now.toEpochMilli}")
+                } yield ())
+                // For real-blockchain modes: sleep until takeoff time so the model clock and the
+                // Yaci clock are synchronized at command execution start. Abort if we are already late.
+                _ <- state.takeoffTime match {
+                    case None => IO.unit
+                    case Some(t) =>
+                        IO.realTimeInstant.flatMap { now =>
+                            if now.isAfter(t) then
+                                IO.raiseError(
+                                  RuntimeException(
+                                    s"Suite aborted: initialization took too long " +
+                                        s"(takeoff: $t, now: $now)"
+                                  )
+                                )
+                            else
+                                val sleepMs = t.toEpochMilli - now.toEpochMilli
+                                log.info(s"Sleeping ${sleepMs}ms until takeoff at $t") >>
+                                    IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
+                        }
+                }
+                _ <- log.debug(s"peerKeys: ${multiNodeConfig.headConfig.headPeers.headPeerVKeys}")
+            } yield ())
+            // Actor system — terminates automatically when the Resource is finalized.
+            system <- ActorSystem[IO]("Stage1")
+            // Note: Actor exceptions are logged by the supervision strategy but don't
+            // automatically fail tests. To treat them as test failures check that the
+            // system was not terminated in the [[beforeFinalize]] action.
+            // In-memory persistence — released when the Resource is finalized.
+            persistenceBackend <- InMemoryBackendStore.open(persistenceTracer)
+            sut <- Resource.eval(for {
+                cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
+                fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+                    Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(headPeerNum))
+                clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+                    Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
+                // Weaver stub — emits leader_started for tracing
+                blockWeaver <- system.actorOf(
+                  new BlockWeaverMock(
+                    fcaTracer,
+                    headPeerNum,
+                    nodeConfig.headPeers.nHeadPeers: Int
+                  )
+                )
+                // Cardano liaison
+                cardanoLiaison <- system.actorOf(
+                  CardanoLiaison(
+                    nodeConfig,
+                    cardanoBackend,
+                    CardanoLiaison.Connections(blockWeaver),
+                    clTracer
+                  )
+                )
+                // Request sequencer stub
+                requestSequencerStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
+                    override def receive: Receive[IO, RequestSequencer.Request] = _ => IO.pure(())
+                })
+                // Agent actor
+                jointLedgerD <- IO.deferred[JointLedger.Handle]
+                consensusActorD <- IO.deferred[FastConsensusActor.Handle]
+                agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
+                // StackComposer stub — stage1 does not exercise slow consensus.
+                stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
+                    override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
+                })
+                jointLedgerConnections = JointLedger.Connections(
+                  fastConsensusActor = agent,
+                  stackComposer = stackComposerStub,
+                  headPeerLiaisons = List(),
+                )
+                l2Ledger <- EutxoL2Ledger(nodeConfig)
+                // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
+                // need a handle.
+                persistence <- {
+                    given CardanoNetwork.Section = nodeConfig
+                    Persistence.fromBackend(persistenceBackend, persistenceTracer)
+                }
+                jointLedger <- system.actorOf(
+                  JointLedger(
+                    nodeConfig,
+                    jointLedgerConnections,
+                    l2Ledger,
+                    ContraTracer.nullTracer[IO, JointLedgerEvent],
+                    persistence
+                  )
+                )
+                _ <- jointLedgerD.complete(jointLedger)
+                // Consensus actor
+                consensusConnections = FastConsensusActor.Connections(
+                  blockWeaver = blockWeaver,
+                  cardanoLiaison = cardanoLiaison,
+                  requestSequencer = requestSequencerStub,
+                  headPeerLiaisons = List.empty,
+                  jointLedger = jointLedger,
+                  stackComposer = stackComposerStub,
+                )
+                consensusActor <- system.actorOf(
+                  FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
+                )
+                _ <- consensusActorD.complete(consensusActor)
+            } yield Stage1Sut(
+              headAddress = multiNodeConfig.headConfig.headMultisigAddress,
+              system = system,
+              cardanoBackend = cardanoBackend,
+              agent = agent,
+              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
+              runId = runId,
+            ))
+        } yield sut
     }
 
     enum CardanoBackendConfig:
@@ -661,20 +640,16 @@ case class Suite(
                 } yield cardanoBackend
         }
 
-    override def shutdownSut(lastState: State, sut: Sut): IO[Prop] = for {
+    override def beforeFinalize(lastState: State, sut: Sut): IO[Prop] = for {
 
-        _ <- log.info("shutdownSut")
+        _ <- log.info("beforeFinalize")
 
-        /** Important: this action should ensure that the actor system was not terminated.
+        /** Drain all in-flight messages before the [[startupSut]] Resource is finalized.
           *
-          * Even more important: before terminating, make sure [[waitForIdle]] is called - otherwise
-          * we'd shut down the system while messages are still in flight and the test would observe
-          * an inconsistent partial state, causing false-positive or false-negative results. Stage1
+          * [[waitForIdle]] returns when all mailboxes are empty, the child set is stable, and
+          * deadLetters are drained — it also verifies that the system was not terminated. Stage1
           * uses [[BlockWeaverMock]], so there are no wakeup timers to drain — only the mailbox
           * queues from the last submitted command.
-          *
-          * Luckily enough, [[waitForIdle]] does exactly what we need: in addition to checking the
-          * mailboxes it also verifies that the system was not terminated.
           *
           * `maxTimeout` is `Temporal[F].sleep`-based and races the drain loop:
           *   - Under [[TestControl]] (mock backend), it is virtual time and elapses fast in real
@@ -692,6 +667,5 @@ case class Suite(
         // observed `Stack.HardConfirmed`. Stage1's job is now bounded to driving the fast cycle
         // end-to-end through real Yaci/Blockfrost L1 backends to catch L1-side breakage; effect
         // semantics are tested in stage4.
-        _ <- sut.system.terminate()
     } yield Prop.passed
 }

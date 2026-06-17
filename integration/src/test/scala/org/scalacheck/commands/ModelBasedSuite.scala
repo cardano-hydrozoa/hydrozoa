@@ -303,12 +303,17 @@ trait ModelBasedSuite {
       */
     def startupSut(state: State): Resource[IO, Sut]
 
-    /** Shutdown the SUT instance, and release any resources related to it. May also run some checks
-      * upon shutting SUT down, for which the latest state can be used.
+    /** Drain the SUT and run final assertions before the [[startupSut]] resource is finalized.
       *
-      * TODO: split up: preShutdownCondition / shutdownSut
+      * Called inside the `Resource.use` block after all commands have run. `lastState` is available
+      * for assertions and to size drain timeouts. Cleanup that does not need `lastState` (fiber
+      * cancellation, server shutdown, actor system termination) belongs in the [[startupSut]]
+      * `Resource` finalizer instead.
+      *
+      * The default implementation returns `Prop.proved`; suites that put all cleanup in the
+      * [[startupSut]] finalizer do not need to override this.
       */
-    def shutdownSut(lastState: State, sut: Sut): IO[Prop]
+    def beforeFinalize(lastState: State, sut: Sut): IO[Prop] = IO.pure(Prop.proved)
 
     // ===================================
     // TestControl
@@ -508,8 +513,8 @@ trait ModelBasedSuite {
                                         }
                                     }
                           (sut, prop, s, lastCmd, _) = result
-                          shutdownProp <- shutdownSut(s, sut)
-                      } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
+                          beforeFinalizeProp <- beforeFinalize(s, sut)
+                      } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
                   }
     } yield result
 
@@ -581,8 +586,8 @@ trait ModelBasedSuite {
                     shutdownGate <- Deferred[IO, Unit]
                     _            <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
                     _            <- shutdownGate.get
-                    shutdownProp <- shutdownSut(s, sut)
-                } yield (sut, prop && shutdownProp, s, lastCmd, testCase)
+                    beforeFinalizeProp <- beforeFinalize(s, sut)
+                } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
             }
 
         // Outer driver: advances the virtual clock and drives tickOne loops between commands.

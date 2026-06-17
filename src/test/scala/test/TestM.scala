@@ -5,8 +5,7 @@ import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.IORuntime
 import cats.effect.unsafe.implicits.*
-import cats.syntax.all.*
-import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
+import org.scalacheck.PropertyM.{monadForPropM, monadic1}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.annotation.unused
@@ -75,21 +74,25 @@ object TestM {
       *   The implicit IO runtime in which [[IO]] effects can be executed
       * @return
       */
-    def run[R, A](testM: TestM[R, A], initializer: PT[R])(using
+    /** Run a test against a resource-managed environment. The resource is acquired before each
+      * ScalaCheck trial and released after it completes, regardless of outcome.
+      *
+      * Cannot use `monadicIO` directly here: `resource.use` needs to wrap the test body's full IO
+      * execution, but the test body is `PropertyM[IO, A]` (Gen+IO interleaved). We must hand the
+      * ScalaCheck seed into the `resource.use` closure via `monadic1` + `pureApply` — the same work
+      * `monadicIO` does internally, exposed here so we can insert the resource bracket.
+      */
+    def run[R, A](testM: TestM[R, A], resource: Resource[IO, R])(using
         toProp: A => Prop,
         ioRuntime: IORuntime
-    ): Prop = {
-
-        monadicIO(
-          // This runs the initialization within the `PropertyM` first, in order to give the computation in `TestM`
-          // access to the fully-initialized environment
-          for {
-              env <- initializer
-              res <- {
-                  testM.unTestM.run(env)
-              }
-          } yield res
-        )
+    ): Prop = Prop.secure {
+        Prop { params =>
+            val (p, s) = Prop.startSeed(params)
+            resource
+                .use(env => monadic1(testM.unTestM.run(env)).pureApply(p, s).map(Prop.secure(_)))
+                .unsafeRunSync()
+                .apply(p)
+        }
     }
 
     // ===================================
@@ -143,10 +146,10 @@ final class TestMFixedEnv[R](@annotation.unused dummy: Boolean = true) {
 
     def assert(condition: Boolean): TestM[R, Unit] = TestM.assert(condition)
 
-    def run[A](testM: TestM[R, A], initializer: PT[R])(using
+    def run[A](testM: TestM[R, A], resource: Resource[IO, R])(using
         toProp: A => Prop,
         ioRuntime: IORuntime
-    ): Prop = TestM.run[R, A](testM, initializer)
+    ): Prop = TestM.run[R, A](testM, resource)
 
     def lift[A](e: IO[A]): TestM[R, A] = TestM.lift(e)
 

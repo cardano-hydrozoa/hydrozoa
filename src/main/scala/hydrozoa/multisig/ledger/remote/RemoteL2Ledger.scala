@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.remote
 
 import cats.Monad
 import cats.data.EitherT
-import cats.effect.{Async, IO, Ref, Temporal}
+import cats.effect.{Async, IO, Temporal}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
@@ -38,7 +38,6 @@ import scala.concurrent.duration.*
   */
 class RemoteL2Ledger private (
     wsUri: Uri,
-    connRef: Ref[IO, Option[WSConnectionHighLevel[IO]]],
     initialBackoff: FiniteDuration,
     maxBackoff: FiniteDuration,
     config: RemoteL2Ledger.Config,
@@ -50,63 +49,32 @@ class RemoteL2Ledger private (
 
     given CardanoNetwork.Section = config.cardanoNetwork
 
-    /** Send a request to the remote ledger and wait for the synchronous response */
-    /** Establish a new WebSocket connection
+    /** Execute an operation with automatic reconnection on failure.
       *
-      * Creates a new WebSocket connection and updates the connection reference. Note: This doesn't
-      * close the old connection - in a production environment you may want to track and close old
-      * connections.
-      */
-    private def connect(): IO[WSConnectionHighLevel[IO]] = {
-        for {
-            _ <- tracer.traceWith(Connecting(wsUri))
-            wsClient <- JdkWSClient.simple[IO]
-            newConn <- wsClient.connectHighLevel(WSRequest(wsUri)).allocated.map(_._1)
-            _ <- connRef.set(Some(newConn))
-            _ <- tracer.traceWith(Connected(wsUri))
-        } yield newConn
-    }
-
-    /** Get or establish a connection */
-    private def getOrConnect(): IO[WSConnectionHighLevel[IO]] = {
-        connRef.get.flatMap {
-            case Some(conn) => IO.pure(conn)
-            case None       => connect()
-        }
-    }
-
-    /** Execute an operation with automatic reconnection on failure
-      *
-      * Retries infinitely with exponential backoff capped at maxBackoff.
-      *
-      * @param operation
-      *   The operation to execute
-      * @param attempt
-      *   Current attempt number (for exponential backoff)
-      * @return
-      *   Result of the operation
+      * Opens a fresh connection per attempt via [[Resource.use]], ensuring the connection is always
+      * closed regardless of outcome. Retries infinitely with exponential backoff capped at
+      * maxBackoff.
       */
     private def withReconnect[A](
         operation: WSConnectionHighLevel[IO] => IO[A],
         attempt: Int = 0
     ): IO[A] = {
-        getOrConnect().flatMap(operation).handleErrorWith { error =>
-            // Calculate backoff with maximum cap from config
+        val run = for {
+            _ <- tracer.traceWith(Connecting(wsUri))
+            wsClient <- JdkWSClient.simple[IO]
+            result <- wsClient.connectHighLevel(WSRequest(wsUri)).use { conn =>
+                tracer.traceWith(Connected(wsUri)) >> operation(conn)
+            }
+        } yield result
+
+        run.handleErrorWith { error =>
             val calculatedBackoffSeconds = initialBackoff.toSeconds * Math.pow(2, attempt).toLong
             val backoffDuration =
                 if calculatedBackoffSeconds.seconds > maxBackoff then maxBackoff
                 else calculatedBackoffSeconds.seconds
-
             for {
                 _ <- tracer.traceWith(ConnectionError(attempt, backoffDuration, error))
                 _ <- Temporal[IO].sleep(backoffDuration)
-                // Clear the old connection and try again
-                _ <- connRef.set(None)
-                _ <- connect().handleErrorWith { reconnectError =>
-                    tracer.traceWith(ReconnectionAttemptFailed(reconnectError)) *>
-                        IO.unit // Swallow the error, continue retrying
-                }
-                // Recursively retry - NO LIMIT
                 result <- withReconnect(operation, attempt + 1)
             } yield result
         }
@@ -295,10 +263,7 @@ object RemoteL2Ledger {
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
-    ): IO[RemoteL2Ledger] = {
-        for {
-            uri <- IO.fromEither(Uri.fromString(wsUri))
-            connRef <- Ref.of[IO, Option[WSConnectionHighLevel[IO]]](None)
-        } yield new RemoteL2Ledger(uri, connRef, initialBackoff, maxBackoff, config, tracer)
-    }
+    ): IO[RemoteL2Ledger] =
+        IO.fromEither(Uri.fromString(wsUri))
+            .map(uri => new RemoteL2Ledger(uri, initialBackoff, maxBackoff, config, tracer))
 }
