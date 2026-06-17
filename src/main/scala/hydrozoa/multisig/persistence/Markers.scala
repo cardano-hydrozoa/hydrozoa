@@ -10,28 +10,29 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import java.nio.ByteBuffer
 
-/** The three recovery markers (§5.2), derived from a [[BackendStore]] at boot time.
+/** The four recovery markers (§5.2), derived from a [[BackendStore]] at boot time.
   *
   * No marker is stored explicitly — each falls out of a single-CF scan:
   *
   *   - `softConfirmed = max(SoftConfirmation.key)`
+  *   - `fastBlockMark = max(BlockResult.key)`
   *   - `hardConfirmed = max(HardConfirmation.key)`
   *   - `hardAcked     = max(HardAck.hardAckNum where peer == own)`
   *
-  * `Markers.derive(backend, own)` runs the three reads (in parallel where possible) and returns a
+  * `Markers.derive(backend, own)` runs the four reads (in parallel where possible) and returns a
   * fresh [[Markers]] value. Lives in a separate module — not on [[Persistence]] — because marker
   * derivation is intrinsically byte-level (uses `lastKey` / `lastKeyWithPrefix`) and is a recovery
-  * concern, not a per-operation concern. The fast-side anchor is the shared
-  * [[recoverFastBlockMark]] (`max(BlockResult.key)`), not a marker on this value.
+  * concern, not a per-operation concern.
   */
 final case class Markers(
     softConfirmed: Option[BlockNumber],
+    fastBlockMark: Option[BlockNumber],
     hardConfirmed: Option[StackNumber],
     hardAcked: Option[HardAckNumber]
 )
 
 object Markers:
-    /** Read all three markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
+    /** Read all four markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
       * per-author CF split each satellite CF holds exactly one author's family, so the own
       * `hardAcked` mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
       * `own` is a [[PeerId]] (head or coil), so the one `HardAck` family covers both peer types.
@@ -39,6 +40,7 @@ object Markers:
     def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
         (
           backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
+          recoverFastBlockMark(backend),
           backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
           backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
         ).parMapN(Markers.apply)
@@ -55,12 +57,11 @@ object Markers:
             .lastKey(Cf.Request(own))
             .map(_.fold(RequestNumber(0))(decodeSatelliteNumRequest(_).increment))
 
-    /** The shared fast-side anchor: `fastBlockMark = max(BlockResult.key)`, the highest block this
-      * peer durably finalized, or `None` for an empty store. The `BlockResult` CF is written every
-      * block by every peer (§6), so this anchor is identical for head and coil peers: on a head
-      * peer `max(BlockResult)` equals `max(own SoftAck)` (both written in the same atomic per-block
-      * batch), and a coil peer authors no soft-ack at all. `JointLedger` and `ReplayActor` read it
-      * on boot.
+    /** The fast-side recovery anchor: `fastBlockMark = max(BlockResult.key)`, the highest block
+      * this peer durably finalized, or `None` for an empty store — the same on head and coil peers
+      * (the `BlockResult` CF is written every block by every peer, §6; on a head peer it equals
+      * `max(own SoftAck)`, both written in the same atomic per-block batch, and a coil peer authors
+      * no soft-ack). `JointLedger` and `ReplayActor` read it on boot.
       */
     def recoverFastBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
@@ -78,22 +79,13 @@ object Markers:
     ): IO[Option[HardAckNumber]] =
         backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
 
-    /** `hardConfirmed = max(HardConfirmation.key)` — shared across peer types (the
-      * `HardConfirmation` CF is keyed by `StackNumber`, written at confirmation by every peer, §6
-      * `SlowConsensusActor`). Exposed standalone so a coil peer can derive it without the head-only
-      * [[derive]] (which scans the head `HardAck` family).
+    /** `hardConfirmed = max(HardConfirmation.key)` — the `HardConfirmation` CF is keyed by
+      * `StackNumber`, written at confirmation by every peer (§6 `SlowConsensusActor`). Exposed
+      * standalone so a consumer that needs only this mark (e.g. `StackComposer`'s recover) reads it
+      * without deriving the full [[Markers]] bundle.
       */
     def recoverHardConfirmed(backend: BackendStore[IO]): IO[Option[StackNumber]] =
         backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum))
-
-    /** `softConfirmed = max(SoftConfirmation.key)` — shared across peer types (the
-      * `SoftConfirmation` CF is keyed by `blockNum`, written by every peer's `FastConsensusActor`,
-      * including a coil peer's aggregator-only one). Exposed standalone so a coil peer can derive
-      * it without the head-only [[derive]] (which also scans the head `SoftAck` family a coil peer
-      * never authors).
-      */
-    def recoverSoftConfirmed(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
-        backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum))
 
     /** Decode a 4-byte big-endian `Int` from a spine-shaped key as `BlockNumber`. */
     private def decodeBlockNum(bytes: Array[Byte]): BlockNumber =

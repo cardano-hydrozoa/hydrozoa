@@ -91,6 +91,7 @@ class FamilyScanTest extends AnyFunSuite:
             val peers = List(HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(200))
             val markers = Markers(
               softConfirmed = Some(BlockNumber(2)), // block floor 3, soft-ack floor 3
+              fastBlockMark = None,
               hardConfirmed = Some(StackNumber(1)), // stack floor 2
               hardAcked = Some(HardAckNumber(4))
             )
@@ -104,7 +105,6 @@ class FamilyScanTest extends AnyFunSuite:
             val cursors =
                 ReplayCursors.derive(
                   markers,
-                  fastBlockMark = None,
                   peers,
                   Nil,
                   highWater,

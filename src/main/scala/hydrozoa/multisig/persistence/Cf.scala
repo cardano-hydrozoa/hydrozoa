@@ -46,8 +46,8 @@ object Cf:
     case object HardConfirmation extends Cf:
         def name = "HardConfirmation"
 
-    /** JL per-peer request high-water: the highest request from each peer **included in any block up
-      * to** the key `blockNum` (cumulative, monotone in `blockNum`).
+    /** JL per-peer request high-water: the highest request from each peer **included in any block
+      * up to** the key `blockNum` (cumulative, monotone in `blockNum`).
       */
     case object RequestHighWater extends Cf:
         def name = "RequestHighWater"

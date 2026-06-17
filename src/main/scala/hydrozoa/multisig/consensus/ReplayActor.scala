@@ -77,25 +77,27 @@ object ReplayActor:
     )(using CardanoNetwork.Section): IO[Unit] =
         val backend = persistence.backend
         for
-            fastBlockMark <- Markers.recoverFastBlockMark(backend)
-            softConfirmed <- Markers.recoverSoftConfirmed(backend)
-            hardConfirmed <- Markers.recoverHardConfirmed(backend)
+            markers <- Markers.derive(backend, own)
             // The slow-side own-ack family is the one `PeerId`-keyed `HardAck` family — both the
             // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
             // come from it, for either peer type (§10 Q10).
-            ownAck <- recoverOwnAck(persistence, own, hardConfirmed)
+            ownAck <- recoverOwnAck(persistence, own, markers.hardConfirmed, markers.hardAcked)
             (hardAckedStack, inflight) = ownAck
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
-            _ <- validateInvariants(softConfirmed, hardConfirmed, fastBlockMark, hardAckedStack)
+            _ <- validateInvariants(
+              markers.softConfirmed,
+              markers.hardConfirmed,
+              markers.fastBlockMark,
+              hardAckedStack
+            )
             // 1. First L1 sample → BlockWeaver, so deposit decisions don't wait on the poll tick.
             _ <- seedFirstPollResults(cardanoBackend, treasuryAddress, targets.blockWeaver)
             // 2. The in-flight acked-but-unconfirmed stack (≤1) → reconstructed handoff to SCA.
             _ <- inflight.traverse_(targets.slowConsensusActor ! _)
             // 3. Derive cursors, scan all lanes, total-order, route the tail into mailboxes.
-            highWater <- recoverHighWater(persistence, fastBlockMark)
+            highWater <- recoverHighWater(persistence, markers.fastBlockMark)
             cursors = ReplayCursors.derive(
-              Markers(softConfirmed, hardConfirmed, None),
-              fastBlockMark,
+              markers,
               peers,
               hubs,
               highWater,
@@ -123,10 +125,10 @@ object ReplayActor:
         yield ()
 
     /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap
-      * floor per coil peer is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the
-      * tail is the coil's `HardAck` entries above it (the hub's per-coil-peer receive copy), which the
-      * sequencer stamps via its normal `HardAck` path. The scan stays partitioned per coil peer — each
-      * coil's family is its own CF and its `CoilStampMark` is its own floor.
+      * floor per coil peer is its `CoilStampMark` (the highest already stamped onto `HubHardAck`);
+      * the tail is the coil's `HardAck` entries above it (the hub's per-coil-peer receive copy),
+      * which the sequencer stamps via its normal `HardAck` path. The scan stays partitioned per
+      * coil peer — each coil's family is its own CF and its `CoilStampMark` is its own floor.
       */
     private def replayCoilAckGap(
         persistence: Persistence[IO],
@@ -145,18 +147,19 @@ object ReplayActor:
 
     /** Read this peer's own slow-side anchors: the acked stack (StackComposer/aggregator floor,
       * unpacked from the last own `HardAck` value — the `HardAckNumber → StackNumber` gap, §10 Q9)
-      * and the in-flight handoff. The own ack family is the one `PeerId`-keyed `HardAck` family, so
-      * `own: PeerId` works for both peer types (§10 Q10).
+      * and the in-flight handoff. `hardAcked` is the already-derived [[Markers]] hard-ack counter,
+      * so this avoids re-scanning the own `HardAck` CF. The own ack family is the one
+      * `PeerId`-keyed `HardAck` family, so `own: PeerId` works for both peer types (§10 Q10).
       */
     private def recoverOwnAck(
         persistence: Persistence[IO],
         own: PeerId,
-        hardConfirmed: Option[StackNumber]
+        hardConfirmed: Option[StackNumber],
+        hardAcked: Option[HardAckNumber]
     )(using
         CardanoNetwork.Section
     ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
         for
-            hardAcked <- Markers.recoverHardAcked(persistence.backend, own)
             hardAckedStack <- hardAcked.traverse(n =>
                 persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
             )

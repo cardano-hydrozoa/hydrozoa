@@ -92,8 +92,8 @@ object RocksDbBackendStore:
     private val logger = Logging.loggerIO("Persistence")
 
     /** Open the RocksDB store at `path`, creating it (and parent directories) if it does not yet
-      * exist. `cfs` is the config-derived column-family set to open (`Cf.mkAll(headPeers, coilPeers,
-      * hubs)`, §7.1 — the per-author split makes the set membership-dependent). Runs the
+      * exist. `cfs` is the config-derived column-family set to open (`Cf.mkAll(headPeers,
+      * coilPeers, hubs)`, §7.1 — the per-author split makes the set membership-dependent). Runs the
       * schema-version check ([[StoreVersion]]) and refuses to open an incompatible store. Returns a
       * `Resource` that closes the DB and releases all native resources on use-completion.
       */

@@ -32,9 +32,9 @@ import hydrozoa.multisig.persistence.{FamilyKey, Markers}
   *
   *   - **BlockSpine** — `blockSpineForAggregator = softConfirmed + 1` (FastConsensusActor),
   *     `blockSpineForLedger = fastBlockMark + 1` (BlockWeaver → JointLedger). The fast anchor
-  *     `fastBlockMark = max(BlockResult)` is read by the caller (it is not a [[Markers]] field); on
-  *     a head peer it coincides with `max(own SoftAck)` (both written in the same atomic per-block
-  *     batch), so this is the same boundary the ledger re-drives from.
+  *     `fastBlockMark = max(BlockResult)` is a [[Markers]] field; on a head peer it coincides with
+  *     `max(own SoftAck)` (both written in the same atomic per-block batch), so this is the same
+  *     boundary the ledger re-drives from.
   *   - **StackSpine** — `stackSpineForAggregator = hardConfirmed + 1` (SlowConsensusActor),
   *     `stackSpineForComposer = hardAckedStack + 1` (StackComposer). The acked **stack** is *not*
   *     in [[Markers]] (`Markers.hardAcked` is the author's `HardAckNumber` counter, not a
@@ -91,15 +91,15 @@ final case class ReplayCursors(
 object ReplayCursors:
 
     /** Derive all cursors. Pure — the caller (R3) supplies the values it must read itself: the
-      * recovery [[Markers]] (CF scans), `fastBlockMark = max(BlockResult)` (the fast-side ledger
-      * anchor; see the class docstring), the per-peer request high-water (the persisted counter),
-      * `hardAckedStack` (the acked stack, unpacked from the last own slow-side hard-ack value), and
-      * `own` (the peer identity). On a coil peer (`own = PeerId.Coil`) this adds the own coil
-      * `HardAck` scan floor; on a head peer (`own = PeerId.Head`) it is absent.
+      * recovery [[Markers]] (CF scans, including the fast-side ledger anchor
+      * `fastBlockMark = max(BlockResult)`; see the class docstring), the per-peer request
+      * high-water (the persisted counter), `hardAckedStack` (the acked stack, unpacked from the
+      * last own slow-side hard-ack value), and `own` (the peer identity). On a coil peer (`own =
+      * PeerId.Coil`) this adds the own coil `HardAck` scan floor; on a head peer (`own =
+      * PeerId.Head`) it is absent.
       */
     def derive(
         markers: Markers,
-        fastBlockMark: Option[BlockNumber],
         peers: List[HeadPeerNumber],
         hubs: List[HeadPeerNumber],
         highestIncludedRequest: Map[HeadPeerNumber, RequestNumber],
@@ -110,7 +110,7 @@ object ReplayCursors:
             markers.softConfirmed.map(_.increment).getOrElse(BlockNumber(0))
         // The fast-side ledger floor is the fast anchor (max(BlockResult)) + 1.
         val fastBlockFloor: BlockNumber =
-            fastBlockMark.map(_.increment).getOrElse(BlockNumber(0))
+            markers.fastBlockMark.map(_.increment).getOrElse(BlockNumber(0))
         val hardConfirmedFloor: StackNumber =
             markers.hardConfirmed.map(_.increment).getOrElse(StackNumber(0))
         val hardAckedFloor: StackNumber =
