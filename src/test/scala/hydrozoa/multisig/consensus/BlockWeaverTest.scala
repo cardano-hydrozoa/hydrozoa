@@ -60,9 +60,9 @@ object BlockWeaverTestHelpers {
                 } yield TestR(multiNodeConfig, system, jointLedgerMock, jointLedgerMockActor)
             }
 
-    /** A dummy user request whose content is not interesting to the block weaver — only the
-      * request id matters. Closed over the trial's [[MultiNodeConfig]] so the head id / peer vkey
-      * match the env.
+    /** A dummy user request whose content is not interesting to the block weaver — only the request
+      * id matters. Closed over the trial's [[MultiNodeConfig]] so the head id / peer vkey match the
+      * env.
       */
     def genUserRequest(mnc: MultiNodeConfig): Gen[UserRequestWithId] = {
         val zeroQI = QuantizedInstant(mnc.slotConfig, Instant.ofEpochSecond(0))
@@ -249,7 +249,9 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
                   now.instant.toEpochMilli + 10.second.toMillis > other.toEpochMilli
           _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.second) {
               case s: StartBlock
-                  if s.blockNum == BlockNumber(2) && isAroundNow(s.blockCreationStartTime.instant) =>
+                  if s.blockNum == BlockNumber(2) && isAroundNow(
+                    s.blockCreationStartTime.instant
+                  ) =>
                   ()
           })
           _ <- settle(env.jointLedgerMock.events.get == requests)

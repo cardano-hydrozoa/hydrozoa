@@ -1,11 +1,10 @@
 package test
 
 import cats.*
-import cats.FlatMap.nonInheritedOps.toFlatMapOps
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.IORuntime
-import cats.effect.unsafe.implicits.*
+import cats.syntax.flatMap.*
 import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
@@ -76,10 +75,10 @@ object TestM {
       * @return
       */
     /** Run a test against a resource-managed environment. The resource is acquired before each
-      * ScalaCheck trial and released after it completes, regardless of outcome. Construction of
-      * the [[Resource]] runs inside [[PropertyM]], so it can interleave [[Gen]] (e.g. `pick`).
-      * Bracketing is delegated to [[PropertyM.useResource]], which acquires under
-      * `IO.uncancelable` and guarantees release with the same semantics as `Resource.use`.
+      * ScalaCheck trial and released after it completes, regardless of outcome. Construction of the
+      * [[Resource]] runs inside [[PropertyM]], so it can interleave [[Gen]] (e.g. `pick`).
+      * Bracketing is delegated to [[PropertyM.useResource]], which acquires under `IO.uncancelable`
+      * and guarantees release with the same semantics as `Resource.use`.
       */
     def run[R, A](testM: TestM[R, A], resource: PT[Resource[IO, R]])(using
         toProp: A => Prop,
@@ -88,7 +87,6 @@ object TestM {
         r <- resource
         res <- PropertyM.useResource(r)(env => testM.unTestM.run(env))
     } yield res)
-
 
     // ===================================
     // Lifts

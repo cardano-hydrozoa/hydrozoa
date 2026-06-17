@@ -16,6 +16,8 @@ import org.scalatest.funsuite.AnyFunSuite
   */
 class InMemoryBackendStoreTest extends AnyFunSuite:
 
+    private val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+
     test("put then get returns the same bytes in the same CF") {
         withStore { p =>
             val key = LaneKey.Block(BlockNumber(7)).encode
@@ -126,8 +128,6 @@ class InMemoryBackendStoreTest extends AnyFunSuite:
                 assert(got1.exists(java.util.Arrays.equals(_, expected)))
         }
     }
-
-    private val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
     private def withStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         InMemoryBackendStore.open(tracer).use(prog).unsafeRunSync()

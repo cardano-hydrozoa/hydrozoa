@@ -431,9 +431,9 @@ object PropertyM:
         )
     }
 
-    /** Bracket a [[cats.effect.Resource]] around a [[PropertyM]] body. Acquires the resource
-      * inside [[cats.effect.IO.uncancelable]], polls the body so it remains cancelable, and
-      * guarantees release on success, failure, or cancellation — matching `Resource.use` semantics.
+    /** Bracket a [[cats.effect.Resource]] around a [[PropertyM]] body. Acquires the resource inside
+      * [[cats.effect.IO.uncancelable]], polls the body so it remains cancelable, and guarantees
+      * release on success, failure, or cancellation — matching `Resource.use` semantics.
       */
     def useResource[R, A](r: cats.effect.Resource[cats.effect.IO, R])(
         body: R => PropertyM[cats.effect.IO, A]

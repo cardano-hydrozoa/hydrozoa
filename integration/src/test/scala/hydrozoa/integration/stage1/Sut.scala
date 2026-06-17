@@ -150,7 +150,7 @@ object SutCommands:
 
     implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] =
-for {
+            for {
                 _ <- sut.log.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
                 now <- IO.realTimeInstant
                 _ <- sut.log.debug(s"\tCurrent time: ${now.toEpochMilli}")
@@ -160,7 +160,7 @@ for {
 
     implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
         override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-sut.log.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+            sut.log.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
                 (sut.agent ! StartBlock(
                   blockNum = cmd.blockNumber,
                   blockCreationStartTime = cmd.creationTime
@@ -169,13 +169,13 @@ sut.log.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
 
     implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
-sut.log.debug(">> LedgerEventCommand") >>
+            sut.log.debug(">> LedgerEventCommand") >>
                 (sut.agent ! cmd.request)
     }
 
     implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] =
-for {
+            for {
                 _ <- sut.log.debug(
                   s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
                       s"blockDuration=${cmd.blockDuration}, " +
@@ -212,7 +212,7 @@ for {
 
     given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
         override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
-sut.log.debug(">> RegisterDepositCommand") >>
+            sut.log.debug(">> RegisterDepositCommand") >>
                 (sut.agent ! cmd.request)
     }
 
@@ -220,7 +220,7 @@ sut.log.debug(">> RegisterDepositCommand") >>
 
         // This uses only depositsForSubmission and ignores rejected deposits
         override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] =
-for {
+            for {
                 _ <- sut.log.debug(
                   s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})"
                 )

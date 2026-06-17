@@ -160,8 +160,7 @@ object JointLedgerTestHelpers {
                           JointLedger.Connections(
                             fastConsensusActor =
                                 consensusAgent.narrowRequest[FastConsensusActor.Request],
-                            stackComposer =
-                                stackComposerSink.narrowRequest[StackComposer.Request],
+                            stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
                             headPeerLiaisons = List()
                           ),
                           eutxoLedger,
