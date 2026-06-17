@@ -95,7 +95,8 @@ class JournalScanTest extends AnyFunSuite:
               softConfirmed = Some(BlockNumber(2)), // block floor 3, soft-ack floor 3
               fastBlockMark = None,
               hardConfirmed = Some(StackNumber(1)), // stack floor 2
-              hardAcked = Some(HardAckNumber(4))
+              hardAcked = Some(HardAckNumber(4)),
+              nextRequestNumber = RequestNumber(0)
             )
             val highWater = Map(
               HeadPeerNumber(0) -> RequestNumber(4), // request floor 5

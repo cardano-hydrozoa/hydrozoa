@@ -171,7 +171,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                   softConfirmed = None,
                   fastBlockMark = None,
                   hardConfirmed = Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
-                  hardAcked = Some(HardAckNumber(hardAckNum))
+                  hardAcked = Some(HardAckNumber(hardAckNum)),
+                  nextRequestNumber = RequestNumber(0)
                 )
                 recovered <- StackComposer.State.recover(
                   p,
@@ -225,7 +226,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                   softConfirmed = None,
                   fastBlockMark = None,
                   hardConfirmed = Some(StackNumber(0)), // below stack 1 → gate disarmed
-                  hardAcked = Some(HardAckNumber(0))
+                  hardAcked = Some(HardAckNumber(0)),
+                  nextRequestNumber = RequestNumber(0)
                 )
                 recovered <- StackComposer.State.recover(
                   p,
@@ -353,7 +355,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
                 // Treasury intentionally not written
-                markers = Markers(None, None, Some(StackNumber(1)), Some(HardAckNumber(0)))
+                markers = Markers(
+                  None,
+                  None,
+                  Some(StackNumber(1)),
+                  Some(HardAckNumber(0)),
+                  RequestNumber(0)
+                )
                 r <- StackComposer.State
                     .recover(p, markers.hardAcked, markers.hardConfirmed, PeerId.Head(own))
                     .attempt

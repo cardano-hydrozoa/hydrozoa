@@ -10,39 +10,48 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import java.nio.ByteBuffer
 
-/** The four recovery markers (§5.2), derived from a [[BackendStore]] at boot time.
+/** The five recovery markers (§5.2), derived from a [[BackendStore]] at boot time.
   *
   * No marker is stored explicitly — each falls out of a single-CF scan:
   *
-  *   - `softConfirmed = max(SoftConfirmation.key)`
-  *   - `fastBlockMark = max(BlockResult.key)`
-  *   - `hardConfirmed = max(HardConfirmation.key)`
-  *   - `hardAcked     = max(HardAck.hardAckNum where peer == own)`
+  *   - `softConfirmed     = max(SoftConfirmation.key)`
+  *   - `fastBlockMark     = max(BlockResult.key)`
+  *   - `hardConfirmed     = max(HardConfirmation.key)`
+  *   - `hardAcked         = max(HardAck.hardAckNum where peer == own)`
+  *   - `nextRequestNumber = max(own Request.key) + 1` (`RequestNumber(0)` cold, or on a coil peer —
+  *     it assigns no user requests)
   *
-  * `Markers.derive(backend, own)` runs the four reads (in parallel where possible) and returns a
+  * `Markers.derive(backend, own)` runs the five reads (in parallel where possible) and returns a
   * fresh [[Markers]] value. Lives in a separate module — not on [[Persistence]] — because marker
-  * derivation is intrinsically byte-level (uses `lastKey` / `lastKeyWithPrefix`) and is a recovery
-  * concern, not a per-operation concern.
+  * derivation is intrinsically byte-level (uses `lastKey`) and is a recovery concern, not a
+  * per-operation concern.
   */
 final case class Markers(
     softConfirmed: Option[BlockNumber],
     fastBlockMark: Option[BlockNumber],
     hardConfirmed: Option[StackNumber],
-    hardAcked: Option[HardAckNumber]
+    hardAcked: Option[HardAckNumber],
+    nextRequestNumber: RequestNumber
 )
 
 object Markers:
-    /** Read all four markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
-      * per-author CF split each satellite CF holds exactly one author's journal, so the own
-      * `hardAcked` mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
-      * `own` is a [[PeerId]] (head or coil), so the one `HardAck` journal covers both peer types.
+    /** Read all five markers from `backend`, scoping the `hardAcked` and `nextRequestNumber`
+      * derivations to `own`. With the per-author CF split each satellite CF holds exactly one
+      * author's journal, so the own `hardAcked` mark is just `lastKey` of the own-author `HardAck`
+      * CF — no prefix scan (§7.1). `own` is a [[PeerId]] (head or coil): the one `HardAck` journal
+      * covers both peer types, and `nextRequestNumber` is `RequestNumber(0)` on a coil peer (the
+      * user-request surface is head-only).
       */
     def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
+        val nextRequest = own match
+            case PeerId.Head(n) => recoverNextRequestNumber(backend, n)
+            case PeerId.Coil(_) => IO.pure(RequestNumber(0))
         (
           backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
           recoverFastBlockMark(backend),
           backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
-          backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
+          backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard)),
+          nextRequest
         ).parMapN(Markers.apply)
 
     /** The next request number this peer will assign after recovery: `max(own Request) + 1`, or

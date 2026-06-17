@@ -471,6 +471,12 @@ fast and slow sides (the fast-side acked mark is the `BlockResult` anchor
 work ends and where its own in-flight work begins. **None of them lives in its own
 CF**: each derives from a single-CF scan with no consistency burden of its own.
 
+> The code's `Markers` value bundles a fifth field, **`nextRequestNumber`** — the
+> `RequestSequencer` counter (`max(own Request.key) + 1`; `RequestNumber(0)` cold, or on a
+> coil peer, which assigns none — [§6.1.1](#611-requestsequencer)). It rides the same boot
+> read but is a boundary counter, not part of the fast/slow *confirmed* / *acked* structure
+> below.
+
 | Marker | Side | Definition (and how it's derived) |
 |---|---|---|
 | **`softConfirmed`** | fast | The highest **soft-confirmed** block — `max(SoftConfirmation.key)` (last key in the `SoftConfirmation` CF; empty store → no soft confirmations). Identical on head and coil (both aggregate the head-peer soft-acks into `SoftConfirmation`). |
@@ -1688,13 +1694,15 @@ replay seam; [§6](#6-per-actor-recovery-contracts), [§10](#10-open-questions))
    stamp this process writes sorts after every earlier process's ([§5.4](#54-total-order-of-the-replayed-streams)). Absent
    store → cold start (the degenerate replay: empty base, empty mailboxes), and the
    generation simply starts at 1.
-2. **Derive the markers** by CF scan — the four `Markers` (derivation formulas in
+2. **Derive the markers** by CF scan — the five `Markers` fields (derivation formulas in
    [§5.1](#51-the-markers--all-derived-none-stored)):
    - `softConfirmed = max(SoftConfirmation.key)`;
    - `hardConfirmed = max(HardConfirmation.key)`;
    - `hardAcked` from the last own `HardAck(own)` — `HardAck(PeerId.Head)` on a head
      peer, `HardAck(PeerId.Coil)` on a coil peer (`Markers.recoverHardAcked(backend, own)`);
-   - `fastBlockMark = max(BlockResult.key)` — the fast-side anchor.
+   - `fastBlockMark = max(BlockResult.key)` — the fast-side anchor;
+   - `nextRequestNumber = max(own Request.key) + 1` — the RequestSequencer counter
+     (`RequestNumber(0)` cold or on a coil peer; [§6.1.1](#611-requestsequencer)).
 3. **Load base snapshots** for the consensus actors — `DepositMap` +
    `RequestHighWater[fastBlockMark]` (JL; the latter feeds the Request journal cursors,
    [§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-journal-cursors)), `Treasury` + `EvacuationMap` (SC; the latter at
