@@ -4,7 +4,7 @@ import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
@@ -99,8 +99,11 @@ object OutboxBacking:
           _ => true
         )
 
-    /** Backing for a per-author `HardAck` outbound lane (this peer's own head hard-acks). */
-    def hardAck(backend: BackendStore[IO], peer: HeadPeerNumber)(using
+    /** Backing for a per-author `HardAck` outbound lane (this peer's own hard-acks). `peer` is a
+      * [[PeerId]], so this serves both a head peer (its head `HardAck` family) and a coil peer (its
+      * coil `HardAck` family).
+      */
+    def hardAck(backend: BackendStore[IO], peer: PeerId)(using
         CardanoNetwork.Section
     ): OutboxBacking[HardAck, HardAckNumber] =
         new OutboxBacking(
@@ -109,19 +112,6 @@ object OutboxBacking:
           FamilyKey.HardAck(peer, _),
           b => HardAckNumber(int(b)),
           b => FamilyKey.HardAck(peer, HardAckNumber.zero).decodeValue(b).payload,
-          _ => true
-        )
-
-    /** Backing for a coil peer's own-hard-ack outbound lane (its `CoilHardAck` family). */
-    def coilHardAck(backend: BackendStore[IO], coil: CoilPeerNumber)(using
-        CardanoNetwork.Section
-    ): OutboxBacking[HardAck, HardAckNumber] =
-        new OutboxBacking(
-          backend,
-          Cf.CoilHardAck(coil),
-          FamilyKey.CoilHardAck(coil, _),
-          b => HardAckNumber(int(b)),
-          b => FamilyKey.CoilHardAck(coil, HardAckNumber.zero).decodeValue(b).payload,
           _ => true
         )
 

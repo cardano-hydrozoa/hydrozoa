@@ -125,12 +125,12 @@ abstract class PeerLiaisonCoilToHub(
             )
         }.toMap
 
-    // Outbound: this coil peer's own hard-ack, served to the hub. Backed by the own `CoilHardAck`
+    // Outbound: this coil peer's own hard-ack, served to the hub. Backed by the own coil `HardAck`
     // family so a reply hot-loads acks below the in-memory outbox floor (the hub re-pulls old acks
     // it missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
-        OutboxBacking.coilHardAck(persistence.backend, ownCoilPeerNumber)
+        OutboxBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
     private val ownHardAckLane =
         LaneOutbound.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
@@ -236,14 +236,8 @@ abstract class PeerLiaisonCoilToHub(
                     (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                 )
             val headHardAckPuts: List[WriteBatch => WriteBatch] =
-                pop.headHardAcks.values.flatten.toList.flatMap(a =>
-                    a.peerId match {
-                        case PeerId.Head(n) =>
-                            Some((wb: WriteBatch) =>
-                                wb.put(FamilyKey.HardAck(n, a.hardAckNum))(lv(a))
-                            )
-                        case PeerId.Coil(_) => None
-                    }
+                pop.headHardAcks.values.flatten.toList.map(a =>
+                    (wb: WriteBatch) => wb.put(FamilyKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
                 )
             val coilHardAckPuts: List[WriteBatch => WriteBatch] =
                 pop.coilHardAcks.values.flatten.toList.map(h =>
@@ -311,8 +305,8 @@ abstract class PeerLiaisonCoilToHub(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
-            // Restore only the own-hard-ack high-water; the lane serves older acks from the
-            // CoilHardAck family on demand (the Server half answers the hub's OwnHardAck.Get) and
+            // Restore only the own-hard-ack high-water; the lane serves older acks from the own
+            // coil HardAck family on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
             highWater <- ownHardAckBacking.highWater
             _ <- ownHardAckLane.seedHighWater(highWater)
@@ -341,7 +335,7 @@ abstract class PeerLiaisonCoilToHub(
                 OutboxBacking.softAck(backend, h).highWater.flatMap(l.restoreCursor)
             }
             _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
-                OutboxBacking.hardAck(backend, h).highWater.flatMap(l.restoreCursor)
+                OutboxBacking.hardAck(backend, PeerId.Head(h)).highWater.flatMap(l.restoreCursor)
             }
             _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
                 OutboxBacking.hubHardAck(backend, h).highWater.flatMap(l.restoreCursor)

@@ -116,7 +116,7 @@ object StoreDump:
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
             case Cf.Block | Cf.Stack | Cf.Request(_) | Cf.SoftAck(_) | Cf.HardAck(_) |
-                Cf.CoilHardAck(_) | Cf.HubHardAck(_) =>
+                Cf.HubHardAck(_) =>
                 try FamilyKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |

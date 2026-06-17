@@ -35,14 +35,14 @@ import org.typelevel.log4cats.Logger
   * batch** as the per-coil **stamped-high-water** mark (`StoreKey.CoilStampMark`), **before** it
   * fans out (CR4 write-before-send): a re-stamp would equivocate on the `HubHardAck` spine (two
   * `HubHardAckNumber`s for one coil ack). The receive-cursor advance (in the liaison, CR8) and the
-  * stamp are separate writes, so a crash between them can leave a coil ack **durably received**
-  * (`CoilHardAck`, persisted by the liaison) but **unstamped** — and never re-served. On boot the
-  * sequencer restores only its state — `nextSeq = max(HubHardAck where hub == own) + 1` and the
-  * per-coil marks from `CoilStampMark`. The unstamped gap is **replayed by the `ReplayActor`**:
-  * using each coil's mark as the floor, it scans the `CoilHardAck` tail above it and re-feeds those
-  * acks through the normal `HardAck` path here, closing the gap from the store rather than from a
-  * re-delivery that cannot come. No idempotency index: the restored receive cursor makes
-  * re-delivery impossible, so a scalar mark per coil suffices.
+  * stamp are separate writes, so a crash between them can leave a coil ack **durably received** (in
+  * the coil's `HardAck` receive copy, persisted by the liaison) but **unstamped** — and never
+  * re-served. On boot the sequencer restores only its state — `nextSeq = max(HubHardAck where hub ==
+  * own) + 1` and the per-coil marks from `CoilStampMark`. The unstamped gap is **replayed by the
+  * `ReplayActor`**: using each coil's mark as the floor, it scans the coil's `HardAck` tail above
+  * it and re-feeds those acks through the normal `HardAck` path here, closing the gap from a store
+  * read rather than from a re-delivery that cannot come. No idempotency index: the restored receive
+  * cursor makes re-delivery impossible, so a scalar mark per coil suffices.
   */
 trait CoilAckSequencer(
     config: Config,

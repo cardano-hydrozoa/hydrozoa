@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence.recovery
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -29,7 +29,7 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
       for p <- Gen.choose(0, 255); n <- Gen.choose(0, Int.MaxValue)
       yield FamilyKey.SoftAck(HeadPeerNumber(p), SoftAckNumber(n)),
       for p <- Gen.choose(0, 255); n <- Gen.choose(0, Int.MaxValue)
-      yield FamilyKey.HardAck(HeadPeerNumber(p), HardAckNumber(n))
+      yield FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(p)), HardAckNumber(n))
     )
 
     private val genEntry: Gen[RawFamilyEntry] =

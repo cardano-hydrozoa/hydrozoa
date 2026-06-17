@@ -33,11 +33,11 @@ import scalus.cardano.address.ShelleyAddress
   *      stays out of the acked band (its recover treats acked stacks as closed).
   *   3. Derive the [[ReplayCursors]], scan every lane from its floor, total-order the tail by
   *      arrival stamp ([[ArrivalOrderedMerge]]), and route each entry into the reading actor's
-  *      mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck /
-  *      CoilHardAck → SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
+  *      mailbox (Request → BlockWeaver, SoftAck → FastConsensusActor, HardAck / HubHardAck →
+  *      SlowConsensusActor, Block spine → FCA at `softConfirmed+1` and BlockWeaver at
   *      `fastBlockMark+1`, Stack spine → StackComposer at `hardAcked+1`).
   *   4. (Hub only) re-feed `CoilAckSequencer` the received-but-unstamped coil-ack gap — for each
-  *      hubbed coil, the `CoilHardAck` tail above its `CoilStampMark` floor — so the `HubHardAck`
+  *      hubbed coil, the coil `HardAck` tail above its `CoilStampMark` floor — so the `HubHardAck`
   *      spine is rebuilt through the normal stamp path (see [[replayCoilAckGap]]).
   *
   * Inbound is not restored from PeerLiaisonHeadToHead (it forwards, holds no inbound queue); this
@@ -57,13 +57,13 @@ object ReplayActor:
     )
 
     /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
-      * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the shared
-      * steps are common to both peer types; the single residual peer-type branch is on `own`, the
-      * slow-side own-ack family: a head peer reads its own hard-acks from `HardAck`, a coil peer
-      * from `CoilHardAck` (§10 Q10). `peers` is every head peer (own included on a head peer),
-      * `hubs` every hub head peer (their `HubHardAck` families carry the coil quorum SCA
-      * aggregates, read by both peer types), `coils` the hubbed coils whose ack gap a hub re-feeds
-      * (`Nil` off a hub). `own` and `treasuryAddress` come from the node config.
+      * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the slow
+      * side are now common to both peer types: the slow-side own-ack family is the one
+      * `PeerId`-keyed `HardAck` family, so `own: PeerId` flows straight into
+      * `FamilyKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
+      * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` families carry
+      * the coil quorum SCA aggregates, read by both peer types), `coils` the hubbed coils whose ack
+      * gap a hub re-feeds (`Nil` off a hub). `own` and `treasuryAddress` come from the node config.
       */
     def replay(
         persistence: Persistence[IO],
@@ -80,13 +80,10 @@ object ReplayActor:
             fastBlockMark <- Markers.recoverFastBlockMark(backend)
             softConfirmed <- Markers.recoverSoftConfirmed(backend)
             hardConfirmed <- Markers.recoverHardConfirmed(backend)
-            // The ONE residual peer-type branch: the slow-side own-ack family. A head peer reads its
-            // own hard-acks from `HardAck`, a coil peer from `CoilHardAck` (§10 Q10) — both the acked
-            // stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks come
-            // from this family. Everything outside this match is shared.
-            ownAck <- own match
-                case PeerId.Head(h) => recoverOwnAck(persistence, h, hardConfirmed)
-                case PeerId.Coil(c) => recoverOwnAckCoil(persistence, c, hardConfirmed)
+            // The slow-side own-ack family is the one `PeerId`-keyed `HardAck` family — both the
+            // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
+            // come from it, for either peer type (§10 Q10).
+            ownAck <- recoverOwnAck(persistence, own, hardConfirmed)
             (hardAckedStack, inflight) = ownAck
             // Fail-safe (CR6/CR7): refuse to start on an inconsistent store (confirmed > acked).
             _ <- validateInvariants(softConfirmed, hardConfirmed, fastBlockMark, hardAckedStack)
@@ -117,7 +114,7 @@ object ReplayActor:
                   )
                 )
             // 4. (Hub only) re-feed the received-but-unstamped coil-ack gap to CoilAckSequencer:
-            //    PeerLiaisonHubToCoil persisted each inbound ack (CoilHardAck, CR8) before advancing
+            //    PeerLiaisonHubToCoil persisted each inbound ack (coil HardAck, CR8) before advancing
             //    its receive cursor, but a crash between that and the stamp can leave a tail the coil
             //    will never re-serve. Replaying it through the normal stamp path rebuilds the
             //    HubHardAck spine — the sequencer itself is a thin counter and does not scan.
@@ -127,8 +124,9 @@ object ReplayActor:
 
     /** Re-feed each coil's received-but-unstamped hard-ack tail to `CoilAckSequencer`. The gap
       * floor per coil is its `CoilStampMark` (the highest already stamped onto `HubHardAck`); the
-      * tail is the `CoilHardAck` entries above it, which the sequencer stamps via its normal
-      * `HardAck` path.
+      * tail is the coil's `HardAck` entries above it (the hub's per-coil receive copy), which the
+      * sequencer stamps via its normal `HardAck` path. The scan stays partitioned per coil — each
+      * coil's family is its own CF and its `CoilStampMark` is its own floor.
       */
     private def replayCoilAckGap(
         persistence: Persistence[IO],
@@ -138,20 +136,21 @@ object ReplayActor:
         persistence.get(StoreKey.CoilStampMark).map(_.getOrElse(Map.empty)).flatMap { marks =>
             coils.traverse_ { coil =>
                 val from = marks.get(coil).fold(HardAckNumber.zero)(_.increment)
-                val k = FamilyKey.CoilHardAck(coil, from)
+                val k = FamilyKey.HardAck(PeerId.Coil(coil), from)
                 FamilyScan
                     .scan(persistence.backend, k)
                     .flatMap(_.traverse_(e => coilAckSequencer ! k.decodeValue(e.framed).payload))
             }
         }
 
-    /** Read the head peer's own slow-side anchors: the acked stack (StackComposer/aggregator floor,
+    /** Read this peer's own slow-side anchors: the acked stack (StackComposer/aggregator floor,
       * unpacked from the last own `HardAck` value — the `HardAckNumber → StackNumber` gap, §10 Q9)
-      * and the in-flight handoff. The own ack family is `HardAck`.
+      * and the in-flight handoff. The own ack family is the one `PeerId`-keyed `HardAck` family, so
+      * `own: PeerId` works for both peer types (§10 Q10).
       */
     private def recoverOwnAck(
         persistence: Persistence[IO],
-        own: HeadPeerNumber,
+        own: PeerId,
         hardConfirmed: Option[StackNumber]
     )(using
         CardanoNetwork.Section
@@ -162,27 +161,6 @@ object ReplayActor:
                 persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
             )
             inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
-        yield (hardAckedStack, inflight)
-
-    /** Coil counterpart of [[recoverOwnAck]]: the own ack family is `CoilHardAck` (§10 Q10). */
-    private def recoverOwnAckCoil(
-        persistence: Persistence[IO],
-        own: CoilPeerNumber,
-        hardConfirmed: Option[StackNumber]
-    )(using
-        CardanoNetwork.Section
-    ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
-        for
-            coilHardAcked <- Markers.recoverCoilHardAcked(persistence.backend, own)
-            hardAckedStack <- coilHardAcked.traverse(n =>
-                persistence.getOrFail(FamilyKey.CoilHardAck(own, n)).map(_.payload.stackNum)
-            )
-            inflight <- reconstructInflightHandoffCoil(
-              persistence,
-              own,
-              hardConfirmed,
-              hardAckedStack
-            )
         yield (hardAckedStack, inflight)
 
     /** Boot-time consistency fail-safe (CR6/CR7): a confirmed mark must never exceed its acked mark
@@ -234,7 +212,7 @@ object ReplayActor:
       */
     private def reconstructInflightHandoff(
         persistence: Persistence[IO],
-        own: HeadPeerNumber,
+        own: PeerId,
         hardConfirmed: Option[StackNumber],
         hardAckedStack: Option[StackNumber]
     )(using CardanoNetwork.Section): IO[Option[SlowConsensusActor.StackHandoff]] =
@@ -247,11 +225,12 @@ object ReplayActor:
             case _ => IO.pure(None)
 
     /** This peer's persisted hard-acks for `stackNum` (round-1 + round-2, or the sole ack) — the
-      * own-keyed HardAck lane scanned and filtered by the ack's `stackNum`.
+      * own-keyed `HardAck` lane scanned and filtered by the ack's `stackNum`. `own: PeerId`, so it
+      * serves both peer types.
       */
     private def ownHardAcksForStack(
         persistence: Persistence[IO],
-        own: HeadPeerNumber,
+        own: PeerId,
         stackNum: StackNumber
     )(using CardanoNetwork.Section): IO[List[HardAck]] =
         val k = FamilyKey.HardAck(own, HardAckNumber.zero)
@@ -271,45 +250,16 @@ object ReplayActor:
             case None    => IO.pure(Map.empty)
             case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
 
-    /** Coil counterpart of [[reconstructInflightHandoff]]: the in-flight stack's own acks come from
-      * the coil peer's `CoilHardAck` lane (not `HardAck`); everything else is identical.
-      */
-    private def reconstructInflightHandoffCoil(
-        persistence: Persistence[IO],
-        own: CoilPeerNumber,
-        hardConfirmed: Option[StackNumber],
-        coilHardAckedStack: Option[StackNumber]
-    )(using CardanoNetwork.Section): IO[Option[SlowConsensusActor.StackHandoff]] =
-        coilHardAckedStack match
-            case Some(stackNum) if hardConfirmed.forall(Ordering[StackNumber].lt(_, stackNum)) =>
-                for
-                    unsigned <- persistence.getOrFail(StoreKey.UnsignedStack(stackNum))
-                    ownAcks <- ownCoilHardAcksForStack(persistence, own, stackNum)
-                yield Some(SlowConsensusActor.StackHandoff(unsigned, ownAcks))
-            case _ => IO.pure(None)
-
-    /** This coil peer's persisted hard-acks for `stackNum`, from its own-keyed `CoilHardAck` lane.
-      */
-    private def ownCoilHardAcksForStack(
-        persistence: Persistence[IO],
-        own: CoilPeerNumber,
-        stackNum: StackNumber
-    )(using CardanoNetwork.Section): IO[List[HardAck]] =
-        val k = FamilyKey.CoilHardAck(own, HardAckNumber.zero)
-        FamilyScan
-            .scan(persistence.backend, k)
-            .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
-
     /** Route one decoded lane entry into the reading actor's mailbox. Family-agnostic (shared by
       * both peer types in [[replay]]): spines fan out to two roles, sliced by the ledger floor (the
       * aggregator already gets everything scanned from its lower floor): blocks to
       * FastConsensusActor always (scanned from `softConfirmed+1`) and to BlockWeaver only
       * `≥ blockLedgerFloor`; stacks to StackComposer only `≥ stackComposerFloor` (the acked band's
-      * single stack is handled by the reconstructed handoff, not its brief). The coil-quorum
-      * families route to `SlowConsensusActor`: `CoilHardAck` carries a `HardAck` directly,
-      * `HubHardAck` carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`.
-      * `HubHardAck` is scanned by every peer (head and coil) for the coil quorum; `CoilHardAck` is
-      * own-keyed, so that arm is reached only on the coil path.
+      * single stack is handled by the reconstructed handoff, not its brief). The hard-ack families
+      * route to `SlowConsensusActor`: a `HardAck` entry carries a `HardAck` directly (a head peer's
+      * own head hard-acks, or — on the coil path — a coil peer's own coil hard-acks), `HubHardAck`
+      * carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`. `HubHardAck` is scanned
+      * by every peer (head and coil) for the coil quorum.
       */
     private def route(
         entry: RawFamilyEntry,
@@ -336,7 +286,5 @@ object ReplayActor:
                 if Ordering[StackNumber].gteq(brief.stackNum, stackComposerFloor)
                 then targets.stackComposer ! brief
                 else IO.unit
-            case k: FamilyKey.CoilHardAck =>
-                targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
             case k: FamilyKey.HubHardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload.ack

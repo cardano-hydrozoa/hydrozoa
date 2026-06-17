@@ -1162,7 +1162,10 @@ case class Stage4Suite(
                     // Satellites are split one CF per author (§7.1); count across every head peer's
                     // own-author CF (each peer holds all peers' entries — own + inbound).
                     softAcks <- countAcross(backend, sortedPeers.toList.map(Cf.SoftAck(_)))
-                    hardAcks <- countAcross(backend, sortedPeers.toList.map(Cf.HardAck(_)))
+                    hardAcks <- countAcross(
+                      backend,
+                      sortedPeers.toList.map(p => Cf.HardAck(PeerId.Head(p)))
+                    )
                     requests <- countAcross(backend, sortedPeers.toList.map(Cf.Request(_)))
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +

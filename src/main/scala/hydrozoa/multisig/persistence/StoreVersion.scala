@@ -18,8 +18,14 @@ object StoreVersion:
       * v3: adds the `CoilStampMark` singleton CF (a hub's per-coil stamped-high-water marks, §6
       * `CoilAckSequencer`); the CF set differs from v2, so a v2 store cannot be opened with the v3
       * descriptor list.
+      *
+      * v4: unifies the head and coil own-hard-ack CFs into one `PeerId`-keyed `HardAck` family. The
+      * per-author physical CF split is preserved (one CF per peer), but the coil CFs are renamed
+      * from `CoilHardAck:<coilNum>` to `HardAck:<peerWireInt>` (the peer's wire int — num shifted
+      * left one bit, low bit tagging head vs coil), so the CF names differ from v3 and a v3 store
+      * cannot be opened with the v4 descriptor list.
       */
-    val current: Int = 3
+    val current: Int = 4
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")

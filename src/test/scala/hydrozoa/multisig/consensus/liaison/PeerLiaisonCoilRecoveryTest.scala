@@ -23,7 +23,7 @@ import scala.concurrent.duration.DurationInt
   * GUM-153). After a crash each lane restores only its high-water and serves older entries from the
   * store on demand (`load`), rather than eagerly loading its whole own production:
   *
-  *   - a coil peer's own-hard-ack lane is backed by its own `CoilHardAck` family;
+  *   - a coil peer's own-hard-ack lane is backed by its own coil `HardAck` family;
   *   - a hub's full-population lanes are backed by the families it already holds — every block (no
   *     `canLead` filter on a hub→coil link), every author's acks, every hub's relay lane.
   */
@@ -40,12 +40,12 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
     test("coil own-hard-ack backing: high-water = max, load returns the tail from a number") {
         val coil = CoilPeerNumber(0)
         val (hw, fromZero, fromOne) = run { p =>
-            val backing = OutboxBacking.coilHardAck(p.backend, coil)
+            val backing = OutboxBacking.hardAck(p.backend, PeerId.Coil(coil))
             for {
-                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
+                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
                   FamilyValue(stamp, coilHardAck(coil, 0, stack = 1))
                 )
-                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
+                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
                   FamilyValue(stamp, coilHardAck(coil, 1, stack = 2))
                 )
                 hw <- backing.highWater
@@ -60,7 +60,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
 
     test("coil own-hard-ack backing on an empty store: no high-water, empty load") {
         val (hw, loaded) = run { p =>
-            val backing = OutboxBacking.coilHardAck(p.backend, CoilPeerNumber(0))
+            val backing = OutboxBacking.hardAck(p.backend, PeerId.Coil(CoilPeerNumber(0)))
             for {
                 hw <- backing.highWater
                 loaded <- backing.backfill(HardAckNumber.zero, 16)
@@ -82,7 +82,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
         val out = run { p =>
             val blockBacking = OutboxBacking.block(p.backend, _ => true)
             val stackBacking = OutboxBacking.stack(p.backend, _ => true)
-            val headHardAckBacking = OutboxBacking.hardAck(p.backend, h0)
+            val headHardAckBacking = OutboxBacking.hardAck(p.backend, PeerId.Head(h0))
             val relayBacking = OutboxBacking.hubHardAck(p.backend, hub0)
             for {
                 // Two blocks on the spine — a hub→coil link keeps BOTH (no canLead filter).
@@ -92,7 +92,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                 _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, b2))
                 s1 <- stackBrief(1, 1, 2)
                 _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
-                _ <- p.put(FamilyKey.HardAck(h0, HardAckNumber(0)))(
+                _ <- p.put(FamilyKey.HardAck(PeerId.Head(h0), HardAckNumber(0)))(
                   FamilyValue(stamp, headHardAck(h0, 0, stack = 1))
                 )
                 _ <- p.put(FamilyKey.HubHardAck(hub0, HubHardAckNumber(0)))(

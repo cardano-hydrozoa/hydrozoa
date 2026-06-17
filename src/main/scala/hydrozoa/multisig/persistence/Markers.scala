@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.syntax.functor.*
 import cats.syntax.parallel.*
 import hydrozoa.multisig.consensus.ack.HardAckNumber
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -34,8 +34,9 @@ object Markers:
     /** Read all three markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
       * per-author CF split each satellite CF holds exactly one author's family, so the own
       * `hardAcked` mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
+      * `own` is a [[PeerId]] (head or coil), so the one `HardAck` family covers both peer types.
       */
-    def derive(backend: BackendStore[IO], own: HeadPeerNumber): IO[Markers] =
+    def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
         (
           backend.lastKey(Cf.SoftConfirmation).map(_.map(decodeBlockNum)),
           backend.lastKey(Cf.HardConfirmation).map(_.map(decodeStackNum)),
@@ -64,28 +65,18 @@ object Markers:
     def recoverFastBlockMark(backend: BackendStore[IO]): IO[Option[BlockNumber]] =
         backend.lastKey(Cf.BlockResult).map(_.map(decodeBlockNum))
 
-    /** The head slow-side anchor: `hardAcked = max(own HardAck.key)` — the head peer's last own
-      * hard-ack number, or `None` for an empty store. The head counterpart of
-      * [[recoverCoilHardAcked]]; exposed standalone so the unified boot replay reads just this mark
-      * without the broader [[derive]] (which also re-scans the soft/hard-confirmation spines the
-      * caller already holds).
+    /** The slow-side anchor: `hardAcked = max(own HardAck.key)` — this peer's last own hard-ack
+      * number, or `None` for an empty store. Works for both peer types: `own` is a [[PeerId]], so a
+      * head peer reads its head `HardAck` CF and a coil peer reads its coil `HardAck` CF (the stack
+      * number is unpacked from the hard-ack value, §6 `StackComposer`). Exposed standalone so the
+      * unified boot replay reads just this mark without the broader [[derive]] (which also re-scans
+      * the soft/hard-confirmation spines the caller already holds).
       */
     def recoverHardAcked(
         backend: BackendStore[IO],
-        own: HeadPeerNumber
+        own: PeerId
     ): IO[Option[HardAckNumber]] =
         backend.lastKey(Cf.HardAck(own)).map(_.map(decodeSatelliteNumHard))
-
-    /** The coil slow-side anchor: `hardAcked = max(own CoilHardAck.key)` — the coil peer's last own
-      * hard-ack number, or `None` for an empty store. A coil peer's own hard-acks live in its
-      * `CoilHardAck` CF (not `HardAck`); recovery otherwise mirrors a head peer's, unpacking the
-      * stack number from the hard-ack value (§6 `StackComposer`).
-      */
-    def recoverCoilHardAcked(
-        backend: BackendStore[IO],
-        coil: CoilPeerNumber
-    ): IO[Option[HardAckNumber]] =
-        backend.lastKey(Cf.CoilHardAck(coil)).map(_.map(decodeSatelliteNumHard))
 
     /** `hardConfirmed = max(HardConfirmation.key)` — shared across peer types (the
       * `HardConfirmation` CF is keyed by `StackNumber`, written at confirmation by every peer, §6

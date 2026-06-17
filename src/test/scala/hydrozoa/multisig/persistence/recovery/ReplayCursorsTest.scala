@@ -114,7 +114,9 @@ class ReplayCursorsTest extends AnyFunSuite:
               .requests(HeadPeerNumber(2)) == FamilyKey.Request(HeadPeerNumber(2), RequestNumber(0))
         )
         // Hard-ack family has no derivable band floor (HardAckNumber-indexed) — scan from 0.
-        peers.foreach(p => assert(cursors.hardAcks(p) == FamilyKey.HardAck(p, HardAckNumber(0))))
+        peers.foreach(p =>
+            assert(cursors.hardAcks(p) == FamilyKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
+        )
     }
 
     test(
@@ -169,7 +171,7 @@ class ReplayCursorsTest extends AnyFunSuite:
         peers.foreach { p =>
             assert(cursors.requests(p) == FamilyKey.Request(p, RequestNumber(0)))
             assert(cursors.softAcks(p) == FamilyKey.SoftAck(p, SoftAckNumber(0)))
-            assert(cursors.hardAcks(p) == FamilyKey.HardAck(p, HardAckNumber(0)))
+            assert(cursors.hardAcks(p) == FamilyKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
         }
     }
 
@@ -208,21 +210,21 @@ class ReplayCursorsTest extends AnyFunSuite:
         assert(cursors.hubHardAcks.size == hubs.size)
         assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
         hubs.foreach(h => assert(cursors.scanFloors.contains(cursors.hubHardAcks(h))))
-        // A head peer carries no own CoilHardAck floor.
+        // A head peer carries no own coil HardAck floor.
         assert(cursors.ownCoilHardAck.isEmpty)
     }
 
-    test("derive: a coil peer adds its own CoilHardAck floor; scanFloors grows by one") {
+    test("derive: a coil peer adds its own coil HardAck floor; scanFloors grows by one") {
         val hubs = List(HeadPeerNumber(1))
         val own = PeerId.Coil(CoilPeerNumber(0))
         val cursors =
             ReplayCursors.derive(Markers(None, None, None), None, peers, hubs, Map.empty, None, own)
         assert(
           cursors.ownCoilHardAck.contains(
-            FamilyKey.CoilHardAck(CoilPeerNumber(0), HardAckNumber.zero)
+            FamilyKey.HardAck(PeerId.Coil(CoilPeerNumber(0)), HardAckNumber.zero)
           )
         )
-        // 2 spines + 3N satellites + H hubs + 1 own CoilHardAck.
+        // 2 spines + 3N satellites + H hubs + 1 own coil HardAck.
         assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size + 1)
         assert(cursors.scanFloors.contains(cursors.ownCoilHardAck.get))
     }

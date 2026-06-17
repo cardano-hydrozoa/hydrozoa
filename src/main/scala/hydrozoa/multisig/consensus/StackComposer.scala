@@ -14,7 +14,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -93,19 +93,15 @@ final case class StackComposer(
       * is empty), so we drive the branch off its result: `Some` ⇒ seed the recovered state and skip
       * bootstrap, `None` ⇒ cold start.
       *
-      * Head and coil share the one [[State.recover]] seam (it branches on `own` for the slow-side
-      * own-ack family): a head peer's own hard-acks live in `HardAck` and the closing stack's
-      * `lastBlockNum` comes from its own `Stack` lane brief; a coil peer's live in `CoilHardAck`
-      * and the `lastBlockNum` comes from the `UnsignedStack` it persists on every close (no own
-      * `Stack` lane). The own hard-ack marker is read from the matching family
-      * ([[Markers.recoverHardAcked]] / [[Markers.recoverCoilHardAcked]]); `hardConfirmed` derives
-      * the same way on both ([[Markers.recoverHardConfirmed]]).
+      * Head and coil share the one [[State.recover]] seam with no peer-type branch: the own-ack
+      * family is the one `PeerId`-keyed `HardAck` family ([[Markers.recoverHardAcked]] takes a
+      * [[PeerId]]), and the closing stack's `lastBlockNum` comes from the `UnsignedStack` every
+      * peer persists on every close (atomic with the hard-ack). `hardConfirmed` derives the same
+      * way on both ([[Markers.recoverHardConfirmed]]).
       */
     private def recoverOrBootstrap: IO[Unit] =
         for {
-            hardAcked <- config.ownPeerId match
-                case PeerId.Head(h) => Markers.recoverHardAcked(persistence.backend, h)
-                case PeerId.Coil(c) => Markers.recoverCoilHardAcked(persistence.backend, c)
+            hardAcked <- Markers.recoverHardAcked(persistence.backend, config.ownPeerId)
             hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
             recovered <- State.recover(persistence, hardAcked, hardConfirmed, config.ownPeerId)
             _ <- recovered match {
@@ -279,12 +275,7 @@ final case class StackComposer(
                         base.put(FamilyKey.Stack(brief.stackNum))(FamilyValue(stamp, brief))
                     else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
-                    ack.peerId match {
-                        case PeerId.Head(n) =>
-                            b.put(FamilyKey.HardAck(n, ack.hardAckNum))(FamilyValue(stamp, ack))
-                        case PeerId.Coil(c) =>
-                            b.put(FamilyKey.CoilHardAck(c, ack.hardAckNum))(FamilyValue(stamp, ack))
-                    }
+                    b.put(FamilyKey.HardAck(ack.peerId, ack.hardAckNum))(FamilyValue(stamp, ack))
                 )
             }
             // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
@@ -923,12 +914,12 @@ object StackComposer {
           * inbound briefs arrive from replay (R3), re-pairing into `ready`.
           *
           * `hardAcked` is a [[HardAckNumber]] (the satellite key), NOT a stack number, so the stack
-          * number is read from the last own HardAck **value**; the marker number gives only
-          * `nextOwnHardAckNum = hardAcked + 1`. The brief, treasury, and evacuation map are present
-          * on every peer for any hard-acked stack — the brief via `persistOwnStackClose` (if this
-          * peer led) or `PeerLiaisonHeadToHead.persistInbound` (if it received); treasury +
-          * evacuation map are written by every peer at each close — so a missing entry is store
-          * corruption.
+          * number is read from the last own `HardAck` **value** (the one `PeerId`-keyed family, so
+          * `own` works for either peer type); the marker number gives only
+          * `nextOwnHardAckNum = hardAcked + 1`. The closing stack's `lastBlockNum`, treasury, and
+          * evacuation map are present on every peer for any hard-acked stack — the `UnsignedStack`,
+          * treasury, and evacuation map are all written by every peer in the same atomic close
+          * batch as the hard-ack (`persistOwnStackClose`) — so a missing entry is store corruption.
           */
         def recover(
             persistence: Persistence[IO],
@@ -940,34 +931,16 @@ object StackComposer {
                 case None => IO.pure(None)
                 case Some(hardAckNum) =>
                     for {
-                        // The one residual peer-type branch: the own hard-ack family + the source of
-                        // the closing stack's lastBlockNum.
-                        stackAndBlock <- own match
-                            case PeerId.Head(h) =>
-                                for {
-                                    lastHardAck <- persistence.getOrFail(
-                                      FamilyKey.HardAck(h, hardAckNum)
-                                    )
-                                    stackBrief <- persistence.getOrFail(
-                                      FamilyKey.Stack(lastHardAck.payload.stackNum)
-                                    )
-                                } yield (
-                                  lastHardAck.payload.stackNum,
-                                  stackBrief.payload.lastBlockNum
-                                )
-                            case PeerId.Coil(c) =>
-                                for {
-                                    lastHardAck <- persistence.getOrFail(
-                                      FamilyKey.CoilHardAck(c, hardAckNum)
-                                    )
-                                    unsignedStack <- persistence.getOrFail(
-                                      StoreKey.UnsignedStack(lastHardAck.payload.stackNum)
-                                    )
-                                } yield (
-                                  lastHardAck.payload.stackNum,
-                                  unsignedStack.brief.lastBlockNum
-                                )
-                        (hardAckedStack, lastBlockNum) = stackAndBlock
+                        // No peer-type branch: the own hard-ack lives in the one `PeerId`-keyed
+                        // `HardAck` family, and the closing stack's `lastBlockNum` comes from the
+                        // `UnsignedStack` every peer persists on every close (atomic with the
+                        // hard-ack, so always present for a hard-acked stack).
+                        lastHardAck <- persistence.getOrFail(FamilyKey.HardAck(own, hardAckNum))
+                        hardAckedStack = lastHardAck.payload.stackNum
+                        unsignedStack <- persistence.getOrFail(
+                          StoreKey.UnsignedStack(hardAckedStack)
+                        )
+                        lastBlockNum = unsignedStack.brief.lastBlockNum
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
                         blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)

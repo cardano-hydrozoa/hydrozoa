@@ -2,7 +2,7 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.ack.{HardAck as HardAckMsg, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck as SoftAckMsg, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -20,7 +20,6 @@ import java.nio.ByteBuffer
   *   - `Request` → `[requestNum : 8]`
   *   - `SoftAck` → `[softAckNum : 4]`
   *   - `HardAck` → `[hardAckNum : 4]`
-  *   - `CoilHardAck` → `[hardAckNum : 4]`
   *   - `HubHardAck` → `[hubHardAckNum : 4]`
   *
   * Both the family-type **and the author** are the column family ([[Cf]], split one CF per author,
@@ -77,21 +76,16 @@ object FamilyKey:
         def encode: Array[Byte] = intBytes(num)
 
     /** Hard-ack satellite (per author): a peer's hard-ack signature, keyed by `(peer, hardAckNum)`.
+      * The author is a [[PeerId]] — head and coil peers share one family type, one CF per author. A
+      * head peer's family holds its own head hard-acks; a coil peer's family holds its own
+      * hard-acks plus a hub's raw inbound receive copy (persisted by `PeerLiaisonHubToCoil` on
+      * receipt so a coil peer's ack survives a hub crash before `CoilAckSequencer` re-sequences
+      * it). The key bytes carry only the within-author index — the author comes from the CF.
       */
-    final case class HardAck(peer: HeadPeerNumber, num: HardAckNumber) extends FamilyKey:
+    final case class HardAck(peer: PeerId, num: HardAckNumber) extends FamilyKey:
         type Value = FamilyValue[HardAckMsg]
         given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
         def familyId: FamilyId = FamilyId.HardAck(peer)
-        def encode: Array[Byte] = intBytes(num)
-
-    /** Coil-hard-ack receive family (per coil peer): a hub's raw inbound hard-ack from one of its
-      * coil peers, keyed by `(coil, hardAckNum)`. Persisted by `PeerLiaisonHubToCoil` on receipt so
-      * a coil peer's ack survives a hub crash before `CoilAckSequencer` re-sequences it.
-      */
-    final case class CoilHardAck(coil: CoilPeerNumber, num: HardAckNumber) extends FamilyKey:
-        type Value = FamilyValue[HardAckMsg]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
-        def familyId: FamilyId = FamilyId.CoilHardAck(coil)
         def encode: Array[Byte] = intBytes(num)
 
     /** Hub-hard-ack family (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
@@ -122,9 +116,6 @@ object FamilyKey:
         case Cf.HardAck(peer) =>
             requireLen(cf, bytes, 4)
             HardAck(peer, HardAckNumber(readIntBE(bytes, 0)))
-        case Cf.CoilHardAck(coil) =>
-            requireLen(cf, bytes, 4)
-            CoilHardAck(coil, HardAckNumber(readIntBE(bytes, 0)))
         case Cf.HubHardAck(hub) =>
             requireLen(cf, bytes, 4)
             HubHardAck(hub, HubHardAckNumber(readIntBE(bytes, 0)))

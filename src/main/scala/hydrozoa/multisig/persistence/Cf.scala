@@ -1,6 +1,7 @@
 package hydrozoa.multisig.persistence
 
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.PeerId.toWireInt
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 
 /** A column family the persistence layer opens.
   *
@@ -52,7 +53,8 @@ object Cf:
     /** Singleton CF (hub-only): per-coil stamped-high-water marks for `CoilAckSequencer` — the
       * highest coil `HardAckNumber` this hub has sequenced onto its `HubHardAck` spine, per coil
       * peer. Written in the same atomic batch as each `HubHardAck`, so recovery knows which durable
-      * inbound coil hard-acks (`CoilHardAck`) still need stamping (§6 `CoilAckSequencer`).
+      * inbound coil hard-acks (the coil's `HardAck` receive copy) still need stamping (§6
+      * `CoilAckSequencer`).
       */
     case object CoilStampMark extends Cf:
         def name = "CoilStampMark"
@@ -90,13 +92,14 @@ object Cf:
     final case class SoftAck(peer: HeadPeerNumber) extends Cf:
         def name = s"SoftAck:${peer: Int}"
 
-    /** One head peer's hard-ack family, keyed by `hardAckNum`. */
-    final case class HardAck(peer: HeadPeerNumber) extends Cf:
-        def name = s"HardAck:${peer: Int}"
-
-    /** One coil peer's hard-ack family (own + a hub's receive copy), keyed by `hardAckNum`. */
-    final case class CoilHardAck(coil: CoilPeerNumber) extends Cf:
-        def name = s"CoilHardAck:${coil: Int}"
+    /** One peer's hard-ack family (head peer own; coil peer own + a hub's receive copy), keyed by
+      * `hardAckNum`. The author is a [[PeerId]] — head and coil peers share one family type, one CF
+      * per author. The CF name embeds the author's wire int (num shifted left one bit, low bit
+      * tagging head vs coil — see [[PeerId.toWireInt]]), so a head peer's and a coil peer's
+      * families never collide on the same number.
+      */
+    final case class HardAck(peer: PeerId) extends Cf:
+        def name = s"HardAck:${peer.toWireInt}"
 
     /** One hub's re-sequenced coil-ack family, keyed by `hubHardAckNum`. */
     final case class HubHardAck(hub: HeadPeerNumber) extends Cf:
@@ -120,8 +123,9 @@ object Cf:
     )
 
     /** The full CF set for a head of the given membership: the fixed-shape CFs plus one per-author
-      * satellite CF for each head peer (Request / SoftAck / HardAck), each coil peer (CoilHardAck),
-      * and each hub (HubHardAck). This is the descriptor list the backend opens (§7).
+      * satellite CF for each head peer (Request / SoftAck / HardAck), each peer's hard-ack family
+      * (`HardAck` per head peer and per coil peer — the author is a [[PeerId]]), and each hub
+      * (HubHardAck). This is the descriptor list the backend opens (§7).
       */
     def all(
         headPeers: List[HeadPeerNumber],
@@ -131,6 +135,6 @@ object Cf:
         fixed
             ++ headPeers.map(Request(_))
             ++ headPeers.map(SoftAck(_))
-            ++ headPeers.map(HardAck(_))
-            ++ coilPeers.map(CoilHardAck(_))
+            ++ headPeers.map(p => HardAck(PeerId.Head(p)))
+            ++ coilPeers.map(c => HardAck(PeerId.Coil(c)))
             ++ hubs.map(HubHardAck(_))

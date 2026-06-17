@@ -38,8 +38,8 @@ class FamilyScanTest extends AnyFunSuite:
 
     test("scan stops at the satellite peer boundary — does not bleed into the next author") {
         withStore { backend =>
-            val peer0 = HeadPeerNumber(0)
-            val peer1 = HeadPeerNumber(1)
+            val peer0 = PeerId.Head(HeadPeerNumber(0))
+            val peer1 = PeerId.Head(HeadPeerNumber(1))
             val p0Keys = List(0, 1, 2).map(n => FamilyKey.HardAck(peer0, HardAckNumber(n)))
             val p1Keys = List(0, 1).map(n => FamilyKey.HardAck(peer1, HardAckNumber(n)))
             for
@@ -54,7 +54,7 @@ class FamilyScanTest extends AnyFunSuite:
 
     test("scan from a mid-family cursor skips earlier indices") {
         withStore { backend =>
-            val peer = HeadPeerNumber(2)
+            val peer = PeerId.Head(HeadPeerNumber(2))
             val keys = List(0, 1, 5, 9).map(n => FamilyKey.HardAck(peer, HardAckNumber(n)))
             for
                 _ <- keys.traverse(k => putLane(backend, k, stampN(0)))
@@ -135,9 +135,9 @@ class FamilyScanTest extends AnyFunSuite:
               FamilyKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(3)),
               FamilyKey.SoftAck(HeadPeerNumber(1), SoftAckNumber(3)),
               FamilyKey.SoftAck(HeadPeerNumber(200), SoftAckNumber(4)),
-              FamilyKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)),
-              FamilyKey.HardAck(HeadPeerNumber(1), HardAckNumber(1)),
-              FamilyKey.HardAck(HeadPeerNumber(200), HardAckNumber(0))
+              FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(0)),
+              FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(1)), HardAckNumber(1)),
+              FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(200)), HardAckNumber(0))
             )
             // Stamp gen alternates 1/2 across the combined seed list while monotonic increases, so
             // some gen-1 entries get a higher monotonic than some gen-2 ones — a mono-only sort

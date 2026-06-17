@@ -160,11 +160,11 @@ class RecoverSeamsTest extends AnyFunSuite:
             val stackN = 2
             val lastBlock = 7
             for
-                sb <- stackBrief(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
-                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(hardAckNum)))(
+                us <- unsignedStack(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
+                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(hardAckNum)))(
                   FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
-                _ <- p.put(FamilyKey.Stack(StackNumber(stackN)))(FamilyValue(stamp, sb))
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 markers = Markers(
@@ -202,11 +202,11 @@ class RecoverSeamsTest extends AnyFunSuite:
             val stackN = 1
             val lastBlock = 3
             for
-                sb <- stackBrief(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
-                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+                us <- unsignedStack(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
+                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
                   FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
                 )
-                _ <- p.put(FamilyKey.Stack(StackNumber(stackN)))(FamilyValue(stamp, sb))
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block must be excluded (scan is exclusive).
@@ -249,7 +249,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     }
 
     test(
-      "StackComposer.recover (coil) rebuilds counters + snapshots from the last own CoilHardAck; " +
+      "StackComposer.recover (coil) rebuilds counters + snapshots from the last own coil HardAck; " +
           "lastBlockNum comes from the UnsignedStack, not a Stack family"
     ) {
         withStore { p =>
@@ -280,8 +280,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                   )
                 )
                 // The last own hard-ack number is 5, belonging to stack 2 — the stack number comes
-                // from the CoilHardAck VALUE, and the ack lives in CoilHardAck (not HardAck).
-                _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(hardAckNum)))(
+                // from the coil HardAck VALUE, read from the coil peer's own `HardAck` family.
+                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(hardAckNum)))(
                   FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
@@ -345,11 +345,11 @@ class RecoverSeamsTest extends AnyFunSuite:
         withStore { p =>
             val own = HeadPeerNumber(0)
             for
-                sb <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
-                _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+                us <- unsignedStack(stack = 1, firstBlock = 0, lastBlock = 3)
+                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
                   FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = 1))
                 )
-                _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, sb))
+                _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
                 // Treasury intentionally not written
                 markers = Markers(None, Some(StackNumber(1)), Some(HardAckNumber(0)))
                 r <- StackComposer.State
@@ -464,7 +464,7 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     test("OutboxBacking over an empty store has no high-water and an empty load") {
         withStore { p =>
-            val hardAckBacking = OutboxBacking.hardAck(p.backend, ownNum)
+            val hardAckBacking = OutboxBacking.hardAck(p.backend, PeerId.Head(ownNum))
             val blockBacking = OutboxBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
             for
                 hwHardAck <- hardAckBacking.highWater
@@ -480,17 +480,17 @@ class RecoverSeamsTest extends AnyFunSuite:
         withStore { p =>
             val other = HeadPeerNumber(1)
             val spineRange = (0 to 5).toList
-            val hardAckBacking = OutboxBacking.hardAck(p.backend, ownNum)
+            val hardAckBacking = OutboxBacking.hardAck(p.backend, PeerId.Head(ownNum))
             val blockBacking = OutboxBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
             val stackBacking = OutboxBacking.stack(p.backend, s => config.canLeadSlow(s.stackNum))
             for
                 // own HardAcks 0..2 + another peer's at 5; the per-author CF excludes the other's.
                 _ <- List(0, 1, 2).traverse_(k =>
-                    p.put(FamilyKey.HardAck(ownNum, HardAckNumber(k)))(
+                    p.put(FamilyKey.HardAck(PeerId.Head(ownNum), HardAckNumber(k)))(
                       FamilyValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
                     )
                 )
-                _ <- p.put(FamilyKey.HardAck(other, HardAckNumber(5)))(
+                _ <- p.put(FamilyKey.HardAck(PeerId.Head(other), HardAckNumber(5)))(
                   FamilyValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
                 )
                 // Block + Stack spines carry every leader's brief; load keeps only own-led.
@@ -576,6 +576,30 @@ class RecoverSeamsTest extends AnyFunSuite:
               firstBlockNum = BlockNumber(firstBlock),
               lastBlockNum = BlockNumber(lastBlock),
               creationEndTime = StackCreationEndTime(now)
+            )
+        }
+
+    /** The `Stack.Unsigned` a peer persists on every close — recover reads `brief.lastBlockNum`
+      * from it (the unified §6 source for both peer types). Simplest Regular shape: one Minor SEC
+      * at the stack's last block.
+      */
+    private def unsignedStack(stack: Int, firstBlock: Int, lastBlock: Int): IO[Stack.Unsigned] =
+        stackBrief(stack, firstBlock, lastBlock).map { sb =>
+            val sec = StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(lastBlock),
+              blockVersion = BlockVersion.Full(0, 0),
+              kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
+                Array.fill[Byte](32)(7)
+              )
+            )
+            Stack.Unsigned(
+              sb,
+              StackEffects.Unsigned.Regular(
+                NonEmptyList.one[PartitionEffects[StandaloneEvacuationCommitment]](
+                  PartitionEffects.Minor(sec, List.empty)
+                )
+              )
             )
         }
 

@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.traverse.*
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.Assertion
@@ -67,7 +67,7 @@ class InMemoryBackendStoreTest extends AnyFunSuite:
 
     test("cursor scans a satellite family in ascending index order from the seek point") {
         withStore { p =>
-            val peer = HeadPeerNumber(0)
+            val peer = PeerId.Head(HeadPeerNumber(0))
             val nums = List(0, 1, 2, 5, 10).map(HardAckNumber(_))
             val keys = nums.map(n => FamilyKey.HardAck(peer, n))
             val seekFrom = FamilyKey.HardAck(peer, HardAckNumber(1)).encode

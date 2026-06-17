@@ -85,7 +85,7 @@ abstract class PeerLiaisonHubToCoil(
     private val softAckBackings =
         headPeerNums.map(h => h -> OutboxBacking.softAck(backend, h)).toMap
     private val headHardAckBackings =
-        headPeerNums.map(h => h -> OutboxBacking.hardAck(backend, h)).toMap
+        headPeerNums.map(h => h -> OutboxBacking.hardAck(backend, PeerId.Head(h))).toMap
     private val coilHardAckBackings =
         hubNums.map(h => h -> OutboxBacking.hubHardAck(backend, h)).toMap
 
@@ -255,15 +255,18 @@ abstract class PeerLiaisonHubToCoil(
             }
         }
 
-    /** Persist the coil peer's inbound hard-ack to its [[FamilyKey.CoilHardAck]] receive lane,
-      * receipt- stamped, before the cursor advances. A missing ack is a no-op.
+    /** Persist the coil peer's inbound hard-ack to its `HardAck` receive lane (keyed by the BOUND
+      * coil — this liaison's trust boundary — not the ack's self-reported author), receipt-stamped,
+      * before the cursor advances. A missing ack is a no-op.
       */
     private def persistInbound(own: OwnHardAck.New): IO[Unit] =
         own.hardAck.traverse_ { ack =>
             persistence.arrivalStamp.flatMap { stamp =>
                 persistence.write(
                   WriteBatch.start
-                      .put(FamilyKey.CoilHardAck(coil, ack.hardAckNum))(FamilyValue(stamp, ack))
+                      .put(FamilyKey.HardAck(PeerId.Coil(coil), ack.hardAckNum))(
+                        FamilyValue(stamp, ack)
+                      )
                 )
             }
         }
@@ -327,7 +330,7 @@ abstract class PeerLiaisonHubToCoil(
             }
         } yield ()
 
-    /** Restore the inbound coil-ack receive cursor to `next(max(CoilHardAck))` (CR8 persisted each
+    /** Restore the inbound coil-ack receive cursor to `next(max(coil HardAck))` (CR8 persisted each
       * ack before the cursor advanced), so we re-pull only NEW acks: the hub's `CoilAckSequencer`
       * stamps any received-but-unstamped tail from the store, and `verify` rejects a stale re-serve
       * — we must not re-receive (and re-stamp) what we already hold. A single inbound lane (the
@@ -336,7 +339,7 @@ abstract class PeerLiaisonHubToCoil(
     private def restoreInboundCursors: IO[Unit] =
         for {
             _ <- OutboxBacking
-                .coilHardAck(backend, coil)
+                .hardAck(backend, PeerId.Coil(coil))
                 .highWater
                 .flatMap(ownHardAckLane.restoreCursor)
         } yield ()

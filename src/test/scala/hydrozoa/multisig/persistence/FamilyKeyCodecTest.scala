@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, HubHardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
@@ -22,6 +22,10 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     private val coilPeer: Gen[CoilPeerNumber] =
         Gen.choose(0, (1 << 8) - 1).map(CoilPeerNumber(_))
 
+    /** A hard-ack author — head or coil — exercising both wire-tag bits of the unified family. */
+    private val peerId: Gen[PeerId] =
+        Gen.oneOf(peer.map(PeerId.Head(_)), coilPeer.map(PeerId.Coil(_)))
+
     private val blockNum: Gen[BlockNumber] = Gen.choose(0, Int.MaxValue).map(BlockNumber(_))
     private val stackNum: Gen[StackNumber] = Gen.choose(0, Int.MaxValue).map(StackNumber(_))
     private val softNum: Gen[SoftAckNumber] = Gen.choose(0, Int.MaxValue).map(SoftAckNumber(_))
@@ -36,8 +40,7 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
       stackNum.map(FamilyKey.Stack(_)),
       for p <- peer; n <- reqNum yield FamilyKey.Request(p, n),
       for p <- peer; n <- softNum yield FamilyKey.SoftAck(p, n),
-      for p <- peer; n <- hardNum yield FamilyKey.HardAck(p, n),
-      for c <- coilPeer; n <- hardNum yield FamilyKey.CoilHardAck(c, n),
+      for p <- peerId; n <- hardNum yield FamilyKey.HardAck(p, n),
       for p <- peer; n <- hubHardNum yield FamilyKey.HubHardAck(p, n)
     )
 
@@ -52,13 +55,12 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("encoded width matches §7.1 spec for each family") {
         forAll(laneKey) { key =>
             val expected = key match
-                case FamilyKey.Block(_)          => 4
-                case FamilyKey.Stack(_)          => 4
-                case FamilyKey.Request(_, _)     => 8
-                case FamilyKey.SoftAck(_, _)     => 4
-                case FamilyKey.HardAck(_, _)     => 4
-                case FamilyKey.CoilHardAck(_, _) => 4
-                case FamilyKey.HubHardAck(_, _)  => 4
+                case FamilyKey.Block(_)         => 4
+                case FamilyKey.Stack(_)         => 4
+                case FamilyKey.Request(_, _)    => 8
+                case FamilyKey.SoftAck(_, _)    => 4
+                case FamilyKey.HardAck(_, _)    => 4
+                case FamilyKey.HubHardAck(_, _) => 4
             assert(key.encode.length == expected, s"width mismatch for $key")
         }
     }
@@ -76,13 +78,12 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
         forAll(laneKey) { key =>
             val cf = key.familyId.cf
             val expected = key match
-                case _: FamilyKey.Block       => Cf.Block
-                case _: FamilyKey.Stack       => Cf.Stack
-                case k: FamilyKey.Request     => Cf.Request(k.peer)
-                case k: FamilyKey.SoftAck     => Cf.SoftAck(k.peer)
-                case k: FamilyKey.HardAck     => Cf.HardAck(k.peer)
-                case k: FamilyKey.CoilHardAck => Cf.CoilHardAck(k.coil)
-                case k: FamilyKey.HubHardAck  => Cf.HubHardAck(k.hub)
+                case _: FamilyKey.Block      => Cf.Block
+                case _: FamilyKey.Stack      => Cf.Stack
+                case k: FamilyKey.Request    => Cf.Request(k.peer)
+                case k: FamilyKey.SoftAck    => Cf.SoftAck(k.peer)
+                case k: FamilyKey.HardAck    => Cf.HardAck(k.peer)
+                case k: FamilyKey.HubHardAck => Cf.HubHardAck(k.hub)
             assert(cf == expected)
         }
     }

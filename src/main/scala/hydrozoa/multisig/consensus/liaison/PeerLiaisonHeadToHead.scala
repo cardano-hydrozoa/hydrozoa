@@ -80,7 +80,7 @@ abstract class PeerLiaisonHeadToHead(
     private val stackBacking = OutboxBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
     private val requestBacking = OutboxBacking.request(backend, ownHeadPeerNum)
     private val softAckBacking = OutboxBacking.softAck(backend, ownHeadPeerNum)
-    private val hardAckBacking = OutboxBacking.hardAck(backend, ownHeadPeerNum)
+    private val hardAckBacking = OutboxBacking.hardAck(backend, PeerId.Head(ownHeadPeerNum))
     private val hubHardAckBacking = OutboxBacking.hubHardAck(backend, ownHeadPeerNum)
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
@@ -205,14 +205,8 @@ abstract class PeerLiaisonHeadToHead(
                   m.softAck.map(a =>
                       (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                   ),
-                  m.headHardAck.flatMap(a =>
-                      a.peerId match {
-                          case PeerId.Head(n) =>
-                              Some((wb: WriteBatch) =>
-                                  wb.put(FamilyKey.HardAck(n, a.hardAckNum))(lv(a))
-                              )
-                          case PeerId.Coil(_) => None
-                      }
+                  m.headHardAck.map(a =>
+                      (wb: WriteBatch) => wb.put(FamilyKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
                   ),
                   m.hubHardAck.map(h =>
                       (wb: WriteBatch) => wb.put(FamilyKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
@@ -351,7 +345,7 @@ abstract class PeerLiaisonHeadToHead(
                 .highWater
                 .flatMap(softAckLane.restoreInbound)
             _ <- OutboxBacking
-                .hardAck(backend, remoteNum)
+                .hardAck(backend, PeerId.Head(remoteNum))
                 .highWater
                 .flatMap(hardAckLane.restoreInbound)
             _ <- OutboxBacking

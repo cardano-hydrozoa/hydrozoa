@@ -87,19 +87,19 @@ class ReplayActorTest extends AnyFunSuite:
     }
 
     test("ReplayActor (hub) re-feeds the unstamped coil-ack gap to CoilAckSequencer") {
-        // The hub durably received coil 0's acks 0..2 (CoilHardAck) but only stamped through 0
-        // (CoilStampMark floor). Replay must re-feed the gap {1, 2} — above the mark — and nothing
-        // at or below it.
+        // The hub durably received coil 0's acks 0..2 (its coil HardAck receive copy) but only
+        // stamped through 0 (CoilStampMark floor). Replay must re-feed the gap {1, 2} — above the
+        // mark — and nothing at or below it.
         val coil = CoilPeerNumber(0)
         val c = runReplay(
           seed = p =>
-              p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
+              p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
                 FamilyValue(stamp, coilHardAck(0, 0, stack = 1))
               ) >>
-                  p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
+                  p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
                     FamilyValue(stamp, coilHardAck(0, 1, stack = 2))
                   ) >>
-                  p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(2)))(
+                  p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(2)))(
                     FamilyValue(stamp, coilHardAck(0, 2, stack = 3))
                   ) >>
                   p.put(StoreKey.CoilStampMark)(Map(coil -> HardAckNumber(0))),
@@ -111,7 +111,7 @@ class ReplayActorTest extends AnyFunSuite:
     }
 
     test(
-      "ReplayActor.replay (coil) routes the coil tail (coil anchors, HubHardAck + own CoilHardAck)"
+      "ReplayActor.replay (coil) routes the coil tail (coil anchors, HubHardAck + own coil HardAck)"
     ) {
         val c = runReplayCoil(seedRecoverableCoil)
         assert(c.outcome.isRight, s"coil replay failed: ${c.outcome}")
@@ -121,7 +121,7 @@ class ReplayActorTest extends AnyFunSuite:
         // FastConsensusActor: the block brief (aggregator floor softConfirmed+1 = 0).
         assert(hasBlock(c.fca, 5), "FCA block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every coil-quorum hard-ack —
-        // this coil peer's own two CoilHardAcks (stack 1) routed back, plus the hub's HubHardAck
+        // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
         assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
         assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
@@ -260,14 +260,14 @@ class ReplayActorTest extends AnyFunSuite:
               Array[Byte](0)
             )
             // Own hard-acks for stack 1 → hardAcked = 1, hardAckedStack = 1 (> hardConfirmed 0).
-            _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
               FamilyValue(stamp, hardAck(own.convert, 0, 1))
             )
-            _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(1)))(
+            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(1)))(
               FamilyValue(stamp, hardAck(own.convert, 1, 1))
             )
             // A remote peer's hard-ack for stack 1 → routed to SCA via the tail.
-            _ <- p.put(FamilyKey.HardAck(other, HardAckNumber(0)))(
+            _ <- p.put(FamilyKey.HardAck(PeerId.Head(other), HardAckNumber(0)))(
               FamilyValue(stamp, hardAck(other.convert, 0, 1))
             )
             // The in-flight stack's unsigned form → reconstructed handoff to SCA.
@@ -299,7 +299,7 @@ class ReplayActorTest extends AnyFunSuite:
         } yield ()
 
     /** Coil store: stack 0 hard-confirmed (`hardConfirmed = 0`); stack 1 acked-not-confirmed via
-      * the coil peer's own two `CoilHardAck`s + its `UnsignedStack`; the hub's `HubHardAck`
+      * the coil peer's own two coil `HardAck`s + its `UnsignedStack`; the hub's `HubHardAck`
       * carrying a second coil peer's stack-1 ack; a `BlockResult` (the coil fast anchor
       * `coilBlockMark = 2`) + its `RequestHighWater`; a block brief; and two stack briefs (1 + 2)
       * for the composer floor.
@@ -314,10 +314,10 @@ class ReplayActorTest extends AnyFunSuite:
               Array[Byte](0)
             )
             // Own coil hard-acks for stack 1 → coilHardAcked = 1, coilHardAckedStack = 1 (> 0).
-            _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(0)))(
+            _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
               FamilyValue(stamp, coilHardAck(0, 0, 1))
             )
-            _ <- p.put(FamilyKey.CoilHardAck(coil, HardAckNumber(1)))(
+            _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
               FamilyValue(stamp, coilHardAck(0, 1, 1))
             )
             // The hub's re-sequenced coil-quorum ack (another coil peer's stack-1 ack) → SCA via

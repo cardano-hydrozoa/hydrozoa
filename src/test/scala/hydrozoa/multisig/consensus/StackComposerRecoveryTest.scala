@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus
 
+import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
 import com.suprnation.actor.Actor.{Actor, Receive}
@@ -12,15 +13,16 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
-import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import scalus.uplc.builtin.ByteString
 
 /** Records the stack-0 [[SlowConsensusActor.StackHandoff]] a bootstrapping [[StackComposer]] emits,
   * completing `gotHandoff` so the test can await it (cold) or assert its absence (recovered).
@@ -75,16 +77,17 @@ class StackComposerRecoveryTest extends AnyFunSuite:
     }
 
     /** Seed exactly what `StackComposer.State.recover` reads for a peer that hard-acked stack 1
-      * (last block 3): the own hard-ack, the stack brief, the treasury, and the evacuation map.
+      * (last block 3): the own hard-ack, the unsigned stack (the `lastBlockNum` source), the
+      * treasury, and the evacuation map.
       */
     private def seedRecoverable(p: Persistence[IO]): IO[Unit] =
         val own = ownNum
         for {
-            sb <- stackBrief(stack = 1, firstBlock = 0, lastBlock = 3)
-            _ <- p.put(FamilyKey.HardAck(own, HardAckNumber(0)))(
+            us <- unsignedStack(stack = 1, firstBlock = 0, lastBlock = 3)
+            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
               FamilyValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
             )
-            _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, sb))
+            _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
             _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
             _ <- p.put(StoreKey.EvacuationMap(BlockNumber(3)))(EvacuationMap.empty)
         } yield ()
@@ -139,3 +142,26 @@ class StackComposerRecoveryTest extends AnyFunSuite:
           stackNum = StackNumber(stack),
           payload = HardAck.Round2Payload.Regular(TxSignature(IArray.from(Array.fill[Byte](64)(0))))
         )
+
+    /** The `Stack.Unsigned` recover reads `brief.lastBlockNum` from — simplest Regular shape: one
+      * Minor SEC at the stack's last block.
+      */
+    private def unsignedStack(stack: Int, firstBlock: Int, lastBlock: Int): IO[Stack.Unsigned] =
+        stackBrief(stack, firstBlock, lastBlock).map { sb =>
+            val sec = StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(lastBlock),
+              blockVersion = BlockVersion.Full(0, 0),
+              kzgCommitment = ByteString.fromArray(Array.fill[Byte](48)(0)),
+              header = StandaloneEvacuationCommitment.Onchain.Serialized.fromBytes(
+                Array.fill[Byte](32)(7)
+              )
+            )
+            Stack.Unsigned(
+              sb,
+              StackEffects.Unsigned.Regular(
+                NonEmptyList.one[PartitionEffects[StandaloneEvacuationCommitment]](
+                  PartitionEffects.Minor(sec, List.empty)
+                )
+              )
+            )
+        }

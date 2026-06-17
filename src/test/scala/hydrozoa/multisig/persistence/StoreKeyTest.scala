@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
@@ -16,7 +16,8 @@ class StoreKeyTest extends AnyFunSuite:
           FamilyKey.Block(BlockNumber(0)) -> Cf.Block,
           FamilyKey.Stack(StackNumber(0)) -> Cf.Stack,
           FamilyKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck(HeadPeerNumber(0)),
-          FamilyKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)) -> Cf.HardAck(HeadPeerNumber(0)),
+          FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(0)) ->
+              Cf.HardAck(PeerId.Head(HeadPeerNumber(0))),
           StoreKey.BlockResult(BlockNumber(0)) -> Cf.BlockResult,
           StoreKey.SoftConfirmation(BlockNumber(0)) -> Cf.SoftConfirmation,
           StoreKey.HardConfirmation(StackNumber(0)) -> Cf.HardConfirmation,

@@ -54,9 +54,11 @@ import hydrozoa.multisig.persistence.{FamilyKey, Markers}
   *   - **HubHardAck[h]** — `0` for every hub (SlowConsensusActor reads them for the coil quorum,
   *     §3.1 — the `+ H`); same `HubHardAckNumber`-indexed scan-from-0 as `HardAck`. Scanned by
   *     every peer (head and coil).
-  *   - **own `CoilHardAck`** — present only on a coil peer (`ownCoilHardAck = Some(…)`): the coil
-  *     peer's own hard-ack family, scanned from `0` (same `HardAckNumber`-indexed scan-from-0 as
-  *     `HardAck`; §10 Q10). A head peer carries no own `CoilHardAck` floor (`None`).
+  *   - **own coil `HardAck`** — present only on a coil peer (`ownCoilHardAck = Some(…)`): the coil
+  *     peer's own hard-ack family (the same `PeerId`-keyed `HardAck` family the head peers use,
+  *     here for `PeerId.Coil(own)`), scanned from `0` (same `HardAckNumber`-indexed scan-from-0 as
+  *     the head `HardAck` floors; §10 Q10). A head peer carries no own coil floor (`None`) — its
+  *     own family is already in `hardAcks` (own is one of `peers`).
   *
   * See `design/persistence-and-crash-recovery.md` §5.3 and `design/recovery-implementation-plan.md`
   * R1.
@@ -70,16 +72,16 @@ final case class ReplayCursors(
     softAcks: Map[HeadPeerNumber, FamilyKey.SoftAck],
     hardAcks: Map[HeadPeerNumber, FamilyKey.HardAck],
     hubHardAcks: Map[HeadPeerNumber, FamilyKey.HubHardAck],
-    ownCoilHardAck: Option[FamilyKey.CoilHardAck]
+    ownCoilHardAck: Option[FamilyKey.HardAck]
 ):
     /** The families to **scan**, each from its lowest floor (the widest tail any consumer needs):
       * the two spines from their aggregator (`*Confirmed + 1`) cursor — the lower of each spine's
       * two, since `confirmed ≤ acked` — then the satellites, the hubs' `HubHardAck` families, and
-      * (coil peer only) the own `CoilHardAck` family. `2 + 3N + H` entries on a head peer, one more
-      * on a coil peer (its own `CoilHardAck`). The ledger consumer's `acked` slicing happens at
-      * feed time in the `ReplayActor` (R3), not at scan time. Spine order is fixed; satellite order
-      * is unspecified (hashed by `HeadPeerNumber`) and washed out by [[ArrivalOrderedMerge]]'s
-      * stamp re-sort — do not rely on it.
+      * (coil peer only) the own coil `HardAck` family. `2 + 3N + H` entries on a head peer, one
+      * more on a coil peer (its own coil `HardAck`). The ledger consumer's `acked` slicing happens
+      * at feed time in the `ReplayActor` (R3), not at scan time. Spine order is fixed; satellite
+      * order is unspecified (hashed by `HeadPeerNumber`) and washed out by
+      * [[ArrivalOrderedMerge]]'s stamp re-sort — do not rely on it.
       */
     def scanFloors: List[FamilyKey] =
         List[FamilyKey](blockSpineForAggregator, stackSpineForAggregator) ++
@@ -92,8 +94,8 @@ object ReplayCursors:
       * recovery [[Markers]] (CF scans), `fastBlockMark = max(BlockResult)` (the fast-side ledger
       * anchor; see the class docstring), the per-peer request high-water (the persisted counter),
       * `hardAckedStack` (the acked stack, unpacked from the last own slow-side hard-ack value), and
-      * `own` (the peer identity). On a coil peer (`own = PeerId.Coil`) this adds the own
-      * `CoilHardAck` scan floor; on a head peer (`own = PeerId.Head`) it is absent.
+      * `own` (the peer identity). On a coil peer (`own = PeerId.Coil`) this adds the own coil
+      * `HardAck` scan floor; on a head peer (`own = PeerId.Head`) it is absent.
       */
     def derive(
         markers: Markers,
@@ -128,10 +130,10 @@ object ReplayCursors:
               p -> FamilyKey.Request(p, floor)
           }.toMap,
           softAcks = peers.map(p => p -> FamilyKey.SoftAck(p, softAckFloor)).toMap,
-          hardAcks = peers.map(p => p -> FamilyKey.HardAck(p, HardAckNumber(0))).toMap,
+          hardAcks = peers.map(p => p -> FamilyKey.HardAck(PeerId.Head(p), HardAckNumber(0))).toMap,
           hubHardAcks = hubs.map(h => h -> FamilyKey.HubHardAck(h, HubHardAckNumber.zero)).toMap,
           ownCoilHardAck = own match
-              case PeerId.Coil(c) => Some(FamilyKey.CoilHardAck(c, HardAckNumber.zero))
+              case PeerId.Coil(c) => Some(FamilyKey.HardAck(PeerId.Coil(c), HardAckNumber.zero))
               case PeerId.Head(_) => None
         )
 
