@@ -451,7 +451,7 @@ case class Stage4Suite(
             val hubConfig = multiNodeConfig.nodeConfigs(hubNum)
             val hubPending = pendingConnsMap(hubNum)
             for {
-                (coilAckSequencer, coilRelay) <- Resource.eval(for {
+                coilHandles <- Resource.eval(for {
                     coilAckSequencer <-
                         if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
                         else
@@ -464,6 +464,7 @@ case class Stage4Suite(
                         if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
                         else system.actorOf(CoilRelay(hubPending)).map(Some(_))
                 } yield (coilAckSequencer, coilRelay))
+                (coilAckSequencer, coilRelay) = coilHandles
 
                 coilWirings <- coilConfigs.traverse { coilConfig =>
                     val coilNum = coilConfig.ownPeerId match {
@@ -789,13 +790,14 @@ case class Stage4Suite(
                 .map(_.toMap)
             peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pendingConnsMap))
             ws <- transportSetup(system, peerLiaisonMap)
-            (coilAckSequencer, coilRelay, coilWirings) <- buildCoilWirings(
+            coilParts <- buildCoilWirings(
               system,
               cardanoBackend,
               peerStackMap,
               pendingConnsMap,
               ws,
             )
+            (coilAckSequencer, coilRelay, coilWirings) = coilParts
             sut <- Resource.make(
               finalizeSut(
                 system,
@@ -865,7 +867,7 @@ case class Stage4Suite(
 
         for {
             // Per-head mesh transports, hub coil transport, and shared WS client (all IO).
-            (meshTransports, coilHubTransportOpt, client) <- Resource.eval(for {
+            wsParts <- Resource.eval(for {
                 meshTransports <- peers.toList
                     .traverse { ownPeerNum =>
                         val ownPeerId = headPeerId(multiNodeConfig, ownPeerNum)
@@ -887,6 +889,7 @@ case class Stage4Suite(
                         HubWsTransport.create(coilNums, hwtTracer).map(Some(_))
                 client <- JdkWSClient.simple[IO]
             } yield (meshTransports, coilHubTransportOpt, client))
+            (meshTransports, coilHubTransportOpt, client) = wsParts
 
             // One shared server per peer: mesh `/head` for every head, plus the hub's `/hub`.
             _ <- peers.toList.traverse_ { ownPeerNum =>
@@ -905,7 +908,7 @@ case class Stage4Suite(
             }
 
             // Register liaisons, start mesh dialers, build remote proxies (IO between Resource steps).
-            (remoteHeadByPeer, remoteCoilProxies) <- Resource.eval(for {
+            remoteParts <- Resource.eval(for {
                 _ <- peers.toList.traverse_ { ownPeerNum =>
                     peerLiaisonMap(ownPeerNum).toList.traverse_ { case (remotePeerId, localLiaison) =>
                         meshTransports(ownPeerNum).register(remotePeerId, localLiaison)
@@ -938,6 +941,7 @@ case class Stage4Suite(
                             .map(_.toMap)
                 }
             } yield (remoteHeadByPeer, remoteCoilProxies))
+            (remoteHeadByPeer, remoteCoilProxies) = remoteParts
 
             // Start the mesh dialers (lower dials higher).
             _ <- peers.toList.traverse_ { ownPeerNum =>
@@ -945,7 +949,7 @@ case class Stage4Suite(
             }
 
             // Coil uplinks: create each transport, start its dialer, then build the hub proxy.
-            (coilUplinks, remoteHubProxies) <- coilNums
+            coilParts <- coilNums
                 .traverse { coilNum =>
                     val cpwtTracer = Slf4jTracer.sink
                         .contramap(CoilPeerWsTransportEventFormat.humanFormat(coilNum))
@@ -960,6 +964,7 @@ case class Stage4Suite(
                     yield (coilNum -> up, coilNum -> proxy)
                 }
                 .map(entries => (entries.map(_._1).toMap, entries.map(_._2).toMap))
+            (coilUplinks, remoteHubProxies) = coilParts
         } yield WsNetwork(
           remoteHeadByPeer = remoteHeadByPeer,
           coilHubTransport = coilHubTransportOpt,

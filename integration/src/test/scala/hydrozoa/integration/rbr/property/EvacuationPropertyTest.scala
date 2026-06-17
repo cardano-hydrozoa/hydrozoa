@@ -81,25 +81,29 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 coilSignatures = coilSigs
               )
           ),
-          PropertyM.pick(
-            MultiNodeConfig
-                .generate(TestPeersSpec.default)(
-                  generateNodeOperationEvacuationConfig = fastEvacConfig
-                )
-                .label("MultiNodeConfig")
-          )
+          PropertyM
+              .pick[IO, MultiNodeConfig](
+                MultiNodeConfig
+                    .generate(TestPeersSpec.default)(
+                      generateNodeOperationEvacuationConfig = fastEvacConfig
+                    )
+                    .label("MultiNodeConfig")
+              )
+              .map(Resource.pure[IO, MultiNodeConfig](_))
         )
 
     lazy val _ = property("evacuation resolves via abstain: treasury present, no votes remain") =
         run(
           scenario(mkAction = (_, _, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
-          PropertyM.pick(
-            MultiNodeConfig
-                .generate(TestPeersSpec.default)(
-                  generateNodeOperationEvacuationConfig = fastEvacConfig
-                )
-                .label("MultiNodeConfig")
-          )
+          PropertyM
+              .pick[IO, MultiNodeConfig](
+                MultiNodeConfig
+                    .generate(TestPeersSpec.default)(
+                      generateNodeOperationEvacuationConfig = fastEvacConfig
+                    )
+                    .label("MultiNodeConfig")
+              )
+              .map(Resource.pure[IO, MultiNodeConfig](_))
         )
 
     /** Shared happy-path scenario: synthesize the post-fallback UTxO set, spawn the
