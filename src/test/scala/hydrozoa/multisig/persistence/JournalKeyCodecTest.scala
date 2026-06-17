@@ -9,12 +9,12 @@ import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
-/** Property-based round-trip tests for [[FamilyKey]] encode / decode.
+/** Property-based round-trip tests for [[JournalKey]] encode / decode.
   *
-  * Verifies the §7.1 invariant: bytes written can be parsed back to the same `FamilyKey` for every
-  * family case across the full legal index range.
+  * Verifies the §7.1 invariant: bytes written can be parsed back to the same `JournalKey` for every
+  * journal case across the full legal index range.
   */
-class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
+class JournalKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
 
     private val peer: Gen[HeadPeerNumber] =
         Gen.choose(0, (1 << 8) - 1).map(HeadPeerNumber(_))
@@ -22,7 +22,7 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     private val coilPeer: Gen[CoilPeerNumber] =
         Gen.choose(0, (1 << 8) - 1).map(CoilPeerNumber(_))
 
-    /** A hard-ack author — head or coil — exercising both wire-tag bits of the unified family. */
+    /** A hard-ack author — head or coil — exercising both wire-tag bits of the unified journal. */
     private val peerId: Gen[PeerId] =
         Gen.oneOf(peer.map(PeerId.Head(_)), coilPeer.map(PeerId.Coil(_)))
 
@@ -35,32 +35,32 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     private val reqNum: Gen[RequestNumber] =
         Gen.choose(0L, (1L << 40) - 1L).map(RequestNumber(_))
 
-    private val laneKey: Gen[FamilyKey] = Gen.oneOf(
-      blockNum.map(FamilyKey.Block(_)),
-      stackNum.map(FamilyKey.Stack(_)),
-      for p <- peer; n <- reqNum yield FamilyKey.Request(p, n),
-      for p <- peer; n <- softNum yield FamilyKey.SoftAck(p, n),
-      for p <- peerId; n <- hardNum yield FamilyKey.HardAck(p, n),
-      for p <- peer; n <- hubHardNum yield FamilyKey.HubHardAck(p, n)
+    private val laneKey: Gen[JournalKey] = Gen.oneOf(
+      blockNum.map(JournalKey.Block(_)),
+      stackNum.map(JournalKey.Stack(_)),
+      for p <- peer; n <- reqNum yield JournalKey.Request(p, n),
+      for p <- peer; n <- softNum yield JournalKey.SoftAck(p, n),
+      for p <- peerId; n <- hardNum yield JournalKey.HardAck(p, n),
+      for p <- peer; n <- hubHardNum yield JournalKey.HubHardAck(p, n)
     )
 
-    test("encode then decode is identity for every FamilyKey case") {
+    test("encode then decode is identity for every JournalKey case") {
         forAll(laneKey) { key =>
             val bytes = key.encode
-            val back = FamilyKey.decode(key.familyId.cf, bytes)
+            val back = JournalKey.decode(key.journalId.cf, bytes)
             assert(back == key, s"round-trip failed for $key")
         }
     }
 
-    test("encoded width matches §7.1 spec for each family") {
+    test("encoded width matches §7.1 spec for each journal") {
         forAll(laneKey) { key =>
             val expected = key match
-                case FamilyKey.Block(_)         => 4
-                case FamilyKey.Stack(_)         => 4
-                case FamilyKey.Request(_, _)    => 8
-                case FamilyKey.SoftAck(_, _)    => 4
-                case FamilyKey.HardAck(_, _)    => 4
-                case FamilyKey.HubHardAck(_, _) => 4
+                case JournalKey.Block(_)         => 4
+                case JournalKey.Stack(_)         => 4
+                case JournalKey.Request(_, _)    => 8
+                case JournalKey.SoftAck(_, _)    => 4
+                case JournalKey.HardAck(_, _)    => 4
+                case JournalKey.HubHardAck(_, _) => 4
             assert(key.encode.length == expected, s"width mismatch for $key")
         }
     }
@@ -68,22 +68,22 @@ class FamilyKeyCodecTest extends AnyFunSuite with ScalaCheckPropertyChecks:
     test("lexicographic byte order matches numeric index order within a spine") {
         // Big-endian fixed-width is what makes range scans correct.
         forAll(Gen.choose(0, Int.MaxValue - 1)) { (n: Int) =>
-            val a = FamilyKey.Block(BlockNumber(n)).encode
-            val b = FamilyKey.Block(BlockNumber(n + 1)).encode
+            val a = JournalKey.Block(BlockNumber(n)).encode
+            val b = JournalKey.Block(BlockNumber(n + 1)).encode
             assert(compareBytes(a, b) < 0, s"$n bytes should be < ${n + 1} bytes")
         }
     }
 
-    test("FamilyKey.familyId picks the right Cf") {
+    test("JournalKey.journalId picks the right Cf") {
         forAll(laneKey) { key =>
-            val cf = key.familyId.cf
+            val cf = key.journalId.cf
             val expected = key match
-                case _: FamilyKey.Block      => Cf.Block
-                case _: FamilyKey.Stack      => Cf.Stack
-                case k: FamilyKey.Request    => Cf.Request(k.peer)
-                case k: FamilyKey.SoftAck    => Cf.SoftAck(k.peer)
-                case k: FamilyKey.HardAck    => Cf.HardAck(k.peer)
-                case k: FamilyKey.HubHardAck => Cf.HubHardAck(k.hub)
+                case _: JournalKey.Block      => Cf.Block
+                case _: JournalKey.Stack      => Cf.Stack
+                case k: JournalKey.Request    => Cf.Request(k.peer)
+                case k: JournalKey.SoftAck    => Cf.SoftAck(k.peer)
+                case k: JournalKey.HardAck    => Cf.HardAck(k.peer)
+                case k: JournalKey.HubHardAck => Cf.HubHardAck(k.hub)
             assert(cf == expected)
         }
     }

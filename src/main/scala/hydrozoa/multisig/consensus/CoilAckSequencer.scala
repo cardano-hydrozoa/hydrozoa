@@ -12,7 +12,7 @@ import hydrozoa.multisig.MultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.persistence.{Cf, FamilyKey, FamilyValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{Cf, JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
 import java.nio.ByteBuffer
 import org.typelevel.log4cats.Logger
 
@@ -26,12 +26,12 @@ import org.typelevel.log4cats.Logger
   * ack the hub already holds, and a stale re-serve is rejected by `verify`). It stamps each with a
   * monotonic hub-local [[HubHardAckNumber]] and fans the resulting [[HardAckWithId]] out to all the
   * hub's [[hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead]]s, which carry it on the
-  * contiguous `HubHardAck` family (§5.3 of `design/coil-network.md`) [doc-ref] — to the head-peer
+  * contiguous `HubHardAck` journal (§5.3 of `design/coil-network.md`) [doc-ref] — to the head-peer
   * mesh and onward to coil peers. The sequence number is transport ordering only; the embedded ack
   * is verified end-to-end by each receiving `SlowConsensusActor`.
   *
   * **Persistence / recovery** (`persistence-and-crash-recovery.md` §6 CoilAckSequencer). Each
-  * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` family in the **same atomic
+  * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` journal in the **same atomic
   * batch** as the per-coil-peer **stamped-high-water** mark (`StoreKey.CoilStampMark`), **before**
   * it fans out (CR4 write-before-send): a re-stamp would equivocate on the `HubHardAck` spine (two
   * `HubHardAckNumber`s for one coil ack). The receive-cursor advance (in the liaison, CR8) and the
@@ -125,7 +125,7 @@ trait CoilAckSequencer(
             _ <- state.commit(seq, newMarks)
         } yield hubAck
 
-    /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` family **and** the
+    /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` journal **and** the
       * per-coil-peer stamped-high-water mark in one atomic `WriteBatch` — CR4 write-before-send
       * (durable before it fans out), and the mark stays consistent with the spine across a crash.
       */
@@ -137,7 +137,7 @@ trait CoilAckSequencer(
         persistence.arrivalStamp.flatMap(stamp =>
             persistence.write(
               WriteBatch.start
-                  .put(FamilyKey.HubHardAck(hubPeerNum, seq))(FamilyValue(stamp, hubAck))
+                  .put(JournalKey.HubHardAck(hubPeerNum, seq))(JournalValue(stamp, hubAck))
                   .put(StoreKey.CoilStampMark)(newMarks)
             )
         )
@@ -181,7 +181,7 @@ object CoilAckSequencer {
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section
 
     /** The sequencer's recoverable state: the next sequence number to assign and the per-coil-peer
-      * stamped-high-water marks, derived from this hub's own `HubHardAck` family and the
+      * stamped-high-water marks, derived from this hub's own `HubHardAck` journal and the
       * `CoilStampMark` blob (§6).
       */
     final case class Recovered(
@@ -191,7 +191,7 @@ object CoilAckSequencer {
 
     /** Derive [[Recovered]]: `nextSeq = max(HubHardAck seqNum) + 1` (empty → `zero`, the last key
       * of the own-hub CF), and the per-coil-peer marks from the `CoilStampMark` singleton (empty →
-      * no marks). Both are cheap reads — no full-family scan.
+      * no marks). Both are cheap reads — no full-journal scan.
       */
     def recover(persistence: Persistence[IO], hub: HeadPeerNumber): IO[Recovered] =
         for {

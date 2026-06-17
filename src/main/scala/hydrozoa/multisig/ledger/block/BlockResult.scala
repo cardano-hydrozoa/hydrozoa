@@ -46,9 +46,9 @@ final case class BlockResult(
     competingFallbackTxTime: FallbackTxStartTime
 ):
     /** The on-disk projection — everything **except** `brief`. The brief already lives durably in
-      * the `Block` family (`FamilyKey.Block[blockNum]` — written by the leader, or
+      * the `Block` journal (`JournalKey.Block[blockNum]` — written by the leader, or
       * inbound-replicated by `PeerLiaison*.persistInbound` on head and coil peers alike), so
-      * persisting it again inside the `BlockResult` would store it twice across two families.
+      * persisting it again inside the `BlockResult` would store it twice across two journals.
       * Recovery rehydrates it from there via [[BlockResult.fromPersisted]]. The live
       * `JointLedger → StackComposer` message carries the full `BlockResult` (with brief); only the
       * persisted form drops it.
@@ -76,7 +76,7 @@ object BlockResult:
     )
 
     /** Reassemble the full [[BlockResult]] at recovery from its persisted projection + the brief
-      * read back from the `Block` family.
+      * read back from the `Block` journal.
       */
     def fromPersisted(brief: BlockBrief.Next, p: Persisted): BlockResult =
         BlockResult(

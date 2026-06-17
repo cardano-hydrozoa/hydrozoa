@@ -8,12 +8,12 @@ import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardA
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Recovery tests for [[CoilAckSequencer.recover]] (§6 CoilAckSequencer): a hub restores its
-  * `HubHardAck` relay counter from its own-hub `HubHardAck` family and its per-coil
+  * `HubHardAck` relay counter from its own-hub `HubHardAck` journal and its per-coil
   * stamped-high-water marks from the `CoilStampMark` blob, so it knows which durably-received coil
   * acks a crash left unstamped (the gap it then stamps from the store).
   */
@@ -81,11 +81,11 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
             )
             .unsafeRunSync()
 
-    /** Persist one sequenced coil ack to this hub's own `HubHardAck` family. */
+    /** Persist one sequenced coil ack to this hub's own `HubHardAck` journal. */
     private def putHubAck(p: Persistence[IO], seq: Int, coil: Int, hardAckNum: Int): IO[Unit] =
         val ack = coilHardAck(coil, hardAckNum)
         val hubAck = HardAckWithId(hubPeer = hub, seqNum = HubHardAckNumber(seq), ack = ack)
-        p.put(FamilyKey.HubHardAck(hub, HubHardAckNumber(seq)))(FamilyValue(stamp, hubAck))
+        p.put(JournalKey.HubHardAck(hub, HubHardAckNumber(seq)))(JournalValue(stamp, hubAck))
 
     /** A coil-authored hard-ack fixture (signature contents are irrelevant to sequencing). */
     private def coilHardAck(coil: Int, hardAckNum: Int): HardAck =

@@ -10,8 +10,8 @@ import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, FamilyScan, RawFamilyEntry, ReplayCursors}
-import hydrozoa.multisig.persistence.{FamilyKey, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.recovery.{ArrivalOrderedMerge, JournalScan, RawJournalEntry, ReplayCursors}
+import hydrozoa.multisig.persistence.{JournalKey, Markers, Persistence, StoreKey}
 import scalus.cardano.address.ShelleyAddress
 
 /** The boot-time replay seam (R3 §8 step 3). Not a long-lived cats-actors `Actor`: it is the
@@ -58,10 +58,10 @@ object ReplayActor:
 
     /** Run the boot replay (see the object docstring), for either peer type. Pure over the store +
       * a one-shot L1 read; all effects are mailbox sends to `targets`. The fast side and the slow
-      * side are now common to both peer types: the slow-side own-ack family is the one
-      * `PeerId`-keyed `HardAck` family, so `own: PeerId` flows straight into
-      * `FamilyKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
-      * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` families carry
+      * side are now common to both peer types: the slow-side own-ack journal is the one
+      * `PeerId`-keyed `HardAck` journal, so `own: PeerId` flows straight into
+      * `JournalKey.HardAck(own, n)` with no peer-type branch (§10 Q10). `peers` is every head peer
+      * (own included on a head peer), `hubs` every hub head peer (their `HubHardAck` journals carry
       * the coil quorum SCA aggregates, read by both peer types), `coils` the hubbed coils whose ack
       * gap a hub re-feeds (`Nil` off a hub). `own` and `treasuryAddress` come from the node config.
       */
@@ -78,7 +78,7 @@ object ReplayActor:
         val backend = persistence.backend
         for
             markers <- Markers.derive(backend, own)
-            // The slow-side own-ack family is the one `PeerId`-keyed `HardAck` family — both the
+            // The slow-side own-ack journal is the one `PeerId`-keyed `HardAck` journal — both the
             // acked stack (the StackComposer/aggregator floor) and the in-flight handoff's own acks
             // come from it, for either peer type (§10 Q10).
             ownAck <- recoverOwnAck(persistence, own, markers.hardConfirmed, markers.hardAcked)
@@ -104,9 +104,9 @@ object ReplayActor:
               hardAckedStack,
               own
             )
-            perLane <- FamilyScan.scanFamilies(backend, cursors)
+            perJournal <- JournalScan.scanJournals(backend, cursors)
             _ <- ArrivalOrderedMerge
-                .merge(perLane)
+                .merge(perJournal)
                 .traverse_(
                   route(
                     _,
@@ -128,7 +128,7 @@ object ReplayActor:
       * floor per coil peer is its `CoilStampMark` (the highest already stamped onto `HubHardAck`);
       * the tail is the coil's `HardAck` entries above it (the hub's per-coil-peer receive copy),
       * which the sequencer stamps via its normal `HardAck` path. The scan stays partitioned per
-      * coil peer — each coil's family is its own CF and its `CoilStampMark` is its own floor.
+      * coil peer — each coil's journal is its own CF and its `CoilStampMark` is its own floor.
       */
     private def replayCoilAckGap(
         persistence: Persistence[IO],
@@ -138,8 +138,8 @@ object ReplayActor:
         persistence.get(StoreKey.CoilStampMark).map(_.getOrElse(Map.empty)).flatMap { marks =>
             coils.traverse_ { coil =>
                 val from = marks.get(coil).fold(HardAckNumber.zero)(_.increment)
-                val k = FamilyKey.HardAck(PeerId.Coil(coil), from)
-                FamilyScan
+                val k = JournalKey.HardAck(PeerId.Coil(coil), from)
+                JournalScan
                     .scan(persistence.backend, k)
                     .flatMap(_.traverse_(e => coilAckSequencer ! k.decodeValue(e.framed).payload))
             }
@@ -148,8 +148,8 @@ object ReplayActor:
     /** Read this peer's own slow-side anchors: the acked stack (StackComposer/aggregator floor,
       * unpacked from the last own `HardAck` value — the `HardAckNumber → StackNumber` gap, §10 Q9)
       * and the in-flight handoff. `hardAcked` is the already-derived [[Markers]] hard-ack counter,
-      * so this avoids re-scanning the own `HardAck` CF. The own ack family is the one
-      * `PeerId`-keyed `HardAck` family, so `own: PeerId` works for both peer types (§10 Q10).
+      * so this avoids re-scanning the own `HardAck` CF. The own ack journal is the one
+      * `PeerId`-keyed `HardAck` journal, so `own: PeerId` works for both peer types (§10 Q10).
       */
     private def recoverOwnAck(
         persistence: Persistence[IO],
@@ -161,7 +161,7 @@ object ReplayActor:
     ): IO[(Option[StackNumber], Option[SlowConsensusActor.StackHandoff])] =
         for
             hardAckedStack <- hardAcked.traverse(n =>
-                persistence.getOrFail(FamilyKey.HardAck(own, n)).map(_.payload.stackNum)
+                persistence.getOrFail(JournalKey.HardAck(own, n)).map(_.payload.stackNum)
             )
             inflight <- reconstructInflightHandoff(persistence, own, hardConfirmed, hardAckedStack)
         yield (hardAckedStack, inflight)
@@ -236,8 +236,8 @@ object ReplayActor:
         own: PeerId,
         stackNum: StackNumber
     )(using CardanoNetwork.Section): IO[List[HardAck]] =
-        val k = FamilyKey.HardAck(own, HardAckNumber.zero)
-        FamilyScan
+        val k = JournalKey.HardAck(own, HardAckNumber.zero)
+        JournalScan
             .scan(persistence.backend, k)
             .map(_.map(e => k.decodeValue(e.framed).payload).filter(_.stackNum == stackNum))
 
@@ -253,41 +253,41 @@ object ReplayActor:
             case None    => IO.pure(Map.empty)
             case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))
 
-    /** Route one decoded lane entry into the reading actor's mailbox. Family-agnostic (shared by
+    /** Route one decoded lane entry into the reading actor's mailbox. Journal-agnostic (shared by
       * both peer types in [[replay]]): spines fan out to two roles, sliced by the ledger floor (the
       * aggregator already gets everything scanned from its lower floor): blocks to
       * FastConsensusActor always (scanned from `softConfirmed+1`) and to BlockWeaver only
       * `≥ blockLedgerFloor`; stacks to StackComposer only `≥ stackComposerFloor` (the acked band's
-      * single stack is handled by the reconstructed handoff, not its brief). The hard-ack families
+      * single stack is handled by the reconstructed handoff, not its brief). The hard-ack journals
       * route to `SlowConsensusActor`: a `HardAck` entry carries a `HardAck` directly (a head peer's
       * own head hard-acks, or — on the coil path — a coil peer's own coil hard-acks), `HubHardAck`
       * carries a `HardAckWithId` whose `.ack` is the underlying `HardAck`. `HubHardAck` is scanned
       * by every peer (head and coil) for the coil quorum.
       */
     private def route(
-        entry: RawFamilyEntry,
+        entry: RawJournalEntry,
         blockLedgerFloor: BlockNumber,
         stackComposerFloor: StackNumber,
         targets: Targets
     )(using CardanoNetwork.Section): IO[Unit] =
         entry.key match
-            case k: FamilyKey.Request =>
+            case k: JournalKey.Request =>
                 targets.blockWeaver ! k.decodeValue(entry.framed).payload
-            case k: FamilyKey.SoftAck =>
+            case k: JournalKey.SoftAck =>
                 targets.fastConsensusActor ! k.decodeValue(entry.framed).payload
-            case k: FamilyKey.HardAck =>
+            case k: JournalKey.HardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload
-            case k: FamilyKey.Block =>
+            case k: JournalKey.Block =>
                 val brief = k.decodeValue(entry.framed).payload
                 val toLedger =
                     if Ordering[BlockNumber].gteq(brief.blockNum, blockLedgerFloor)
                     then targets.blockWeaver ! brief
                     else IO.unit
                 (targets.fastConsensusActor ! brief) >> toLedger
-            case k: FamilyKey.Stack =>
+            case k: JournalKey.Stack =>
                 val brief = k.decodeValue(entry.framed).payload
                 if Ordering[StackNumber].gteq(brief.stackNum, stackComposerFloor)
                 then targets.stackComposer ! brief
                 else IO.unit
-            case k: FamilyKey.HubHardAck =>
+            case k: JournalKey.HubHardAck =>
                 targets.slowConsensusActor ! k.decodeValue(entry.framed).payload.ack

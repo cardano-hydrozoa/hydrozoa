@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 
 import scala.annotation.tailrec
 
@@ -94,7 +94,7 @@ final case class StackComposer(
       * bootstrap, `None` ⇒ cold start.
       *
       * Head and coil share the one [[State.recover]] seam with no peer-type branch: the own-ack
-      * family is the one `PeerId`-keyed `HardAck` family ([[Markers.recoverHardAcked]] takes a
+      * journal is the one `PeerId`-keyed `HardAck` journal ([[Markers.recoverHardAcked]] takes a
       * [[PeerId]]), and the closing stack's `lastBlockNum` comes from the `UnsignedStack` every
       * peer persists on every close (atomic with the hard-ack). `hardConfirmed` derives the same
       * way on both ([[Markers.recoverHardConfirmed]]).
@@ -272,10 +272,10 @@ final case class StackComposer(
                 val base = WriteBatch.start.put(StoreKey.UnsignedStack(brief.stackNum))(unsigned)
                 val withBrief =
                     if config.canLeadSlow(brief.stackNum) then
-                        base.put(FamilyKey.Stack(brief.stackNum))(FamilyValue(stamp, brief))
+                        base.put(JournalKey.Stack(brief.stackNum))(JournalValue(stamp, brief))
                     else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
-                    b.put(FamilyKey.HardAck(ack.peerId, ack.hardAckNum))(FamilyValue(stamp, ack))
+                    b.put(JournalKey.HardAck(ack.peerId, ack.hardAckNum))(JournalValue(stamp, ack))
                 )
             }
             // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
@@ -914,7 +914,7 @@ object StackComposer {
           * inbound briefs arrive from replay (R3), re-pairing into `ready`.
           *
           * `hardAcked` is a [[HardAckNumber]] (the satellite key), NOT a stack number, so the stack
-          * number is read from the last own `HardAck` **value** (the one `PeerId`-keyed family, so
+          * number is read from the last own `HardAck` **value** (the one `PeerId`-keyed journal, so
           * `own` works for either peer type); the marker number gives only
           * `nextOwnHardAckNum = hardAcked + 1`. The closing stack's `lastBlockNum`, treasury, and
           * evacuation map are present on every peer for any hard-acked stack — the `UnsignedStack`,
@@ -932,10 +932,10 @@ object StackComposer {
                 case Some(hardAckNum) =>
                     for {
                         // No peer-type branch: the own hard-ack lives in the one `PeerId`-keyed
-                        // `HardAck` family, and the closing stack's `lastBlockNum` comes from the
+                        // `HardAck` journal, and the closing stack's `lastBlockNum` comes from the
                         // `UnsignedStack` every peer persists on every close (atomic with the
                         // hard-ack, so always present for a hard-acked stack).
-                        lastHardAck <- persistence.getOrFail(FamilyKey.HardAck(own, hardAckNum))
+                        lastHardAck <- persistence.getOrFail(JournalKey.HardAck(own, hardAckNum))
                         hardAckedStack = lastHardAck.payload.stackNum
                         unsignedStack <- persistence.getOrFail(
                           StoreKey.UnsignedStack(hardAckedStack)

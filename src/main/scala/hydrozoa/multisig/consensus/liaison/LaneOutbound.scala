@@ -47,7 +47,7 @@ final class LaneOutbound[T, N] private (
     /** Append an item we produce to the outbox, enforcing gap-free monotonic numbering for *new*
       * items. An item whose number is **at or below the high-water is a no-op**: it is something we
       * already produced and persisted (everything that reaches a lane is durable, CR4), so the lane
-      * serves it from the family on demand ([[reply]]'s hot-load) and need not re-hold it. This
+      * serves it from the journal on demand ([[reply]]'s hot-load) and need not re-hold it. This
       * absorbs a replay re-broadcast — e.g. `SlowConsensusActor` re-emitting the in-flight stack's
       * round-1 ack (number `n1`) after the lane has restored its high-water to round-2 (`n1 + 1`) —
       * which would otherwise be a spurious out-of-order error. A *new* item (above the high-water)

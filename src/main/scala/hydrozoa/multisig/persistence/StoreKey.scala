@@ -16,9 +16,12 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   *
   * Every column family ([[Cf]]) has exactly one **key shape** and exactly one **value type** — a
   * corresponding `StoreKey` subtype captures both, so actor code addresses entries by name and
-  * exchanges typed values, never raw bytes. The 5 family CFs are reached through [[FamilyKey]]
-  * (which extends `StoreKey`); the 10 non-family CFs are covered by the cases declared in the
-  * companion below:
+  * exchanges typed values, never raw bytes. `StoreKey` is the common base — **every** column family
+  * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
+  * append-only replay sequence, §3) is the **subset** of column families reached through
+  * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
+  * The 11 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
   *     `Cf.BlockResult`, keyed by `blockNum`. [[StoreKey.SoftConfirmation]] —
@@ -28,7 +31,8 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
-  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
+  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
+  *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
   * Each subtype declares its `Value` and a `given codec: StoreCodec[Value]`; the trait's
@@ -74,7 +78,7 @@ object StoreKey:
         import BlockResultCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockResult
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.SoftConfirmation]] — FCA aggregate (header + multisig), keyed by `blockNum`.
       * `softConfirmed` derives as the last key in this CF (§5.2).
@@ -84,7 +88,7 @@ object StoreKey:
         import SoftConfirmationCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.SoftConfirmation
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.HardConfirmation]] — SCA multisigned effects / SECs / fallbacks, keyed by
       * `stackNum`. `hardConfirmed` derives as the last key in this CF (§5.2). The R10 evacuation
@@ -99,7 +103,7 @@ object StoreKey:
         import StackEffectsCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.HardConfirmation
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:
@@ -141,7 +145,7 @@ object StoreKey:
         import JointEvacuationMap.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.RequestHighWater]] — JointLedger's cumulative per-peer request high-water
       * `Map[HeadPeerNumber, RequestNumber]` **as of block `num`** (the highest request number from
@@ -156,7 +160,7 @@ object StoreKey:
         import RequestHighWaterCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.RequestHighWater
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.CoilStampMark]] — a hub's per-coil-peer stamped-high-water blob
       * `Map[CoilPeerNumber, HardAckNumber]` (the highest coil `HardAckNumber` sequenced onto this
@@ -184,13 +188,13 @@ object StoreKey:
         import LedgerL2CommandNumber.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.L2CommandNumber
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.UnsignedStack]] — the `Stack.Unsigned` (brief + locally-derived effects)
       * StackComposer closed for `stackNum`, persisted **before** the handoff to
       * `SlowConsensusActor` (CR4/CR8: durable before the own ack crosses the peer boundary via
       * SCA's broadcast). On recovery the `ReplayActor` reads the in-flight stack's value and the
-      * own acks (HardAck family) to reconstruct the handoff into SCA — a `HardAck` signs the
+      * own acks (HardAck journal) to reconstruct the handoff into SCA — a `HardAck` signs the
       * effects, which a `StackBrief` alone does not carry, so the effects must be durable. Keyed by
       * `stackNum`.
       */
@@ -199,7 +203,7 @@ object StoreKey:
         import UnsignedStackCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.UnsignedStack
-        def encode: Array[Byte] = FamilyKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */
     final case class Meta(name: String) extends StoreKey:

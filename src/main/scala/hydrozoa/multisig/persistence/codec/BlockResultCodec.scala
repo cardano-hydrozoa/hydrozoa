@@ -10,7 +10,7 @@ import io.circe.{Decoder, Encoder}
 
 /** Persistence-layer JSON codec for [[BlockResult.Persisted]] — the value stored at
   * `StoreKey.BlockResult`: JointLedger's per-block deltas. The `brief` is **not** stored here (it
-  * already lives in the `Block` family and is rehydrated from there at recovery — see
+  * already lives in the `Block` journal and is rehydrated from there at recovery — see
   * [[BlockResult.persisted]]). The slow side rebuilds its `pending` map from these on restart (§6).
   *
   * Derived structurally from the field leaf codecs:

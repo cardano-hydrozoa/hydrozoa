@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.OutboxBacking
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -23,8 +23,8 @@ import scala.concurrent.duration.DurationInt
   * GUM-153). After a crash each lane restores only its high-water and serves older entries from the
   * store on demand (`load`), rather than eagerly loading its whole own production:
   *
-  *   - a coil peer's own-hard-ack lane is backed by its own coil `HardAck` family;
-  *   - a hub's full-population lanes are backed by the families it already holds — every block (no
+  *   - a coil peer's own-hard-ack lane is backed by its own coil `HardAck` journal;
+  *   - a hub's full-population lanes are backed by the journals it already holds — every block (no
   *     `canLead` filter on a hub→coil link), every author's acks, every hub's relay lane.
   */
 class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
@@ -42,11 +42,11 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
         val (hw, fromZero, fromOne) = run { p =>
             val backing = OutboxBacking.hardAck(p.backend, PeerId.Coil(coil))
             for {
-                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
-                  FamilyValue(stamp, coilHardAck(coil, 0, stack = 1))
+                _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
+                  JournalValue(stamp, coilHardAck(coil, 0, stack = 1))
                 )
-                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
-                  FamilyValue(stamp, coilHardAck(coil, 1, stack = 2))
+                _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
+                  JournalValue(stamp, coilHardAck(coil, 1, stack = 2))
                 )
                 hw <- backing.highWater
                 fromZero <- backing.backfill(HardAckNumber(0), 16)
@@ -88,15 +88,15 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                 // Two blocks on the spine — a hub→coil link keeps BOTH (no canLead filter).
                 b1 <- blockBrief(1)
                 b2 <- blockBrief(2)
-                _ <- p.put(FamilyKey.Block(BlockNumber(1)))(FamilyValue(stamp, b1))
-                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, b2))
+                _ <- p.put(JournalKey.Block(BlockNumber(1)))(JournalValue(stamp, b1))
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, b2))
                 s1 <- stackBrief(1, 1, 2)
-                _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
-                _ <- p.put(FamilyKey.HardAck(PeerId.Head(h0), HardAckNumber(0)))(
-                  FamilyValue(stamp, headHardAck(h0, 0, stack = 1))
+                _ <- p.put(JournalKey.Stack(StackNumber(1)))(JournalValue(stamp, s1))
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(h0), HardAckNumber(0)))(
+                  JournalValue(stamp, headHardAck(h0, 0, stack = 1))
                 )
-                _ <- p.put(FamilyKey.HubHardAck(hub0, HubHardAckNumber(0)))(
-                  FamilyValue(
+                _ <- p.put(JournalKey.HubHardAck(hub0, HubHardAckNumber(0)))(
+                  JournalValue(
                     stamp,
                     HardAckWithId(hub0, HubHardAckNumber(0), coilHardAck(CoilPeerNumber(0), 0, 1))
                   )

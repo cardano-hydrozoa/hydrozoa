@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 
 /** A column family the persistence layer opens.
   *
-  * **Satellite families are split one CF per author** (§3.2, §7.1): the CF *is* the author
+  * **Satellite journals are split one CF per author** (§3.2, §7.1): the CF *is* the author
   * discriminant, so the on-disk key carries no author prefix and each author's CF is a single
   * monotonic append stream (non-overlapping L0 → near-zero compaction — decisive at the request
   * rate). The set of CFs is therefore **config-derived** (`Cf.mkAll`): the fixed-shape CFs (the two
@@ -86,24 +86,24 @@ object Cf:
         def name = "Meta"
 
     // ---- Per-author satellite CFs (one per author). --------------------------------------------
-    /** One head peer's request family, keyed by `requestNum`. */
+    /** One head peer's request journal, keyed by `requestNum`. */
     final case class Request(peer: HeadPeerNumber) extends Cf:
         def name = s"Request:${peer: Int}"
 
-    /** One head peer's soft-ack family, keyed by `softAckNum`. */
+    /** One head peer's soft-ack journal, keyed by `softAckNum`. */
     final case class SoftAck(peer: HeadPeerNumber) extends Cf:
         def name = s"SoftAck:${peer: Int}"
 
-    /** One peer's hard-ack family (head peer own; coil peer own + a hub's receive copy), keyed by
-      * `hardAckNum`. The author is a [[PeerId]] — head and coil peers share one family type, one CF
-      * per author. The CF name embeds the author's wire int (num shifted left one bit, low bit
+    /** One peer's hard-ack journal (head peer own; coil peer own + a hub's receive copy), keyed by
+      * `hardAckNum`. The author is a [[PeerId]] — head and coil peers share one journal type, one
+      * CF per author. The CF name embeds the author's wire int (num shifted left one bit, low bit
       * tagging head vs coil — see [[PeerId.toWireInt]]), so a head peer's and a coil peer's
-      * families never collide on the same number.
+      * journals never collide on the same number.
       */
     final case class HardAck(peer: PeerId) extends Cf:
         def name = s"HardAck:${peer.toWireInt}"
 
-    /** One hub's re-sequenced coil-ack family, keyed by `hubHardAckNum`. */
+    /** One hub's re-sequenced coil-ack journal, keyed by `hubHardAckNum`. */
     final case class HubHardAck(hub: HeadPeerNumber) extends Cf:
         def name = s"HubHardAck:${hub: Int}"
 
@@ -125,7 +125,7 @@ object Cf:
     )
 
     /** The full CF set for a head of the given membership: the fixed-shape CFs plus one per-author
-      * satellite CF for each head peer (Request / SoftAck / HardAck), each peer's hard-ack family
+      * satellite CF for each head peer (Request / SoftAck / HardAck), each peer's hard-ack journal
       * (`HardAck` per head peer and per coil peer — the author is a [[PeerId]]), and each hub
       * (HubHardAck). This is the descriptor list the backend opens (§7).
       */

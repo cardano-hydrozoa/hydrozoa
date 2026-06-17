@@ -13,10 +13,10 @@ class StoreKeyTest extends AnyFunSuite:
 
     test("every StoreKey type maps to its expected Cf") {
         val cases: List[(StoreKey, Cf)] = List(
-          FamilyKey.Block(BlockNumber(0)) -> Cf.Block,
-          FamilyKey.Stack(StackNumber(0)) -> Cf.Stack,
-          FamilyKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck(HeadPeerNumber(0)),
-          FamilyKey.HardAck(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(0)) ->
+          JournalKey.Block(BlockNumber(0)) -> Cf.Block,
+          JournalKey.Stack(StackNumber(0)) -> Cf.Stack,
+          JournalKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck(HeadPeerNumber(0)),
+          JournalKey.HardAck(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(0)) ->
               Cf.HardAck(PeerId.Head(HeadPeerNumber(0))),
           StoreKey.BlockResult(BlockNumber(0)) -> Cf.BlockResult,
           StoreKey.SoftConfirmation(BlockNumber(0)) -> Cf.SoftConfirmation,
@@ -68,9 +68,9 @@ class StoreKeyTest extends AnyFunSuite:
         assert(java.util.Arrays.compareUnsigned(c, d) < 0)
     }
 
-    test("FamilyKey is a StoreKey — accepted by APIs typed over StoreKey") {
-        // Mirror what WriteBatch / Persistence do — accept a FamilyKey wherever a StoreKey is expected.
+    test("JournalKey is a StoreKey — accepted by APIs typed over StoreKey") {
+        // Mirror what WriteBatch / Persistence do — accept a JournalKey wherever a StoreKey is expected.
         def takesAnyStoreKey(k: StoreKey): Cf = k.cf
-        val _ = assert(takesAnyStoreKey(FamilyKey.Block(BlockNumber(42))) == Cf.Block)
+        val _ = assert(takesAnyStoreKey(JournalKey.Block(BlockNumber(42))) == Cf.Block)
         assert(takesAnyStoreKey(StoreKey.DepositMap) == Cf.DepositMap)
     }

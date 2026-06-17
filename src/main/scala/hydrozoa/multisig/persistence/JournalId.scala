@@ -2,16 +2,16 @@ package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 
-/** Identifies one append-only family — the range-scan prefix.
+/** Identifies one append-only journal — the range-scan prefix.
   *
-  * Spines (Block, Stack) are head-global: there is exactly one of each family for the whole head,
-  * round-robin-authored by all head peers. Satellite families (Request, SoftAck, HardAck) are
-  * per-author: one family per author per family type. Request/SoftAck are per [[HeadPeerNumber]];
-  * HardAck is per [[PeerId]] (one family per head peer and per coil peer).
+  * Spines (Block, Stack) are head-global: there is exactly one of each journal for the whole head,
+  * round-robin-authored by all head peers. Satellite journals (Request, SoftAck, HardAck) are
+  * per-author: one journal per author per journal type. Request/SoftAck are per [[HeadPeerNumber]];
+  * HardAck is per [[PeerId]] (one journal per head peer and per coil peer).
   *
   * See `design/persistence-and-crash-recovery.md` §3.2, §7.1.
   */
-enum FamilyId:
+enum JournalId:
     case BlockSpine
     case StackSpine
     case Request(peer: HeadPeerNumber)
@@ -19,8 +19,8 @@ enum FamilyId:
     case HardAck(peer: PeerId)
     case HubHardAck(hub: HeadPeerNumber)
 
-    /** The column family this family lives in. The CF is the family-type discriminant — there is no
-      * tag byte in the encoded key (§7.1).
+    /** The column family this journal lives in. The CF is the journal-type discriminant — there is
+      * no tag byte in the encoded key (§7.1).
       */
     def cf: Cf = this match
         case BlockSpine    => Cf.Block

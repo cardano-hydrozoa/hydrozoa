@@ -64,7 +64,7 @@ final class LaneInbound[T, N] private (
     def advanceTo(next: N): IO[Unit] = inboundCursor.set(next)
 
     /** Restore the receive cursor on recovery from the last durably-received number — the cursor
-      * becomes its [[next]] (`max(persisted family) + 1` for a contiguous lane; the remote's
+      * becomes its [[next]] (`max(persisted journal) + 1` for a contiguous lane; the remote's
       * next-led number for a sparse one), or the cold [[initialCursor]] when nothing was received.
       * So after a crash the remote is re-pulled only for **new** items, and [[verify]] rejects any
       * stale re-serve of what we already hold (which would otherwise be re-dispatched to the

@@ -8,7 +8,7 @@ import java.nio.ByteBuffer
   *
   * Intended for development / debugging / on-demand inspection from the REPL or a tool entrypoint —
   * never on a hot path. Walks every CF via the `cursor` API, decoding keys where the CF's schema
-  * allows it (families via [[FamilyKey]], spine-indexed metadata as big-endian `Int`, `Meta` as
+  * allows it (journals via [[JournalKey]], spine-indexed metadata as big-endian `Int`, `Meta` as
   * UTF-8, singletons as the empty key). Bypasses the typed [[Persistence]] layer — byte-level
   * inspection is the point.
   */
@@ -109,7 +109,7 @@ object StoreDump:
     private def renderEntry(cf: Cf, key: Array[Byte], value: Array[Byte]): String =
         s"  ${renderKey(cf, key)} -> ${value.length} bytes"
 
-    /** Pretty-print a key. Family CFs go through [[FamilyKey.decode]]; spine-indexed metadata CFs
+    /** Pretty-print a key. Journal CFs go through [[JournalKey.decode]]; spine-indexed metadata CFs
       * decode as 4-byte big-endian `Int`; `Meta` decodes as UTF-8; singleton snapshot CFs show
       * "(singleton)"; anything malformed falls back to a hex dump.
       */
@@ -117,7 +117,7 @@ object StoreDump:
         cf match
             case Cf.Block | Cf.Stack | Cf.Request(_) | Cf.SoftAck(_) | Cf.HardAck(_) |
                 Cf.HubHardAck(_) =>
-                try FamilyKey.decode(cf, key).toString
+                try JournalKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
                 Cf.EvacuationMap | Cf.UnsignedStack =>

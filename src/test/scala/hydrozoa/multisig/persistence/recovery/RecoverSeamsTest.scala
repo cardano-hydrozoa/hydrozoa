@@ -24,7 +24,7 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, FamilyKey, FamilyValue, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Markers, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
@@ -78,7 +78,7 @@ class RecoverSeamsTest extends AnyFunSuite:
         withStore { p =>
             for
                 brief <- blockBrief(4)
-                _ <- p.put(FamilyKey.Block(BlockNumber(4)))(FamilyValue(stamp, brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(4)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 done <- JointLedger.State.recoverState(p, Some(BlockNumber(4)))
             yield assert(
@@ -100,7 +100,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 )
                 // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
-                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 done <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
@@ -122,10 +122,10 @@ class RecoverSeamsTest extends AnyFunSuite:
                     ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
                 )
                 // Crash boundary: fastBlockMark = block 2 (max BlockResult), recorded at L2 command
-                // number 2. The header is read from the Block family (present inbound on any peer),
+                // number 2. The header is read from the Block journal (present inbound on any peer),
                 // so seed Block(2).
                 brief <- blockBrief(2)
-                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 recovered <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
@@ -161,8 +161,8 @@ class RecoverSeamsTest extends AnyFunSuite:
             val lastBlock = 7
             for
                 us <- unsignedStack(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
-                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(hardAckNum)))(
-                  FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(hardAckNum)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
@@ -204,23 +204,23 @@ class RecoverSeamsTest extends AnyFunSuite:
             val lastBlock = 3
             for
                 us <- unsignedStack(stack = stackN, firstBlock = 0, lastBlock = lastBlock)
-                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
-                  FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = stackN))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(us)
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block must be excluded (scan is exclusive).
                 // Persisted BlockResults hold only the deltas; recover rehydrates each brief from the
-                // Block family, so seed Block(4)/Block(5) for the two scanned blocks.
+                // Block journal, so seed Block(4)/Block(5) for the two scanned blocks.
                 br3 <- blockResult(3)
                 br4 <- blockResult(4)
                 br5 <- blockResult(5)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(3)))(br3.persisted)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(4)))(br4.persisted)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(5)))(br5.persisted)
-                _ <- p.put(FamilyKey.Block(BlockNumber(4)))(FamilyValue(stamp, br4.brief))
-                _ <- p.put(FamilyKey.Block(BlockNumber(5)))(FamilyValue(stamp, br5.brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(4)))(JournalValue(stamp, br4.brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(5)))(JournalValue(stamp, br5.brief))
                 markers = Markers(
                   softConfirmed = None,
                   fastBlockMark = None,
@@ -252,7 +252,7 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     test(
       "StackComposer.recover (coil) rebuilds counters + snapshots from the last own coil HardAck; " +
-          "lastBlockNum comes from the UnsignedStack, not a Stack family"
+          "lastBlockNum comes from the UnsignedStack, not a Stack journal"
     ) {
         withStore { p =>
             val coil = CoilPeerNumber(0)
@@ -269,7 +269,7 @@ class RecoverSeamsTest extends AnyFunSuite:
             )
             for
                 sb <- stackBrief(stack = stackN, firstBlock = 4, lastBlock = lastBlock)
-                // A coil peer has no own Stack family; the closing stack's lastBlockNum comes from the
+                // A coil peer has no own Stack journal; the closing stack's lastBlockNum comes from the
                 // UnsignedStack it persists on every close.
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(stackN)))(
                   Stack.Unsigned(
@@ -282,20 +282,20 @@ class RecoverSeamsTest extends AnyFunSuite:
                   )
                 )
                 // The last own hard-ack number is 5, belonging to stack 2 — the stack number comes
-                // from the coil HardAck VALUE, read from the coil peer's own `HardAck` family.
-                _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(hardAckNum)))(
-                  FamilyValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
+                // from the coil HardAck VALUE, read from the coil peer's own `HardAck` journal.
+                _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(hardAckNum)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = hardAckNum, stack = stackN))
                 )
                 _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)
                 _ <- p.put(StoreKey.EvacuationMap(BlockNumber(lastBlock)))(EvacuationMap.empty)
                 // A stale BlockResult at the last closed block is excluded (scan is exclusive).
                 // Persisted BlockResults hold only the deltas; the brief is rehydrated from the
-                // Block family, so seed Block(8) for the one scanned block.
+                // Block journal, so seed Block(8) for the one scanned block.
                 br7 <- blockResult(7)
                 br8 <- blockResult(8)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(7)))(br7.persisted)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(8)))(br8.persisted)
-                _ <- p.put(FamilyKey.Block(BlockNumber(8)))(FamilyValue(stamp, br8.brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(8)))(JournalValue(stamp, br8.brief))
                 recovered <- StackComposer.State.recover(
                   p,
                   Some(HardAckNumber(hardAckNum)),
@@ -335,7 +335,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 brief <- blockBrief(2)
-                _ <- p.put(FamilyKey.Block(BlockNumber(2)))(FamilyValue(stamp, brief))
+                _ <- p.put(JournalKey.Block(BlockNumber(2)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 // L2CommandNumber intentionally not written
                 r <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2))).attempt
@@ -348,8 +348,8 @@ class RecoverSeamsTest extends AnyFunSuite:
             val own = HeadPeerNumber(0)
             for
                 us <- unsignedStack(stack = 1, firstBlock = 0, lastBlock = 3)
-                _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
-                  FamilyValue(stamp, hardAck(peer = 0, ackNum = 0, stack = 1))
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+                  JournalValue(stamp, hardAck(peer = 0, ackNum = 0, stack = 1))
                 )
                 _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
                 // Treasury intentionally not written
@@ -412,13 +412,13 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- List(0L, 1L, 2L, 5_000_000_000L).traverse_(k =>
                     p.backend.put(
                       Cf.Request(own),
-                      FamilyKey.Request(own, RequestNumber(k)).encode,
+                      JournalKey.Request(own, RequestNumber(k)).encode,
                       Array[Byte](0)
                     )
                 )
                 _ <- p.backend.put(
                   Cf.Request(HeadPeerNumber(2)),
-                  FamilyKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
+                  JournalKey.Request(HeadPeerNumber(2), RequestNumber(99L)).encode,
                   Array[Byte](0)
                 )
                 n <- Markers.recoverNextRequestNumber(p.backend, own)
@@ -488,22 +488,22 @@ class RecoverSeamsTest extends AnyFunSuite:
             for
                 // own HardAcks 0..2 + another peer's at 5; the per-author CF excludes the other's.
                 _ <- List(0, 1, 2).traverse_(k =>
-                    p.put(FamilyKey.HardAck(PeerId.Head(ownNum), HardAckNumber(k)))(
-                      FamilyValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
+                    p.put(JournalKey.HardAck(PeerId.Head(ownNum), HardAckNumber(k)))(
+                      JournalValue(stamp, hardAck(peer = ownNum.convert, ackNum = k, stack = 0))
                     )
                 )
-                _ <- p.put(FamilyKey.HardAck(PeerId.Head(other), HardAckNumber(5)))(
-                  FamilyValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
+                _ <- p.put(JournalKey.HardAck(PeerId.Head(other), HardAckNumber(5)))(
+                  JournalValue(stamp, hardAck(peer = other.convert, ackNum = 5, stack = 0))
                 )
                 // Block + Stack spines carry every leader's brief; load keeps only own-led.
                 _ <- spineRange.traverse_(n =>
                     blockBrief(n).flatMap(b =>
-                        p.put(FamilyKey.Block(BlockNumber(n)))(FamilyValue(stamp, b))
+                        p.put(JournalKey.Block(BlockNumber(n)))(JournalValue(stamp, b))
                     )
                 )
                 _ <- spineRange.traverse_(n =>
                     stackBrief(stack = n, firstBlock = 0, lastBlock = n).flatMap(s =>
-                        p.put(FamilyKey.Stack(StackNumber(n)))(FamilyValue(stamp, s))
+                        p.put(JournalKey.Stack(StackNumber(n)))(JournalValue(stamp, s))
                     )
                 )
                 hwHardAck <- hardAckBacking.highWater

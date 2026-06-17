@@ -8,8 +8,8 @@ import hydrozoa.config.head.network.CardanoNetwork
   * Build with [[WriteBatch.start]] and the typed builder methods, e.g.:
   * {{{
   *   WriteBatch.start
-  *       .put(FamilyKey.Block(blockNum))(brief)
-  *       .put(FamilyKey.SoftAck(ownPeer, softAckNum))(softAck)
+  *       .put(JournalKey.Block(blockNum))(brief)
+  *       .put(JournalKey.SoftAck(ownPeer, softAckNum))(softAck)
   *       .put(StoreKey.BlockResult(blockNum))(blockResult)
   *       .put(StoreKey.DepositMap)(depositMap)
   * }}}

@@ -8,39 +8,39 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.{BackendStore, Cf, FamilyKey}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, JournalKey}
 import java.nio.ByteBuffer
 
 /** The store backing for one liaison outbound lane
-  * ([[hydrozoa.multisig.consensus.liaison.LaneOutbound]]): the durable family the lane's own
+  * ([[hydrozoa.multisig.consensus.liaison.LaneOutbound]]): the durable journal the lane's own
   * production lives in, surfaced as the two reads a lane needs to recover lazily rather than seed
   * eagerly (§6, recovery doc).
   *
-  *   - [[highWater]] — the lane's last durable number (`lastKey` of the family), so `preStart`
+  *   - [[highWater]] — the lane's last durable number (`lastKey` of the journal), so `preStart`
   *     seeds only the high-water (no payloads): the gap-free [[LaneOutbound.append]] check and the
   *     out-of-bounds guard work, and replay can re-append the live tail on top.
   *   - [[backfill]] — up to `limit` payloads from a `from` number, so [[LaneOutbound.reply]] reads
   *     the prefix below its in-memory outbox floor when a remote pulls an old entry, instead of
   *     holding the whole own production in memory.
   *
-  * `keep` filters a spine family to this peer's own-led entries (a head-mesh liaison serves only
+  * `keep` filters a spine journal to this peer's own-led entries (a head-mesh liaison serves only
   * its own-led briefs); the satellites are already a single author per CF, and a hub→coil link
   * serves every author, so both pass the default accept-all.
   */
 final class OutboxBacking[T, N] private (
     backend: BackendStore[IO],
     cf: Cf,
-    seekKey: N => FamilyKey,
+    seekKey: N => JournalKey,
     decodeNum: Array[Byte] => N,
     decodePayload: Array[Byte] => T,
     keep: T => Boolean
 ):
-    /** The lane's last durable number, or `None` for an empty family. */
+    /** The lane's last durable number, or `None` for an empty journal. */
     def highWater: IO[Option[N]] = backend.lastKey(cf).map(_.map(decodeNum))
 
     /** Up to `limit` own-produced payloads with number `>= from`, ascending. */
     def backfill(from: N, limit: Int): IO[List[T]] =
-        FamilyScan.loadFrom(backend, seekKey(from), decodePayload, keep, limit)
+        JournalScan.loadFrom(backend, seekKey(from), decodePayload, keep, limit)
 
 object OutboxBacking:
 
@@ -54,9 +54,9 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.Block,
-          FamilyKey.Block(_),
+          JournalKey.Block(_),
           b => BlockNumber(int(b)),
-          b => FamilyKey.Block(BlockNumber.zero).decodeValue(b).payload,
+          b => JournalKey.Block(BlockNumber.zero).decodeValue(b).payload,
           keep
         )
 
@@ -67,9 +67,9 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.Stack,
-          FamilyKey.Stack(_),
+          JournalKey.Stack(_),
           b => StackNumber(int(b)),
-          b => FamilyKey.Stack(StackNumber.zero).decodeValue(b).payload,
+          b => JournalKey.Stack(StackNumber.zero).decodeValue(b).payload,
           keep
         )
 
@@ -80,9 +80,9 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.Request(peer),
-          FamilyKey.Request(peer, _),
+          JournalKey.Request(peer, _),
           b => RequestNumber(long(b)),
-          b => FamilyKey.Request(peer, RequestNumber.zero).decodeValue(b).payload,
+          b => JournalKey.Request(peer, RequestNumber.zero).decodeValue(b).payload,
           _ => true
         )
 
@@ -93,15 +93,15 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.SoftAck(peer),
-          FamilyKey.SoftAck(peer, _),
+          JournalKey.SoftAck(peer, _),
           b => SoftAckNumber(int(b)),
-          b => FamilyKey.SoftAck(peer, SoftAckNumber.zero).decodeValue(b).payload,
+          b => JournalKey.SoftAck(peer, SoftAckNumber.zero).decodeValue(b).payload,
           _ => true
         )
 
     /** Backing for a per-author `HardAck` outbound lane (this peer's own hard-acks). `peer` is a
-      * [[PeerId]], so this serves both a head peer (its head `HardAck` family) and a coil peer (its
-      * coil `HardAck` family).
+      * [[PeerId]], so this serves both a head peer (its head `HardAck` journal) and a coil peer
+      * (its coil `HardAck` journal).
       */
     def hardAck(backend: BackendStore[IO], peer: PeerId)(using
         CardanoNetwork.Section
@@ -109,9 +109,9 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.HardAck(peer),
-          FamilyKey.HardAck(peer, _),
+          JournalKey.HardAck(peer, _),
           b => HardAckNumber(int(b)),
-          b => FamilyKey.HardAck(peer, HardAckNumber.zero).decodeValue(b).payload,
+          b => JournalKey.HardAck(peer, HardAckNumber.zero).decodeValue(b).payload,
           _ => true
         )
 
@@ -122,8 +122,8 @@ object OutboxBacking:
         new OutboxBacking(
           backend,
           Cf.HubHardAck(hub),
-          FamilyKey.HubHardAck(hub, _),
+          JournalKey.HubHardAck(hub, _),
           b => HubHardAckNumber(int(b)),
-          b => FamilyKey.HubHardAck(hub, HubHardAckNumber.zero).decodeValue(b).payload,
+          b => JournalKey.HubHardAck(hub, HubHardAckNumber.zero).decodeValue(b).payload,
           _ => true
         )

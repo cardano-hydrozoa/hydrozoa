@@ -23,15 +23,15 @@ class StoreDumpTest extends AnyFunSuite:
             val populate = (b: BackendStore[IO]) =>
                 b.write(
                   RawWriteBatch.start
-                      .put(Cf.Block, FamilyKey.Block(BlockNumber(1)).encode, Array[Byte](1, 2, 3))
+                      .put(Cf.Block, JournalKey.Block(BlockNumber(1)).encode, Array[Byte](1, 2, 3))
                       .put(
                         Cf.Block,
-                        FamilyKey.Block(BlockNumber(2)).encode,
+                        JournalKey.Block(BlockNumber(2)).encode,
                         Array[Byte](1, 2, 3, 4)
                       )
                       .put(
                         Cf.SoftAck(ownPeer),
-                        FamilyKey.SoftAck(ownPeer, SoftAckNumber(1)).encode,
+                        JournalKey.SoftAck(ownPeer, SoftAckNumber(1)).encode,
                         Array[Byte](9)
                       )
                       .put(
@@ -86,7 +86,7 @@ class StoreDumpTest extends AnyFunSuite:
         finally recursivelyDelete(tempDir)
     }
 
-    test("dump pretty-prints decoded keys per CF (families, spine-indexed, singletons, meta)") {
+    test("dump pretty-prints decoded keys per CF (journals, spine-indexed, singletons, meta)") {
         val tempDir = newTempDir()
         try
             val ownPeer = HeadPeerNumber(3)
@@ -95,10 +95,10 @@ class StoreDumpTest extends AnyFunSuite:
                 .use { b =>
                     b.write(
                       RawWriteBatch.start
-                          .put(Cf.Block, FamilyKey.Block(BlockNumber(7)).encode, Array[Byte](1))
+                          .put(Cf.Block, JournalKey.Block(BlockNumber(7)).encode, Array[Byte](1))
                           .put(
                             Cf.SoftAck(ownPeer),
-                            FamilyKey.SoftAck(ownPeer, SoftAckNumber(2)).encode,
+                            JournalKey.SoftAck(ownPeer, SoftAckNumber(2)).encode,
                             Array[Byte](1)
                           )
                           .put(

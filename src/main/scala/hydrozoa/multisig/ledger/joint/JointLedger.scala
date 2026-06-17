@@ -34,7 +34,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -773,12 +773,12 @@ final case class JointLedger(
             common <- snapshotBundleBatch(brief, blockResult)
             withLeaderBrief =
                 if config.canLeadFast(brief.blockNum) then
-                    common.put(FamilyKey.Block(brief.blockNum))(FamilyValue(stamp, brief))
+                    common.put(JournalKey.Block(brief.blockNum))(JournalValue(stamp, brief))
                 else common
             _ <- persistence.write(
               withLeaderBrief
-                  .put(FamilyKey.SoftAck(softAck.peerNum, softAck.ackNum))(
-                    FamilyValue(stamp, softAck)
+                  .put(JournalKey.SoftAck(softAck.peerNum, softAck.ackNum))(
+                    JournalValue(stamp, softAck)
                   )
             )
         } yield ()
@@ -989,7 +989,7 @@ object JointLedger {
                 case Some(blockNum) => doneAt(persistence, blockNum).map(Some(_))
 
         /** Build `Done` from the brief persisted at `blockNum` (its header) and the deposits
-          * snapshot. Both are present in any non-empty store — the brief in the `Block` family via
+          * snapshot. Both are present in any non-empty store — the brief in the `Block` journal via
           * `persistOwnAckBundle` (if this peer led), `PeerLiaisonHeadToHead.persistInbound` (a head
           * peer that received it), or `PeerLiaisonCoilToHub.persistInbound` (a coil peer's inbound
           * population); the deposits via the per-block snapshot bundle — so a missing entry is
@@ -999,7 +999,7 @@ object JointLedger {
             CardanoNetwork.Section
         ): IO[Done] =
             for {
-                brief <- persistence.getOrFail(FamilyKey.Block(blockNum))
+                brief <- persistence.getOrFail(JournalKey.Block(blockNum))
                 deposits <- persistence.getOrFail(StoreKey.DepositMap)
             } yield Done(brief.payload.header, deposits)
     }

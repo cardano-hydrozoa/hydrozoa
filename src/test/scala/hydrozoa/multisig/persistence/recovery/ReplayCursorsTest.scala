@@ -6,11 +6,11 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId.*
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{FamilyKey, Markers}
+import hydrozoa.multisig.persistence.{JournalKey, Markers}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the §5.3 indices algorithm in [[ReplayCursors]] — pure derivation of the `2 + 3N`
-  * family scan floors from the recovery [[Markers]].
+  * journal scan floors from the recovery [[Markers]].
   */
 class ReplayCursorsTest extends AnyFunSuite:
 
@@ -82,40 +82,49 @@ class ReplayCursorsTest extends AnyFunSuite:
 
         // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = fastBlockMark + 1.
         assert(
-          cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(6)),
+          cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(6)),
           "softConfirmed 5 + 1"
         )
         assert(
-          cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(7)),
+          cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(7)),
           "fastBlockMark 6 + 1"
         )
         // StackSpine: aggregator floor = hardConfirmed + 1; composer floor = hardAckedStack + 1.
         assert(
-          cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(4)),
+          cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(4)),
           "hardConfirmed 3 + 1"
         )
         assert(
-          cursors.stackSpineForComposer == FamilyKey.Stack(StackNumber(5)),
+          cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(5)),
           "hardAckedStack 4 + 1"
         )
         // Soft-ack floor coincides with the fast-side confirmed mark + 1, for every peer.
-        peers.foreach(p => assert(cursors.softAcks(p) == FamilyKey.SoftAck(p, SoftAckNumber(6))))
+        peers.foreach(p => assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(6))))
         // Request floor = per-peer high-water + 1; peers with no included request start at 0.
         assert(
           cursors
-              .requests(HeadPeerNumber(0)) == FamilyKey.Request(HeadPeerNumber(0), RequestNumber(8))
+              .requests(HeadPeerNumber(0)) == JournalKey.Request(
+            HeadPeerNumber(0),
+            RequestNumber(8)
+          )
         )
         assert(
           cursors
-              .requests(HeadPeerNumber(1)) == FamilyKey.Request(HeadPeerNumber(1), RequestNumber(3))
+              .requests(HeadPeerNumber(1)) == JournalKey.Request(
+            HeadPeerNumber(1),
+            RequestNumber(3)
+          )
         )
         assert(
           cursors
-              .requests(HeadPeerNumber(2)) == FamilyKey.Request(HeadPeerNumber(2), RequestNumber(0))
+              .requests(HeadPeerNumber(2)) == JournalKey.Request(
+            HeadPeerNumber(2),
+            RequestNumber(0)
+          )
         )
-        // Hard-ack family has no derivable band floor (HardAckNumber-indexed) — scan from 0.
+        // Hard-ack journal has no derivable band floor (HardAckNumber-indexed) — scan from 0.
         peers.foreach(p =>
-            assert(cursors.hardAcks(p) == FamilyKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
+            assert(cursors.hardAcks(p) == JournalKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
         )
     }
 
@@ -139,17 +148,17 @@ class ReplayCursorsTest extends AnyFunSuite:
               hardAckedStack = Some(StackNumber(2)),
               own = ownHead
             )
-        assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
+        assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
         assert(
-          cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(6)),
+          cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(6)),
           "fastBlockMark 5 + 1"
         )
-        assert(cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(0)))
+        assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
         assert(
-          cursors.stackSpineForComposer == FamilyKey.Stack(StackNumber(3)),
+          cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(3)),
           "hardAckedStack 2 + 1"
         )
-        peers.foreach(p => assert(cursors.softAcks(p) == FamilyKey.SoftAck(p, SoftAckNumber(0))))
+        peers.foreach(p => assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(0))))
     }
 
     test("derive: empty store (all None, no acked stack) yields index-0 floors everywhere") {
@@ -163,18 +172,18 @@ class ReplayCursorsTest extends AnyFunSuite:
           own = ownHead
         )
 
-        assert(cursors.blockSpineForAggregator == FamilyKey.Block(BlockNumber(0)))
-        assert(cursors.blockSpineForLedger == FamilyKey.Block(BlockNumber(0)))
-        assert(cursors.stackSpineForAggregator == FamilyKey.Stack(StackNumber(0)))
-        assert(cursors.stackSpineForComposer == FamilyKey.Stack(StackNumber(0)))
+        assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
+        assert(cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(0)))
+        assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
+        assert(cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(0)))
         peers.foreach { p =>
-            assert(cursors.requests(p) == FamilyKey.Request(p, RequestNumber(0)))
-            assert(cursors.softAcks(p) == FamilyKey.SoftAck(p, SoftAckNumber(0)))
-            assert(cursors.hardAcks(p) == FamilyKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
+            assert(cursors.requests(p) == JournalKey.Request(p, RequestNumber(0)))
+            assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(0)))
+            assert(cursors.hardAcks(p) == JournalKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
         }
     }
 
-    test("scanFloors enumerates exactly 2 + 3N families (no hubs; spines collapse to confirmed)") {
+    test("scanFloors enumerates exactly 2 + 3N journals (no hubs; spines collapse to confirmed)") {
         val cursors =
             ReplayCursors.derive(
               Markers(None, None, None, None),
@@ -202,7 +211,7 @@ class ReplayCursorsTest extends AnyFunSuite:
               own = ownHead
             )
         hubs.foreach(h =>
-            assert(cursors.hubHardAcks(h) == FamilyKey.HubHardAck(h, HubHardAckNumber.zero))
+            assert(cursors.hubHardAcks(h) == JournalKey.HubHardAck(h, HubHardAckNumber.zero))
         )
         assert(cursors.hubHardAcks.size == hubs.size)
         assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
@@ -218,7 +227,7 @@ class ReplayCursorsTest extends AnyFunSuite:
             ReplayCursors.derive(Markers(None, None, None, None), peers, hubs, Map.empty, None, own)
         assert(
           cursors.ownCoilHardAck.contains(
-            FamilyKey.HardAck(PeerId.Coil(CoilPeerNumber(0)), HardAckNumber.zero)
+            JournalKey.HardAck(PeerId.Coil(CoilPeerNumber(0)), HardAckNumber.zero)
           )
         )
         // 2 spines + 3N satellites + H hubs + 1 own coil HardAck.

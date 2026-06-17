@@ -46,8 +46,8 @@ trait BackendStore[F[_]]:
       *
       * Implementation note: RocksDB serves `seekToLast` in O(1) — the LSM index pinpoints the
       * largest key across the MemTable + every SSTable level without a full scan. With the
-      * per-author CF split (§7.1) each satellite CF holds exactly one author's family, so `lastKey`
-      * of the own-author CF *is* that author's high-water — no prefix scan needed.
+      * per-author CF split (§7.1) each satellite CF holds exactly one author's journal, so
+      * `lastKey` of the own-author CF *is* that author's high-water — no prefix scan needed.
       */
     def lastKey(cf: Cf): F[Option[Array[Byte]]]
 

@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -84,8 +84,8 @@ class StackComposerRecoveryTest extends AnyFunSuite:
         val own = ownNum
         for {
             us <- unsignedStack(stack = 1, firstBlock = 0, lastBlock = 3)
-            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
-              FamilyValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+              JournalValue(stamp, hardAck(peer = own.convert, ackNum = 0, stack = 1))
             )
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(us)
             _ <- p.put(StoreKey.Treasury)(TreasuryFixture.sampleTreasury)

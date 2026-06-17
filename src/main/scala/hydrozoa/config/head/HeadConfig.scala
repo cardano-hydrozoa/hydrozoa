@@ -590,7 +590,7 @@ object HeadConfig {
             final def hubbedCoilPeerNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
                 coilPeers.hubbedBy(headNum)
 
-            /** Every hub head peer — those that hub ≥ 1 coil peer (one `HubHardAck` family each; a
+            /** Every hub head peer — those that hub ≥ 1 coil peer (one `HubHardAck` journal each; a
               * coil peer reads them all to reconstruct the coil quorum on recovery). Empty with no
               * coil peers.
               */

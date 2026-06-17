@@ -151,7 +151,7 @@ trait CoilMultisigRegimeManager(
             )
 
             // R3 boot replay (§8 step 3, coil path — §10 Q10): before opening the start barrier,
-            // re-feed the consensus actors from the persisted lane tail (head families + the hubs'
+            // re-feed the consensus actors from the persisted lane tail (head journals + the hubs'
             // HubHardAck + this coil peer's own coil HardAck) and seed BlockWeaver's first L1
             // PollResults. Run INLINE here (Plan A) so every send queues behind each actor's PreStart
             // and drains in order once the barrier opens. Cold store ⇒ near-no-op.

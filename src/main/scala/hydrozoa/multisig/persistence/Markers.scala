@@ -33,9 +33,9 @@ final case class Markers(
 
 object Markers:
     /** Read all four markers from `backend`, scoping the `hardAcked` derivation to `own`. With the
-      * per-author CF split each satellite CF holds exactly one author's family, so the own
+      * per-author CF split each satellite CF holds exactly one author's journal, so the own
       * `hardAcked` mark is just `lastKey` of the own-author `HardAck` CF — no prefix scan (§7.1).
-      * `own` is a [[PeerId]] (head or coil), so the one `HardAck` family covers both peer types.
+      * `own` is a [[PeerId]] (head or coil), so the one `HardAck` journal covers both peer types.
       */
     def derive(backend: BackendStore[IO], own: PeerId): IO[Markers] =
         (
@@ -102,7 +102,7 @@ object Markers:
         requireWidth(bytes, 4, "HardAck key")
         HardAckNumber(ByteBuffer.wrap(bytes).getInt)
 
-    /** Decode `RequestNumber` from a per-author Request key `[requestNum:8]` — the Request family
+    /** Decode `RequestNumber` from a per-author Request key `[requestNum:8]` — the Request journal
       * uses an 8-byte index, unlike the 4-byte soft/hard-ack indices.
       */
     private def decodeSatelliteNumRequest(bytes: Array[Byte]): RequestNumber =

@@ -9,8 +9,15 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import java.nio.ByteBuffer
 
-/** A full addressable entry key in the persistence layer — a [[FamilyId]] paired with the
-  * within-family index.
+/** A full addressable entry key in the persistence layer — a [[JournalId]] paired with the
+  * within-journal index.
+  *
+  * A *journal* is the **recovery** concept — one author's arrival-stamped, index-ordered
+  * append-only replay sequence (scanned by [[recovery.JournalScan]], total-ordered across journals
+  * by [[recovery.ArrivalOrderedMerge]]). It is a **subset** of the column families: `JournalKey
+  * extends StoreKey`, so "journal" ≠ "column family" — every CF is a [[StoreKey]], but only the
+  * replayable ones are a `JournalKey`. The 11 non-journal CFs (snapshots, key-ordered / `max(key)`
+  * reconstruction reads) stay plain [[StoreKey]]: unstamped, never merged.
   *
   * Encoded byte form (per §7.1, big-endian fixed-width so lexicographic byte order matches numeric
   * index order, the property that makes range scans correct):
@@ -22,85 +29,85 @@ import java.nio.ByteBuffer
   *   - `HardAck` → `[hardAckNum : 4]`
   *   - `HubHardAck` → `[hubHardAckNum : 4]`
   *
-  * Both the family-type **and the author** are the column family ([[Cf]], split one CF per author,
+  * Both the journal-type **and the author** are the column family ([[Cf]], split one CF per author,
   * §3.2) — the key carries neither a type tag nor an author prefix, only the within-author index.
   *
-  * **Each satellite CF is one author's family.** With the per-author split the whole CF is a single
-  * author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole family —
-  * [[recovery.FamilyScan]] needs no peer-prefix bounding. The author is recovered from the CF on
-  * [[decode]] (the cursor passes the per-author [[Cf]] it scanned).
+  * **Each satellite CF is one author's journal.** With the per-author split the whole CF is a
+  * single author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole
+  * journal — [[recovery.JournalScan]] needs no peer-prefix bounding. The author is recovered from
+  * the CF on [[decode]] (the cursor passes the per-author [[Cf]] it scanned).
   *
-  * Each case's `Value` is a [[FamilyValue]] wrapping that family's wire payload (the wire codec
+  * Each case's `Value` is a [[JournalValue]] wrapping that journal's wire payload (the wire codec
   * from `consensus.transport.Codecs`, reused under the 12-byte arrival-stamp prefix via
-  * [[StoreCodec.laneValue]]; §5.4, §7.1). A sealed trait (not an `enum`) so each case can declare
-  * its own path-dependent `Value` + codec.
+  * [[StoreCodec.journalValue]]; §5.4, §7.1). A sealed trait (not an `enum`) so each case can
+  * declare its own path-dependent `Value` + codec.
   */
-sealed trait FamilyKey extends StoreKey:
-    /** The family this key belongs to (and therefore the column family — see [[FamilyId.cf]]). */
-    def familyId: FamilyId
+sealed trait JournalKey extends StoreKey:
+    /** The journal this key belongs to (and therefore the column family — see [[JournalId.cf]]). */
+    def journalId: JournalId
 
-    /** The column family this family key lives in — delegates through [[FamilyId.cf]]. Satisfies
+    /** The column family this journal key lives in — delegates through [[JournalId.cf]]. Satisfies
       * the [[StoreKey]] contract.
       */
-    final def cf: Cf = familyId.cf
+    final def cf: Cf = journalId.cf
 
-object FamilyKey:
+object JournalKey:
 
     /** Block spine: the block brief, keyed by `blockNum`. */
-    final case class Block(num: BlockNumber) extends FamilyKey:
-        type Value = FamilyValue[BlockBrief.Next]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[BlockBrief.Next]
-        def familyId: FamilyId = FamilyId.BlockSpine
+    final case class Block(num: BlockNumber) extends JournalKey:
+        type Value = JournalValue[BlockBrief.Next]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[BlockBrief.Next]
+        def journalId: JournalId = JournalId.BlockSpine
         def encode: Array[Byte] = intBytes(num)
 
     /** Stack spine: the stack brief, keyed by `stackNum`. */
-    final case class Stack(num: StackNumber) extends FamilyKey:
-        type Value = FamilyValue[StackBrief]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[StackBrief]
-        def familyId: FamilyId = FamilyId.StackSpine
+    final case class Stack(num: StackNumber) extends JournalKey:
+        type Value = JournalValue[StackBrief]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[StackBrief]
+        def journalId: JournalId = JournalId.StackSpine
         def encode: Array[Byte] = intBytes(num)
 
     /** Request satellite (per author): the assigned user request, keyed by `(peer, requestNum)`. */
-    final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends FamilyKey:
-        type Value = FamilyValue[UserRequestWithId]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[UserRequestWithId]
-        def familyId: FamilyId = FamilyId.Request(peer)
+    final case class Request(peer: HeadPeerNumber, num: RequestNumber) extends JournalKey:
+        type Value = JournalValue[UserRequestWithId]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[UserRequestWithId]
+        def journalId: JournalId = JournalId.Request(peer)
         def encode: Array[Byte] = longBytes(num)
 
     /** Soft-ack satellite (per author): a peer's soft-ack signature, keyed by `(peer, softAckNum)`.
       */
-    final case class SoftAck(peer: HeadPeerNumber, num: SoftAckNumber) extends FamilyKey:
-        type Value = FamilyValue[SoftAckMsg]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[SoftAckMsg]
-        def familyId: FamilyId = FamilyId.SoftAck(peer)
+    final case class SoftAck(peer: HeadPeerNumber, num: SoftAckNumber) extends JournalKey:
+        type Value = JournalValue[SoftAckMsg]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[SoftAckMsg]
+        def journalId: JournalId = JournalId.SoftAck(peer)
         def encode: Array[Byte] = intBytes(num)
 
     /** Hard-ack satellite (per author): a peer's hard-ack signature, keyed by `(peer, hardAckNum)`.
-      * The author is a [[PeerId]] — head and coil peers share one family type, one CF per author. A
-      * head peer's family holds its own head hard-acks; a coil peer's family holds its own
+      * The author is a [[PeerId]] — head and coil peers share one journal type, one CF per author.
+      * A head peer's journal holds its own head hard-acks; a coil peer's journal holds its own
       * hard-acks plus a hub's raw inbound receive copy (persisted by `PeerLiaisonHubToCoil` on
       * receipt so a coil peer's ack survives a hub crash before `CoilAckSequencer` re-sequences
       * it). The key bytes carry only the within-author index — the author comes from the CF.
       */
-    final case class HardAck(peer: PeerId, num: HardAckNumber) extends FamilyKey:
-        type Value = FamilyValue[HardAckMsg]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckMsg]
-        def familyId: FamilyId = FamilyId.HardAck(peer)
+    final case class HardAck(peer: PeerId, num: HardAckNumber) extends JournalKey:
+        type Value = JournalValue[HardAckMsg]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[HardAckMsg]
+        def journalId: JournalId = JournalId.HardAck(peer)
         def encode: Array[Byte] = intBytes(num)
 
-    /** Hub-hard-ack family (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that travels
-      * the head mesh and the hub→coil links, keyed by `(hub, hubHardAckNum)`.
+    /** Hub-hard-ack journal (per hub): the re-sequenced coil hard-ack (`HardAckWithId`) that
+      * travels the head mesh and the hub→coil links, keyed by `(hub, hubHardAckNum)`.
       */
-    final case class HubHardAck(hub: HeadPeerNumber, num: HubHardAckNumber) extends FamilyKey:
-        type Value = FamilyValue[HardAckWithId]
-        given codec: StoreCodec[Value] = StoreCodec.laneValue[HardAckWithId]
-        def familyId: FamilyId = FamilyId.HubHardAck(hub)
+    final case class HubHardAck(hub: HeadPeerNumber, num: HubHardAckNumber) extends JournalKey:
+        type Value = JournalValue[HardAckWithId]
+        given codec: StoreCodec[Value] = StoreCodec.journalValue[HardAckWithId]
+        def journalId: JournalId = JournalId.HubHardAck(hub)
         def encode: Array[Byte] = intBytes(num)
 
     /** Decode a key from its byte form, given the CF the bytes came from. Throws on a malformed
       * payload (interpreted as store corruption — fail safe).
       */
-    def decode(cf: Cf, bytes: Array[Byte]): FamilyKey = cf match
+    def decode(cf: Cf, bytes: Array[Byte]): JournalKey = cf match
         case Cf.Block =>
             requireLen(cf, bytes, 4)
             Block(BlockNumber(readIntBE(bytes, 0)))
@@ -123,7 +130,7 @@ object FamilyKey:
             Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.CoilStampMark |
             Cf.L2CommandNumber | Cf.UnsignedStack | Cf.Meta =>
             throw new IllegalArgumentException(
-              s"$cf is not a family CF; FamilyKey.decode is undefined for it"
+              s"$cf is not a journal CF; JournalKey.decode is undefined for it"
             )
 
     /** Encode a non-negative `Int` as 4 big-endian bytes. */

@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.OutboxBacking
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -82,7 +82,7 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Lanes ----------------------------------------------------------------------------------
     // Inbound population (pulled from the hub): block + stack spines are contiguous (the hub relays
     // every item in order; block 0 / stack 0 are out-of-band bootstrap so the first is 1). The
-    // per-author / per-hub families are one contiguous Lane each.
+    // per-author / per-hub journals are one contiguous Lane each.
     private val blockLane =
         LaneInbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
@@ -126,7 +126,7 @@ abstract class PeerLiaisonCoilToHub(
         }.toMap
 
     // Outbound: this coil peer's own hard-ack, served to the hub. Backed by the own coil `HardAck`
-    // family so a reply hot-loads acks below the in-memory outbox floor (the hub re-pulls old acks
+    // journal so a reply hot-loads acks below the in-memory outbox floor (the hub re-pulls old acks
     // it missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
@@ -216,32 +216,34 @@ abstract class PeerLiaisonCoilToHub(
       */
     private def persistInbound(pop: Population.New): IO[Unit] =
         persistence.arrivalStamp.flatMap { stamp =>
-            def lv[P](payload: P): FamilyValue[P] = FamilyValue(stamp, payload)
+            def lv[P](payload: P): JournalValue[P] = JournalValue(stamp, payload)
             val spinePuts: List[WriteBatch => WriteBatch] =
                 List(
                   pop.block.map(b =>
-                      (wb: WriteBatch) => wb.put(FamilyKey.Block(b.blockNum))(lv(b))
+                      (wb: WriteBatch) => wb.put(JournalKey.Block(b.blockNum))(lv(b))
                   ),
-                  pop.stack.map(s => (wb: WriteBatch) => wb.put(FamilyKey.Stack(s.stackNum))(lv(s)))
+                  pop.stack.map(s =>
+                      (wb: WriteBatch) => wb.put(JournalKey.Stack(s.stackNum))(lv(s))
+                  )
                 ).flatten
             val requestPuts: List[WriteBatch => WriteBatch] =
                 pop.requests.values.flatten.toList.map(r =>
                     (wb: WriteBatch) =>
-                        wb.put(FamilyKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                        wb.put(JournalKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
                           lv(r)
                         )
                 )
             val softAckPuts: List[WriteBatch => WriteBatch] =
                 pop.softAcks.values.flatten.toList.map(a =>
-                    (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                    (wb: WriteBatch) => wb.put(JournalKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                 )
             val headHardAckPuts: List[WriteBatch => WriteBatch] =
                 pop.headHardAcks.values.flatten.toList.map(a =>
-                    (wb: WriteBatch) => wb.put(FamilyKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
+                    (wb: WriteBatch) => wb.put(JournalKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
                 )
             val coilHardAckPuts: List[WriteBatch => WriteBatch] =
                 pop.coilHardAcks.values.flatten.toList.map(h =>
-                    (wb: WriteBatch) => wb.put(FamilyKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                    (wb: WriteBatch) => wb.put(JournalKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
                 )
             val full =
                 (spinePuts ++ requestPuts ++ softAckPuts ++ headHardAckPuts ++ coilHardAckPuts)
@@ -306,7 +308,7 @@ abstract class PeerLiaisonCoilToHub(
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
             // Restore only the own-hard-ack high-water; the lane serves older acks from the own
-            // coil HardAck family on demand (the Server half answers the hub's OwnHardAck.Get) and
+            // coil HardAck journal on demand (the Server half answers the hub's OwnHardAck.Get) and
             // replay re-appends the in-flight tail. An empty store leaves the lane cold.
             highWater <- ownHardAckBacking.highWater
             _ <- ownHardAckLane.seedHighWater(highWater)
@@ -319,7 +321,7 @@ abstract class PeerLiaisonCoilToHub(
             _ <- startResendTimer
         } yield ()
 
-    /** Restore the inbound population lanes' receive cursors to `next(max(persisted family))` (the
+    /** Restore the inbound population lanes' receive cursors to `next(max(persisted journal))` (the
       * full population the coil peer pulls from the hub). An empty store leaves a lane at its cold
       * initial cursor.
       */

@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.OutboxBacking
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
@@ -74,7 +74,7 @@ abstract class PeerLiaisonHubToCoil(
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
-    // Each lane is backed by the family the hub already persists as a head-mesh member (own-produced
+    // Each lane is backed by the journal the hub already persists as a head-mesh member (own-produced
     // or inbound-replicated), so a reply hot-loads entries below the in-memory outbox floor and
     // preStart restores only the high-water; the hub serves every author (no own-led filter).
     private val backend = persistence.backend
@@ -264,8 +264,8 @@ abstract class PeerLiaisonHubToCoil(
             persistence.arrivalStamp.flatMap { stamp =>
                 persistence.write(
                   WriteBatch.start
-                      .put(FamilyKey.HardAck(PeerId.Coil(coil), ack.hardAckNum))(
-                        FamilyValue(stamp, ack)
+                      .put(JournalKey.HardAck(PeerId.Coil(coil), ack.hardAckNum))(
+                        JournalValue(stamp, ack)
                       )
                 )
             }
@@ -307,10 +307,10 @@ abstract class PeerLiaisonHubToCoil(
             appendArtifact(artifact) >> server.afterAppend
     }
 
-    /** Restore each population outbox lane's high-water from its backing family, leaving the queues
-      * empty. The Server half answers the coil peer's `Population.Get` by hot-loading older entries
-      * from the store (`OutboxBacking.backfill`); live `CoilRelay` production re-appends the tail.
-      * An empty store leaves every lane cold.
+    /** Restore each population outbox lane's high-water from its backing journal, leaving the
+      * queues empty. The Server half answers the coil peer's `Population.Get` by hot-loading older
+      * entries from the store (`OutboxBacking.backfill`); live `CoilRelay` production re-appends
+      * the tail. An empty store leaves every lane cold.
       */
     private def restoreHighWaters: IO[Unit] =
         for {

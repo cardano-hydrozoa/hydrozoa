@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, FamilyKey, FamilyValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -93,14 +93,14 @@ class ReplayActorTest extends AnyFunSuite:
         val coil = CoilPeerNumber(0)
         val c = runReplay(
           seed = p =>
-              p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
-                FamilyValue(stamp, coilHardAck(0, 0, stack = 1))
+              p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
+                JournalValue(stamp, coilHardAck(0, 0, stack = 1))
               ) >>
-                  p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
-                    FamilyValue(stamp, coilHardAck(0, 1, stack = 2))
+                  p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
+                    JournalValue(stamp, coilHardAck(0, 1, stack = 2))
                   ) >>
-                  p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(2)))(
-                    FamilyValue(stamp, coilHardAck(0, 2, stack = 3))
+                  p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(2)))(
+                    JournalValue(stamp, coilHardAck(0, 2, stack = 3))
                   ) >>
                   p.put(StoreKey.CoilStampMark)(Map(coil -> HardAckNumber(0))),
           coils = List(coil)
@@ -260,27 +260,27 @@ class ReplayActorTest extends AnyFunSuite:
               Array[Byte](0)
             )
             // Own hard-acks for stack 1 → hardAcked = 1, hardAckedStack = 1 (> hardConfirmed 0).
-            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
-              FamilyValue(stamp, hardAck(own.convert, 0, 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(0)))(
+              JournalValue(stamp, hardAck(own.convert, 0, 1))
             )
-            _ <- p.put(FamilyKey.HardAck(PeerId.Head(own), HardAckNumber(1)))(
-              FamilyValue(stamp, hardAck(own.convert, 1, 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Head(own), HardAckNumber(1)))(
+              JournalValue(stamp, hardAck(own.convert, 1, 1))
             )
             // A remote peer's hard-ack for stack 1 → routed to SCA via the tail.
-            _ <- p.put(FamilyKey.HardAck(PeerId.Head(other), HardAckNumber(0)))(
-              FamilyValue(stamp, hardAck(other.convert, 0, 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Head(other), HardAckNumber(0)))(
+              JournalValue(stamp, hardAck(other.convert, 0, 1))
             )
             // The in-flight stack's unsigned form → reconstructed handoff to SCA.
             unsigned <- unsignedStack(1)
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(unsigned)
             // A block brief → FCA + BlockWeaver.
             block5 <- blockBrief(5)
-            _ <- p.put(FamilyKey.Block(BlockNumber(5)))(FamilyValue(stamp, block5))
+            _ <- p.put(JournalKey.Block(BlockNumber(5)))(JournalValue(stamp, block5))
             // Two stack briefs → SC gets only stack 2 (>= composer floor 2).
             s1 <- stackBrief(1, 0, 0)
             s2 <- stackBrief(2, 1, 1)
-            _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
-            _ <- p.put(FamilyKey.Stack(StackNumber(2)))(FamilyValue(stamp, s2))
+            _ <- p.put(JournalKey.Stack(StackNumber(1)))(JournalValue(stamp, s1))
+            _ <- p.put(JournalKey.Stack(StackNumber(2)))(JournalValue(stamp, s2))
         } yield ()
 
     /** softConfirmed = 5 but fastBlockMark = max(BlockResult) = 2 → confirmed > acked, a torn
@@ -314,16 +314,16 @@ class ReplayActorTest extends AnyFunSuite:
               Array[Byte](0)
             )
             // Own coil hard-acks for stack 1 → coilHardAcked = 1, coilHardAckedStack = 1 (> 0).
-            _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
-              FamilyValue(stamp, coilHardAck(0, 0, 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
+              JournalValue(stamp, coilHardAck(0, 0, 1))
             )
-            _ <- p.put(FamilyKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
-              FamilyValue(stamp, coilHardAck(0, 1, 1))
+            _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(1)))(
+              JournalValue(stamp, coilHardAck(0, 1, 1))
             )
             // The hub's re-sequenced coil-quorum ack (another coil peer's stack-1 ack) → SCA via
             // its `.ack`.
-            _ <- p.put(FamilyKey.HubHardAck(hub, HubHardAckNumber(0)))(
-              FamilyValue(stamp, hubHardAck(1, 0, coilHardAck(1, 0, 1)))
+            _ <- p.put(JournalKey.HubHardAck(hub, HubHardAckNumber(0)))(
+              JournalValue(stamp, hubHardAck(1, 0, coilHardAck(1, 0, 1)))
             )
             unsigned <- unsignedStack(1)
             _ <- p.put(StoreKey.UnsignedStack(StackNumber(1)))(unsigned)
@@ -335,11 +335,11 @@ class ReplayActorTest extends AnyFunSuite:
               Map.empty[HeadPeerNumber, RequestNumber]
             )
             block5 <- blockBrief(5)
-            _ <- p.put(FamilyKey.Block(BlockNumber(5)))(FamilyValue(stamp, block5))
+            _ <- p.put(JournalKey.Block(BlockNumber(5)))(JournalValue(stamp, block5))
             s1 <- stackBrief(1, 0, 0)
             s2 <- stackBrief(2, 1, 1)
-            _ <- p.put(FamilyKey.Stack(StackNumber(1)))(FamilyValue(stamp, s1))
-            _ <- p.put(FamilyKey.Stack(StackNumber(2)))(FamilyValue(stamp, s2))
+            _ <- p.put(JournalKey.Stack(StackNumber(1)))(JournalValue(stamp, s1))
+            _ <- p.put(JournalKey.Stack(StackNumber(2)))(JournalValue(stamp, s2))
         } yield ()
 
     /** A single hub's `HubHardAck` (a coil peer's ack re-sequenced by hub 1) — the only durable
@@ -347,8 +347,8 @@ class ReplayActorTest extends AnyFunSuite:
       * exercising head-peer coil-quorum recovery (P14).
       */
     private def seedHubHardAck(p: Persistence[IO]): IO[Unit] =
-        p.put(FamilyKey.HubHardAck(HeadPeerNumber(1), HubHardAckNumber(0)))(
-          FamilyValue(stamp, hubHardAck(1, 0, coilHardAck(0, 0, 1)))
+        p.put(JournalKey.HubHardAck(HeadPeerNumber(1), HubHardAckNumber(0)))(
+          JournalValue(stamp, hubHardAck(1, 0, coilHardAck(0, 0, 1)))
         )
 
     // ---- fixtures (mirror RecoverSeamsTest) ----

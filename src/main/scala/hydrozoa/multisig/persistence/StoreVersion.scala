@@ -19,11 +19,11 @@ object StoreVersion:
       * §6 `CoilAckSequencer`); the CF set differs from v2, so a v2 store cannot be opened with the
       * v3 descriptor list.
       *
-      * v4: unifies the head and coil own-hard-ack CFs into one `PeerId`-keyed `HardAck` family. The
-      * per-author physical CF split is preserved (one CF per peer), but the coil CFs are renamed
-      * from `CoilHardAck:<coilNum>` to `HardAck:<peerWireInt>` (the peer's wire int — num shifted
-      * left one bit, low bit tagging head vs coil), so the CF names differ from v3 and a v3 store
-      * cannot be opened with the v4 descriptor list.
+      * v4: unifies the head and coil own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal.
+      * The per-author physical CF split is preserved (one CF per peer), but the coil CFs are
+      * renamed from `CoilHardAck:<coilNum>` to `HardAck:<peerWireInt>` (the peer's wire int — num
+      * shifted left one bit, low bit tagging head vs coil), so the CF names differ from v3 and a v3
+      * store cannot be opened with the v4 descriptor list.
       */
     val current: Int = 4
 

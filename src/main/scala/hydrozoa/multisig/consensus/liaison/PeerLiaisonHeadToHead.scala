@@ -19,7 +19,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import hydrozoa.multisig.persistence.recovery.OutboxBacking
-import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -71,7 +71,7 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
-    // Each outbound side is backed by the family this peer's own production lives in, so a reply
+    // Each outbound side is backed by the journal this peer's own production lives in, so a reply
     // hot-loads entries below the in-memory outbox floor and preStart restores only the high-water.
     // The spines carry every leader's brief, so their backings keep only the ones THIS peer leads;
     // the satellites are this peer's own author (CF per author).
@@ -197,23 +197,23 @@ abstract class PeerLiaisonHeadToHead(
       */
     private def persistInbound(m: Mesh.New): IO[Unit] =
         persistence.arrivalStamp.flatMap { stamp =>
-            def lv[P](payload: P): FamilyValue[P] = FamilyValue(stamp, payload)
+            def lv[P](payload: P): JournalValue[P] = JournalValue(stamp, payload)
             val puts: List[WriteBatch => WriteBatch] =
                 List(
-                  m.block.map(b => (wb: WriteBatch) => wb.put(FamilyKey.Block(b.blockNum))(lv(b))),
-                  m.stack.map(s => (wb: WriteBatch) => wb.put(FamilyKey.Stack(s.stackNum))(lv(s))),
+                  m.block.map(b => (wb: WriteBatch) => wb.put(JournalKey.Block(b.blockNum))(lv(b))),
+                  m.stack.map(s => (wb: WriteBatch) => wb.put(JournalKey.Stack(s.stackNum))(lv(s))),
                   m.softAck.map(a =>
-                      (wb: WriteBatch) => wb.put(FamilyKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                      (wb: WriteBatch) => wb.put(JournalKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                   ),
                   m.headHardAck.map(a =>
-                      (wb: WriteBatch) => wb.put(FamilyKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
+                      (wb: WriteBatch) => wb.put(JournalKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
                   ),
                   m.hubHardAck.map(h =>
-                      (wb: WriteBatch) => wb.put(FamilyKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                      (wb: WriteBatch) => wb.put(JournalKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
                   )
                 ).flatten ++ m.requests.map(r =>
                     (wb: WriteBatch) =>
-                        wb.put(FamilyKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                        wb.put(JournalKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
                           lv(r)
                         )
                 )
@@ -305,7 +305,7 @@ abstract class PeerLiaisonHeadToHead(
         case hub: HardAckWithId   => hubHardAckLane.append(hub)
     }
 
-    /** Restore each outbound lane's high-water from its backing family, leaving the queues empty
+    /** Restore each outbound lane's high-water from its backing journal, leaving the queues empty
       * (R3): the Server half hot-loads older own-produced entries from the store on the remote's
       * `Mesh.Get`, and replay / live production re-appends the tail. The hub-hard-ack lane restores
       * on a **hub** head peer (its own `HubHardAck` is persisted by `CoilAckSequencer`); it is cold
@@ -324,8 +324,8 @@ abstract class PeerLiaisonHeadToHead(
     /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
       * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
       * otherwise re-dispatch to the consensus actors that `ReplayActor` already re-fed, CR8). The
-      * satellites read the **remote**'s own-keyed family; the spines are a single shared CF (every
-      * leader's briefs, not per-author), so they read the overall family max and the sparse lane's
+      * satellites read the **remote**'s own-keyed journal; the spines are a single shared CF (every
+      * leader's briefs, not per-author), so they read the overall journal max and the sparse lane's
       * leader-schedule successor picks the remote's next-led number. The spine max reuses the
       * outbound `blockBacking` / `stackBacking`: `highWater` is the whole-CF `lastKey`, independent
       * of the backing's own-led `keep` (which filters only `backfill`). An empty store leaves a
