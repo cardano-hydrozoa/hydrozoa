@@ -2,8 +2,9 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
@@ -119,12 +120,11 @@ class PersistenceTest extends AnyFunSuite:
 
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
+        val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         try
             RocksDbBackendStore
-                .open(tempDir, ContraTracer.nullTracer)
-                .use(backend =>
-                    Persistence.fromBackend(backend, ContraTracer.nullTracer).flatMap(prog)
-                )
+                .open(tempDir, tracer)
+                .use(backend => Persistence.fromBackend(backend, tracer).flatMap(prog))
                 .unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
