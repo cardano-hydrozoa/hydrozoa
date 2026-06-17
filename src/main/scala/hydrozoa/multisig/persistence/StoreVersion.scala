@@ -4,28 +4,20 @@ import java.nio.ByteBuffer
 
 /** The persistence-layer schema version.
   *
-  * Bumped whenever the on-disk format (CF set, key layout, codecs) changes in a
-  * backward-incompatible way. The store rejects opens that find a version it does not understand —
-  * better fail-safe than silently misread (CR6 / §7 versioning note).
+  * The store rejects opens that find a version it does not understand — better fail-safe than
+  * silently misread (CR6 / §7 versioning note). The mechanism is in place from day one; bumping it
+  * on backward-incompatible format changes (CF set, key layout, codecs) waits until the layout
+  * stabilizes — see [[current]].
   */
 object StoreVersion:
-    /** Current on-disk schema version.
+    /** Current on-disk schema version — held at **1**.
       *
-      * v2: per-author satellite CF split (§7.1) — satellite CFs are now one-per-author with the
-      * author embedded in the CF name and dropped from the key; incompatible with v1's combined
-      * author-prefixed satellite CFs.
-      *
-      * v3: adds the `CoilStampMark` singleton CF (a hub's per-coil-peer stamped-high-water marks,
-      * §6 `CoilAckSequencer`); the CF set differs from v2, so a v2 store cannot be opened with the
-      * v3 descriptor list.
-      *
-      * v4: unifies the head and coil own-hard-ack CFs into one `PeerId`-keyed `HardAck` journal.
-      * The per-author physical CF split is preserved (one CF per peer), but the coil CFs are
-      * renamed from `CoilHardAck:<coilNum>` to `HardAck:<peerWireInt>` (the peer's wire int — num
-      * shifted left one bit, low bit tagging head vs coil), so the CF names differ from v3 and a v3
-      * store cannot be opened with the v4 descriptor list.
+      * The format still churns freely during development, so we do **not** track
+      * backward-incompatible bumps yet: a format change just rebuilds the store. Versioning starts
+      * (and the per-version deltas get recorded here) once the layout stabilizes and stores must
+      * survive upgrades.
       */
-    val current: Int = 4
+    val current: Int = 1
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */
     val key: Array[Byte] = "store_version".getBytes("UTF-8")
