@@ -108,13 +108,23 @@ object MultiNodeConfig {
         toProp: A => Prop,
         ioRuntime: IORuntime
     ): Prop =
-        run(resource = Resource.eval(IO(generateDefault.sample.get)), testM = testM)
+        run(
+          resource = PropertyM
+              .pick[IO, MultiNodeConfig](generateDefault)
+              .map(Resource.pure[IO, MultiNodeConfig](_)),
+          testM = testM
+        )
 
     def runWithCoil[A](nCoil: Int = 5, quorum: Int = 3)(testM: MultiNodeConfigTestM[A])(using
         toProp: A => Prop,
         ioRuntime: IORuntime
     ): Prop =
-        run(resource = Resource.eval(IO(generateWithCoil(nCoil, quorum).sample.get)), testM = testM)
+        run(
+          resource = PropertyM
+              .pick[IO, MultiNodeConfig](generateWithCoil(nCoil, quorum))
+              .map(Resource.pure[IO, MultiNodeConfig](_)),
+          testM = testM
+        )
 
     def generateDefault: Gen[MultiNodeConfig] = generate(TestPeersSpec.default)()
 

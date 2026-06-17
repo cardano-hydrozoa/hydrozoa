@@ -80,7 +80,9 @@ object EvacuationActorTest extends Properties("Evacuation Actor") {
     import EvacuationActorTestHelpers.*
 
     val _ = property("dispute actor (no actor system)") = run(
-      resource = Resource.eval(IO(MultiNodeConfig.generate(TestPeersSpec.default)().sample.get)),
+      resource = PropertyM
+          .pick[IO, MultiNodeConfig](MultiNodeConfig.generate(TestPeersSpec.default)())
+          .map(Resource.pure[IO, MultiNodeConfig](_)),
       testM = for {
           _ <- ask
       } yield true

@@ -129,58 +129,55 @@ object JointLedgerTestHelpers {
         type Request = FastConsensusActor.Request | GetState.Sync
     }
 
-    val defaultResource: Resource[IO, TestR] = for {
-        multiNodeConfig <- Resource.eval(
-          IO(
-            MultiNodeConfig
-                .generate(
-                  TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(1))
-                )()
-                .sample
-                .get
-          )
-        )
-
-        // testPeers <- PropertyM.pick[IO, TestHeadPeers](generateTestPeers())
-        // config <- PropertyM.pick[IO, NodeConfig](
-        //  generateNodeConfig(Exact(SeedPhrase.Yaci, testPeers.headPeers.nHeadPeers.toInt))()
-        // )
-
-        config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
-
-        system <- ActorSystem[IO]("JointLedger")
-        consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
-        stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
-
-        eutxoLedger <- Resource.eval(EutxoL2Ledger(config))
-        persistenceBackend <- InMemoryBackendStore.open(ContraTracer.nullTracer)
-        persistence <- Resource.eval(
-          Persistence.fromBackend(persistenceBackend, ContraTracer.nullTracer)(using config)
-        )
-        jointLedger <- Resource.eval(
-          system.actorOf(
-            JointLedger(
-              config,
-              JointLedger.Connections(
-                fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
-                stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
-                headPeerLiaisons = List()
-              ),
-              eutxoLedger,
-              Slf4jTracer.sink.contramap(
-                JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
-              ),
-              persistence
+    val defaultResource: PropertyM[IO, Resource[IO, TestR]] =
+        PropertyM
+            .pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generate(
+                    TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(1))
+                  )()
             )
-          )
-        )
-    } yield TestR(
-      multiNodeConfig = multiNodeConfig,
-      config = config,
-      actorSystem = system,
-      jointLedger = jointLedger,
-      consensusAgent = consensusAgent
-    )
+            .map { multiNodeConfig =>
+                val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+                for {
+                    system <- ActorSystem[IO]("JointLedger")
+                    consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
+                    stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
+
+                    eutxoLedger <- Resource.eval(EutxoL2Ledger(config))
+                    persistenceBackend <- InMemoryBackendStore.open(ContraTracer.nullTracer)
+                    persistence <- Resource.eval(
+                      Persistence.fromBackend(persistenceBackend, ContraTracer.nullTracer)(using
+                        config
+                      )
+                    )
+                    jointLedger <- Resource.eval(
+                      system.actorOf(
+                        JointLedger(
+                          config,
+                          JointLedger.Connections(
+                            fastConsensusActor =
+                                consensusAgent.narrowRequest[FastConsensusActor.Request],
+                            stackComposer =
+                                stackComposerSink.narrowRequest[StackComposer.Request],
+                            headPeerLiaisons = List()
+                          ),
+                          eutxoLedger,
+                          Slf4jTracer.sink.contramap(
+                            JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
+                          ),
+                          persistence
+                        )
+                      )
+                    )
+                } yield TestR(
+                  multiNodeConfig = multiNodeConfig,
+                  config = config,
+                  actorSystem = system,
+                  jointLedger = jointLedger,
+                  consensusAgent = consensusAgent
+                )
+            }
 
     /** The "environment" that is contained in the ReaderT of the JLTest
       */
