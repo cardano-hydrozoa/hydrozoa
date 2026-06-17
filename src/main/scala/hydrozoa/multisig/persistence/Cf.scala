@@ -5,7 +5,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 
 /** A column family the persistence layer opens.
   *
-  * **Satellite families are split one CF per author** (§3.1, §7.1): the CF *is* the author
+  * **Satellite families are split one CF per author** (§3.2, §7.1): the CF *is* the author
   * discriminant, so the on-disk key carries no author prefix and each author's CF is a single
   * monotonic append stream (non-overlapping L0 → near-zero compaction — decisive at the request
   * rate). The set of CFs is therefore **config-derived** (`Cf.mkAll`): the fixed-shape CFs (the two

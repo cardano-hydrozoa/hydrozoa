@@ -23,7 +23,7 @@ import java.nio.ByteBuffer
   *   - `HubHardAck` → `[hubHardAckNum : 4]`
   *
   * Both the family-type **and the author** are the column family ([[Cf]], split one CF per author,
-  * §3.1) — the key carries neither a type tag nor an author prefix, only the within-author index.
+  * §3.2) — the key carries neither a type tag nor an author prefix, only the within-author index.
   *
   * **Each satellite CF is one author's family.** With the per-author split the whole CF is a single
   * author's entries in index order, so a scan from the cursor to end-of-CF *is* the whole family —

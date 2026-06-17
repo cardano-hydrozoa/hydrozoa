@@ -356,7 +356,7 @@ final case class SlowConsensusActor(
       * handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid- confirmation
       * can be recovered from disk on next boot.
       *
-      * Hard-ack pruning (per §3.2 / §6) is not yet wired here — the typed `WriteBatch` shape for it
+      * Hard-ack pruning (per §3.3 / §6) is not yet wired here — the typed `WriteBatch` shape for it
       * spans peer-multiplexed satellite keys and is deferred until ack-prune semantics land. The
       * R10 floor is intact regardless.
       */

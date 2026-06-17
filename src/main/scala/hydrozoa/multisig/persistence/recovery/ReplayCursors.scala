@@ -45,14 +45,14 @@ import hydrozoa.multisig.persistence.{FamilyKey, Markers}
   *     (maintained with [[maxRequestNumberPerPeer]]; not brief-folded — see that method). Single
   *     consumer.
   *   - **SoftAck[p]** — `softConfirmed + 1` for every peer (FastConsensusActor aggregates them).
-  *     The soft-ack index coincides with the block number (§3.1), so the fast-side confirmed mark
+  *     The soft-ack index coincides with the block number (§3.2), so the fast-side confirmed mark
   *     is the floor.
   *   - **HardAck[p]** — `0` for every peer (SlowConsensusActor aggregates them). ⚠ no derivable
   *     floor: the hard-ack family is `HardAckNumber`-indexed, not `StackNumber`, and no marker
   *     gives the `StackNumber → HardAckNumber` correspondence. Scanning from 0 is correct, not
   *     minimal — defer a tight floor to R3 (§10 Q9 / §6 StackComposer).
   *   - **HubHardAck[h]** — `0` for every hub (SlowConsensusActor reads them for the coil quorum,
-  *     §3.1 — the `+ H`); same `HubHardAckNumber`-indexed scan-from-0 as `HardAck`. Scanned by
+  *     §3.2 — the `+ H`); same `HubHardAckNumber`-indexed scan-from-0 as `HardAck`. Scanned by
   *     every peer (head and coil).
   *   - **own coil `HardAck`** — present only on a coil peer (`ownCoilHardAck = Some(…)`): the coil
   *     peer's own hard-ack family (the same `PeerId`-keyed `HardAck` family the head peers use,
@@ -115,7 +115,7 @@ object ReplayCursors:
             markers.hardConfirmed.map(_.increment).getOrElse(StackNumber(0))
         val hardAckedFloor: StackNumber =
             hardAckedStack.map(_.increment).getOrElse(StackNumber(0))
-        // Soft-ack index coincides with the block number (§3.1: one ack per block, SoftAckNumber ==
+        // Soft-ack index coincides with the block number (§3.2: one ack per block, SoftAckNumber ==
         // blockNum), so the fast-side confirmed mark + 1 is the soft-ack floor too.
         val softAckFloor: SoftAckNumber =
             markers.softConfirmed.map(b => SoftAckNumber((b: Int) + 1)).getOrElse(SoftAckNumber(0))

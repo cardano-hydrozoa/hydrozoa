@@ -9,7 +9,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
   * per-author: one family per author per family type. Request/SoftAck are per [[HeadPeerNumber]];
   * HardAck is per [[PeerId]] (one family per head peer and per coil peer).
   *
-  * See `design/persistence-and-crash-recovery.md` §3.1, §7.1.
+  * See `design/persistence-and-crash-recovery.md` §3.2, §7.1.
   */
 enum FamilyId:
     case BlockSpine

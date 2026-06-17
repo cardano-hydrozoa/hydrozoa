@@ -40,7 +40,7 @@ see [timing-rules](https://) `#fallback`).
 so it recovers by the same machinery described here. The two node types diverge in
 a handful of precise, enumerated places — a coil peer never leads either spine,
 authors no user requests, **authors no soft-ack** (its fast-side recovery anchors on
-the shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and its own hard-acks are re-sequenced onto a hub's `HubHardAck`
+the `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and its own hard-acks are re-sequenced onto a hub's `HubHardAck`
 family. Hub head peers carry one extra
 recovery contract — the `CoilAckSequencer` re-sequencing boundary ([§6](#6-per-actor-recovery-contracts)).
 
@@ -57,13 +57,13 @@ recovery contract — the `CoilAckSequencer` re-sequencing boundary ([§6](#6-pe
       block / stack spines + the request / soft-ack / hard-ack satellites, where the
       hard-ack satellite is `PeerId`-keyed so it spans head and coil authors, plus the
       `HubHardAck` family; [§3](#3-consensus-data-the-families)). Every peer eventually holds
-      the same set; it is the shared, network-disseminated consensus data.
+      the same set; it is the common, network-disseminated consensus data.
     - **Peer-local derived data** — what *this* peer computes and keeps for its own
       recovery, **never shared** and not part of the replicated set: per-block
       `BlockResult`s, the soft / hard confirmation records, the passive snapshots
       (deposits map, treasury, evacuation maps), the request high-water and L2
       command number, the sequencer counters / indices (`RequestSequencer`,
-      `CoilAckSequencer`), and store metadata ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it), [§5.2](#52-state-recovery-the-base-snapshots)). Each peer derives these
+      `CoilAckSequencer`), and store metadata ([§3.3](#33-what-gets-stored-and-how-recovery-treats-it), [§5.2](#52-state-recovery-the-base-snapshots)). Each peer derives these
       from the common set; they differ peer to peer (different `hardAcked` marks,
       different in-flight bands) and are stored only because re-deriving them from
       scratch on every boot would be unsound or too slow ([§5.2](#52-state-recovery-the-base-snapshots)).
@@ -178,7 +178,7 @@ necessarily one fixed author for an entire family. Two family shapes realize tha
   *i* is the only peer that writes entry *i*, but leadership rotates across the
   spine. No single peer authors the whole spine, yet every individual entry still
   has exactly one author (and each peer's own contribution is a **sparse**
-  subsequence — gaps where others led; [§3.1](#31-the-families--one-cf-per-author)'s "per-writer gaps, globally gap-free").
+  subsequence — gaps where others led; [§3.1](#31-spines)'s "per-writer gaps, globally gap-free").
 - **Satellite families** (Request, SoftAck, HardAck, HubHardAck) — a **fixed** single
   author owns the whole family, keyed by its own monotonic `seqNum` and totally
   ordered within itself.
@@ -200,14 +200,38 @@ requests is imposed downstream by fast consensus (block briefs), not by the fami
 > *as a lane*; on disk that same sequence is a *family* — and the persistence types are
 > named accordingly: `FamilyId` / `FamilyKey` / `FamilyScan` / `FamilyValue` ([§3](#3-consensus-data-the-families) vocabulary).
 
-### 3.1 The families — one CF per author
+### 3.1 Spines
 
-Two are **spines** (round-robin, single global index, rotating sole writer — the
-only Raft-like part); the rest are **satellite** families (one independent sequence
-per author) attached to a spine.
+Two families are **spines** (round-robin, single global index, rotating sole writer
+— the only Raft-like part): the BlockSpine (fast) and the StackSpine (slow). The
+spines are **common** — a *single* BlockSpine and a *single* StackSpine for the whole
+head. Each spine is one global sequence with a single global index; the author
+rotates round-robin, so no single peer authors the whole spine while every individual
+entry still has exactly one author.
+
+| Family | Writer(s) | Per-author CF? | Index key (within CF) | Pacing | Gap rule | Role |
+|---|---|---|---|---|---|---|
+| **BlockSpine** | head, round-robin | no (one global) | `BlockNumber` | round-robin | per-writer gaps; globally gap-free | fast spine |
+| **StackSpine** | head, round-robin | no (one global) | `StackNumber` | round-robin | per-writer gaps; globally gap-free | slow spine (bundles blocks) |
+
+Pacing archetype:
+
+- **Round-robin-paced** (BlockSpine, StackSpine) — one global index, leader rotates
+  by `index % nHeadPeers`; any single writer's entries have gaps.
+
+Structural fact:
+
+- **Every head peer rotates as leader on both spines.** There is no spine a head peer
+  is excluded from: each head peer is the round-robin author of entries on *both*
+  spines (BlockSpine, StackSpine), and reads both.
+
+### 3.2 Satellites
+
+The rest are **satellite** families (one independent sequence per author) attached to
+a spine: Request, SoftAck, HardAck, and HubHardAck.
 
 **Each satellite author gets its own CF** — the families are **not** multiplexed by
-an author-prefix into one shared CF. One author's CF receives only that author's
+an author-prefix into one CF. One author's CF receives only that author's
 monotonic stream, so it is a clean append-only sequence (non-overlapping L0 SSTables
 → near-zero compaction), which matters at the request rate ([§7](#7-storage-design--rocksdb)). The CF *is* the
 author discriminant, so the on-disk key is just the within-author index.
@@ -215,11 +239,10 @@ Consequently the **CF set is derived from head config at open** — fixed for a 
 instance's lifetime (membership changes by closing and re-opening a fresh head, so
 the set never changes under a running store, [§7](#7-storage-design--rocksdb)).
 
-The spines are **common** — a *single* BlockSpine and a *single* StackSpine shared
-by the whole head — while each satellite is **per author**. A head of **N** peers
-therefore has **2 spines + 3·N satellite CFs** (Request / SoftAck / HardAck per head
-peer), and every peer eventually holds a copy of all of them. That `2 + 3N` is the
-head-mesh figure the recovery indices algorithm works over ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)).
+Each satellite is **per author**. A head of **N** peers therefore has **2 spines +
+3·N satellite CFs** (Request / SoftAck / HardAck per head peer), and every peer
+eventually holds a copy of all of them. That `2 + 3N` is the head-mesh figure the
+recovery indices algorithm works over ([§5.3](#53-the-indices-algorithm-deriving-the-2--3n--h-family-cursors)).
 
 With **C** coil peers across **H** hubs the disseminated set grows by **H** hubs'
 `HubHardAck` CFs (`SlowConsensusActor` reads them for the coil quorum). A coil peer
@@ -232,11 +255,10 @@ receive CF per coil peer it hubs ([§5.3](#53-the-indices-algorithm-deriving-the
 
 | Family | Writer(s) | Per-author CF? | Index key (within CF) | Pacing | Gap rule | Role |
 |---|---|---|---|---|---|---|
-| **BlockSpine** | head, round-robin | no (one global) | `BlockNumber` | round-robin | per-writer gaps; globally gap-free | fast spine |
-| **StackSpine** | head, round-robin | no (one global) | `StackNumber` | round-robin | per-writer gaps; globally gap-free | slow spine (bundles blocks) |
 | **Request** | each head peer | one per head peer | `RequestNumber` | author-paced | gap-free | feeds → BlockSpine |
 | **SoftAck** | each head peer | one per head peer | `SoftAckNumber` | coverage-paced | gap-free (one ack per block; `SoftAckNumber` coincides with the block's number) | ratifies BlockSpine → soft-confirm |
-| **HardAck** | each head peer | one per head peer | `HardAckNumber` | coverage-paced | cover every stack — all head peers' acks needed to hard-confirm | ratifies StackSpine → hard-confirm |
+| **HardAck** | each head peer **and** each coil peer (author = `PeerId`); a hub also keeps a receive CF per coil peer it hubs | one per author (`PeerId`) | `HardAckNumber` | coverage-paced (head) / author-paced (coil) | covers every stack | ratifies StackSpine → hard-confirm; a coil peer's acks reach the quorum re-sequenced onto `HubHardAck` |
+| **HubHardAck** | each hub | one per hub | `HubHardAckNumber` | hub-paced | gap-free | the re-sequenced, *disseminated* coil-ack family the head mesh + hub→coil links carry; `SlowConsensusActor` reads it to reach the coil quorum |
 
 `SoftAck` is **head-only** — a coil peer authors none, and recovers its fast side
 from the `fastBlockMark = max(BlockResult.key)` anchor instead ([§6](#6-per-actor-recovery-contracts)
@@ -249,20 +271,14 @@ hard-acks are its only authored family, and they feed the hub re-sequencing pipe
 A **hub** also keeps a receive copy of each of its coil peers' acks in that same
 `HardAck(PeerId.Coil)` CF (on the hub, where that coil peer doesn't run). The
 `HubHardAck` family is a **separate** kind — the hub's re-sequenced, disseminated
-coil-ack spine:
-
-| Family | Writer(s) | Per-author CF? | Index key (within CF) | Pacing | Gap rule | Role |
-|---|---|---|---|---|---|---|
-| **`HardAck(PeerId.Coil)`** | each coil peer (own); a hub also keeps a receive CF per coil peer it hubs | one per coil peer | `HardAckNumber` | author-paced | covers **every** stack — a coil peer hard-acks all (the skip-stack optimization is deferred, [§2](#2-two-kinds-of-actor)) | the coil peer's own slow-side ack family; the hub's copy is its receive log |
-| **HubHardAck** | each hub | one per hub | `HubHardAckNumber` | hub-paced | gap-free | the re-sequenced, *disseminated* coil-ack family the head mesh + hub→coil links carry; `SlowConsensusActor` reads it to reach the coil quorum |
-
-Only `HubHardAck` is disseminated across the network — a coil peer's raw
-`HardAck(PeerId.Coil)` family reaches the population only *re-sequenced* onto a hub's
-`HubHardAck` (the raw copy a hub keeps is for hub-crash survival, [§6](#6-per-actor-recovery-contracts) `CoilAckSequencer`).
+coil-ack spine. Only `HubHardAck` is disseminated across the network — a coil peer's
+raw `HardAck(PeerId.Coil)` family reaches the population only *re-sequenced* onto a
+hub's `HubHardAck` (the raw copy a hub keeps is for hub-crash survival, [§6](#6-per-actor-recovery-contracts)
+`CoilAckSequencer`).
 
 > **Coil families are slow-side only.** A coil peer touches none of the fast-side
 > author families: no `Request`, no `SoftAck` (its fast recovery anchors on the
-> shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`). Its only authored family is its
+> `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`). Its only authored family is its
 > slow-side `HardAck(PeerId.Coil)` CF. The head/coil distinction it carries is the
 > `PeerId` author, not a separate family kind: a head peer's acks ride
 > `HardAck(PeerId.Head)`, a coil peer's ride `HardAck(PeerId.Coil)`, and the dissemination
@@ -270,13 +286,11 @@ Only `HubHardAck` is disseminated across the network — a coil peer's raw
 > is a property of the author, not of the CF kind. The per-author CF split keeps the
 > hub's receive log + re-sequence pipeline isolated from the mesh-broadcast head acks.
 
-Three **pacing archetypes**:
+Pacing archetypes:
 
-- **Round-robin-paced** (BlockSpine, StackSpine) — one global index, leader rotates
-  by `index % nHeadPeers`; any single writer's entries have gaps.
 - **Author-paced** (Request, a coil peer's `HardAck`) — the writer's own monotonic
   counter; the writer sets cadence.
-- **Coverage-paced** (SoftAck, HardAck) — the writer must cover every entry
+- **Coverage-paced** (SoftAck, head HardAck) — the writer must cover every entry
   of a *spine* gap-free. SoftAck indexes directly by the spine number (one soft
   ack per block); HardAck carries the same cover-every-stack obligation but is
   indexed by the author's own counter, since one stack draws several hard acks (per
@@ -284,26 +298,23 @@ Three **pacing archetypes**:
 
 Structural facts:
 
-- **Every head peer participates in both fast and slow consensus.** There is no
-  fast-only or slow-only head peer: each head peer authors a Request family, rotates
-  as leader on *both* spines (BlockSpine, StackSpine), and authors *both* a
-  SoftAck family (fast) and a HardAck family (slow). So every head peer **writes to all
-  five families** — *sole* author of its three satellites (Request/Soft/HardAck),
-  round-robin author of entries on both spines — and reads all five.
+- **Every head peer authors all three of its satellites.** Each head peer is the
+  *sole* author of its Request family, its SoftAck family (fast), and its HardAck
+  family (slow), and reads all of them — there is no fast-only or slow-only head peer.
 - **A coil peer authors only its own `HardAck(PeerId.Coil)`.** It never leads a spine,
   authors no Request and no SoftAck, and produces no disseminated ack. Its sole authored
   family is `HardAck(PeerId.Coil)` (its slow-side acks, re-sequenced onto a hub's `HubHardAck`
-  for the population); its fast-side recovery anchors on the shared `BlockResult` CF
+  for the population); its fast-side recovery anchors on the `BlockResult` CF
   ([§6](#6-per-actor-recovery-contracts) `JointLedger`), not on any ack it authors. It *reads* the whole disseminated
   population.
 - **A hub additionally authors `HubHardAck`.** A hub is a head peer (so it writes all
-  five head families) that also serves coil peers: its `CoilAckSequencer` re-sequences
+  the head families) that also serves coil peers: its `CoilAckSequencer` re-sequences
   its coil peers' hard-acks into the disseminated `HubHardAck` family the population
   reads to reach the coil quorum ([§6](#6-per-actor-recovery-contracts)).
 - **Dependency:** Request family → BlockSpine → StackSpine; SoftAck family ratifies
   BlockSpine; HardAck family (+ the coil quorum via `HubHardAck`) ratifies StackSpine.
 
-### 3.2 What gets stored, and how recovery treats it
+### 3.3 What gets stored, and how recovery treats it
 
 | Datum                                                                             | Producer | Recovery treatment |
 |-----------------------------------------------------------------------------------|---|---|
@@ -602,7 +613,7 @@ The snapshots do **not** carry per-family cursors (those are derived, [§5.3](#5
 **not** carry the acked-but-unconfirmed band (those briefs / acks are still in
 the family CFs above the side's confirmed mark — unpruned), and do **not** carry
 SC's `pending` map (rebuilt from the `BlockResult` CF on restart — JL writes
-each block's result at ack time, [§3.2](#32-what-gets-stored-and-how-recovery-treats-it), [§6](#6-per-actor-recovery-contracts) `JointLedger`, so SC can load
+each block's result at ack time, [§3.3](#33-what-gets-stored-and-how-recovery-treats-it), [§6](#6-per-actor-recovery-contracts) `JointLedger`, so SC can load
 `(StackSpine[hardAcked].lastBlockNum, head]` directly). The pending soft / hard
 confirmations themselves complete in the **aggregators**
 (`FastConsensusActor` / `SlowConsensusActor`) from the persisted briefs +
@@ -612,10 +623,10 @@ re-aggregate the band freely, unlike the signers.
 ### 5.3 The indices algorithm: deriving the 2 + 3N + H family cursors
 
 To replay, the `ReplayActor` needs an initial cursor for each family: **2** for
-the shared spines (one BlockSpine, one StackSpine), **+ 3 per head peer** (its
+the spines (one BlockSpine, one StackSpine), **+ 3 per head peer** (its
 Request / Soft-ack / Hard-ack satellites), **+ 1 per hub** (its `HubHardAck`
 family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
-([§3.1](#31-the-families--one-cf-per-author)); a coil peer also replays its own `HardAck(PeerId.Coil)` family. Every one of them
+([§3.2](#32-satellites)); a coil peer also replays its own `HardAck(PeerId.Coil)` family. Every one of them
 **derives from the markers** via Hydrozoa's monotonicity invariants:
 
 - **Requests** — monotonic per peer: *if a block includes Peer A's Request `N`,
@@ -646,7 +657,7 @@ family, which every peer's SCA reads to reach the coil quorum) = **2 + 3N + H**
   is a `HardAckNumber` counter, not a `StackNumber`, so the acked-stack floor is
   sourced separately (unpack the stack id from the last own `HardAck` value).
 - **Soft acks** — single consumer (FCA). The soft-ack index *coincides with the
-  block number* (one ack per block, [§3.1](#31-the-families--one-cf-per-author)), so each peer's SoftAck family cursor is the
+  block number* (one ack per block, [§3.2](#32-satellites)), so each peer's SoftAck family cursor is the
   fast-side confirmed mark `+ 1`, exactly the BlockSpine `confirmed` floor.
 - **Requests** — single consumer (`BlockWeaver`), at the per-peer high-water `+ 1`
   (the persisted counter above).
@@ -680,7 +691,7 @@ own soft ack — the one place a snapshot is unavoidable on the fast side.
 **These index reads need no cross-CF atomicity.** They are taken family by family
 (each `highWater` / marker is its own `lastKey` scan), never under one snapshot. That
 is safe because every family is **append-only** — entries are appended in index order
-and never mutated ([§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)): a reader — even one running concurrently
+and never mutated ([§3.2](#32-satellites), [§7.1](#71-key-layout--family-ids)): a reader — even one running concurrently
 with the writer, e.g. a liaison re-seeding its lanes after the start barrier — sees a
 consistent prefix. It can at worst miss the newest append, never a torn entry, and a
 stale high-water self-corrects through the normal `append` / `backfill` path (and the
@@ -758,7 +769,7 @@ above/below-the-confirmed-mark semantics.
 ### 5.6 The replay mechanism
 
 **Replay re-feeds families, and only families.** The replicated set's family entries
-([§3.1](#31-the-families--one-cf-per-author)) are the sole replay input; every *non-family* input is reproduced, not
+([§3.2](#32-satellites)) are the sole replay input; every *non-family* input is reproduced, not
 replayed — inter-actor signals (`StartBlock`/`CompleteBlock`, the soft-confirm
 fan-out, `GetState`) regenerate from the interior cascade, and L1 poll results
 are re-sampled live ([§5.5](#55-the-l1-boundary-is-re-sampled-live-not-replayed)) — with the `ReplayActor` seeding the first
@@ -931,7 +942,7 @@ differing only in which lanes each serves.
   - `effectInputs: Map[TransactionInput, EffectId]` — the "which effect spends this input" index;
   - `happyPathEffects: TreeMap[EffectId, HappyPathEffect]`;
   - `fallbackEffects: Map[BlockVersion.Major, FallbackTx]`.
-- **Recover:** fold over the **`HardConfirmation` CF** ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it), multisigned effects /
+- **Recover:** fold over the **`HardConfirmation` CF** ([§3.3](#33-what-gets-stored-and-how-recovery-treats-it), multisigned effects /
   SECs / fallbacks in full); `targetState` seeded from
   `config.initializationTx.treasuryProduced.utxoId` until stack-0 hard-confirms;
   effects faulted in lazily. **Submission progress is recovered from L1 itself**
@@ -1056,7 +1067,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
   **every** peer (head and coil), keyed by `blockNum`:
     - the per-block **`BlockResult` deltas** → **`BlockResult`** CF (the `brief` is
       **not** stored — it already lives in the `Block` family and is rehydrated from
-      there at recovery, so it is not duplicated across two families; [§3.2](#32-what-gets-stored-and-how-recovery-treats-it)) — so
+      there at recovery, so it is not duplicated across two families; [§3.3](#33-what-gets-stored-and-how-recovery-treats-it)) — so
       `StackComposer` can rebuild its `pending` map from disk on restart by loading
       `(StackSpine[hardAcked].lastBlockNum, head]` directly, instead of relying on
       `JointLedger` to re-emit results below the fast anchor,
@@ -1161,7 +1172,7 @@ Post-split, owns only the fast-side state; treasury moved to `StackComposer`.
       `HardAck`. `CardanoLiaison` submits the effects from this record. No marker
       key written — `hardConfirmed` derives as `max(HardConfirmation.key)`.
 
-  See [§3.2](#32-what-gets-stored-and-how-recovery-treats-it).
+  See [§3.3](#33-what-gets-stored-and-how-recovery-treats-it).
 - **Recover (replay):** rebuild only the **in-flight cells** above the side's
   confirmed mark — `FastConsensusActor` for cells `> softConfirmed`,
   `SlowConsensusActor` for cells `> hardConfirmed` — from briefs + acks (fast side)
@@ -1377,7 +1388,7 @@ one CF per satellite author**, the count derived from head config at store-open:
 `2 + 3N + H` for a head peer (`+ C` receive `HardAck(PeerId.Coil)` CFs on a hub; `+`
 its own `HardAck(PeerId.Coil)` CF on a coil peer), where **N** head peers, **C** coil
 peers, **H** hubs
-([§3.1](#31-the-families--one-cf-per-author)). Membership changes by closing and re-opening a fresh head, so the set is
+([§3.2](#32-satellites)). Membership changes by closing and re-opening a fresh head, so the set is
 constant for a store's lifetime — RocksDB opens exactly the CFs that exist.
 
 ```
@@ -1466,7 +1477,7 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   internal matter.
 - **Column families.** The satellite *families* (`Request`, `SoftAck`, `HardAck`
   — the last `PeerId`-keyed across head and coil authors — and `HubHardAck`) are
-  **split one CF per author** ([§3.1](#31-the-families--one-cf-per-author), [§7.1](#71-key-layout--family-ids)); the two
+  **split one CF per author** ([§3.2](#32-satellites), [§7.1](#71-key-layout--family-ids)); the two
   spines (`BlockSpine`, `StackSpine`) are one CF each; six spine-indexed
   working / confirmation CFs (`BlockResult`, `SoftConfirmation`, `HardConfirmation`,
   `RequestHighWater`, `L2CommandNumber`, `UnsignedStack` — the last the
@@ -1482,7 +1493,7 @@ of the committed bytes in our CFs, we rebuild actor state from there.
   leading) lands as one transaction across **six CFs**.
 - **Snapshots** = `DepositMap` / `Treasury` are single keyed blobs in their own
   CF, overwritten in place; `EvacuationMap` is keyed by `blockNum`, one entry per
-  committed block ([§3.2](#32-what-gets-stored-and-how-recovery-treats-it)).
+  committed block ([§3.3](#33-what-gets-stored-and-how-recovery-treats-it)).
 
 **Per-CF profile — what CF-per-concern buys us.** The CFs have very
 different workload shapes, and the win of splitting them is that each one's
@@ -1594,7 +1605,7 @@ enum FamilyKey:
 ```
 
 **Each family is its own column family — one CF per spine, one CF per satellite
-author** ([§3.1](#31-the-families--one-cf-per-author)). The `FamilyId` maps to a CF handle (the CF *name* encodes
+author** ([§3.2](#32-satellites)). The `FamilyId` maps to a CF handle (the CF *name* encodes
 kind + author; the handle map is built from head config at store-open), so the
 **author is the CF, not part of the on-disk key**. The encoded byte key is just the
 **within-author index**, big-endian fixed-width, so lexicographic byte order matches
