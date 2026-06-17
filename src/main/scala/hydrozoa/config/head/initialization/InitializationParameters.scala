@@ -13,7 +13,8 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import io.circe.generic.semiauto.*
-import io.circe.{Decoder, Encoder, *}
+import io.circe.{Decoder, Encoder}
+import scala.annotation.unused
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.{AssetName, Blake2b_256, Coin, Hash, Hash32, TransactionOutput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.{ByteString, platform}
@@ -53,7 +54,7 @@ final case class InitializationParameters(
 
 object InitializationParameters {
     given initializationParametersEncoder(using
-        config: CardanoNetwork.Section
+        @unused config: CardanoNetwork.Section
     ): Encoder[InitializationParameters] = Encoder.derived[InitializationParameters]
 
     given initializationParametersDecoder(using

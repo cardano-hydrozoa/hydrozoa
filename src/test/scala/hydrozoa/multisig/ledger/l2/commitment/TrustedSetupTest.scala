@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l2.commitment
 
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import org.scalatest.funsuite.AnyFunSuite
-import org.scalatest.matchers.should.Matchers.*
 import scala.annotation.nowarn
 import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.{G1, G2}
 import scalus.uplc.builtin.bls12_381.*

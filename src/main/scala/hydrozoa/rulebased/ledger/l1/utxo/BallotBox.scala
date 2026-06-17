@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, V
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AddrKeyHash, Coin, MultiAsset, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{AddrKeyHash, Coin, MultiAsset, TransactionInput, Utxo, Value}
 import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{ExpectedSigner, ScriptSource, ThreeArgumentPlutusScriptWitness}

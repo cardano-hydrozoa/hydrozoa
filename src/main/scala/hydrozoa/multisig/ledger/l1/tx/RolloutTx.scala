@@ -375,7 +375,7 @@ private object RolloutTxOps {
                     case Left(
                           SomeBuildError.BalancingError(
                             TxBalancingError.Failed(WrappedCoin(Coin(diff))),
-                            _errorCtx
+                            _
                           )
                         ) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))

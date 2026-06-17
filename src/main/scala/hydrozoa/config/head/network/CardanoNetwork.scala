@@ -4,7 +4,6 @@ import hydrozoa.config.head.rulebased.scripts.RuleBasedScriptAddresses
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.lib.number.PositiveInt
 import io.circe.*
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, ProtocolVersion, SlotConfig, TransactionOutput}
@@ -97,7 +96,7 @@ object CardanoNetwork {
             case x if x.toLowerCase == "mainnet" => Right(CardanoNetwork.Mainnet)
             case x if x.toLowerCase == "preview" => Right(CardanoNetwork.Preview)
             case x if x.toLowerCase == "preprod" => Right(CardanoNetwork.Preprod)
-            case other =>
+            case _ =>
                 Left(
                   "Error decoding the cardano network. Valid values are \"mainnet\", \"preview\","
                       + "\"preprod\", or a map {\"custom\" : (...insert CardanoInfo here...)}."

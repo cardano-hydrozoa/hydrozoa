@@ -137,7 +137,7 @@ lazy val integration: Project = (project in file("integration"))
     )
 
 // Latest Scala 3 LTS version
-ThisBuild / scalaVersion := "3.3.6"
+ThisBuild / scalaVersion := "3.3.7"
 
 ThisBuild / scalacOptions ++= Seq(
   "-feature",
@@ -147,6 +147,10 @@ ThisBuild / scalacOptions ++= Seq(
   "-Wvalue-discard",
   "-Wunused:all",
   "-Wall",
+  // Scala 3.3.7 enables `-Wtostring-interpolation` (via `-Wall`), which flags many pre-existing
+  // `s"...$x"` sites where `x` is not a String. Silenced (non-fatal under `-Werror`) pending a
+  // dedicated cleanup pass; demote to a warning/error once those sites are fixed.
+  "-Wconf:msg=interpolation uses toString:s",
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
 
@@ -169,7 +173,7 @@ ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
 
 inThisBuild(
   List(
-    scalaVersion := "3.3.6",
+    scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
   )

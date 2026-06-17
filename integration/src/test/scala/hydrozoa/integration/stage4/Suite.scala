@@ -1721,7 +1721,7 @@ object Stage4Suite:
               .map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
-              generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
+              generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
                   Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
               )
             )

@@ -210,7 +210,7 @@ private object DepositTxOps {
                     for {
                         // Pull metadata
                         mdParseResult <- MD.Deposit.parse(tx).left.map(MetadataParseError(_))
-                        (headId, md) = mdParseResult
+                        (_, md) = mdParseResult
                         Metadata.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
 
                         // Compare hash with virtual outputs
@@ -229,10 +229,10 @@ private object DepositTxOps {
                             .toRight(MissingDepositOutputAtIndex(depositUtxoIx))
 
                         // TODO: check: contains ada only
-                        l2Value = depositOutput.value.value - Value(depositFee)
+                        _ = depositOutput.value.value - Value(depositFee)
 
                         // Parse the deposit datum
-                        depositDatum <- depositOutput.value.datumOption match {
+                        _ <- depositOutput.value.datumOption match {
                             case Some(DatumOption.Inline(d)) =>
                                 Try(fromData[DepositUtxo.Datum](d)) match {
                                     case Failure(e)  => Left(InvalidDatumContent(e))
@@ -256,7 +256,7 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        expectedTtl = expectedSubmissionDeadline.toSlot.slot
+                        _ = expectedSubmissionDeadline.toSlot.slot
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

@@ -3,6 +3,7 @@ package hydrozoa.lib.petri.net
 import cats.data.NonEmptyList
 import hydrozoa.lib.petri.net.Net.Topology.{MissingArcTopology, MissingPlaceTopology, MissingTransitionTopology}
 import hydrozoa.lib.petri.net.components.*
+import scala.annotation.unused
 
 trait Net[
     ArcId,
@@ -151,12 +152,9 @@ object Net {
           *
           * Uses the abstract-override list-accumulation pattern. Must be linearised after
           * [[Topology]] so that `super.topologyErrors` is concrete.
-          *
-          * `ArcId` requires an [[Ordering]] (already required by `MapNet`) so that the canonical
-          * arc (smallest ArcId) is deterministically retained when duplicates are reported.
           */
         trait SingleArc[
-            ArcId: Ordering,
+            ArcId,
             PlaceId,
             TransitionId,
             A <: Arc.Topology[PlaceId, TransitionId],
@@ -287,7 +285,7 @@ object Net {
 
         // Override (with abstract override) to add net-wide enabling conditions for transition t.
         // Composed under AND with all other enabling predicate levels; commutative by conjunction.
-        protected def netEnablingPredicates(t: TransitionId): List[Boolean] = List.empty
+        protected def netEnablingPredicates(@unused t: TransitionId): List[Boolean] = List.empty
 
         final def netEnablingPredicate(t: TransitionId): Boolean =
             netEnablingPredicates(t).forall(identity)

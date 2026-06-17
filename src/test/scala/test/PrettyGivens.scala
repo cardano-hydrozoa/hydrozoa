@@ -9,10 +9,10 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 object PrettyGivens {
 
     given prettyUtxo: (Utxo => Pretty) = utxo =>
-        Pretty(params => s"Utxo(${Pretty.pretty(utxo.input)},${Pretty.pretty(utxo.output)})")
+        Pretty(_ => s"Utxo(${Pretty.pretty(utxo.input)},${Pretty.pretty(utxo.output)})")
 
     given prettyTxIn: (TransactionInput => Pretty) = ti =>
-        Pretty(params =>
+        Pretty(_ =>
             val truncatedHash = ti.transactionId.toHex.take(6)
             s"$truncatedHash(...)#${ti.index}"
         )

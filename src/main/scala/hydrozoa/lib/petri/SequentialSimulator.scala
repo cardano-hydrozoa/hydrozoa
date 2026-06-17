@@ -30,7 +30,7 @@ import hydrozoa.lib.petri.net.components.*
   *   - [[withUpdatedPlaces]]: how to produce a new `Self` with updated place markings
   */
 trait SequentialSimulator[
-    ArcId: Ordering,
+    ArcId,
     PlaceId,
     TransitionId,
     A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],

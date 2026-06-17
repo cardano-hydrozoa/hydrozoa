@@ -2,7 +2,6 @@ package hydrozoa.multisig.backend.cardano
 
 import cats.data.EitherT
 import cats.effect.*
-import cats.effect.syntax.all.*
 import cats.syntax.traverse.*
 import com.bloxbean.cardano.client.api.common.OrderEnum
 import com.bloxbean.cardano.client.api.model.{Result, Utxo}

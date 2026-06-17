@@ -4,6 +4,7 @@ import cats.Monad
 import cats.data.StateT
 import cats.implicits.*
 import hydrozoa.lib.petri.net.components.*
+import scala.annotation.unused
 
 /** Abstract simulation interface for a net. Extends [[Net]] with the ability to fire transitions
   * and query enabledness.
@@ -138,14 +139,14 @@ object Simulator {
           * automatically; short-circuits with a [[Simulator.FiringError]] on failure.
           */
         def fire[
-            ArcId: Ordering,
+            ArcId,
             PlaceId,
             TransitionId,
             A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
             S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ](t: TransitionId): Sim[S, Unit] =
+        ](t: TransitionId)(using @unused ordArcId: Ordering[ArcId]): Sim[S, Unit] =
             StateT.modifyF(_.fire(t))
 
         /** Read-only access to the current net state. The only way to observe `S` from within a
@@ -154,25 +155,25 @@ object Simulator {
         def inspect[S, A](f: S => A): Sim[S, A] = StateT.inspect(f)
 
         def isEnabled[
-            ArcId: Ordering,
+            ArcId,
             PlaceId,
             TransitionId,
             A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
             S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ](t: TransitionId): Sim[S, Boolean] =
+        ](t: TransitionId)(using @unused ordArcId: Ordering[ArcId]): Sim[S, Boolean] =
             StateT.inspect(_.isEnabled(t))
 
         def enabledTransitions[
-            ArcId: Ordering,
+            ArcId,
             PlaceId,
             TransitionId,
             A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
             S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ]: Sim[S, Set[TransitionId]] =
+        ](using @unused ordArcId: Ordering[ArcId]): Sim[S, Set[TransitionId]] =
             StateT.inspect(_.enabledTransitions)
 
         // ----- Eliminators ---------------------------------------------------

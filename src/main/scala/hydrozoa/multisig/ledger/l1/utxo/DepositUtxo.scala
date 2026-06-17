@@ -184,13 +184,13 @@ object DepositUtxo {
                 case _ => Left(InvalidDatumType)
             }
 
-            refScript: Option[Script.Native | Script.PlutusV3] <- babbage.scriptRef match {
+            _ <- babbage.scriptRef match {
                 case None               => Right(None)
-                case Some(ScriptRef(s)) => Left(RefScriptNotAllowed)
+                case Some(ScriptRef(_)) => Left(RefScriptNotAllowed)
             }
 
-            submissionDeadline = txTiming.depositSubmissionDeadline(requestValidityEndTime)
-            absorptionStartTime = txTiming.depositAbsorptionStartTime(requestValidityEndTime)
+            _ = txTiming.depositSubmissionDeadline(requestValidityEndTime)
+            _ = txTiming.depositAbsorptionStartTime(requestValidityEndTime)
 
         } yield new DepositUtxo(
           utxoId = utxo._1,

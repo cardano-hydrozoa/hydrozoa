@@ -7,8 +7,8 @@ import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatumOnchain}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
@@ -279,7 +279,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 //   - The change utxo is position zero
                 //   - the treasury utxo in position one
                 //   - the tail be evacuatees
-                val List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)) =
+                val List.Cons(_, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
 
                 require(
@@ -385,7 +385,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // Treasury should be resolved
                 val (headMp, utxosActive) = treasuryDatum match
                     case d: ResolvedOnchain   => (d.headMp, d.evacuationActive)
-                    case d: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
+                    case _: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
                 val treasuryInput = tx.inputs

@@ -1,8 +1,7 @@
 package hydrozoa.lib.classification
 
 import cats.data.Validated.{Invalid, Valid}
-import cats.data.{NonEmptyList, Validated, ValidatedNel}
-import cats.syntax.all.*
+import cats.data.{NonEmptyList, ValidatedNel}
 
 // Observation: The semantics of this are very similar to cardano `Value`s
 // TODO: in the future, we might want something more "bi-directional", such that we don't lose the actual values

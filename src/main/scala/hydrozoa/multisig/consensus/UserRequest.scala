@@ -1,7 +1,6 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.IO
-import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest

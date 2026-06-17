@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.tx
 
-import cats.*
 import cats.data.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
@@ -39,7 +38,7 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
             payouts <- genPayouts(multiNodeConfig.headConfig)
         } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
 
-    given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = builder =>
+    given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = _ =>
         Pretty(_ => "NotLast (too long to print)")
     val genNotLastBuilder: Gen[RolloutTx.Build.NotLast] =
         for {

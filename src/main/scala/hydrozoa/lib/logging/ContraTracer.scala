@@ -5,6 +5,7 @@ import cats.arrow.*
 import cats.syntax.all.*
 import hydrozoa.lib.logging.ContraTracer.nullTracer
 import hydrozoa.lib.logging.TracerA.Squelching
+import scala.annotation.unused
 
 /** Ported from https://github.com/avieth/contra-tracer/blob/master/src/Control/Tracer.hs
   *
@@ -135,7 +136,7 @@ object ContraTracer {
       */
     given [M[_]: Monad, S]: Semigroup[ContraTracer[M, S]] with {
         override def combine(x: ContraTracer[M, S], y: ContraTracer[M, S]): ContraTracer[M, S] = {
-            def const[A, B](a: A)(b: => B): A = a
+            def const[A, B](a: A)(@unused b: => B): A = a
             def discard(tunit: (Unit, Unit)): Unit = const(())(tunit)
             def arrDiscard = Arrow[[X, Y] =>> TracerA[M, X, Y]].lift(discard)
             ContraTracer((x.use &&& y.use) >>> arrDiscard)
@@ -146,7 +147,7 @@ object ContraTracer {
         override def empty: ContraTracer[M, S] = nullTracer
 
         override def combine(x: ContraTracer[M, S], y: ContraTracer[M, S]): ContraTracer[M, S] = {
-            def const[A, B](a: A)(b: => B): A = a
+            def const[A, B](a: A)(@unused b: => B): A = a
             def discard(tunit: (Unit, Unit)): Unit = const(())(tunit)
             def arrDiscard = Arrow[[X, Y] =>> TracerA[M, X, Y]].lift(discard)
             ContraTracer((x.use &&& y.use) >>> arrDiscard)

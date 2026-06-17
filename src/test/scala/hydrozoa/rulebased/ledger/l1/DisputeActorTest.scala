@@ -77,7 +77,7 @@ object DisputeActorTestHelpers {
         votingDeadline: PosixTime
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
         for {
-            env <- ask
+            _ <- ask
 
             datum = Unresolved(
               deadlineVoting = votingDeadline,
@@ -126,7 +126,7 @@ object DisputeActorTestHelpers {
               refUtxoIds.forall(id => !additionalL1Utxos.contains(id)),
               "Reference utxos from head config conflict with utxos from mkDisputeActor"
             )
-            ownPeerConfig = env.nodePrivateConfigs.head
+            _ = env.nodePrivateConfigs.head
 
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
@@ -162,7 +162,7 @@ object DisputeActorTestHelpers {
                 // FIXME: I think that the current slot in the mock state and the slot in the UtxoEnv of the context
                 //  conflict
                 MockState(ledgerState = State(initialUtxos), currentSlot = currentSlot),
-                mkContext = l =>
+                mkContext = _ =>
                     Context(
                       fee = Coin.zero,
                       env = UtxoEnv.apply(

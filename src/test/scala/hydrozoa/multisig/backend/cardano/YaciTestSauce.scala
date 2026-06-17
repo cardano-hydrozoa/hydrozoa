@@ -1,5 +1,6 @@
 package hydrozoa.multisig.backend.cardano
 
+import scala.annotation.unused
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{Blake2b_256, Hash, HashPurpose, TransactionInput, TransactionOutput, Utxos, Value}
 import scalus.uplc.builtin.ByteString
@@ -8,7 +9,7 @@ import test.{TestPeerName, TestPeers}
 
 type MkGenesis = (network: Network) => (peers: List[TestPeerName]) => Map[TestPeerName, Utxos]
 
-def mkGenesis(setup: List[(String, TestPeerName)])(network: Network)(
+def mkGenesis(setup: List[(String, TestPeerName)])(@unused network: Network)(
     testPeers: TestPeers
 ): Map[TestPeerName, Utxos] = {
 

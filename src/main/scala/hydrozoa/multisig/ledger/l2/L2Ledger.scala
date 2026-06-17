@@ -5,7 +5,6 @@ import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import monocle.Focus.focus
 
 private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
 // See: "Kendo" from the test library

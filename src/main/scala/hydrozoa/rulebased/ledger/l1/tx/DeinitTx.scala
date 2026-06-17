@@ -1,6 +1,5 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
@@ -12,12 +11,11 @@ import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, *}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import monocle.*
 import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{SomeBuildError, *}
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.hex
 
 final case class DeinitTx(

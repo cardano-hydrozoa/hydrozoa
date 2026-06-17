@@ -6,7 +6,7 @@ import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.tx.Tx.SignatureError.InvalidSignature
 import monocle.{Focus, Lens}
 import scala.Function.const
-import scala.annotation.nowarn
+import scala.annotation.unused
 import scalus.cardano.ledger.TransactionException.InvalidTransactionSizeException
 import scalus.cardano.ledger.TransactionWitnessSet.given
 import scalus.cardano.ledger.rules.STS.Validator
@@ -66,7 +66,6 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
       *     existing signatures) are incorrect
       *   - Valid[Transaction] with the signatures applied otherwise
       */
-    @nowarn("msg=unused local definition")
     final def addSignatures(
         vkw: Set[VKeyWitness]
     ): ValidatedNel[InvalidSignature[Self], Self] =
@@ -133,7 +132,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
         List(bodiesMatch, containsHeadPeerWitnesses, addedSignatures).foldLeft(
           Valid(this): ValidatedNel[Tx.SignatureError[Self], Self]
         ) {
-            case (Valid(v1), Valid(v2))     => Valid(v2)
+            case (Valid(_), Valid(v2))      => Valid(v2)
             case (Valid(_), e @ Invalid(_)) => e
             case (e @ Invalid(_), Valid(_)) => e
             case (Invalid(e1), Invalid(e2)) => Invalid(e1 ++ e2.toList)
@@ -236,7 +235,11 @@ object Tx {
 
             def explainModify(
                 modifyString: String => String
-            )(implicit line: Line, file: File, enclosing: Enclosing): Either[(E, String), A] = {
+            )(implicit
+                @unused line: Line,
+                @unused file: File,
+                @unused enclosing: Enclosing
+            ): Either[(E, String), A] = {
                 augmentedEither.left.map(t => (t._1, modifyString(t._2)))
             }
 
@@ -274,7 +277,7 @@ object Tx {
                 replacement: => A
             ): Either[SomeBuildError | TxError, A] = {
                 err match
-                    case SomeBuildError.ValidationError(ve, ctx) =>
+                    case SomeBuildError.ValidationError(ve, _) =>
                         ve match {
                             case _: InvalidTransactionSizeException =>
                                 Right(replacement)

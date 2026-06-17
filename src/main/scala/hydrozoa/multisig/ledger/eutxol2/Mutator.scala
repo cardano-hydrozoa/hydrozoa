@@ -4,6 +4,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger.Config
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
+import scala.annotation.unused
 import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.rules.{State as L1State, *}
 import scalus.cardano.ledger.{CertState, Coin, TransactionException, Utxos}
@@ -89,7 +90,7 @@ object HydrozoaTransactionMutator {
 object EvacuatingMutator:
 
     def transit(
-        config: Config,
+        @unused config: Config,
         state: Utxos,
         l2Tx: L2Tx
     ): Utxos =
