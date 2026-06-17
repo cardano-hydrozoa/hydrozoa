@@ -143,7 +143,7 @@ class RecoverSeamsTest extends AnyFunSuite:
     test("StackComposer.recover returns None for an empty store (no own hard-ack)") {
         withStore { p =>
             StackComposer.State
-                .recover(p, None, None, HeadPeerNumber(0))
+                .recover(p, None, None, PeerId.Head(HeadPeerNumber(0)))
                 .map(s => assert(s.isEmpty))
         }
     }
@@ -176,7 +176,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   p,
                   markers.hardAcked,
                   markers.hardConfirmed,
-                  own
+                  PeerId.Head(own)
                 )
             yield assert(
               recovered.exists { s =>
@@ -229,7 +229,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                   p,
                   markers.hardAcked,
                   markers.hardConfirmed,
-                  own
+                  PeerId.Head(own)
                 )
             yield assert(
               recovered.exists { s =>
@@ -240,16 +240,16 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    test("StackComposer.recoverCoil returns None for an empty store (no own coil hard-ack)") {
+    test("StackComposer.recover (coil) returns None for an empty store (no own coil hard-ack)") {
         withStore { p =>
             StackComposer.State
-                .recoverCoil(p, None, None, CoilPeerNumber(0))
+                .recover(p, None, None, PeerId.Coil(CoilPeerNumber(0)))
                 .map(r => assert(r.isEmpty))
         }
     }
 
     test(
-      "StackComposer.recoverCoil rebuilds counters + snapshots from the last own CoilHardAck; " +
+      "StackComposer.recover (coil) rebuilds counters + snapshots from the last own CoilHardAck; " +
           "lastBlockNum comes from the UnsignedStack, not a Stack family"
     ) {
         withStore { p =>
@@ -294,11 +294,11 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(7)))(br7.persisted)
                 _ <- p.put(StoreKey.BlockResult(BlockNumber(8)))(br8.persisted)
                 _ <- p.put(FamilyKey.Block(BlockNumber(8)))(FamilyValue(stamp, br8.brief))
-                recovered <- StackComposer.State.recoverCoil(
+                recovered <- StackComposer.State.recover(
                   p,
                   Some(HardAckNumber(hardAckNum)),
                   Some(StackNumber(stackN)), // stack 2 hard-confirmed → gate armed
-                  coil
+                  PeerId.Coil(coil)
                 )
             yield assert(
               recovered.exists { s =>
@@ -353,7 +353,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 // Treasury intentionally not written
                 markers = Markers(None, Some(StackNumber(1)), Some(HardAckNumber(0)))
                 r <- StackComposer.State
-                    .recover(p, markers.hardAcked, markers.hardConfirmed, own)
+                    .recover(p, markers.hardAcked, markers.hardConfirmed, PeerId.Head(own))
                     .attempt
             yield assert(r.swap.toOption.exists(_.isInstanceOf[IllegalStateException]))
         }

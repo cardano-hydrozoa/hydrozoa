@@ -22,6 +22,8 @@ import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
 import hydrozoa.multisig.persistence.{FamilyKey, FamilyValue, Markers, Persistence, StoreKey, WriteBatch}
 
+import scala.annotation.tailrec
+
 /** Stack composer.
   *
   * Pairs [[BlockResult]] (from JointLedger) with [[Block.SoftConfirmed]] (from FastConsensusActor)
@@ -91,43 +93,26 @@ final case class StackComposer(
       * is empty), so we drive the branch off its result: `Some` ⇒ seed the recovered state and skip
       * bootstrap, `None` ⇒ cold start.
       *
-      * A coil peer recovers symmetrically off the `CoilHardAck` lane ([[State.recoverCoil]]): its
-      * own hard-acks live there (not `HardAck`), and it reads the closing stack's `lastBlockNum`
-      * from the `UnsignedStack` it persists on every close (it has no own `Stack` lane). The shared
-      * `hardConfirmed` derives the same way ([[Markers.recoverHardConfirmed]]).
+      * Head and coil share the one [[State.recover]] seam (it branches on `own` for the slow-side
+      * own-ack family): a head peer's own hard-acks live in `HardAck` and the closing stack's
+      * `lastBlockNum` comes from its own `Stack` lane brief; a coil peer's live in `CoilHardAck`
+      * and the `lastBlockNum` comes from the `UnsignedStack` it persists on every close (no own
+      * `Stack` lane). The own hard-ack marker is read from the matching family
+      * ([[Markers.recoverHardAcked]] / [[Markers.recoverCoilHardAcked]]); `hardConfirmed` derives
+      * the same way on both ([[Markers.recoverHardConfirmed]]).
       */
     private def recoverOrBootstrap: IO[Unit] =
-        config.ownPeerId match {
-            case PeerId.Coil(coil) =>
-                for {
-                    coilHardAcked <- Markers.recoverCoilHardAcked(persistence.backend, coil)
-                    hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
-                    recovered <- State.recoverCoil(
-                      persistence,
-                      coilHardAcked,
-                      hardConfirmed,
-                      coil
-                    )
-                    _ <- recovered match {
-                        case Some(recoveredState) => state.set(recoveredState)
-                        case None                 => bootstrapInitialStack
-                    }
-                } yield ()
-            case PeerId.Head(own) =>
-                for {
-                    markers <- Markers.derive(persistence.backend, own)
-                    recovered <- State.recover(
-                      persistence,
-                      markers.hardAcked,
-                      markers.hardConfirmed,
-                      own
-                    )
-                    _ <- recovered match {
-                        case Some(recoveredState) => state.set(recoveredState)
-                        case None                 => bootstrapInitialStack
-                    }
-                } yield ()
-        }
+        for {
+            hardAcked <- config.ownPeerId match
+                case PeerId.Head(h) => Markers.recoverHardAcked(persistence.backend, h)
+                case PeerId.Coil(c) => Markers.recoverCoilHardAcked(persistence.backend, c)
+            hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
+            recovered <- State.recover(persistence, hardAcked, hardConfirmed, config.ownPeerId)
+            _ <- recovered match {
+                case Some(recoveredState) => state.set(recoveredState)
+                case None                 => bootstrapInitialStack
+            }
+        } yield ()
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *
@@ -854,6 +839,7 @@ object StackComposer {
 
         /** Longest contiguous run of ready blocks starting at `lastClosedBlockNum + 1`. */
         def longestReadyPrefix: List[ReadyBlock] = {
+            @tailrec
             def loop(n: BlockNumber, acc: List[ReadyBlock]): List[ReadyBlock] =
                 ready.get(n) match {
                     case Some(rb) => loop(n.increment, rb :: acc)
@@ -868,6 +854,7 @@ object StackComposer {
           * lastClosedBlockNum + 1`, `first <= last`).
           */
         def readySlice(first: BlockNumber, last: BlockNumber): Option[List[ReadyBlock]] = {
+            @tailrec
             def loop(n: BlockNumber, acc: List[ReadyBlock]): Option[List[ReadyBlock]] =
                 if n.convert > last.convert then Some(acc.reverse)
                 else
@@ -947,62 +934,41 @@ object StackComposer {
             persistence: Persistence[IO],
             hardAcked: Option[HardAckNumber],
             hardConfirmed: Option[StackNumber],
-            own: HeadPeerNumber
+            own: PeerId
         )(using CardanoNetwork.Section): IO[Option[State]] =
             hardAcked match
                 case None => IO.pure(None)
                 case Some(hardAckNum) =>
                     for {
-                        lastHardAck <- persistence.getOrFail(FamilyKey.HardAck(own, hardAckNum))
-                        hardAckedStack = lastHardAck.payload.stackNum
+                        // The one residual peer-type branch: the own hard-ack family + the source of
+                        // the closing stack's lastBlockNum.
+                        stackAndBlock <- own match
+                            case PeerId.Head(h) =>
+                                for {
+                                    lastHardAck <- persistence.getOrFail(
+                                      FamilyKey.HardAck(h, hardAckNum)
+                                    )
+                                    stackBrief <- persistence.getOrFail(
+                                      FamilyKey.Stack(lastHardAck.payload.stackNum)
+                                    )
+                                } yield (
+                                  lastHardAck.payload.stackNum,
+                                  stackBrief.payload.lastBlockNum
+                                )
+                            case PeerId.Coil(c) =>
+                                for {
+                                    lastHardAck <- persistence.getOrFail(
+                                      FamilyKey.CoilHardAck(c, hardAckNum)
+                                    )
+                                    unsignedStack <- persistence.getOrFail(
+                                      StoreKey.UnsignedStack(lastHardAck.payload.stackNum)
+                                    )
+                                } yield (
+                                  lastHardAck.payload.stackNum,
+                                  unsignedStack.brief.lastBlockNum
+                                )
+                        (hardAckedStack, lastBlockNum) = stackAndBlock
                         treasury <- persistence.getOrFail(StoreKey.Treasury)
-                        stackBrief <- persistence.getOrFail(FamilyKey.Stack(hardAckedStack))
-                        lastBlockNum = stackBrief.payload.lastBlockNum
-                        evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
-                        blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
-                    } yield Some(
-                      blockResults.foldLeft(
-                        State(
-                          pending = Map.empty,
-                          ready = Map.empty,
-                          inboundLeaderBrief = Map.empty,
-                          lastClosedStackNum = hardAckedStack,
-                          lastClosedBlockNum = lastBlockNum,
-                          previousStackHardConfirmed =
-                              hardConfirmed.exists(Ordering[StackNumber].gteq(_, hardAckedStack)),
-                          nextOwnHardAckNum = hardAckNum.increment,
-                          treasury = treasury,
-                          evacuationMap = evacuationMap
-                        )
-                      )(_.recordBlockResult(_))
-                    )
-
-        /** Coil counterpart of [[recover]]: a coil peer's own hard-acks live in the `CoilHardAck`
-          * lane (not `HardAck`), and it reads the closing stack's `lastBlockNum` from the
-          * `UnsignedStack` it persists on every close (no own `Stack` lane — it never leads), just
-          * as `JointLedger`'s coil recover reads the header from `BlockResult`. Everything else
-          * (treasury / evacuation map / `pending` rebuild / counters) is identical to [[recover]].
-          * `None` for an empty store (no own coil hard-ack).
-          */
-        def recoverCoil(
-            persistence: Persistence[IO],
-            hardAcked: Option[HardAckNumber],
-            hardConfirmed: Option[StackNumber],
-            coil: CoilPeerNumber
-        )(using CardanoNetwork.Section): IO[Option[State]] =
-            hardAcked match
-                case None => IO.pure(None)
-                case Some(hardAckNum) =>
-                    for {
-                        lastHardAck <- persistence.getOrFail(
-                          FamilyKey.CoilHardAck(coil, hardAckNum)
-                        )
-                        hardAckedStack = lastHardAck.payload.stackNum
-                        treasury <- persistence.getOrFail(StoreKey.Treasury)
-                        unsignedStack <- persistence.getOrFail(
-                          StoreKey.UnsignedStack(hardAckedStack)
-                        )
-                        lastBlockNum = unsignedStack.brief.lastBlockNum
                         evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
                         blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
                     } yield Some(
