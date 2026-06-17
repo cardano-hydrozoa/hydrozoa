@@ -29,7 +29,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonE
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
-import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
+import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent, JointLedgerEventFormat}
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.util.Pretty
@@ -543,7 +543,7 @@ case class Suite(
                     nodeConfig,
                     jointLedgerConnections,
                     l2Ledger,
-                    ContraTracer.nullTracer[IO, JointLedgerEvent],
+                    Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(headPeerNum)),
                     persistence
                   )
                 )

@@ -5,7 +5,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.implicits.*
 import hydrozoa.integration.stage4.Model.*
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg}
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.commands.AnyCommand
 import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
@@ -111,7 +111,8 @@ object Stage4Runner:
         renderTable(initialState, commands).flatMap(IO.println)
 
 @main def stage4PrintCommandSequence(): Unit =
-    given ContraTracer[IO, Slf4jMsg] = ContraTracer.nullTracer
+    given ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Runner"))
     val prop = PropertyM.monadicIO {
         for
             initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
