@@ -173,15 +173,15 @@ totally-ordered log. It is a replicated **set of append-only families**, each en
 authored by exactly one peer (no two peers ever write the same slot) — **not**
 necessarily one fixed author for an entire family. Two family shapes realize that:
 
-- **Satellite families** (Request, SoftAck, HardAck — the last `PeerId`-keyed across
-  head and coil authors — plus HubHardAck) — a **fixed** single author owns the whole
-  family, keyed by its own monotonic `seqNum` and totally ordered within itself.
 - **Spines** (BlockSpine, StackSpine) — one global sequence (`BlockNumber` /
   `StackNumber`) whose **author rotates round-robin**: the leader for index
   *i* is the only peer that writes entry *i*, but leadership rotates across the
   spine. No single peer authors the whole spine, yet every individual entry still
   has exactly one author (and each peer's own contribution is a **sparse**
   subsequence — gaps where others led; [§3.1](#31-the-families--one-cf-per-author)'s "per-writer gaps, globally gap-free").
+- **Satellite families** (Request, SoftAck, HardAck, HubHardAck) — a **fixed** single
+  author owns the whole family, keyed by its own monotonic `seqNum` and totally
+  ordered within itself.
 
 Either way the defining invariant is **one author per entry**: entries are appended,
 never mutated, and never conflict, and every peer eventually holds a copy of *every*
