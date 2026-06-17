@@ -6,7 +6,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
@@ -165,6 +165,7 @@ private object VoteTxOps {
                 // _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 
                 finalized <- context
+                    .addRequiredSigners(uncastBallotBox.votingSigners)
                     .finalizeContext(
                       diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
                       validators = nonSigningValidators

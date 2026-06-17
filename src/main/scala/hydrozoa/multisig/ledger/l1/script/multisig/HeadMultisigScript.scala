@@ -6,8 +6,8 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.Timelock.{AllOf, MOf, Signature}
+import scalus.cardano.txbuilder.NativeScriptWitness
 import scalus.cardano.txbuilder.ScriptSource.{NativeScriptAttached, NativeScriptValue}
-import scalus.cardano.txbuilder.{ExpectedSigner, NativeScriptWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.Builtins.blake2b_224
 
@@ -29,29 +29,27 @@ case class HeadMultisigScript(private val script0: Script.Native) {
       * NOTE: because this is a [[Set]], the traversal order WILL NOT be the same as
       * [[headPeers.headPeerVKeys]].
       */
-    val requiredSigners: Set[ExpectedSigner] = {
+    val requiredSigners: Set[AddrKeyHash] = {
         val all = script.script.asInstanceOf[Timelock.AllOf].scripts
         val headKeyHashes = all.collect { case s: Signature => s.keyHash }
         val coilKeyHashes = all.collectFirst { case m: MOf => m }.toList.flatMap { m =>
             m.scripts.collect { case s: Signature => s.keyHash }.take(m.m)
         }
-        (headKeyHashes ++ coilKeyHashes).map(ExpectedSigner(_)).toSet
+        (headKeyHashes ++ coilKeyHashes).toSet
     }
     val numSigners: Int = requiredSigners.toSeq.size
 
-    def checkSigners(signers: Set[ExpectedSigner]): Boolean = signers == requiredSigners
+    def checkSigners(signers: Set[AddrKeyHash]): Boolean = signers == requiredSigners
 
     // use when the multisig witness utxo id not available
     val witnessValue: NativeScriptWitness = NativeScriptWitness(
-      scriptSource = NativeScriptValue(script),
-      additionalSigners = requiredSigners
+      scriptSource = NativeScriptValue(script)
     )
 
     // use when referencing the multisig witness utxo
     // or after [[witnessValue]] has been used within a tx
     val witnessAttached: NativeScriptWitness = NativeScriptWitness(
-      scriptSource = NativeScriptAttached,
-      additionalSigners = requiredSigners
+      scriptSource = NativeScriptAttached
     )
 
 }

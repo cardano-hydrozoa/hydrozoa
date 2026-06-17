@@ -349,7 +349,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           msg = "Vote output has correct datum",
           condition = votedOutput._2.datumOption match {
               case Some(Inline(d)) =>
-                  val votedDatum = fromData[VoteDatum](d)(using VoteState.given_FromData_VoteDatum)
+                  val votedDatum = fromData[VoteDatum](d)
                   votedDatum.key == 1
                   && votedDatum.link == 2
                   && votedDatum.voteStatus == VoteStatus.Voted(

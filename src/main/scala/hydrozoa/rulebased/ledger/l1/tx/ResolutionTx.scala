@@ -5,7 +5,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.Tx
 import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
@@ -136,7 +136,9 @@ private object ResolutionTxOps {
                       )
                     )
 
+                // The tallied ballot box is spent by the own wallet; declare it as expected signer.
                 finalized <- context
+                    .addRequiredSigners(talliedBallotBox.spendSigners)
                     .finalizeContext(
                       diffHandler = Change.changeOutputDiffHandler(1),
                       validators = nonSigningValidators

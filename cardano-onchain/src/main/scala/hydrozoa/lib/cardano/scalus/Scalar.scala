@@ -1,9 +1,9 @@
 package hydrozoa.lib.cardano.scalus
 
 import scala.annotation.tailrec
-import scalus.Compile
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{Option, require}
+import scalus.compiler.Compile
 import scalus.uplc.builtin.Builtins.{byteStringToInteger, integerToByteString}
 import scalus.uplc.builtin.ByteString
 

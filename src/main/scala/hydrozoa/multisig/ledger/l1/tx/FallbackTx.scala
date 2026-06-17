@@ -5,7 +5,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
@@ -76,10 +76,12 @@ private object FallbackTxOps {
 
         lazy val result: Either[SomeBuildError, FallbackTx] = for {
             unbalanced <- build(Steps())
-            finalized <- unbalanced.finalizeContext(
-              diffHandler = Change.changeOutputDiffHandler(1),
-              validators = Tx.Validators.nonSigningNonValidityChecksValidators
-            )
+            finalized <- unbalanced
+                .addExpectedSigners(config.headMultisigScript.requiredSigners)
+                .finalizeContext(
+                  diffHandler = Change.changeOutputDiffHandler(1),
+                  validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                )
             completed = Complete(finalized)
         } yield completed
 

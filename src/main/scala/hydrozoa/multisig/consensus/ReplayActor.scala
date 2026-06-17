@@ -248,7 +248,7 @@ object ReplayActor:
     private def recoverHighWater(
         persistence: Persistence[IO],
         fastBlockMark: Option[BlockNumber]
-    )(using CardanoNetwork.Section): IO[Map[HeadPeerNumber, RequestNumber]] =
+    )(using @scala.annotation.unused section: CardanoNetwork.Section): IO[Map[HeadPeerNumber, RequestNumber]] =
         fastBlockMark match
             case None    => IO.pure(Map.empty)
             case Some(b) => persistence.getOrFail(StoreKey.RequestHighWater(b))

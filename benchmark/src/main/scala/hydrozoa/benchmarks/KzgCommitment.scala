@@ -260,5 +260,5 @@ given transactionOutput: Arbitrary[TransactionOutput] = Arbitrary {
           5 -> arbitrary[Option[DatumOption]],
           95 -> Gen.const(None)
         )
-    yield TransactionOutput(address, value, mbDatum)
+    yield TransactionOutput(address, value, mbDatum, None)
 }

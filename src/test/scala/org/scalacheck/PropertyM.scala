@@ -437,7 +437,7 @@ object PropertyM:
       */
     def useResource[R, A](r: cats.effect.Resource[cats.effect.IO, R])(
         body: R => PropertyM[cats.effect.IO, A]
-    )(using toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM { k =>
+    )(using @scala.annotation.unused toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM { k =>
         Gen.gen { (p, s) =>
             val io: cats.effect.IO[Prop] = cats.effect.IO.uncancelable { poll =>
                 r.allocated.flatMap { case (env, release) =>

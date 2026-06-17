@@ -37,7 +37,7 @@ dockerCommands := dockerCommands.value.flatMap {
     case other                => List(other)
 }
 
-val scalusVersion = "0.15.1"
+val scalusVersion = "0.18.1"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
 
@@ -50,11 +50,11 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
       resolvers += Resolver.defaultLocal,
       libraryDependencies ++= Seq(
-        "org.scalus" % "scalus_3" % scalusVersion withSources (),
-        "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
+        "org.scalus" %% "scalus" % scalusVersion withSources (),
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
         "org.typelevel" %% "cats-core" % "2.13.0",
       ),
-      addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion),
+      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
     )
 
 // Main application
@@ -67,9 +67,8 @@ lazy val core: Project = (project in file("."))
       resolvers += "jitpack" at "https://jitpack.io",
       libraryDependencies ++= Seq(
         // Scalus
-        // Using `org.scalus" %% "scalus` gives an error when using locally vendored version.
-        "org.scalus" % "scalus_3" % scalusVersion withSources (),
-        "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
+        "org.scalus" %% "scalus" % scalusVersion withSources (),
+        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
         // Cardano Client library
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Logging
@@ -109,7 +108,7 @@ lazy val core: Project = (project in file("."))
         "org.scalatest" %% "scalatest" % "3.2.19" % Test,
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
-        "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
+        "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test
       ),
@@ -154,8 +153,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-Yretain-trees", // Essential for incremental compilation
 ) ++ (if (sys.env.contains("CI")) Seq("-Werror") else Nil)
 
-// Add the Scalus compiler plugin
-addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion)
+// Add the Scalus compiler plugin (published with CrossVersion.full → scalus-plugin_<full-scala-version>)
+addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
 // Custom commands to format and lint all subprojects
 // TODO: Restore integration module to fmt and lint
@@ -197,7 +196,7 @@ lazy val benchmark: Project = (project in file("benchmark"))
       libraryDependencies ++= Seq(
         // "org.scalacheck" %% "scalacheck" % "1.19.0",
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-        "org.scalus" % "scalus-testkit_3" % scalusVersion
+        "org.scalus" %% "scalus-testkit" % scalusVersion
       )
     )
 

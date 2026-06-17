@@ -14,8 +14,8 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.onchain.plutus.prelude.*
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G2
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G2.scale
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.cardano.onchain.plutus.v3.{Validator, *}

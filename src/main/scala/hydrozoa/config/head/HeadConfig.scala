@@ -343,7 +343,9 @@ object HeadConfig {
         // - vkey -> connection address
         // - vkey -> equity
         // - vkey -> peer number
-        given headConfigBootstrapEncoder(using CardanoNetwork.Section): Encoder[
+        given headConfigBootstrapEncoder(using
+            @scala.annotation.unused section: CardanoNetwork.Section
+        ): Encoder[
           HeadConfig.Bootstrap
         ] with {
             override def apply(hc: HeadConfig.Bootstrap): Json = {
@@ -548,7 +550,7 @@ object HeadConfig {
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
                 case Valid(())           => Valid(headConfigBootstrap)
-                case x @ Invalid(errors) => Invalid(errors)
+                case Invalid(errors) => Invalid(errors)
             }
         }
 

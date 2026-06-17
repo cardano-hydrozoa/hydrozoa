@@ -998,7 +998,7 @@ object JointLedger {
           * store corruption (fail-safe throw).
           */
         private def doneAt(persistence: Persistence[IO], blockNum: BlockNumber)(using
-            CardanoNetwork.Section
+            @scala.annotation.unused section: CardanoNetwork.Section
         ): IO[Done] =
             for {
                 brief <- persistence.getOrFail(JournalKey.Block(blockNum))
