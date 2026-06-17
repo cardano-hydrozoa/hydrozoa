@@ -19,12 +19,12 @@ object Stage4Runner:
         n: Int
     )(using ContraTracer[IO, Slf4jMsg]): PropertyM[IO, (ModelState, List[AnyCommand[ModelState, Stage4Sut]])] =
         val step: StateT[[x] =>> PropertyM[IO, x], ModelState, AnyCommand[ModelState, Stage4Sut]] =
-            StateT { state =>
-                for
-                    cmd      <- Stage4ScenarioGen.genNextCommand(state)
-                    newState <- PropertyM.run(cmd.advanceState[IO](state))
-                yield (newState, cmd)
-            }
+            for
+                state    <- StateT.get[[x] =>> PropertyM[IO, x], ModelState]
+                cmd      <- StateT.liftF(Stage4ScenarioGen.genNextCommand(state))
+                newState <- StateT.liftF(PropertyM.run(cmd.advanceState[IO](state)))
+                _        <- StateT.set[[x] =>> PropertyM[IO, x], ModelState](newState)
+            yield cmd
         step.replicateA(n).run(initialState)
 
     def renderTable(

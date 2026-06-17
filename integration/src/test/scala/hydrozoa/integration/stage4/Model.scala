@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
 import io.bullet.borer.Cbor
-import cats.{Monad, MonadThrow}
+import cats.MonadThrow
 import cats.data.StateT
 import cats.syntax.all.*
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug}
@@ -142,12 +142,12 @@ object Model {
         override def runState[M[_]: MonadThrow](
             cmd: DelayCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, ModelState, Unit] =
-            StateT { state =>
+            StateT.modifyF[M, ModelState] { state =>
                 import cmd.peerNum
                 val newTime = state.currentModelTime + cmd.duration
                 val absorbed = absorbDeposits(newTime, state)
-                log.debug(s"MODEL>> DelayCommand(peer=$peerNum, duration=${cmd.duration})") >>
-                    Monad[M].pure(absorbed.copy(currentModelTime = newTime) -> ())
+                log.debug(s"MODEL>> DelayCommand(peer=$peerNum, duration=${cmd.duration})")
+                    .as(absorbed.copy(currentModelTime = newTime))
             }
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
@@ -163,51 +163,53 @@ object Model {
         override def runState[M[_]: MonadThrow](
             cmd: L2TxCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, ModelState, ValidityFlag] =
-            StateT { state =>
-                import cmd.peerNum
-                val newTime = state.currentModelTime + cmd.interArrivalDelay
-                val stateAfterTime = absorbDeposits(newTime, state).copy(
-                  currentModelTime = newTime,
-                )
-                val nodeConfig = stateAfterTime.nodeConfigFor(peerNum)
-                for
-                    l2Tx <- L2Tx
-                        .parse(
-                          cmd.request.request.body.l2Payload.bytes,
-                          nodeConfig.headConfig.cardanoNetwork
-                        )
-                        .fold(
-                          err =>
-                              MonadThrow[M].raiseError(
-                                RuntimeException(s"Failed to parse L2Tx: $err")
-                              ),
-                          MonadThrow[M].pure(_)
-                        )
-                    mutatorResult = HydrozoaTransactionMutator.transit(
-                      config = nodeConfig.headConfig,
-                      time = stateAfterTime.currentModelTime,
-                      state = stateAfterTime.utxosL2Active,
-                      l2Tx = l2Tx
-                    )
-                    (flag, newL2Utxos, mInvalidMsg) = mutatorResult match {
-                        case Left(err) =>
-                            (ValidityFlag.Invalid, stateAfterTime.utxosL2Active,
-                                Some(s"L2 tx ${cmd.request.requestId} invalid in model: $err"))
-                        case Right(newUtxos) =>
-                            (ValidityFlag.Valid, newUtxos, None)
-                    }
-                    newState = stateAfterTime.copy(
-                      utxosL2Active = newL2Utxos,
-                      nextRequestNumbers = stateAfterTime.nextRequestNumbers +
-                          (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
-                      modelFlags = stateAfterTime.modelFlags + (cmd.request.requestId -> flag),
-                    )
-                    _ <- log.debug(
-                      s"MODEL>> L2TxCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
-                    )
-                    _ <- mInvalidMsg.fold(MonadThrow[M].pure(()))(log.debug(_))
-                yield newState -> flag
-            }
+            import cmd.peerNum
+            for
+                state         <- StateT.get[M, ModelState]
+                newTime        = state.currentModelTime + cmd.interArrivalDelay
+                stateAT        = absorbDeposits(newTime, state).copy(currentModelTime = newTime)
+                nodeConfig     = stateAT.nodeConfigFor(peerNum)
+                l2Tx          <- StateT.liftF(
+                                   L2Tx
+                                       .parse(
+                                         cmd.request.request.body.l2Payload.bytes,
+                                         nodeConfig.headConfig.cardanoNetwork
+                                       )
+                                       .fold(
+                                         err =>
+                                             MonadThrow[M].raiseError(
+                                               RuntimeException(s"Failed to parse L2Tx: $err")
+                                             ),
+                                         MonadThrow[M].pure(_)
+                                       )
+                                 )
+                mutatorResult  = HydrozoaTransactionMutator.transit(
+                                   config = nodeConfig.headConfig,
+                                   time = stateAT.currentModelTime,
+                                   state = stateAT.utxosL2Active,
+                                   l2Tx = l2Tx
+                                 )
+                (flag, newL2Utxos, mInvalidMsg) = mutatorResult match {
+                    case Left(err) =>
+                        (ValidityFlag.Invalid, stateAT.utxosL2Active,
+                            Some(s"L2 tx ${cmd.request.requestId} invalid in model: $err"))
+                    case Right(newUtxos) =>
+                        (ValidityFlag.Valid, newUtxos, None)
+                }
+                newState       = stateAT.copy(
+                                   utxosL2Active = newL2Utxos,
+                                   nextRequestNumbers = stateAT.nextRequestNumbers +
+                                       (peerNum -> stateAT.nextRequestNumbers(peerNum).increment),
+                                   modelFlags = stateAT.modelFlags + (cmd.request.requestId -> flag),
+                                 )
+                _             <- StateT.liftF(
+                                   log.debug(
+                                     s"MODEL>> L2TxCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
+                                   )
+                                 )
+                _             <- StateT.liftF(mInvalidMsg.fold(MonadThrow[M].pure(()))(log.debug(_)))
+                _             <- StateT.set[M, ModelState](newState)
+            yield flag
     }
 
     given ModelCommand[RegisterAndSubmitDepositCommand, ValidityFlag, ModelState] with {
@@ -217,36 +219,38 @@ object Model {
         override def runState[M[_]: MonadThrow](
             cmd: RegisterAndSubmitDepositCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, ModelState, ValidityFlag] =
-            StateT { state =>
-                import cmd.peerNum
-                val newTime = state.currentModelTime + cmd.interArrivalDelay
-                val stateAfterTime = absorbDeposits(newTime, state).copy(
-                  currentModelTime = newTime,
-                )
-                val pending = PendingDeposit(
-                  requestId = cmd.request.requestId,
-                  absorptionStartTime = cmd.absorptionStartTime,
-                  expectedAbsorptionTime = cmd.expectedAbsorptionTime,
-                  l2Payload = cmd.l2Payload,
-                  depositProduced = cmd.depositProduced
-                )
-                val spentL1Inputs = cmd.depositTxBytesSigned.body.value.inputs.toSet
-                val updatedPeerL1 = stateAfterTime.peerUtxosL1(peerNum) -- spentL1Inputs
-                val newState = stateAfterTime.copy(
-                  pendingDeposits = stateAfterTime.pendingDeposits +
-                      (peerNum -> (stateAfterTime.pendingDeposits(peerNum) :+ pending)),
-                  nextRequestNumbers = stateAfterTime.nextRequestNumbers +
-                      (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
-                  peerUtxosL1 = stateAfterTime.peerUtxosL1 + (peerNum -> updatedPeerL1),
-                  modelFlags =
-                      stateAfterTime.modelFlags + (cmd.request.requestId -> ValidityFlag.Valid),
-                  registeredDeposits =
-                      stateAfterTime.registeredDeposits + (cmd.request.requestId -> pending),
-                )
-                log.debug(
-                  s"MODEL>> RegisterAndSubmitDepositCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
-                ) >> Monad[M].pure(newState -> ValidityFlag.Valid)
-            }
+            import cmd.peerNum
+            for
+                state           <- StateT.get[M, ModelState]
+                newTime          = state.currentModelTime + cmd.interArrivalDelay
+                stateAfterTime   = absorbDeposits(newTime, state).copy(currentModelTime = newTime)
+                pending          = PendingDeposit(
+                                     requestId = cmd.request.requestId,
+                                     absorptionStartTime = cmd.absorptionStartTime,
+                                     expectedAbsorptionTime = cmd.expectedAbsorptionTime,
+                                     l2Payload = cmd.l2Payload,
+                                     depositProduced = cmd.depositProduced
+                                   )
+                spentL1Inputs    = cmd.depositTxBytesSigned.body.value.inputs.toSet
+                updatedPeerL1    = stateAfterTime.peerUtxosL1(peerNum) -- spentL1Inputs
+                newState         = stateAfterTime.copy(
+                                     pendingDeposits = stateAfterTime.pendingDeposits +
+                                         (peerNum -> (stateAfterTime.pendingDeposits(peerNum) :+ pending)),
+                                     nextRequestNumbers = stateAfterTime.nextRequestNumbers +
+                                         (peerNum -> stateAfterTime.nextRequestNumbers(peerNum).increment),
+                                     peerUtxosL1 = stateAfterTime.peerUtxosL1 + (peerNum -> updatedPeerL1),
+                                     modelFlags =
+                                         stateAfterTime.modelFlags + (cmd.request.requestId -> ValidityFlag.Valid),
+                                     registeredDeposits =
+                                         stateAfterTime.registeredDeposits + (cmd.request.requestId -> pending),
+                                   )
+                _               <- StateT.set[M, ModelState](newState)
+                _               <- StateT.liftF(
+                                     log.debug(
+                                       s"MODEL>> RegisterAndSubmitDepositCommand(peer=$peerNum, requestId=${cmd.request.requestId})"
+                                     )
+                                   )
+            yield ValidityFlag.Valid
     }
 
 }

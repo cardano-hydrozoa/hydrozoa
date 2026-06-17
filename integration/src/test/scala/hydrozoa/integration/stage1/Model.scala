@@ -228,6 +228,9 @@ object Model:
           replace = events => bc => bc.copy(accumulator = events)
         )
 
+    private def liftS[M[_]: Applicative, A](s: cats.data.State[State, A]): StateT[M, State, A] =
+        s.transformF(_.value.pure[M])
+
     // ===================================
     // ModelCommand instances
     // ===================================
@@ -241,7 +244,7 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: DelayCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
-            StateT { state =>
+            StateT.modifyF[M, State] { state =>
                 val newBlockM = state.blockCycle match {
                     case BlockCycle.Done(blockNumber, version) =>
                         MonadThrow[M].pure(BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version))
@@ -261,7 +264,7 @@ object Model:
                             log.warn(s"MODEL>> DelayCommand: model time entering silence/fallback zone")
                         case _ => MonadThrow[M].pure(())
                     }
-                yield newState -> ()
+                yield newState
             }
 
         override def delay(cmd: DelayCommand): scala.concurrent.duration.FiniteDuration =
@@ -277,7 +280,7 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: StartBlockCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
-            StateT { state =>
+            StateT.modifyF[M, State] { state =>
                 state.getCurrentTime match {
                     case CurrentTime.BeforeHappyPathExpiration(_) =>
                         val newBlockM = state.blockCycle match {
@@ -301,7 +304,7 @@ object Model:
                             _ <- log.debug(
                               s"MODEL>> StartBlockCommand for block number: ${cmd.blockNumber}"
                             )
-                        yield state.copy(blockCycle = newBlock) -> ()
+                        yield state.copy(blockCycle = newBlock)
                     case _ =>
                         MonadThrow[M].raiseError(
                           Error.UnexpectedState(
@@ -321,62 +324,58 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: CompleteBlockCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, BlockBrief] =
-            StateT { state =>
-                state.blockCycle match {
+            for
+                state <- StateT.get[M, State]
+                brief <- state.blockCycle match {
                     case BlockCycle.InProgress(blockNumber, _creationTime, prevVersion, accumulator) =>
                         val events: List[(RequestId, ValidityFlag)] =
                             accumulator.map((le, _, flag) => le.requestId -> flag)
-
-                        val s: cats.data.State[State, BlockBrief] =
-                            for {
-                                regOrReject <- registerOrReject(events)
-                                registeredThisBlock = regOrReject._1
-                                rejectedThisBlock = regOrReject._2
-
-                                absorbedThisBlock <- absorb(cmd.blockCreationEndTime)
-
-                                refundedThisBlock <- refund(cmd.isFinal, cmd.blockCreationEndTime)
-
-                                blockBrief <- mkBlockBrief(
-                                  cmd.isFinal,
-                                  cmd.blockCreationEndTime,
-                                  cmd.blockNumber,
-                                  prevVersion,
-                                  accumulator,
-                                  absorbedThisBlock,
-                                  refundedThisBlock
-                                )
-
-                                // tick time
-                                _ <- cats.data.State.modify[State](state =>
-                                    state.advanceCurrentTime(cmd.blockCreationEndTime.convert)
-                                )
-
-                                // update block cycle
-                                _ <- cats.data.State.modify[State](state => {
-                                    val nextBlockCycle =
-                                        if cmd.isFinal then BlockCycle.HeadFinalized
-                                        else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
-                                    state.copy(blockCycle = nextBlockCycle)
-                                })
-
-                            } yield blockBrief
-
-                        log.debug(
-                          s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
-                        ) >> MonadThrow[M].pure(s.run(state).value)
+                        for
+                            _                   <- StateT.liftF(
+                                                     log.debug(
+                                                       s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
+                                                     )
+                                                   )
+                            regOrReject         <- registerOrReject[M](events)
+                            registeredThisBlock  = regOrReject._1
+                            rejectedThisBlock    = regOrReject._2
+                            absorbedThisBlock   <- absorb[M](cmd.blockCreationEndTime)
+                            refundedThisBlock   <- refund[M](cmd.isFinal, cmd.blockCreationEndTime)
+                            blockBrief          <- mkBlockBrief[M](
+                                                     cmd.isFinal,
+                                                     cmd.blockCreationEndTime,
+                                                     cmd.blockNumber,
+                                                     prevVersion,
+                                                     accumulator,
+                                                     absorbedThisBlock,
+                                                     refundedThisBlock
+                                                   )
+                            // tick time
+                            _                   <- StateT.modify[M, State](
+                                                     _.advanceCurrentTime(cmd.blockCreationEndTime.convert)
+                                                   )
+                            // update block cycle
+                            _                   <- StateT.modify[M, State] { state =>
+                                                     val nextBlockCycle =
+                                                         if cmd.isFinal then BlockCycle.HeadFinalized
+                                                         else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
+                                                     state.copy(blockCycle = nextBlockCycle)
+                                                   }
+                        yield blockBrief
                     case _ =>
-                        MonadThrow[M].raiseError(
-                          UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
+                        StateT.liftF(
+                          MonadThrow[M].raiseError(
+                            UnexpectedState("CompleteBlockCommand requires BlockCycle.InProgress")
+                          )
                         )
                 }
-            }
+            yield brief
 
-        private def getBlockCreationStartTime: cats.data.State[State, BlockCreationStartTime] =
-            cats.data.State.get.map(state => BlockCreationStartTime(state.getCurrentTime.instant))
+        private def getBlockCreationStartTime[M[_]: Applicative]: StateT[M, State, BlockCreationStartTime] =
+            StateT.inspect(state => BlockCreationStartTime(state.getCurrentTime.instant))
 
-        private def getNewSettlementValidityEnd: cats.data.State[State, SettlementTxEndTime] =
-            cats.data.State.get.map(state =>
+        private def getNewSettlementValidityEnd[M[_]: Applicative]: StateT[M, State, SettlementTxEndTime] =
+            StateT.inspect(state =>
                 state.multiNodeConfig.txTiming.newSettlementEndTime(state.competingFallbackStartTime)
             )
 
@@ -385,10 +384,10 @@ object Model:
           * @return
           *   a tuple of (registeredEvents, rejectedEvents)
           */
-        private def registerOrReject(
+        private def registerOrReject[M[_]: Monad](
             events: List[(RequestId, ValidityFlag)]
-        ): cats.data.State[State, (Queue[Registered], Queue[Rejected])] = for {
-            state <- cats.data.State.get[State]
+        ): StateT[M, State, (Queue[Registered], Queue[Rejected])] = for {
+            state <- StateT.get[M, State]
             // FIXME: this could be done probably in a single fold, and perhaps more performant for large
             // lists of events by using a `Map[RequestId, ValidityFlag]` instead.
             // Or perhaps the accumulator should just store the full RegisterDepositCommand,
@@ -415,17 +414,17 @@ object Model:
             ) = requestsInAccumulator
                 .partition(_._1 == Valid)
                 .bimap(_.map(_._2), _.map(_._2))
-            registered <- DepositStatus.Registered.register(depositsToRegisterOrReject._1)
-            rejected <- DepositStatus.Rejected.reject(depositsToRegisterOrReject._2)
+            registered <- liftS(DepositStatus.Registered.register(depositsToRegisterOrReject._1))
+            rejected <- liftS(DepositStatus.Rejected.reject(depositsToRegisterOrReject._2))
         } yield (registered, rejected)
 
-        def absorb(
+        def absorb[M[_]: Applicative](
             blockCreationEndTime: BlockCreationEndTime
-        ): cats.data.State[State, Queue[Absorbed]] =
+        ): StateT[M, State, Queue[Absorbed]] =
             // The fast cycle does not rotate the treasury, so no deposit ever transitions to
             // Absorbed. Mature Submitted deposits flow to `refund` instead (see SUT's
             // `NotInPollResults` compartment in `DepositsMap.partition`).
-            cats.data.State.pure(Queue.empty)
+            StateT.pure(Queue.empty)
 
         // Previous absorb body (kept for review; restore once the slow cycle rotates the
         // treasury and absorption can actually happen on the fast/slow split):
@@ -464,12 +463,12 @@ object Model:
         //     depositsAbsorbed <- DepositStatus.Absorbed.absorb(depositsToAbsorb)
         // } yield depositsAbsorbed
 
-        private def refund(
+        private def refund[M[_]: Monad](
             isFinal: Boolean,
             blockCreationEndTime: BlockCreationEndTime
-        ): cats.data.State[State, Queue[Refunded]] = for {
-            state <- cats.data.State.get[State]
-            settlementValidityEnd <- getNewSettlementValidityEnd
+        ): StateT[M, State, Queue[Refunded]] = for {
+            state <- StateT.get[M, State]
+            settlementValidityEnd <- getNewSettlementValidityEnd[M]
 
             depositsToRefund: Queue[Refundable] =
                 if isFinal
@@ -490,22 +489,22 @@ object Model:
                     // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
                     // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
                     //     .isInstanceOf[Submitted])
-            refunded <- DepositStatus.Refunded.refund(depositsToRefund)
+            refunded <- liftS(DepositStatus.Refunded.refund(depositsToRefund))
         } yield refunded
 
-        private def majorBlock(
+        private def majorBlock[M[_]: Monad](
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
             events: List[(RequestId, ValidityFlag)],
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
-        ): cats.data.State[State, BlockBrief.Major] =
+        ): StateT[M, State, BlockBrief.Major] =
             for {
-                state <- cats.data.State.get[State]
+                state <- StateT.get[M, State]
                 txTiming = state.multiNodeConfig.txTiming
 
-                blockStartTime <- getBlockCreationStartTime
+                blockStartTime <- getBlockCreationStartTime[M]
 
                 newFallbackTxStartTime = txTiming.newFallbackStartTime(blockEndTime)
                 newForcedMajorBlockWakeupTime =
@@ -531,21 +530,21 @@ object Model:
                   )
                 )
 
-                _ <- cats.data.State.modify[State](
+                _ <- StateT.modify[M, State](
                   _.copy(competingFallbackStartTime = newFallbackTxStartTime)
                 )
 
             } yield majorBlock
 
-        private def minorBlock(
+        private def minorBlock[M[_]: Monad](
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
             events: List[(RequestId, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
-        ): cats.data.State[State, BlockBrief.Minor] = for {
-            state <- cats.data.State.get[State]
-            blockStartTime <- getBlockCreationStartTime
+        ): StateT[M, State, BlockBrief.Minor] = for {
+            state <- StateT.get[M, State]
+            blockStartTime <- getBlockCreationStartTime[M]
             forcedMajorBlockWakeupTime =
                 state.multiNodeConfig.txTiming.forcedMajorBlockWakeupTime(
                   state.competingFallbackStartTime
@@ -570,16 +569,15 @@ object Model:
             )
         } yield minorBlock
 
-        def finalBlock(
+        def finalBlock[M[_]: Monad](
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
             blockVersion: BlockVersion.Full,
             events: List[(RequestId, ValidityFlag)],
             refundedThisBlock: Queue[Refunded]
-        ): cats.data.State[State, BlockBrief.Final] = for {
-            _ <- cats.data.State
-                .modify[State](_.copy(blockCycle = BlockCycle.HeadFinalized))
-            blockStartTime <- getBlockCreationStartTime
+        ): StateT[M, State, BlockBrief.Final] = for {
+            _ <- StateT.modify[M, State](_.copy(blockCycle = BlockCycle.HeadFinalized))
+            blockStartTime <- getBlockCreationStartTime[M]
 
             finalBlock = Final(
               header = BlockHeader.Final(
@@ -595,7 +593,7 @@ object Model:
             )
         } yield finalBlock
 
-        private def mkBlockBrief(
+        private def mkBlockBrief[M[_]: Monad](
             isFinal: Boolean,
             blockEndTime: BlockCreationEndTime,
             blockNumber: BlockNumber,
@@ -603,14 +601,14 @@ object Model:
             accumulator: BlockAccumulator,
             absorbedThisBlock: Queue[Absorbed],
             refundedThisBlock: Queue[Refunded]
-        ): cats.data.State[State, BlockBrief] =
+        ): StateT[M, State, BlockBrief] =
             for {
-                state <- cats.data.State.get[State]
+                state <- StateT.get[M, State]
 
                 events = accumulator.map((req, _, flag) => (req.requestId, flag))
 
                 // Construct, but don't execute the state transitions -- we decide which one we need below
-                doMajorBlock = majorBlock(
+                doMajorBlock = majorBlock[M](
                   blockEndTime,
                   blockNumber,
                   prevVersion.incrementMajor,
@@ -618,14 +616,14 @@ object Model:
                   absorbedThisBlock,
                   refundedThisBlock
                 )
-                doMinorBlock = minorBlock(
+                doMinorBlock = minorBlock[M](
                   blockEndTime,
                   blockNumber,
                   prevVersion.incrementMinor,
                   events,
                   refundedThisBlock
                 )
-                doFinalBlock = finalBlock(
+                doFinalBlock = finalBlock[M](
                   blockEndTime,
                   blockNumber,
                   prevVersion.incrementMajor,
@@ -676,7 +674,7 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: L2TxCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
-            StateT { state =>
+            StateT.modifyF[M, State] { state =>
                 for
                     l2Tx <- L2Tx
                         .parse(
@@ -720,7 +718,7 @@ object Model:
                     finalState = newState.focus(_.nextRequestNumber).modify(_.increment)
                     _ <- log.debug(s"MODEL>> L2TxCommand for event ID: ${cmd.request.requestId}")
                     _ <- mInvalidMsg.fold(MonadThrow[M].pure(()))(log.debug(_))
-                yield finalState -> ()
+                yield finalState
             }
     }
 
@@ -732,7 +730,7 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: RegisterDepositCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
-            StateT { state =>
+            StateT.modifyF[M, State] { state =>
                 import cmd.request as req
                 import state.multiNodeConfig as config
 
@@ -777,7 +775,7 @@ object Model:
                     _ <- log.debug(
                       s"MODEL>> RegisterDepositCommand for event ID: ${cmd.request.requestId}"
                     )
-                yield newState -> ()
+                yield newState
             }
     }
 
@@ -789,17 +787,16 @@ object Model:
         override def runState[M[_]: MonadThrow](
             cmd: SubmitDepositsCommand
         )(using log: ContraTracer[M, Slf4jMsg]): StateT[M, State, Unit] =
-            StateT { state =>
-                val s: cats.data.State[State, Unit] = for {
-                    _ <- DepositStatus.Submitted.submit(cmd.depositsForSubmission)
-                    _ <- DepositStatus.Declined.decline(cmd.depositsToDecline)
-                } yield ()
-                val (newState, _) = s.run(state).value
-                log.debug(
-                  s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
-                      s"for rejection: ${cmd.depositsToDecline.size}"
-                ) >> MonadThrow[M].pure(newState -> ())
-            }
+            for
+                _ <- liftS(DepositStatus.Submitted.submit(cmd.depositsForSubmission))
+                _ <- liftS(DepositStatus.Declined.decline(cmd.depositsToDecline))
+                _ <- StateT.liftF(
+                       log.debug(
+                         s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
+                             s"for rejection: ${cmd.depositsToDecline.size}"
+                       )
+                     )
+            yield ()
     }
 
     enum Error extends Throwable:
