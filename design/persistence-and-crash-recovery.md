@@ -40,10 +40,8 @@ see [timing-rules](https://) `#fallback`).
 so it recovers by the same machinery described here. The two node types diverge in
 a handful of precise, enumerated places — a coil peer never leads either spine,
 authors no user requests, **authors no soft-ack** (its fast-side recovery anchors on
-the shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and writes its own hard-acks
-to its own `HardAck(PeerId.Coil)` CF, which a hub re-sequences onto the `HubHardAck` family.
-Those deltas are threaded into each section below rather than quarantined; where a
-mechanism is genuinely identical, that is stated. Hub head peers carry one extra
+the shared `BlockResult` CF, [§6](#6-per-actor-recovery-contracts) `JointLedger`), and its own hard-acks are re-sequenced onto a hub's `HubHardAck`
+family. Hub head peers carry one extra
 recovery contract — the `CoilAckSequencer` re-sequencing boundary ([§6](#6-per-actor-recovery-contracts)).
 
 ### In scope (M5)
