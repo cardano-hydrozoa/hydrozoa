@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import hydrozoa.lib.logging.ContraTracer
+import cats.syntax.all.*
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.SoftAckNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -58,7 +59,7 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                 )
             val stats = RocksDbBackendStore
-                .open(tempDir, ContraTracer.nullTracer)
+                .open(tempDir, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
                 .use(b => populate(b) *> StoreDump.stats(b))
                 .unsafeRunSync()
 
@@ -88,7 +89,7 @@ class StoreDumpTest extends AnyFunSuite:
         try
             val ownPeer = HeadPeerNumber(3)
             val rendered = RocksDbBackendStore
-                .open(tempDir, ContraTracer.nullTracer)
+                .open(tempDir, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
                 .use { b =>
                     b.write(
                       RawWriteBatch.start
