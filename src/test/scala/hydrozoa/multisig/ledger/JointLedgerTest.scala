@@ -17,7 +17,7 @@ import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.cardano.scalus.QuantizedTime.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.stripVKeyWitnesses
-import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
@@ -35,7 +35,7 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
@@ -145,9 +145,11 @@ object JointLedgerTestHelpers {
                     stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
 
                     eutxoLedger <- Resource.eval(EutxoL2Ledger(config))
-                    persistenceBackend <- InMemoryBackendStore.open(ContraTracer.nullTracer)
+                    persistenceTracer =
+                        Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                    persistenceBackend <- InMemoryBackendStore.open(persistenceTracer)
                     persistence <- Resource.eval(
-                      Persistence.fromBackend(persistenceBackend, ContraTracer.nullTracer)(using
+                      Persistence.fromBackend(persistenceBackend, persistenceTracer)(using
                         config
                       )
                     )
