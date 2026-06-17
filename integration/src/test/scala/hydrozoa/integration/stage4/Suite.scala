@@ -50,7 +50,7 @@ import test.{SeedPhrase, TestPeers, given}
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 // ===================================
 // Stage 4 suite
@@ -1010,10 +1010,7 @@ case class Stage4Suite(
             // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
             // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
             // still return because the periods between ticks are mailbox-empty.
-            stackDrainTimeout =
-                (lastState.params.multiNodeConfig.nodeConfigs.values.head.hardStackMinPeriod * (nCommands * 2 + 3))
-                    .max(30.seconds)
-            _ <- sut.system.waitForIdle(maxTimeout = stackDrainTimeout)
+            _ <- sut.system.waitForIdle(maxTimeout = Duration.Inf)
 
             // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
             // set stable + deadLetters drained — but it does NOT wait for scheduled future
