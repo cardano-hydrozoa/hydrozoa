@@ -9,11 +9,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
   * [[HydrozoaServer]]. Only one request sequencer is running per node, specifically to handle
@@ -24,7 +24,7 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatc
   */
 trait RequestSequencer(
     config: Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
@@ -48,7 +48,7 @@ trait RequestSequencer(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(
@@ -77,7 +77,7 @@ trait RequestSequencer(
               (userRequest: UserRequest) =>
                   for {
                       conn <- getConnections
-                      newNum <- state.nextLedgerEventNum()
+                      newNum <- state.nextRequestNum()
                       // The user-request surface is head-only, so the author is always a head peer.
                       ownHeadPeerNum <- config.ownPeerId match {
                           case PeerId.Head(n) => IO.pure(n)
@@ -101,8 +101,8 @@ trait RequestSequencer(
                       stamp <- persistence.arrivalStamp
                       _ <- persistence.write(
                         WriteBatch.start
-                            .put(LaneKey.Request(ownHeadPeerNum, newNum))(
-                              LaneValue(stamp, newRequestWithId)
+                            .put(JournalKey.Request(ownHeadPeerNum, newNum))(
+                              JournalValue(stamp, newRequestWithId)
                             )
                       )
                       _ <- req.dResponse.complete(newId)
@@ -115,13 +115,34 @@ trait RequestSequencer(
             )
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            // The user-request surface is head-only, so the author is always a head peer.
+            ownHeadPeerNum <- config.ownPeerId match {
+                case PeerId.Head(n) => IO.pure(n)
+                case PeerId.Coil(_) =>
+                    IO.raiseError(
+                      new IllegalStateException(
+                        "RequestSequencer runs only on a head peer"
+                      )
+                    )
+            }
+            // R3: continue the request counter from `max(own Request) + 1` (CR3, no re-issue);
+            // empty store -> RequestNumber(0), the same cold value.
+            next <- Markers.recoverNextRequestNumber(persistence.backend, ownHeadPeerNum)
+            _ <- state.seedNextRequestNum(next)
+        } yield ()
 
     private final class State {
-        private val nLedgerEvent = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
+        private val nextRequestNumRef = Ref.unsafe[IO, RequestNumber](RequestNumber(0))
 
-        def nextLedgerEventNum(): IO[RequestNumber] =
-            nLedgerEvent.getAndUpdate(_.increment)
+        def nextRequestNum(): IO[RequestNumber] =
+            nextRequestNumRef.getAndUpdate(_.increment)
+
+        /** Seed the next-to-assign request number on recovery (R3). */
+        def seedNextRequestNum(next: RequestNumber): IO[Unit] =
+            nextRequestNumRef.set(next)
     }
 }
 
@@ -131,7 +152,7 @@ trait RequestSequencer(
 object RequestSequencer {
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections,
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
     ): IO[RequestSequencer] =

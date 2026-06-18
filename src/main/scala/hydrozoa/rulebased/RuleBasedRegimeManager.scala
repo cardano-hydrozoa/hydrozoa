@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{BackendStore, Cf, LaneKey, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{BackendStore, Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
 import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.Data
@@ -78,7 +78,7 @@ case class RuleBasedRegimeManager(
                       )
                     )
             }
-            markers <- Markers.derive(backend, ownHeadPeerNum)
+            markers <- Markers.derive(backend, PeerId.Head(ownHeadPeerNum))
             stackNum <- markers.hardConfirmed.liftTo[IO](
               RuleBasedRegimeManager.MissingState("no hard-confirmed stack on disk")
             )
@@ -102,11 +102,6 @@ case class RuleBasedRegimeManager(
                       )
                     )
                 case r: StackEffects.HardConfirmed.Regular =>
-                    // TODO: hoist the StackBrief + EvacuationMap recovery lookup into a shared
-                    // helper once SC's recovery routine lands (open draft PR on another branch);
-                    // both readers want `EvacuationMap[StackLane[hardAcked].lastBlockNum]` per
-                    // design/persistence-and-crash-recovery.md §5.2 / §6.
-                    val stackKey = LaneKey.Stack(stackNum)
                     for {
                         fallbackTx <- RuleBasedRegimeManager
                             .lastFallback(r.partitions)
@@ -126,17 +121,20 @@ case class RuleBasedRegimeManager(
                         }
                         // Default-vote map — what the multisig treasury was committed to at
                         // fallback time. The default vote utxo carries this kzg, so if peers
-                        // never tally onto a newer SEC the resolution will land here.
-                        stackBriefBytes <- backend
-                            .get(Cf.Stack, stackKey.encode)
+                        // never tally onto a newer SEC the resolution will land here. The closing
+                        // stack's `lastBlockNum` comes from the `UnsignedStack` every peer persists
+                        // on every close (atomic with the hard-ack), so it is present for any
+                        // hard-confirmed stack — unlike the StackLane brief (leader-authored only).
+                        unsignedStack <- persistence
+                            .get(StoreKey.UnsignedStack(stackNum))
                             .flatMap(
                               _.liftTo[IO](
                                 RuleBasedRegimeManager.MissingState(
-                                  s"StackLane[$stackNum] missing"
+                                  s"UnsignedStack($stackNum) missing"
                                 )
                               )
                             )
-                        lastBlockNum = stackKey.codec.decode(stackBriefBytes).payload.lastBlockNum
+                        lastBlockNum = unsignedStack.brief.lastBlockNum
                         defaultMap <- persistence
                             .get(StoreKey.EvacuationMap(lastBlockNum))
                             .flatMap(

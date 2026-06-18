@@ -780,7 +780,7 @@ trait ModelBasedSuite {
                     case false =>
                         tc.nextInterval.flatMap { next =>
                             if next > Duration.Zero then
-                                loggerIO.warn(
+                                loggerIO.info(
                                   s"tickUntilAdvancing: no eligible fibers — advancing $next to next timer"
                                 ) >> tc.advance(next) >> tickUntilAdvancing(tc, done)
                             else {

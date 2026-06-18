@@ -20,7 +20,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import cats.effect.IOLocal
 import hydrozoa.lib.logging.{Logging, Slf4jTracer}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy}
@@ -63,7 +63,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 private case class CoilWiring(
     coilNum: CoilPeerNumber,
     config: NodeConfig,
-    pending: Deferred[IO, MultisigRegimeManager.Connections],
+    pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
     stack: PeerStack,
     stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
     coilLiaison: PeerLiaisonCoilToHub.Handle,
@@ -209,7 +209,7 @@ case class Stage4Suite(
         val postSystem: IO[
           (
               CardanoBackend[IO],
-              Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+              Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
               Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
               Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]]
           )
@@ -235,7 +235,7 @@ case class Stage4Suite(
             // are started so cross-peer liaisons can be wired.
             pendingConnsMap <- peers
                 .traverse { peerNum =>
-                    Deferred[IO, MultisigRegimeManager.Connections].map(peerNum -> _)
+                    Deferred[IO, HeadMultisigRegimeManager.Connections].map(peerNum -> _)
                 }
                 .map(_.toMap)
             // Per-peer Ref capturing every BlockBrief.Intermediate the peer's JointLedger emits.
@@ -260,7 +260,7 @@ case class Stage4Suite(
             peerNum: HeadPeerNumber,
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
         ): Resource[IO, PeerStack] = {
@@ -300,7 +300,14 @@ case class Stage4Suite(
             // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
             // every producer (RequestSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
             // one per-peer store; `analyzePersistence` reads it back.
-            openPeerBackend(peerNum).evalMap { backendStore =>
+            openPeerBackend(
+              peerNum,
+              Cf.mkAll(
+                headPeers = multiNodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              )
+            ).evalMap { backendStore =>
                 for
                     persistence <- {
                         given CardanoNetwork.Section = nodeConfig
@@ -308,7 +315,7 @@ case class Stage4Suite(
                     }
                     blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, bwTracer))
                     cardanoLiaison <- system.actorOf(
-                      CardanoLiaison(nodeConfig, cardanoBackend, pending, clTracer)
+                      CardanoLiaison(nodeConfig, cardanoBackend, pending, clTracer, persistence)
                     )
                     requestSequencer <- system.actorOf(
                       RequestSequencer(nodeConfig, pending, esTracer, persistence)
@@ -344,7 +351,7 @@ case class Stage4Suite(
         def postStack(
             system: ActorSystem[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
         ): IO[Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]]] = {
             for {
             // Create one local PeerLiaisonHeadToHead per (local, remote) pair.
@@ -435,7 +442,7 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             ws: WsNetwork,
         ): IO[(Option[CoilAckSequencer.Handle], Option[CoilRelay.Handle], List[CoilWiring])] = {
             val hubConfig = multiNodeConfig.nodeConfigs(hubNum)
@@ -443,7 +450,16 @@ case class Stage4Suite(
             for {
                 coilAckSequencer <-
                     if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
-                    else system.actorOf(CoilAckSequencer(hubConfig, hubPending)).map(Some(_))
+                    else
+                        system
+                            .actorOf(
+                              CoilAckSequencer(
+                                hubConfig,
+                                peerStackMap(hubNum).persistence,
+                                hubPending
+                              )
+                            )
+                            .map(Some(_))
 
                 coilRelay <-
                     if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
@@ -485,7 +501,7 @@ case class Stage4Suite(
                               .humanFormat(PeerId.Head(hubNum), PeerId.Coil(coilNum))
                         )
                     for
-                        coilPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                        coilPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                         // The coil peer gets its own per-peer store (in-memory for the test).
                         coilBackendStore <- InMemoryBackendStore.open.allocated.map(_._1)
                         coilPersistence <- {
@@ -508,7 +524,13 @@ case class Stage4Suite(
                           BlockWeaver(coilConfig, coilPending, bwTracer)
                         )
                         cardanoLiaison <- system.actorOf(
-                          CardanoLiaison(coilConfig, cardanoBackend, coilPending, clTracer)
+                          CardanoLiaison(
+                            coilConfig,
+                            cardanoBackend,
+                            coilPending,
+                            clTracer,
+                            coilPersistence
+                          )
                         )
                         requestSequencer <- system.actorOf(
                           RequestSequencer(coilConfig, coilPending, esTracer, coilPersistence)
@@ -582,7 +604,7 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, MultisigRegimeManager.Connections]],
+            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
             peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
@@ -624,7 +646,7 @@ case class Stage4Suite(
                     )
                     _ <- pendingConnsMap(peerNum)
                         .complete(
-                          MultisigRegimeManager.Connections(
+                          HeadMultisigRegimeManager.Connections(
                             blockWeaver = stack.blockWeaver,
                             blockWeaverLimiter = blockWeaverLimiter,
                             cardanoLiaison = stack.cardanoLiaison,
@@ -663,7 +685,7 @@ case class Stage4Suite(
                     )
                     _ <- c.pending
                         .complete(
-                          MultisigRegimeManager.Connections(
+                          HeadMultisigRegimeManager.Connections(
                             blockWeaver = c.stack.blockWeaver,
                             blockWeaverLimiter = blockWeaverLimiter,
                             cardanoLiaison = c.stack.cardanoLiaison,
@@ -1137,9 +1159,14 @@ case class Stage4Suite(
                     blockResults <- countEntries(backend, Cf.BlockResult)
                     softConfirmations <- countEntries(backend, Cf.SoftConfirmation)
                     depositMaps <- countEntries(backend, Cf.DepositMap)
-                    softAcks <- countEntries(backend, Cf.SoftAck)
-                    hardAcks <- countEntries(backend, Cf.HardAck)
-                    requests <- countEntries(backend, Cf.Request)
+                    // Satellites are split one CF per author (§7.1); count across every head peer's
+                    // own-author CF (each peer holds all peers' entries — own + inbound).
+                    softAcks <- countAcross(backend, sortedPeers.toList.map(Cf.SoftAck(_)))
+                    hardAcks <- countAcross(
+                      backend,
+                      sortedPeers.toList.map(p => Cf.HardAck(PeerId.Head(p)))
+                    )
+                    requests <- countAcross(backend, sortedPeers.toList.map(Cf.Request(_)))
                     _ <- logger.info(
                       s"peer${peerNum: Int} persistence: expectedHardConf=$expectedStacks " +
                           s"hardConfirmations=$hardConfirmations treasuries=$treasuries " +
@@ -1185,13 +1212,16 @@ case class Stage4Suite(
       * allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until a
       * stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
       */
-    private def openPeerBackend(peerNum: HeadPeerNumber): Resource[IO, BackendStore[IO]] =
+    private def openPeerBackend(
+        peerNum: HeadPeerNumber,
+        cfs: List[Cf]
+    ): Resource[IO, BackendStore[IO]] =
         backendMode match
             case BackendMode.InMemory => InMemoryBackendStore.open
             case BackendMode.RocksDb(root) =>
                 val dir = root.resolve(s"peer-${peerNum: Int}")
                 Resource.eval(IO.blocking(Files.createDirectories(dir))) >>
-                    RocksDbBackendStore.open(dir)
+                    RocksDbBackendStore.open(dir, cfs)
 
     private def countEntries(
         backend: BackendStore[IO],
@@ -1205,6 +1235,12 @@ case class Stage4Suite(
                 }
             loop(0)
         }
+
+    /** Sum entry counts across a set of (per-author) CFs — e.g. every head peer's `SoftAck` CF, now
+      * that satellites are split one CF per author (§7.1).
+      */
+    private def countAcross(backend: BackendStore[IO], cfs: List[Cf]): IO[Int] =
+        cfs.traverse(countEntries(backend, _)).map(_.sum)
 
     /** With `coilQuorum` ≥ 1, no stack hard-confirms without the coil peers' acks, so
       * [[propStackCoverage]] already proves coil participation on the head side. This additionally

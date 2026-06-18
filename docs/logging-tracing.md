@@ -206,7 +206,7 @@ given SutCommand[MyCmd, Unit, Stage1Sut] with {
 | `JointLedger` | `given IOLocal[Slf4jTracer]` in class body; `preStartLocal` calls `routeLocal`; all log calls via `Tracer.*`; `blockNum` via `scopedCtx` wrapping `startBlock`/`completeBlock*` bodies |
 | `CardanoLiaison` | `given IOLocal[Slf4jTracer]` in class body; `preStartLocal` calls `routeLocal` |
 | `BlockWeaver` | `given IOLocal[Slf4jTracer]` in class body; `receive` PreStart case calls `routeLocal`; state machine still uses old `logger` (migration pending) |
-| `MultisigRegimeManager` | Accepts `tracerLocal: IOLocal[Slf4jTracer]`; `preStartLocal` calls `routeLocal` then `updateLocalCtx("peer")` — all child actors inherit the peer number automatically |
+| `HeadMultisigRegimeManager` | Accepts `tracerLocal: IOLocal[Slf4jTracer]`; `preStartLocal` calls `routeLocal` then `updateLocalCtx("peer")` — all child actors inherit the peer number automatically |
 | `TxTiming.blockCanStayMinor` | Returns `Traced[Boolean]`; `routingKey = Some("TxTiming")` |
 | `BlockHeader.nextHeader*` | Returns `Traced[...]`; `routingKey = Some("BlockHeader")` |
 
@@ -257,7 +257,7 @@ Above the ambient `IOLocal[Slf4jTracer]` sits a per-actor typed event channel. E
 own event ADT plus a `…EventFormat` object that turns events into `LogEvent`s; the actor takes a
 `ContraTracer[IO, MyEvent]` in its constructor and emits via `tracer.traceWith(event)`. Examples:
 `FastConsensusActorEvent`, `CardanoLiaisonEvent`, `StackComposerEvent`, `SlowConsensusActorEvent`,
-`MultisigRegimeManagerEvent`, `JointLedgerEvent`.
+`HeadMultisigRegimeManagerEvent`, `JointLedgerEvent`.
 
 ### Anatomy of a `…EventFormat`
 

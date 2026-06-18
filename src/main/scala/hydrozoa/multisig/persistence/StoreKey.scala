@@ -1,27 +1,38 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.multisig.consensus.ack.HardAckNumber
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult as LedgerBlockResult}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
-import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.codec.{BlockResultCodec, DepositMapCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec}
+import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
+import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
 
 /** The typed key surface for the high-level persistence API.
   *
   * Every column family ([[Cf]]) has exactly one **key shape** and exactly one **value type** — a
   * corresponding `StoreKey` subtype captures both, so actor code addresses entries by name and
-  * exchanges typed values, never raw bytes. The 5 lane CFs are reached through [[LaneKey]] (which
-  * extends `StoreKey`); the 7 non-lane CFs are covered by the cases declared in the companion
-  * below:
+  * exchanges typed values, never raw bytes. `StoreKey` is the common base — **every** column family
+  * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
+  * append-only replay sequence, §3) is the **subset** of column families reached through
+  * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
+  * The 11 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
   *     `Cf.BlockResult`, keyed by `blockNum`. [[StoreKey.SoftConfirmation]] —
   *     `Cf.SoftConfirmation`, keyed by `blockNum`. [[StoreKey.HardConfirmation]] —
   *     `Cf.HardConfirmation`, keyed by `stackNum`. [[StoreKey.EvacuationMap]] — `Cf.EvacuationMap`,
   *     keyed by `blockNum` (per-block; see the case docstring for why).
-  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]].
+  *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
+  *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
+  *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
+  *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
+  *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
   *
   * Each subtype declares its `Value` and a `given codec: StoreCodec[Value]`; the trait's
@@ -63,11 +74,11 @@ object StoreKey:
 
     /** Key for [[Cf.BlockResult]] — the per-block JL output, keyed by `blockNum`. */
     final case class BlockResult(num: BlockNumber) extends StoreKey:
-        type Value = LedgerBlockResult
+        type Value = LedgerBlockResult.Persisted
         import BlockResultCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockResult
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.SoftConfirmation]] — FCA aggregate (header + multisig), keyed by `blockNum`.
       * `softConfirmed` derives as the last key in this CF (§5.2).
@@ -77,7 +88,7 @@ object StoreKey:
         import SoftConfirmationCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.SoftConfirmation
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.HardConfirmation]] — SCA multisigned effects / SECs / fallbacks, keyed by
       * `stackNum`. `hardConfirmed` derives as the last key in this CF (§5.2). The R10 evacuation
@@ -92,7 +103,7 @@ object StoreKey:
         import StackEffectsCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.HardConfirmation
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:
@@ -134,7 +145,65 @@ object StoreKey:
         import JointEvacuationMap.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EvacuationMap
-        def encode: Array[Byte] = LaneKey.intBytes(num)
+        def encode: Array[Byte] = JournalKey.intBytes(num)
+
+    /** Key for [[Cf.RequestHighWater]] — JointLedger's cumulative per-peer request high-water
+      * `Map[HeadPeerNumber, RequestNumber]` **as of block `num`** (the highest request number from
+      * each author included in any block `≤ num`). One entry per own soft-ack, written in the same
+      * atomic bundle as that block; entries are monotone-non-decreasing in `num`. Not read by JL's
+      * own recover; the `ReplayActor` reads `RequestHighWater(softAcked)` to seed each peer's
+      * RequestLane resume cursor (`high-water + 1`, §5.3). Block-keyed (not a singleton) so the
+      * high-water at any committed block is recoverable, mirroring the other spine-indexed CFs.
+      */
+    final case class RequestHighWater(num: BlockNumber) extends StoreKey:
+        type Value = Map[HeadPeerNumber, RequestNumber]
+        import RequestHighWaterCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.RequestHighWater
+        def encode: Array[Byte] = JournalKey.intBytes(num)
+
+    /** Key for [[Cf.CoilStampMark]] — a hub's per-coil-peer stamped-high-water blob
+      * `Map[CoilPeerNumber, HardAckNumber]` (the highest coil `HardAckNumber` sequenced onto this
+      * hub's `HubHardAck` spine, per coil peer), rewritten in the same atomic batch as each
+      * `HubHardAck`. `CoilAckSequencer.recover` reads it to stamp the durable inbound coil
+      * hard-acks (the coil's `HardAck` receive copy) above each mark that a crash left unstamped
+      * (§6). A singleton.
+      */
+    case object CoilStampMark extends StoreKey:
+        type Value = Map[CoilPeerNumber, HardAckNumber]
+        import CoilStampMarkCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.CoilStampMark
+        def encode: Array[Byte] = singletonKey
+
+    /** Key for [[Cf.L2CommandNumber]] — the L2 ledger's commit counter
+      * ([[hydrozoa.multisig.ledger.l2.L2CommandNumber]]) reached after block `num`'s L2 commits.
+      * One entry per own soft-ack, written in the same atomic bundle as that block. JointLedger's
+      * own recover reads `L2CommandNumber(softAcked)` and calls `l2Ledger.restoreTo(it)` to
+      * co-anchor the committed L2 state to the fast-side `softAcked` boundary (§R2b). Block-keyed,
+      * mirroring the other spine-indexed CFs.
+      */
+    final case class L2CommandNumber(num: BlockNumber) extends StoreKey:
+        type Value = LedgerL2CommandNumber
+        import LedgerL2CommandNumber.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.L2CommandNumber
+        def encode: Array[Byte] = JournalKey.intBytes(num)
+
+    /** Key for [[Cf.UnsignedStack]] — the `Stack.Unsigned` (brief + locally-derived effects)
+      * StackComposer closed for `stackNum`, persisted **before** the handoff to
+      * `SlowConsensusActor` (CR4/CR8: durable before the own ack crosses the peer boundary via
+      * SCA's broadcast). On recovery the `ReplayActor` reads the in-flight stack's value and the
+      * own acks (HardAck journal) to reconstruct the handoff into SCA — a `HardAck` signs the
+      * effects, which a `StackBrief` alone does not carry, so the effects must be durable. Keyed by
+      * `stackNum`.
+      */
+    final case class UnsignedStack(num: StackNumber) extends StoreKey:
+        type Value = Stack.Unsigned
+        import UnsignedStackCodec.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.UnsignedStack
+        def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.Meta]] — store-level metadata, name-keyed (UTF-8). */
     final case class Meta(name: String) extends StoreKey:

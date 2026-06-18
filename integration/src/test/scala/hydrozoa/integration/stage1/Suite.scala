@@ -509,13 +509,22 @@ case class Suite(
               )
             )
 
+            // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
+            // need a handle. `given IOLocal[Slf4jTracer]` is already in scope above.
+            persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
+            persistence <- {
+                given CardanoNetwork.Section = nodeConfig
+                Persistence.fromBackend(persistenceBackend)
+            }
+
             // Cardano liaison
             cardanoLiaison <- system.actorOf(
               CardanoLiaison(
                 nodeConfig,
                 cardanoBackend,
                 CardanoLiaison.Connections(blockWeaver),
-                clTracer
+                clTracer,
+                persistence
               )
             )
 
@@ -542,13 +551,6 @@ case class Suite(
             )
 
             l2Ledger <- EutxoL2Ledger(nodeConfig)
-            // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-            // need a handle. `given IOLocal[Slf4jTracer]` is already in scope above.
-            persistenceBackend <- InMemoryBackendStore.open.allocated.map(_._1)
-            persistence <- {
-                given CardanoNetwork.Section = nodeConfig
-                Persistence.fromBackend(persistenceBackend)
-            }
             jointLedger <- system.actorOf(
               JointLedger(
                 nodeConfig,

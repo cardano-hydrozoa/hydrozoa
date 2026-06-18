@@ -141,7 +141,7 @@ Stage 4 is timer-driven, not command-driven. A real `BlockWeaver` per peer fires
 
 ### SUT Architecture
 
-Per peer, stage 4 starts **seven real actors** wired together by `MultisigRegimeManager.Connections`:
+Per peer, stage 4 starts **seven real actors** wired together by `HeadMultisigRegimeManager.Connections`:
 
 - `BlockWeaver` — leader role + autonomous block firing via dead-man wakeups and deposit-decision wakeups.
 - `JointLedger` — block construction, leader/follower symmetric.

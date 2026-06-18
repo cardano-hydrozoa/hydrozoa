@@ -55,6 +55,11 @@ object JointLedgerEventFormat:
                   "requestId" -> rid.toString,
                   "blockNum" -> s"${bn: Int}"
                 )
+            case PassiveStateRecovered(bn) =>
+                info(
+                  s"recovered passive state from a non-empty store (block ${bn: Int})",
+                  "blockNum" -> s"${bn: Int}"
+                )
             case BlockStarted(bn, startTime) =>
                 info(
                   s"start block: $bn (blockCreationStartTime=$startTime)",

@@ -88,32 +88,16 @@ final class RocksDbBackendStore private (
             finally it.close()
         }
 
-    def lastKeyWithPrefix(cf: Cf, prefix: Array[Byte]): IO[Option[Array[Byte]]] =
-        IO.blocking {
-            // Upper bound for the prefix space: `prefix ++ 0xFF * 16`. Since our schema's keys
-            // are ≤ 9 bytes (see §7.1), 16 trailing 0xFF bytes safely dominates every key
-            // sharing this prefix; `seekForPrev` lands on the largest such key (or on a key
-            // outside the prefix if none match, which the prefix check below rejects).
-            val upperBound = prefix ++ Array.fill[Byte](16)(0xff.toByte)
-            val it = db.newIterator(handles(cf), readOptions)
-            try
-                it.seekForPrev(upperBound)
-                if it.isValid then
-                    val k = it.key()
-                    if RocksDbBackendStore.startsWith(k, prefix) then Some(k) else None
-                else None
-            finally it.close()
-        }
-
 object RocksDbBackendStore:
     private val logger = Logging.loggerIO("Persistence")
 
     /** Open the RocksDB store at `path`, creating it (and parent directories) if it does not yet
-      * exist. Runs the schema-version check ([[StoreVersion]]) and refuses to open an incompatible
-      * store. Returns a `Resource` that closes the DB and releases all native resources on
-      * use-completion.
+      * exist. `cfs` is the config-derived column-family set to open (`Cf.mkAll(headPeers,
+      * coilPeers, hubs)`, §7.1 — the per-author split makes the set membership-dependent). Runs the
+      * schema-version check ([[StoreVersion]]) and refuses to open an incompatible store. Returns a
+      * `Resource` that closes the DB and releases all native resources on use-completion.
       */
-    def open(path: Path): Resource[IO, BackendStore[IO]] =
+    def open(path: Path, cfs: List[Cf]): Resource[IO, BackendStore[IO]] =
         for
             _ <- Resource.eval(logger.info(s"opening RocksDB backend at $path"))
             _ <- Resource.eval(IO.blocking {
@@ -128,7 +112,7 @@ object RocksDbBackendStore:
             )
             writeOptions <- autoCloseable(new WriteOptions())
             readOptions <- autoCloseable(new ReadOptions())
-            opened <- openDb(path, dbOpts, cfOpts)
+            opened <- openDb(path, dbOpts, cfOpts, cfs)
             (db, handles) = opened
             backend = new RocksDbBackendStore(db, handles, writeOptions, readOptions)
             _ <- Resource.eval(versionCheck(backend))
@@ -163,7 +147,8 @@ object RocksDbBackendStore:
     private def openDb(
         path: Path,
         dbOpts: DBOptions,
-        cfOpts: ColumnFamilyOptions
+        cfOpts: ColumnFamilyOptions,
+        cfs: List[Cf]
     ): Resource[IO, (RocksDB, Map[Cf, ColumnFamilyHandle])] =
         Resource
             .make(IO.blocking {
@@ -171,14 +156,14 @@ object RocksDbBackendStore:
                 // close-list but don't expose it through `Cf`.
                 val descriptors = new JArrayList[ColumnFamilyDescriptor]()
                 descriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts))
-                Cf.all.foreach(cf =>
+                cfs.foreach(cf =>
                     descriptors.add(new ColumnFamilyDescriptor(cfNameBytes(cf), cfOpts))
                 )
                 val outHandles = new JArrayList[ColumnFamilyHandle]()
                 val db = RocksDB.open(dbOpts, path.toString, descriptors, outHandles)
                 val allHandles = outHandles.asScala.toList
-                // `allHandles.head` is the default CF; the tail aligns positionally with `Cf.all`.
-                val handlesByCf: Map[Cf, ColumnFamilyHandle] = Cf.all.zip(allHandles.tail).toMap
+                // `allHandles.head` is the default CF; the tail aligns positionally with `cfs`.
+                val handlesByCf: Map[Cf, ColumnFamilyHandle] = cfs.zip(allHandles.tail).toMap
                 (db, allHandles, handlesByCf)
             }) { case (db, allHandles, _) =>
                 IO.blocking {
@@ -188,19 +173,9 @@ object RocksDbBackendStore:
             }
             .map { case (db, _, handlesByCf) => (db, handlesByCf) }
 
-    /** Stable on-disk name for a CF — the enum case name in UTF-8. */
-    private def cfNameBytes(cf: Cf): Array[Byte] = cf.toString.getBytes("UTF-8")
+    /** Stable on-disk name for a CF — `Cf.name` in UTF-8 (per-author satellites embed the author).
+      */
+    private def cfNameBytes(cf: Cf): Array[Byte] = cf.name.getBytes("UTF-8")
 
     private def autoCloseable[A <: AutoCloseable](a: => A): Resource[IO, A] =
         Resource.fromAutoCloseable(IO.blocking(a))
-
-    /** True iff `bytes` is at least as long as `prefix` and matches it byte-for-byte. */
-    private def startsWith(bytes: Array[Byte], prefix: Array[Byte]): Boolean =
-        if bytes.length < prefix.length then false
-        else
-            var i = 0
-            var ok = true
-            while ok && i < prefix.length do
-                if bytes(i) != prefix(i) then ok = false
-                i += 1
-            ok

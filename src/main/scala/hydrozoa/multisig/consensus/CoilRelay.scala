@@ -4,7 +4,7 @@ import cats.effect.{IO, Ref}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckWithId, SoftAck}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonHubToCoil
 import hydrozoa.multisig.ledger.block.BlockBrief
@@ -61,7 +61,7 @@ import hydrozoa.multisig.ledger.stack.StackBrief
   *      hasn't itself seen.
   */
 abstract class CoilRelay(
-    pendingConnections: MultisigRegimeManager.PendingConnections | CoilRelay.Connections
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilRelay.Connections
 ) extends Actor[IO, CoilRelay.Request] {
     private val connections = Ref.unsafe[IO, Option[CoilRelay.Connections]](None)
 
@@ -71,7 +71,7 @@ abstract class CoilRelay(
         )
 
     private def resolveConnections: IO[CoilRelay.Connections] = pendingConnections match {
-        case shared: MultisigRegimeManager.PendingConnections =>
+        case shared: HeadMultisigRegimeManager.PendingConnections =>
             shared.get.map(s => CoilRelay.Connections(coilPeerLiaisons = s.coilPeerLiaisons))
         case own: CoilRelay.Connections => IO.pure(own)
     }
@@ -90,7 +90,7 @@ abstract class CoilRelay(
 
 object CoilRelay {
     def apply(
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections
     ): IO[CoilRelay] =
         IO(new CoilRelay(pendingConnections) {})
 

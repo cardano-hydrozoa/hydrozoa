@@ -276,3 +276,27 @@ Always spell out the concrete factory (`StoreCodec.fromCirce[Value]`,
 `Encoder.AsObject.derived`, …). Symptom of getting it wrong: a hang at first access with
 no exception (a JVM-internal monitor wait), not a stack trace. Watch for it when
 introducing the `type Value` + `given codec: StoreCodec[Value]` lower-bound pattern.
+
+## Error handling — log before raising
+
+Whenever you `IO.raiseError` (or otherwise throw), **emit a log message first**. A raised
+exception carries only its message and stack trace — no logger name, no MDC/`Tracer`
+context (peer number, block/stack, lane), and it may be caught, remapped, or swallowed
+upstream before anything reaches the log. Logging at the raise site captures the context
+*as it is now* and guarantees the failure is recorded even if the exception is later
+absorbed.
+
+```scala
+// ✗ the cause is in the message, but no logger context and it may never reach the log
+IO.raiseError(new IllegalStateException(s"$label cursor out of bounds — $detail"))
+
+// ✓ log under the actor's logger first, then raise the same message
+val message = s"$label cursor out of bounds — $detail"
+logger.error(message) >> IO.raiseError(new IllegalStateException(message))
+```
+
+Use the component's existing logger / `Tracer` route (don't coin a new one just for this —
+[Logging](../CLAUDE.md#logging)). Build the message once and share it between the log line
+and the exception so they never drift. This applies to genuine error raises; it is not
+needed for control-flow `raiseError`s that a caller is expected to handle as a normal
+outcome (those should not be surprising in a log).

@@ -54,6 +54,9 @@ final case class CoilPeers private (coilPeerData: SortedMap[CoilPeerNumber, Coil
     def hubHeadPeerNumbers: List[HeadPeerNumber] =
         coilPeerData.values.map(_.hubHeadPeerNumber).toList.distinct
 
+    /** All coil peer numbers in order (the map's key order). */
+    def coilPeerNumbers: List[CoilPeerNumber] = coilPeerData.keys.toList
+
     def size: Int = coilPeerData.size
 
     def isEmpty: Boolean = coilPeerData.isEmpty
