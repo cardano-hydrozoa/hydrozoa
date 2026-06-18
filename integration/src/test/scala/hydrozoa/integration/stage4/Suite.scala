@@ -314,18 +314,20 @@ case class Stage4Suite(
                                      case None => IO.unit
                                      case Some(targetNums) =>
                                          for
-                                             confirmed <- stacksMap(peerNum).get
-                                             allCovered = targetNums.isEmpty || targetNums.forall {
-                                                              bn =>
-                                                                  confirmed.exists { s =>
-                                                                      (s.brief.firstBlockNum: Int) <= bn &&
-                                                                      bn <= (s.brief.lastBlockNum: Int)
-                                                                  }
-                                                          }
-                                             // Only the canonical peer fires the signal — matching
-                                             // analyzeBlockBriefs which uses sortedPeers.head stacks.
-                                             _ <- if allCovered && peerNum == peers.head
-                                                  then slowCoverageSignal.complete(()).void
+                                             // Check ALL peers so the signal only fires once every
+                                             // peer's stacksMap is current — ensuring analyzePersistence
+                                             // sees consistent captured stacks across all peers.
+                                             allPeersStacks <- stacksMap.values.toList.traverse(_.get)
+                                             allCovered = targetNums.isEmpty ||
+                                                 allPeersStacks.forall { peerStacks =>
+                                                     targetNums.forall { bn =>
+                                                         peerStacks.exists { s =>
+                                                             (s.brief.firstBlockNum: Int) <= bn &&
+                                                             bn <= (s.brief.lastBlockNum: Int)
+                                                         }
+                                                     }
+                                                 }
+                                             _ <- if allCovered then slowCoverageSignal.complete(()).void
                                                   else IO.unit
                                          yield ()
                         yield ()
@@ -1108,16 +1110,18 @@ case class Stage4Suite(
                              .traverse(_.get)
                              .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
             _ <- sut.slowCoverageTarget.complete(blockNums)
-            // One-time coverage check using the canonical peer (min peerNum) — matching the sink
-            // guard and analyzeBlockBriefs which both use sortedPeers.head / peers.head.
-            canonicalPeer    = sut.stacks.keys.minBy(p => p: Int)
-            canonicalStacks <- sut.stacks(canonicalPeer).get
-            allCovered       = blockNums.isEmpty || blockNums.forall { bn =>
-                                   canonicalStacks.exists { s =>
-                                       (s.brief.firstBlockNum: Int) <= bn &&
-                                       bn <= (s.brief.lastBlockNum: Int)
-                                   }
-                               }
+            // One-time coverage check across ALL peers — matching the sink condition so a spurious
+            // signal fire can't race ahead of any peer's stacksMap update.
+            allPeersStacks <- sut.stacks.values.toList.traverse(_.get)
+            allCovered      = blockNums.isEmpty ||
+                                  allPeersStacks.forall { peerStacks =>
+                                      blockNums.forall { bn =>
+                                          peerStacks.exists { s =>
+                                              (s.brief.firstBlockNum: Int) <= bn &&
+                                              bn <= (s.brief.lastBlockNum: Int)
+                                          }
+                                      }
+                                  }
             _ <- IO.whenA(allCovered)(sut.slowCoverageSignal.complete(()).void)
             _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
             errors <- sut.sutErrors.get
