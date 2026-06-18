@@ -26,7 +26,8 @@ import scalus.uplc.builtin.ByteString
 object L2StoreCodecs:
 
     import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
-    import hydrozoa.multisig.ledger.event.RequestId.given
+    // The L2 ledger uses the i64 wire form of RequestId (SugarRush u64), not the default object.
+    import hydrozoa.multisig.ledger.event.RequestId.i64.given
     import hydrozoa.multisig.ledger.block.BlockNumber.given
 
     /** A round-tripping Circe codec for a type that has Borer codecs, via a CBOR-hex string. */

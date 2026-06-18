@@ -301,4 +301,18 @@ class CodecsTest extends AnyFunSuite {
         val _ = assert(ledgerShape == canonical, s"ledger: $ledgerShape")
         assert(transportShape == ledgerShape)
     }
+
+    test(
+      "RequestId.i64 is the packed-long L2/SugarRush form — distinct from the default, round-trips"
+    ) {
+        import io.circe.Json
+        import io.circe.syntax.*
+        import hydrozoa.multisig.ledger.event.RequestId.i64.given
+        val rid = RequestId(HeadPeerNumber(2), RequestNumber(7))
+        val packed = rid.asJson
+        // A bare number equal to the i64 packing — NOT the {headPeerNumber, requestNumber} object.
+        val _ = assert(packed.isNumber, s"expected a number, got $packed")
+        val _ = assert(packed == Json.fromLong(rid.asI64))
+        assert(packed.as[RequestId] == Right(rid))
+    }
 }
