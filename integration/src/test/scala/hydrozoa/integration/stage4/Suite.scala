@@ -5,7 +5,6 @@ import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import com.suprnation.actor.event.Error as ActorError
-import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
@@ -50,13 +49,13 @@ import test.{SeedPhrase, TestPeers, given}
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 
 // ===================================
 // Stage 4 suite
 // ===================================
 
-/** All actors + observation refs for one coil peer follower, assembled in `startupSut` (gated on
+/** All actors + observation refs for one coil peer follower, assembled in `sutResource` (gated on
   * `nCoilPeers > 0`). `headLiaison` is the hub-side `PeerLiaisonHubToCoil`; `coilLiaison` is the
   * coil-side `PeerLiaisonCoilToHub`. `stacksRef` collects the hard-confirmed stacks captured by the
   * follower's SlowConsensusActor tracer sink.
@@ -152,7 +151,7 @@ case class Stage4Suite(
 
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: ModelState): Resource[IO, Stage4Sut] = {
+    override def sutResource(state: ModelState): Resource[IO, Stage4Sut] = {
         val multiNodeConfig = state.params.multiNodeConfig
         val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
@@ -199,13 +198,23 @@ case class Stage4Suite(
                         if now.isAfter(t) then
                             IO.raiseError(
                               RuntimeException(
-                                s"Stage4 startupSut: initialization took too long " +
+                                s"Stage4 sutResource: initialization took too long " +
                                     s"(takeoff: $t, now: $now)"
                               )
                             )
                         else
                             val sleepMs = t.toEpochMilli - now.toEpochMilli
-                            IO.sleep(FiniteDuration(sleepMs, TimeUnit.MILLISECONDS))
+                            val tickMs  = 5_000L
+                            val ticks   = sleepMs / tickMs
+                            val remMs   = sleepMs % tickMs
+                            log.info(s"WS mode: sleeping ${sleepMs / 1000}s until takeoff") >>
+                                (0L until ticks).toList.traverse_ { i =>
+                                    IO.sleep(tickMs.millis) >>
+                                        log.info(
+                                          s"WS takeoff in ${(sleepMs - (i + 1) * tickMs) / 1000}s"
+                                        )
+                                } >>
+                                IO.sleep(remMs.millis)
                     }
             }
         } yield ()
@@ -703,7 +712,7 @@ case class Stage4Suite(
         // ------ Post-transport IO: wire each peer's Connections (head and coil), start the
         // ------ error drainer and per-peer CardanoLiaison-tick fibers, then assemble the
         // ------ Stage4Sut.
-        def finalizeSut(
+        def acquireSut(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerStackMap: Map[HeadPeerNumber, PeerStack],
@@ -904,7 +913,7 @@ case class Stage4Suite(
             )
             (coilAckSequencer, coilRelay, coilWirings) = coilParts
             sut <- Resource.make(
-              finalizeSut(
+              acquireSut(
                 system,
                 cardanoBackend,
                 peerStackMap,
@@ -1319,7 +1328,7 @@ case class Stage4Suite(
       *
       * `BackendMode.InMemory` returns a fresh `InMemoryBackendStore`. `BackendMode.RocksDb(root)`
       * opens `root/peer-N/`, creating parent directories on demand. The returned `Resource` is
-      * allocated immediately in `startupSut`; cleanup currently leaks RocksDB handles until a
+      * allocated immediately in `sutResource`; cleanup currently leaks RocksDB handles until a
       * stage4-level shutdown hook lands (parallel to `errorDrainer.cancel`).
       */
     private def openPeerBackend(
@@ -1659,9 +1668,9 @@ object Stage4Suite:
             )
 
         // For non-TestControl runs we need the head's initial block end-time anchored at a
-        // small wall-clock offset in the future, so `startupSut` can sleep until that anchor
+        // small wall-clock offset in the future, so `sutResource` can sleep until that anchor
         // and have the model clock and the wall clock coincide at command 1. 60s matches
-        // stage 1's budget; if 20-peer setup overruns it the test aborts (see startupSut).
+        // stage 1's budget; if 20-peer setup overruns it the test aborts (see sutResource).
         // Under TestControl we keep the deterministic Jan-1-2026 + 100-day random distribution
         // — `Instant.now()` would defeat seed-based reproducibility.
         val takeoffTime: Option[java.time.Instant] =

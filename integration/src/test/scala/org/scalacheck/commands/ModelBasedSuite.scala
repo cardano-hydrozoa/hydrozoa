@@ -229,7 +229,7 @@ trait ModelBasedSuite {
       *
       * The flow of every test case is as follows (a bit simplified):
       *
-      * initEnv -> Env -> genInitState -> State -> startupSut -> Sut -> ... Command.runPC ->
+      * initEnv -> Env -> genInitState -> State -> sutResource -> Sut -> ... Command.runPC ->
       * shutdownSut -> Prop
       */
     type Env
@@ -249,7 +249,7 @@ trait ModelBasedSuite {
     def initEnv: PropertyM[IO, Env]
 
     /** A generator that should produce an initial [[State]] instance that is usable by
-      * [[startupSut]] to create a new system under test.
+      * [[sutResource]] to create a new system under test.
       *
       * TODO: I guess we may want to have multiple initial state generator/preonditions
       */
@@ -282,7 +282,7 @@ trait ModelBasedSuite {
     // SUT
     // ===================================
 
-    /** Decides if [[startupSut]] should be allowed to be called with the specified state value.
+    /** Decides if [[sutResource]] should be allowed to be called with the specified state value.
       * This can be used to limit the number of co-existing [[Sut]] instances.
       *
       * If you want to allow only one [[Sut]] instance to exist at any given time (a singleton
@@ -301,17 +301,17 @@ trait ModelBasedSuite {
       * abstract state instance. Returned as a `Resource` so cleanup (e.g. open ports, RocksDB
       * handles) runs even when a command throws or the test is cancelled before [[shutdownSut]].
       */
-    def startupSut(state: State): Resource[IO, Sut]
+    def sutResource(state: State): Resource[IO, Sut]
 
-    /** Drain the SUT and run final assertions before the [[startupSut]] resource is finalized.
+    /** Drain the SUT and run final assertions before the [[sutResource]] resource is finalized.
       *
       * Called inside the `Resource.use` block after all commands have run. `lastState` is available
       * for assertions and to size drain timeouts. Cleanup that does not need `lastState` (fiber
-      * cancellation, server shutdown, actor system termination) belongs in the [[startupSut]]
+      * cancellation, server shutdown, actor system termination) belongs in the [[sutResource]]
       * `Resource` finalizer instead.
       *
       * The default implementation returns `Prop.proved`; suites that put all cleanup in the
-      * [[startupSut]] finalizer do not need to override this.
+      * [[sutResource]] finalizer do not need to override this.
       */
     def beforeFinalize(lastState: State, sut: Sut): IO[Prop] = IO.pure(Prop.proved)
 
@@ -363,8 +363,8 @@ trait ModelBasedSuite {
                         prop <- sutId match {
                                     case Some(id) =>
                                         if suts.contains(id) then {
-                                            val _ = suts.put(id, Some(startupSut))
-                                            runTestCase(testCase, startupSut)
+                                            val _ = suts.put(id, Some(sutResource))
+                                            runTestCase(testCase, sutResource)
                                                 .handleErrorWith { e =>
                                                     IO(suts.synchronized(suts.clear())) >>
                                                         IO.raiseError(e)
@@ -442,13 +442,13 @@ trait ModelBasedSuite {
 
     private def runTestCase(
         testCase: TestCase,
-        startupSut: State => Resource[IO, Sut]
+        sutResource: State => Resource[IO, Sut]
     ): IO[Prop] = for {
         _ <- onTestCaseGenerated(testCase.initialState, testCase.commands)
         result <-
             if useTestControl
-            then runCommandsWithTestControl(testCase, startupSut)
-            else runCommandsPlain(testCase, startupSut)
+            then runCommandsWithTestControl(testCase, sutResource)
+            else runCommandsPlain(testCase, sutResource)
         (_sut, prop, s, lastCmd, _) = result
         r = prop.apply(Gen.Parameters.default)
         _ <- if r.failure then
@@ -494,10 +494,10 @@ trait ModelBasedSuite {
       */
     private def runCommandsPlain(
         testCase: TestCase,
-        startupSut: State => Resource[IO, Sut]
+        sutResource: State => Resource[IO, Sut]
     ): IO[(Sut, Prop, State, Int, TestCase)] = for {
         _      <- log.debug("Using plain IO to run the test case...")
-        result <- startupSut(testCase.initialState).use { sut =>
+        result <- sutResource(testCase.initialState).use { sut =>
                       val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
                       for {
                           result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
@@ -559,7 +559,7 @@ trait ModelBasedSuite {
       */
     private def runCommandsWithTestControl(
         testCase: TestCase,
-        startupSut: State => Resource[IO, Sut]
+        sutResource: State => Resource[IO, Sut]
     ): IO[(Sut, Prop, State, Int, TestCase)] = {
         import java.util.concurrent.atomic.AtomicReference
 
@@ -568,7 +568,7 @@ trait ModelBasedSuite {
         val pendingDelay = new AtomicReference[Option[(FiniteDuration, Deferred[IO, Unit])]](None)
 
         val innerIO: IO[(Sut, Prop, State, Int, TestCase)] =
-            startupSut(testCase.initialState).use { sut =>
+            sutResource(testCase.initialState).use { sut =>
                 val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
                 for {
                     result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>

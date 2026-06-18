@@ -1,7 +1,6 @@
 package hydrozoa.integration.stage4
 
 import cats.effect.{Deferred, Fiber, IO, Ref}
-import hydrozoa.multisig.ledger.event.RequestId
 import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
@@ -18,7 +17,7 @@ import hydrozoa.multisig.persistence.{BackendStore, Persistence}
 import org.scalacheck.commands.SutCommand
 
 // ===================================
-// Per-peer actor stack (local to startupSut)
+// Per-peer actor stack (local to sutResource)
 // ===================================
 
 private[stage4] case class PeerStack(
@@ -90,10 +89,6 @@ case class Stage4Sut(
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
     log: ContraTracer[IO, Slf4jMsg],
-    // Cleanup hooks for resources allocated outside the actor system (currently the
-    // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
-    // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
-    transportCleanup: IO[Unit] = IO.unit,
 )
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.

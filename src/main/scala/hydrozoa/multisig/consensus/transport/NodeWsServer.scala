@@ -10,6 +10,7 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.implicits.*
 import org.http4s.server.Server
 import org.http4s.server.websocket.WebSocketBuilder2
+import scala.concurrent.duration.Duration
 
 /** The single WebSocket server a peer binds, shared by every WS link the peer runs. A pure head
   * peer mounts only the head-mesh route ([[PeerWsTransport.routes]]); a hub head peer mounts that
@@ -35,6 +36,9 @@ object NodeWsServer {
             // retransmit timers self-heal a stalled link, so in production we'd set this to
             // `Duration.Inf`; we leave the default in place so tests exercise reconnect handling.
             // TODO: surface as a config parameter (default `Inf` for production; short in tests).
+            // Don't wait for open connections to drain on shutdown — by the time the Resource is
+            // released the protocol is complete and there is nothing left to deliver.
+            .withShutdownTimeout(Duration.Zero)
             .withHttpWebSocketApp(wsb =>
                 routes
                     .map(_(wsb))

@@ -57,7 +57,7 @@ object Model:
 
         // The real-world instant at which the SUT should start processing commands.
         // None for mock mode (time is controlled via TestControl).
-        // Some(t) for Yaci/public: startupSut sleeps until t, or aborts if t is already past.
+        // Some(t) for Yaci/public: sutResource sleeps until t, or aborts if t is already past.
         takeoffTime: Option[java.time.Instant],
 
         // Pre-initial state of the peer's L1 utxos.

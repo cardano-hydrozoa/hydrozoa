@@ -412,7 +412,7 @@ case class Suite(
     // TODO: do we want to run multiple SUTs when using L1 mock?
     override def canStartupNewSut(): Boolean = true
 
-    override def startupSut(state: Model.State): Resource[IO, Sut] = {
+    override def sutResource(state: Model.State): Resource[IO, Sut] = {
         val multiNodeConfig = state.multiNodeConfig
         val runId = java.util.UUID.randomUUID().toString.take(8)
         val headPeerNum = HeadPeerNumber.zero
@@ -461,7 +461,7 @@ case class Suite(
                       )
                     )
                     now <- IO.realTimeInstant
-                    _ <- log.info(s"[startupSut] Current time: ${now.toEpochMilli}")
+                    _ <- log.info(s"[sutResource] Current time: ${now.toEpochMilli}")
                 } yield ())
                 // For real-blockchain modes: sleep until takeoff time so the model clock and the
                 // Yaci clock are synchronized at command execution start. Abort if we are already late.
@@ -645,7 +645,7 @@ case class Suite(
 
         _ <- log.info("beforeFinalize")
 
-        /** Drain all in-flight messages before the [[startupSut]] Resource is finalized.
+        /** Drain all in-flight messages before the [[sutResource]] Resource is finalized.
           *
           * [[waitForIdle]] returns when all mailboxes are empty, the child set is stable, and
           * deadLetters are drained — it also verifies that the system was not terminated. Stage1

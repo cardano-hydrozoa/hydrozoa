@@ -140,7 +140,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
         p
             .withWorkers(1)
             .withMinSuccessfulTests(1)
-            .withPropFilter(Some("Two-peers head works \\(quick\\)"))
 
     // Fast variants (CI): small command sequences, minimal peer count
     val _ = property("Two-peers head works") =
@@ -172,7 +171,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
     // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
-    // `useTestControl = false`, and `startupSut` sleeps the wall clock until that anchor, so
+    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
     // model time and wall clock coincide at command 1. Inter-arrival delays from the
     // superposition generator now elapse in real time.
     val _ = property("Two-peers head works WS") = Stage4Suite(

@@ -63,7 +63,7 @@ object Model {
 
         // Real-clock anchor for non-TestControl runs. `Some(t)` means `genInitialState`
         // computed `t = Instant.now() + 60s` and pinned the head's initial block end-time to
-        // it; `startupSut` will sleep until the wall clock reaches `t` (or abort if late).
+        // it; `sutResource` will sleep until the wall clock reaches `t` (or abort if late).
         // `None` for TestControl runs — virtual clock jumps instantly. See
         // package.scala "Why TestControl is mandatory" for the full rationale.
         takeoffTime: Option[java.time.Instant],
