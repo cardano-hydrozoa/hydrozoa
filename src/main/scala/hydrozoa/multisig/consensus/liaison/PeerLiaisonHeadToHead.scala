@@ -51,6 +51,13 @@ abstract class PeerLiaisonHeadToHead(
             throw new IllegalStateException("PeerLiaisonHeadToHead runs only on a head peer")
     }
 
+    // A head peer authors a `HubHardAck` journal (and so opens that CF, `Cf.mkAll`) only if it hubs
+    // ≥ 1 coil peer; a non-hub has no such CF. The hub-hard-ack lane therefore touches the store
+    // only when the relevant peer is a hub — outbound for our own production, inbound for the
+    // remote's. Off a non-hub it stays cold (no own production to seed/serve; nothing to receive).
+    private val ownIsHub: Boolean = config.hubHeadPeerNumbers.contains(ownHeadPeerNum)
+    private val remoteIsHub: Boolean = config.hubHeadPeerNumbers.contains(remoteHead.peerNum)
+
     /** Resolve this liaison's connections — either projected from the shared regime `Connections`
       * (the remote handle from the in-process `remoteHeadLiaisons` map) or supplied directly.
       */
@@ -83,7 +90,9 @@ abstract class PeerLiaisonHeadToHead(
     private val requestBacking = LaneOutgoingBacking.request(backend, ownHeadPeerNum)
     private val softAckBacking = LaneOutgoingBacking.softAck(backend, ownHeadPeerNum)
     private val hardAckBacking = LaneOutgoingBacking.hardAck(backend, PeerId.Head(ownHeadPeerNum))
-    private val hubHardAckBacking = LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum)
+    // Only a hub has a `HubHardAck` CF to back this lane; a non-hub serves/seeds nothing here.
+    private val hubHardAckBacking: Option[LaneOutgoingBacking[HardAckWithId, HubHardAckNumber]] =
+        Option.when(ownIsHub)(LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum))
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
@@ -125,7 +134,8 @@ abstract class PeerLiaisonHeadToHead(
           _.seqNum,
           HubHardAckNumber.zero,
           _.increment,
-          backfill = hubHardAckBacking.backfill
+          backfill = (from, limit) =>
+              hubHardAckBacking.fold(IO.pure(List.empty[HardAckWithId]))(_.backfill(from, limit))
         )
 
     // ---- Connections ----------------------------------------------------------------------------
@@ -320,7 +330,9 @@ abstract class PeerLiaisonHeadToHead(
             _ <- requestBacking.highWater.flatMap(requestLane.seedHighWaterOutbox)
             _ <- softAckBacking.highWater.flatMap(softAckLane.seedHighWaterOutbox)
             _ <- hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox)
-            _ <- hubHardAckBacking.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
+            _ <- hubHardAckBacking.fold(IO.unit)(
+              _.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
+            )
         } yield ()
 
     /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
@@ -346,9 +358,14 @@ abstract class PeerLiaisonHeadToHead(
             _ <- LaneIncomingCursors
                 .hardAck(backend, PeerId.Head(remoteNum))
                 .flatMap(hardAckLane.restoreInbound)
-            _ <- LaneIncomingCursors
-                .hubHardAck(backend, remoteNum)
-                .flatMap(hubHardAckLane.restoreInbound)
+            // Only restore the inbound hub-hard-ack cursor when the remote is a hub — only then does
+            // its `HubHardAck` CF exist; otherwise the lane stays at its cold cursor.
+            _ <-
+                if remoteIsHub then
+                    LaneIncomingCursors
+                        .hubHardAck(backend, remoteNum)
+                        .flatMap(hubHardAckLane.restoreInbound)
+                else IO.unit
         } yield ()
 
     // ---- Actor shell ----------------------------------------------------------------------------
