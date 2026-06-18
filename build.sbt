@@ -111,7 +111,9 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" % "scalus-testkit_3" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
+        "com.monovore" %% "decline-effect" % "2.6.2" % Test,
+        "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
       // Fork JVM to properly pass system properties
       run / fork := true,
