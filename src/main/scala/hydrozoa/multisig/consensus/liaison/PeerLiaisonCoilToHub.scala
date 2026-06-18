@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, FastConsensusActor, SlowConsens
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBackfill}
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A coil peer's single liaison toward its hub head peer (§5.5 of `design/coil-network.md`)
@@ -131,7 +131,7 @@ abstract class PeerLiaisonCoilToHub(
     // it missed during our crash); preStart restores only the high-water, replay re-appends the
     // in-flight tail.
     private val ownHardAckBacking =
-        LaneOutgoingBackfill.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
+        LaneOutgoingBacking.hardAck(persistence.backend, PeerId.Coil(ownCoilPeerNumber))
     private val ownHardAckLane =
         LaneOutbound.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,

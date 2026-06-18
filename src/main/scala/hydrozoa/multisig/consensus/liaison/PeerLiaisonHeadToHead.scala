@@ -18,7 +18,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, 
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBackfill}
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
@@ -77,13 +77,13 @@ abstract class PeerLiaisonHeadToHead(
     // the satellites are this peer's own author (CF per author).
     private val backend = persistence.backend
     private val blockBacking =
-        LaneOutgoingBackfill.block(backend, b => config.canLeadFast(b.blockNum))
+        LaneOutgoingBacking.block(backend, b => config.canLeadFast(b.blockNum))
     private val stackBacking =
-        LaneOutgoingBackfill.stack(backend, s => config.canLeadSlow(s.stackNum))
-    private val requestBacking = LaneOutgoingBackfill.request(backend, ownHeadPeerNum)
-    private val softAckBacking = LaneOutgoingBackfill.softAck(backend, ownHeadPeerNum)
-    private val hardAckBacking = LaneOutgoingBackfill.hardAck(backend, PeerId.Head(ownHeadPeerNum))
-    private val hubHardAckBacking = LaneOutgoingBackfill.hubHardAck(backend, ownHeadPeerNum)
+        LaneOutgoingBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
+    private val requestBacking = LaneOutgoingBacking.request(backend, ownHeadPeerNum)
+    private val softAckBacking = LaneOutgoingBacking.softAck(backend, ownHeadPeerNum)
+    private val hardAckBacking = LaneOutgoingBacking.hardAck(backend, PeerId.Head(ownHeadPeerNum))
+    private val hubHardAckBacking = LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum)
 
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,

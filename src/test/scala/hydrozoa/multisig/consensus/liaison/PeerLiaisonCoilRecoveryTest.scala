@@ -13,13 +13,13 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.recovery.LaneOutgoingBackfill
+import hydrozoa.multisig.persistence.recovery.LaneOutgoingBacking
 import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 
-/** Recovery tests for the coil-liaison outbound lanes' backing ([[LaneOutgoingBackfill]], §6
+/** Recovery tests for the coil-liaison outbound lanes' backing ([[LaneOutgoingBacking]], §6
   * PeerLiaison, GUM-153). After a crash each lane restores only its high-water and serves older
   * entries from the store on demand (`load`), rather than eagerly loading its whole own production:
   *
@@ -40,7 +40,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
     test("coil own-hard-ack backing: high-water = max, load returns the tail from a number") {
         val coil = CoilPeerNumber(0)
         val (hw, fromZero, fromOne) = run { p =>
-            val backing = LaneOutgoingBackfill.hardAck(p.backend, PeerId.Coil(coil))
+            val backing = LaneOutgoingBacking.hardAck(p.backend, PeerId.Coil(coil))
             for {
                 _ <- p.put(JournalKey.HardAck(PeerId.Coil(coil), HardAckNumber(0)))(
                   JournalValue(stamp, coilHardAck(coil, 0, stack = 1))
@@ -60,7 +60,7 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
 
     test("coil own-hard-ack backing on an empty store: no high-water, empty load") {
         val (hw, loaded) = run { p =>
-            val backing = LaneOutgoingBackfill.hardAck(p.backend, PeerId.Coil(CoilPeerNumber(0)))
+            val backing = LaneOutgoingBacking.hardAck(p.backend, PeerId.Coil(CoilPeerNumber(0)))
             for {
                 hw <- backing.highWater
                 loaded <- backing.backfill(HardAckNumber.zero, 16)
@@ -80,10 +80,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
             relay: List[HubHardAckNumber]
         )
         val out = run { p =>
-            val blockBacking = LaneOutgoingBackfill.block(p.backend, _ => true)
-            val stackBacking = LaneOutgoingBackfill.stack(p.backend, _ => true)
-            val headHardAckBacking = LaneOutgoingBackfill.hardAck(p.backend, PeerId.Head(h0))
-            val relayBacking = LaneOutgoingBackfill.hubHardAck(p.backend, hub0)
+            val blockBacking = LaneOutgoingBacking.block(p.backend, _ => true)
+            val stackBacking = LaneOutgoingBacking.stack(p.backend, _ => true)
+            val headHardAckBacking = LaneOutgoingBacking.hardAck(p.backend, PeerId.Head(h0))
+            val relayBacking = LaneOutgoingBacking.hubHardAck(p.backend, hub0)
             for {
                 // Two blocks on the spine — a hub→coil link keeps BOTH (no canLead filter).
                 b1 <- blockBrief(1)

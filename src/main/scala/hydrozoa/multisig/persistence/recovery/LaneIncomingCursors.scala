@@ -14,7 +14,7 @@ import java.nio.ByteBuffer
   * inbound entry before its cursor advances). [[LaneInbound.restoreCursor]] turns it into the
   * resume cursor `next(lastReceived)`, so on reconnect we re-pull only NEW entries.
   *
-  * Deliberately distinct from [[LaneOutgoingBackfill]]: restoring a receive cursor reads only the
+  * Deliberately distinct from [[LaneOutgoingBacking]]: restoring a receive cursor reads only the
   * key index — no `keep` filter, no payload decode (we resume the pull; we never re-serve), and so
   * no `CardanoNetwork.Section`. For a satellite, `peer` is the **remote** author whose journal we
   * received into (not this peer); the spines are a single shared CF, so the whole-CF max stands in

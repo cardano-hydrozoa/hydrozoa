@@ -470,13 +470,13 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    // ---- LaneOutgoingBackfill (the liaison outbound lanes' recover seam) ----
+    // ---- LaneOutgoingBacking (the liaison outbound lanes' recover seam) ----
 
-    test("LaneOutgoingBackfill over an empty store has no high-water and an empty load") {
+    test("LaneOutgoingBacking over an empty store has no high-water and an empty load") {
         withStore { p =>
-            val hardAckBacking = LaneOutgoingBackfill.hardAck(p.backend, PeerId.Head(ownNum))
+            val hardAckBacking = LaneOutgoingBacking.hardAck(p.backend, PeerId.Head(ownNum))
             val blockBacking =
-                LaneOutgoingBackfill.block(p.backend, b => config.canLeadFast(b.blockNum))
+                LaneOutgoingBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
             for
                 hwHardAck <- hardAckBacking.highWater
                 hwBlock <- blockBacking.highWater
@@ -486,16 +486,16 @@ class RecoverSeamsTest extends AnyFunSuite:
     }
 
     test(
-      "LaneOutgoingBackfill high-water = max key; load filters spines to own-led, satellites are per-author"
+      "LaneOutgoingBacking high-water = max key; load filters spines to own-led, satellites are per-author"
     ) {
         withStore { p =>
             val other = HeadPeerNumber(1)
             val spineRange = (0 to 5).toList
-            val hardAckBacking = LaneOutgoingBackfill.hardAck(p.backend, PeerId.Head(ownNum))
+            val hardAckBacking = LaneOutgoingBacking.hardAck(p.backend, PeerId.Head(ownNum))
             val blockBacking =
-                LaneOutgoingBackfill.block(p.backend, b => config.canLeadFast(b.blockNum))
+                LaneOutgoingBacking.block(p.backend, b => config.canLeadFast(b.blockNum))
             val stackBacking =
-                LaneOutgoingBackfill.stack(p.backend, s => config.canLeadSlow(s.stackNum))
+                LaneOutgoingBacking.stack(p.backend, s => config.canLeadSlow(s.stackNum))
             for
                 // own HardAcks 0..2 + another peer's at 5; the per-author CF excludes the other's.
                 _ <- List(0, 1, 2).traverse_(k =>
