@@ -4,7 +4,6 @@ import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{quantizedInstantDecoder, quantizedInstantEncoder}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
-import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.persistence.codec.DestinationCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
@@ -19,7 +18,7 @@ import io.circe.{Decoder, Encoder}
   *     `CardanoNetwork.Section`, threaded through from this codec);
   *   - [[DestinationCodec]] — fresh CBOR-hex round-trip (the codec on the type itself is
   *     asymmetric);
-  *   - `RequestId` codec from `consensus.transport.Codecs`.
+  *   - the canonical `RequestId` codec (on its companion, `ledger.event.RequestId`).
   *
   * `txLens` and `resolvedUtxos = ResolvedUtxos.empty` are derived from the case-class body, not
   * stored in JSON; on decode the case-class default values restore them.
