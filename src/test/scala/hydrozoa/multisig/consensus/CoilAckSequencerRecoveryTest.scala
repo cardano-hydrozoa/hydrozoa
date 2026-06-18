@@ -74,7 +74,8 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
     /** Open a fresh in-memory store, seed it, and run `recover` against this hub. */
     private def run(seed: Persistence[IO] => IO[Unit]): CoilAckSequencer.Recovered =
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 for {
                     p <- Persistence.fromBackend(backend, persistenceTracer)

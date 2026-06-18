@@ -56,7 +56,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
             } yield (hw, fromZero, fromOne)
         }
         val _ = assert(hw == Some(HardAckNumber(1)), s"high-water = max; got $hw")
-        val _ = assert(fromZero.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)), s"$fromZero")
+        val _ = assert(
+          fromZero.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)),
+          s"$fromZero"
+        )
         assert(fromOne.map(_.hardAckNum) == List(HardAckNumber(1)), s"load from 1 → tail; $fromOne")
     }
 
@@ -117,7 +120,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
             )
         }
         val _ = assert(out.blockHw == Some(BlockNumber(2)), "block high-water = max")
-        val _ = assert(out.blocks == List(BlockNumber(1), BlockNumber(2)), "all blocks, no canLead filter")
+        val _ = assert(
+          out.blocks == List(BlockNumber(1), BlockNumber(2)),
+          "all blocks, no canLead filter"
+        )
         val _ = assert(out.stacks == List(StackNumber(1)), "the stack")
         val _ = assert(out.headAcks == List(HardAckNumber(0)), "head hard-ack")
         assert(out.relay == List(HubHardAckNumber(0)), "hub relay lane")
@@ -126,7 +132,8 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
     /** Open a fresh in-memory store, then run `body` against a `Persistence` over it. */
     private def run[A](body: Persistence[IO] => IO[A]): A =
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend => Persistence.fromBackend(backend, persistenceTracer).flatMap(body))
             .unsafeRunSync()
 

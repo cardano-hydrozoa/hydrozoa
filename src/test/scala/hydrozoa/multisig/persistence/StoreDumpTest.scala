@@ -63,7 +63,11 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                 )
             val stats = RocksDbBackendStore
-                .open(tempDir, testCfs, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
+                .open(
+                  tempDir,
+                  testCfs,
+                  Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                )
                 .use(b => populate(b) *> StoreDump.stats(b, testCfs))
                 .unsafeRunSync()
 
@@ -93,7 +97,11 @@ class StoreDumpTest extends AnyFunSuite:
         try
             val ownPeer = HeadPeerNumber(3)
             val rendered = RocksDbBackendStore
-                .open(tempDir, testCfs, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
+                .open(
+                  tempDir,
+                  testCfs,
+                  Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                )
                 .use { b =>
                     b.write(
                       RawWriteBatch.start

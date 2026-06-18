@@ -1,7 +1,6 @@
 package hydrozoa.multisig.persistence.recovery
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import scala.math.Ordering.Implicits.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -10,6 +9,7 @@ import hydrozoa.multisig.persistence.{ArrivalStamp, JournalKey, JournalValue}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.math.Ordering.Implicits.*
 
 /** Property tests for [[ArrivalOrderedMerge]] — the §5.4 stamp-ordered interleaving of journal
   * tails.

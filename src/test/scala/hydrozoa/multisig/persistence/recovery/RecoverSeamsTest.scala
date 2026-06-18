@@ -631,6 +631,7 @@ class RecoverSeamsTest extends AnyFunSuite:
 
     private def withStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend => Persistence.fromBackend(backend, persistenceTracer).flatMap(prog))
             .unsafeRunSync()

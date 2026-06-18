@@ -195,7 +195,9 @@ trait HeadMultisigRegimeManager(
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else
                     context
-                        .actorOf(CoilAckSequencer(config, persistence, pendingConnections, casTracer))
+                        .actorOf(
+                          CoilAckSequencer(config, persistence, pendingConnections, casTracer)
+                        )
                         .map(Some(_))
 
             coilRelay <-

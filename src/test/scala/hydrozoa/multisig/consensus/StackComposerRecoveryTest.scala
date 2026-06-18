@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
+import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
@@ -11,7 +12,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
-import cats.syntax.contravariant.*
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
@@ -97,7 +97,8 @@ class StackComposerRecoveryTest extends AnyFunSuite:
         seed: Persistence[IO] => IO[Unit]
     )(check: Deferred[IO, SlowConsensusActor.StackHandoff] => IO[A]): A =
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("sc-recovery").use(system =>
                     for {

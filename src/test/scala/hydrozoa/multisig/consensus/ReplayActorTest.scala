@@ -126,7 +126,10 @@ class ReplayActorTest extends AnyFunSuite:
         // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
         val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
-        val _ = assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
+        val _ = assert(
+          c.sca.count(_.isInstanceOf[HardAck]) == 3,
+          "SCA 3 hard-acks (2 own coil + 1 hub)"
+        )
         // StackComposer: only stack >= coilHardAckedStack+1 = 2 (stack 1 is the in-flight band).
         assert(
           c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
@@ -157,7 +160,8 @@ class ReplayActorTest extends AnyFunSuite:
         val peers = config.headPeerIds.map(_.peerNum).toList
         val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("replay-test").use(system =>
                     for {
@@ -205,7 +209,8 @@ class ReplayActorTest extends AnyFunSuite:
         val hubs = List(HeadPeerNumber(1))
         val treasuryAddress = config.initializationTx.treasuryProduced.address
         val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
-        InMemoryBackendStore.open(persistenceTracer)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("replay-coil-test").use(system =>
                     for {
