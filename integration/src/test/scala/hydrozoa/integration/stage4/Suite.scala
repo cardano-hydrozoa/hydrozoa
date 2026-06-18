@@ -50,7 +50,7 @@ import test.{SeedPhrase, TestPeers, given}
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 // ===================================
 // Stage 4 suite
@@ -216,7 +216,12 @@ case class Stage4Suite(
               CardanoBackend[IO],
               Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
               Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
-              Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]]
+              Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+              Ref[IO, Vector[RequestId]],
+              Deferred[IO, Unit],
+              Deferred[IO, Unit],
+              Deferred[IO, Set[RequestId]],
+              Deferred[IO, Set[Int]],
           )
         ] = {
             // All peers share one mock L1 backend, starting from the merged pre-init UTxOs.
@@ -256,7 +261,22 @@ case class Stage4Suite(
                         Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
                     }
                     .map(_.toMap)
-            } yield (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap)
+                submittedRequestIds   <- Ref[IO].of(Vector.empty[RequestId])
+                fastSettlementSignal <- IO.deferred[Unit]
+                slowCoverageSignal   <- IO.deferred[Unit]
+                fastSettlementTarget <- IO.deferred[Set[RequestId]]
+                slowCoverageTarget   <- IO.deferred[Set[Int]]
+            } yield (
+              cardanoBackend,
+              pendingConnsMap,
+              blockBriefsMap,
+              stacksMap,
+              submittedRequestIds,
+              fastSettlementSignal,
+              slowCoverageSignal,
+              fastSettlementTarget,
+              slowCoverageTarget,
+            )
         }
 
         // ------ Per-peer actor stack. Brackets `openPeerBackend` (RocksDB on disk); the rest
@@ -268,6 +288,11 @@ case class Stage4Suite(
             pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+            submittedRequestIds: Ref[IO, Vector[RequestId]],
+            fastSettlementSignal: Deferred[IO, Unit],
+            slowCoverageSignal: Deferred[IO, Unit],
+            fastSettlementTarget: Deferred[IO, Set[RequestId]],
+            slowCoverageTarget: Deferred[IO, Set[Int]],
         ): Resource[IO, PeerStack] = {
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
             val pending = pendingConnsMap(peerNum)
@@ -282,7 +307,28 @@ case class Stage4Suite(
             val captureScaSink: ContraTracer[IO, SlowConsensusActorEvent] =
                 ContraTracer.emit[IO, SlowConsensusActorEvent] {
                     case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
-                        stacksMap(peerNum).update(_ :+ stack)
+                        for
+                            _           <- stacksMap(peerNum).update(_ :+ stack)
+                            maybeTarget <- slowCoverageTarget.tryGet
+                            _ <- maybeTarget match
+                                     case None => IO.unit
+                                     case Some(targetNums) =>
+                                         for
+                                             confirmed <- stacksMap(peerNum).get
+                                             allCovered = targetNums.isEmpty || targetNums.forall {
+                                                              bn =>
+                                                                  confirmed.exists { s =>
+                                                                      (s.brief.firstBlockNum: Int) <= bn &&
+                                                                      bn <= (s.brief.lastBlockNum: Int)
+                                                                  }
+                                                          }
+                                             // Only the canonical peer fires the signal — matching
+                                             // analyzeBlockBriefs which uses sortedPeers.head stacks.
+                                             _ <- if allCovered && peerNum == peers.head
+                                                  then slowCoverageSignal.complete(()).void
+                                                  else IO.unit
+                                         yield ()
+                        yield ()
                     case _ => IO.unit
                 }
             val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
@@ -290,11 +336,32 @@ case class Stage4Suite(
                     |+| Slf4jTracer.sink.contramap(
                       SlowConsensusActorEventFormat.humanFormat(peerNum)
                     )
-            // Capture sink: only briefs go into the per-peer Ref.
+            // Capture sink: accumulates briefs and fires fastSettlementSignal once all IDs in
+            // the target set (populated by beforeFinalize) appear across the collected briefs.
+            // The target guard prevents mid-run firing against a partial submittedRequestIds.
             val captureSink: ContraTracer[IO, JointLedgerEvent] =
                 ContraTracer.emit[IO, JointLedgerEvent] {
                     case JointLedgerEvent.BriefProduced(b) =>
-                        blockBriefsMap(peerNum).update(_ :+ b)
+                        for
+                            _           <- blockBriefsMap(peerNum).update(_ :+ b)
+                            maybeTarget <- fastSettlementTarget.tryGet
+                            _ <- maybeTarget match
+                                     case None => IO.unit
+                                     case Some(submitted) =>
+                                         for
+                                             briefs <- blockBriefsMap(peerNum).get
+                                             seen    = briefs
+                                                           .flatMap(br =>
+                                                               br.events.map(_._1) ++
+                                                               br.depositsAbsorbed ++
+                                                               br.depositsRefunded
+                                                           )
+                                                           .toSet
+                                             _ <- if submitted.forall(seen.contains)
+                                                  then fastSettlementSignal.complete(()).void
+                                                  else IO.unit
+                                         yield ()
+                        yield ()
                     case _ => IO.unit
                 }
             // SLF4J sink: all JL events get a human-readable line so test runs are debuggable.
@@ -646,6 +713,11 @@ case class Stage4Suite(
             coilAckSequencer: Option[CoilAckSequencer.Handle],
             coilRelay: Option[CoilRelay.Handle],
             coilWirings: List[CoilWiring],
+            submittedRequestIds: Ref[IO, Vector[RequestId]],
+            fastSettlementSignal: Deferred[IO, Unit],
+            slowCoverageSignal: Deferred[IO, Unit],
+            fastSettlementTarget: Deferred[IO, Set[RequestId]],
+            slowCoverageTarget: Deferred[IO, Set[Int]],
         ): IO[Stage4Sut] = {
             // Coil-ward additions merged into the hub head peer's Connections (below). The hub's
             // view of each coil peer's liaison is the in-process handle in Direct mode, or a
@@ -771,7 +843,6 @@ case class Stage4Suite(
                       pollingPeriod
                     ) >> (c.stack.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
                 }
-                submittedRequestIds <- Ref[IO].of(Vector.empty[RequestId])
             } yield Stage4Sut(
               system = system,
               cardanoBackend = cardanoBackend,
@@ -788,6 +859,10 @@ case class Stage4Suite(
                   peerNum -> stack.backendStore
               },
               submittedRequestIds = submittedRequestIds,
+              fastSettlementSignal = fastSettlementSignal,
+              slowCoverageSignal = slowCoverageSignal,
+              fastSettlementTarget = fastSettlementTarget,
+              slowCoverageTarget = slowCoverageTarget,
               log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
         }
@@ -796,7 +871,9 @@ case class Stage4Suite(
             _ <- Resource.eval(preSystem)
             system <- ActorSystem[IO](label)
             postSystemState <- Resource.eval(postSystem)
-            (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap) = postSystemState
+            (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap,
+             submittedRequestIds, fastSettlementSignal, slowCoverageSignal,
+             fastSettlementTarget, slowCoverageTarget) = postSystemState
             peerStackMap <- peers.toList
                 .traverse { peerNum =>
                     buildPeerStack(
@@ -806,6 +883,11 @@ case class Stage4Suite(
                       pendingConnsMap,
                       blockBriefsMap,
                       stacksMap,
+                      submittedRequestIds,
+                      fastSettlementSignal,
+                      slowCoverageSignal,
+                      fastSettlementTarget,
+                      slowCoverageTarget,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
@@ -832,6 +914,11 @@ case class Stage4Suite(
                 coilAckSequencer,
                 coilRelay,
                 coilWirings,
+                submittedRequestIds,
+                fastSettlementSignal,
+                slowCoverageSignal,
+                fastSettlementTarget,
+                slowCoverageTarget,
               )
             )(sut =>
                 sut.liaisonTickFibers.traverse_(_.cancel) >>
@@ -998,65 +1085,41 @@ case class Stage4Suite(
     override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
         for
             _ <- log.warn("beforeFinalize")
-            // Drain before terminating: the leader's JointLedger is in `Producing` when the
-            // last command arrives, and its `userRequestState.requests` only become a
-            // `BlockBrief` when the block is sealed. Sealing happens when `BlockWeaver` decides
-            // it's time — driven by either the dead-man fallback push-out timer or a deposit
-            // decision wakeup, whichever fires first. Without `waitForIdle` we'd terminate
-            // before any of that completes and miss the in-progress block's events in the
-            // analysis, causing spurious liveness failures.
-            //
-            // `waitForIdle` returns when all mailboxes are empty, the child set is stable, and
-            // deadLetters are drained — it does NOT require "no scheduled future sleeps".
-            // BlockWeaver's `sleepSendWakeup` runs in a separate fiber, so between wakeups the
-            // actor's mailbox is empty and `isIdle` is true.
-            //
-            // `maxTimeout` is virtual under TestControl and elapses fast in real time. The
-            // rate limiter throttles the slow cycle, so the post-command tail can take several
-            // hard-stack periods to drain — under WS real-clock that's wall-clock seconds, far
-            // beyond the framework default (30s). Size the timeout to the throttle: each stack
-            // close sweeps the longest ready prefix, so the remaining blocks fold into the next
-            // stack(s); two hard-stack periods cover the close + cross-peer hard-confirm
-            // round-trip. Deposits need up to 2 periods each (L1 confirmation + seal), so
-            // use `nCommands * 2` as the coefficient to cover deposit-heavy sequences.
-            // Floored at 30s so zero rate limits don't yield a 0 (instant) timeout.
-            //
-            // Order matters: `waitForIdle` BEFORE cancelling liaison tick fibers. Cancelling
-            // ticks first stops the leader's CardanoLiaison from observing L1 settlement,
-            // which kills the path that drives the in-progress block to confirmation — the
-            // leader keeps applying its mempool tail but never gets `BlockConfirmed` because
-            // followers (with ticks cancelled too) stop emitting acks. The result was visible
-            // in WS real-clock 10-peer runs: ~15% of submitted reqIds never reached any
-            // brief because the leader's WIP block at shutdown was discarded by terminate.
-            // Letting ticks run during `waitForIdle` keeps the L1-polling-driven seal path
-            // alive long enough for the tail to land in confirmed blocks. `waitForIdle` can
-            // still return because the periods between ticks are mailbox-empty.
-            _ <- sut.system.waitForIdle(maxTimeout = Duration.Inf)
-
-            // Slow-cycle tail drain. `waitForIdle` returns when mailboxes are empty + child
-            // set stable + deadLetters drained — but it does NOT wait for scheduled future
-            // sleeps. The `PeerLiaisonHeadToHead` resend timer (`startResendTimer`) ticks in its own
-            // fiber via `IO.sleep(peerLiaisonResendInterval) >> ResendCurrent`; between
-            // ticks every actor's mailbox is empty and the system reports idle. Under
-            // `TransportMode.WebSocket` that interval is real wall-clock, so when the very
-            // last stack is closed only milliseconds before `waitForIdle` is called, its
-            // hard-acks have not yet completed the cross-peer round-trip needed to
-            // saturate every peer's `SlowConsensusActor`. `terminate()` immediately after
-            // `waitForIdle` drops the last stack from the SCA capture sink's record, causing a
-            // spurious `propStackCoverage` failure on whatever block(s) sit in that final
-            // stack. Two effects must be covered: (a) ≥ 2 × `peerLiaisonResendInterval` so a
-            // full resend cycle fires across every link and the tail acks land; (b) ≥
-            // `hardStackMinPeriod`, because the rate limiter on the SlowConsensusActor →
-            // StackComposer lane HOLDS the prior stack's `Stack.HardConfirmed` for that long
-            // before it arms StackComposer to close the final stack over the last block(s).
-            // Without (b) the throttled final-stack trigger never arrives before `terminate()`
-            // and the last block is left uncovered. The fast cycle has its own analogous
-            // tail-drain (the L1-polling tick path described just above); this is its
-            // slow-cycle counterpart.
-            nodeConfig = lastState.params.multiNodeConfig.nodeConfigs.values.head
-            slowTailDrain =
-                (nodeConfig.peerLiaisonResendInterval * 2) + nodeConfig.hardStackMinPeriod
-            _ <- IO.sleep(slowTailDrain)
+            submitted <- sut.submittedRequestIds.get
+            // Arm the fast-cycle drain: publish the final submitted set so the JL capture sink
+            // knows the target. The sink fires fastSettlementSignal only after this is set,
+            // preventing mid-run firing against a partial submittedRequestIds snapshot.
+            _ <- sut.fastSettlementTarget.complete(submitted.toSet)
+            // One-time coverage check: if all IDs already landed before we armed the target,
+            // fire the signal ourselves (no new brief will arrive to trigger the sink).
+            allBriefs <- sut.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
+            seen       = allBriefs
+                             .flatMap(br =>
+                                 br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
+                             )
+                             .toSet
+            _ <- IO.whenA(submitted.forall(seen.contains))(
+                     sut.fastSettlementSignal.complete(()).void
+                 )
+            _ <- IO.whenA(submitted.nonEmpty)(sut.fastSettlementSignal.get)
+            // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
+            // the fast drain so any blocks produced during that wait are included in the target.
+            blockNums <- sut.blockBriefs.values.toList
+                             .traverse(_.get)
+                             .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
+            _ <- sut.slowCoverageTarget.complete(blockNums)
+            // One-time coverage check using the canonical peer (min peerNum) — matching the sink
+            // guard and analyzeBlockBriefs which both use sortedPeers.head / peers.head.
+            canonicalPeer    = sut.stacks.keys.minBy(p => p: Int)
+            canonicalStacks <- sut.stacks(canonicalPeer).get
+            allCovered       = blockNums.isEmpty || blockNums.forall { bn =>
+                                   canonicalStacks.exists { s =>
+                                       (s.brief.firstBlockNum: Int) <= bn &&
+                                       bn <= (s.brief.lastBlockNum: Int)
+                                   }
+                               }
+            _ <- IO.whenA(allCovered)(sut.slowCoverageSignal.complete(()).void)
+            _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
             errors <- sut.sutErrors.get
             analysisProp <- analyzeBlockBriefs(lastState, sut)
         yield

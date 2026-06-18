@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{Fiber, IO, Ref}
+import cats.effect.{Deferred, Fiber, IO, Ref}
+import hydrozoa.multisig.ledger.event.RequestId
 import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
@@ -77,6 +78,17 @@ case class Stage4Sut(
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
+    fastSettlementSignal: Deferred[IO, Unit],
+    slowCoverageSignal: Deferred[IO, Unit],
+    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL capture sink reads it
+      * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
+      * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
+      */
+    fastSettlementTarget: Deferred[IO, Set[RequestId]],
+    /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
+      * the SCA capture sink reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
+      */
+    slowCoverageTarget: Deferred[IO, Set[Int]],
     log: ContraTracer[IO, Slf4jMsg],
     // Cleanup hooks for resources allocated outside the actor system (currently the
     // optional WebSocket transport when running with [[TransportMode.WebSocket]]).

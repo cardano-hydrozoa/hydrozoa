@@ -140,6 +140,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
         p
             .withWorkers(1)
             .withMinSuccessfulTests(1)
+            .withPropFilter(Some("Two-peers head works \\(quick\\)"))
 
     // Fast variants (CI): small command sequences, minimal peer count
     val _ = property("Two-peers head works") =
@@ -230,3 +231,16 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
           nCoilPeers = 1,
           transportMode = TransportMode.WebSocket(),
         ).property()
+
+// ===================================
+// Diagnostic: termination check
+// ===================================
+
+object Stage4Diagnostics extends YetAnotherProperties("Integration Stage 4 Diagnostics"):
+
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withWorkers(1).withMinSuccessfulTests(1)
+
+
+    val _ = property("Two-peers 1 command") =
+        Stage4Suite(label = "diag-1", nPeers = 2, nCommands = 1).property()
