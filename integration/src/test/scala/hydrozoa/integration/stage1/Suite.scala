@@ -497,6 +497,12 @@ case class Suite(
                     Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(headPeerNum))
                 clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
                     Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
+                // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
+                // need a handle.
+                persistence <- {
+                    given CardanoNetwork.Section = nodeConfig
+                    Persistence.fromBackend(persistenceBackend, persistenceTracer)
+                }
                 // Weaver stub — emits leader_started for tracing
                 blockWeaver <- system.actorOf(
                   new BlockWeaverMock(
@@ -511,7 +517,8 @@ case class Suite(
                     nodeConfig,
                     cardanoBackend,
                     CardanoLiaison.Connections(blockWeaver),
-                    clTracer
+                    clTracer,
+                    persistence
                   )
                 )
                 // Request sequencer stub
@@ -532,12 +539,6 @@ case class Suite(
                   headPeerLiaisons = List(),
                 )
                 l2Ledger <- EutxoL2Ledger(nodeConfig)
-                // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-                // need a handle.
-                persistence <- {
-                    given CardanoNetwork.Section = nodeConfig
-                    Persistence.fromBackend(persistenceBackend, persistenceTracer)
-                }
                 jointLedger <- system.actorOf(
                   JointLedger(
                     nodeConfig,

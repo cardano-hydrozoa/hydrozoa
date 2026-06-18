@@ -1,6 +1,7 @@
 package hydrozoa.multisig.persistence.recovery
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
+import scala.math.Ordering.Implicits.*
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -105,7 +106,7 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
         // order — the (gen, mono, cf.name) tuple, not insertion order, decides.
         val block = entryAt(JournalKey.Block(BlockNumber(0)), stamp)
         val stack = entryAt(JournalKey.Stack(StackNumber(0)), stamp)
-        assert(
+        val _ = assert(
           block.key.cf.name < stack.key.cf.name,
           "precondition: Block sorts before Stack"
         )
