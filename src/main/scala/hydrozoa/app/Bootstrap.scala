@@ -6,7 +6,7 @@ import cats.effect.{ExitCode, IO, IOApp}
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
@@ -16,10 +16,8 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.node.NodeConfig
-import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
-import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
+import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -33,12 +31,16 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import io.circe.generic.semiauto.deriveDecoder
+import io.circe.syntax.*
+import io.circe.{Decoder, parser}
+import io.github.cdimascio.dotenv.Dotenv
+import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import scala.collection.immutable.{SortedMap, TreeMap}
-import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, Hash32, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
@@ -80,24 +82,34 @@ object Bootstrap:
             (vKey, sKey)
         }
 
-    /** @return
-      *   NodeConfig, such that:
-      *   - one node is in the head
-      *   - the provided key pair [[vKey]]/[[sKey]] is used for that only node
-      *   - the initial equity is not less than [[minEquity]]
-      *   - the initial l2 is empty
-      *   - Cardano preview is used
-      *   - utxos available on l1 VKey's enterprise address will be used for funding the head
-      *   - the initial l2 parameters are empty
+    /** The static head+coil membership the build step turns into a shared [[HeadConfig]]: each head
+      * peer's verification key + WebSocket address, each coil peer's verification key + hub head
+      * peer, and the coil quorum. Authored once (from [[GenerateKeyPair]] output) and shared with
+      * every node. Head peer 0 is the first entry in [[headPeers]].
       */
-    def mkNodeConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
-        vKey: VerificationKey,
-        sKey: SigningKey,
-        minEquity: Coin,
-    ): IO[NodeConfig] = for {
-        _ <- IO.pure(())
+    final case class Membership(
+        headPeers: List[HeadPeerData],
+        coilPeers: List[CoilPeerData],
+        coilQuorum: Int
+    )
 
-        ownHeadWallet = PeerWallet.scalusWallet(vKey, sKey)
+    object Membership {
+        private given Decoder[HeadPeerData] = deriveDecoder[HeadPeerData]
+        given Decoder[Membership] = deriveDecoder[Membership]
+    }
+
+    /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
+      *
+      * Only head peer 0 funds the head: it contributes [[minEquity]] as L2 equity and covers the
+      * whole head's fallback contingency (the collective share once, plus one individual share per
+      * head peer) from its own L1 enterprise address. Heads 1..N-1 contribute zero and just co-sign
+      * the stack-0 initialization; coil peers fund nothing. The initial L2 ledger and L2 parameters
+      * are empty, and Cardano preview is used.
+      */
+    def mkSharedHeadConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
+        membership: Membership,
+        minEquity: Coin
+    ): IO[HeadConfig] = for {
         startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
         blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
 
@@ -109,7 +121,7 @@ object Bootstrap:
           ),
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
-          coilQuorum = 0,
+          coilQuorum = membership.coilQuorum,
           l2ParamsHash = Hash32.fromByteString(ByteString.empty),
         )
 
@@ -144,8 +156,23 @@ object Bootstrap:
           )
         )
 
-        peerAddress = vKey.shelleyAddress()(using cardanoNetwork)
-        _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
+        headPeers <- IO.fromOption(
+          HeadPeers(
+            NonEmptyMap.fromMapUnsafe(
+              SortedMap.from(
+                membership.headPeers.zipWithIndex.map((data, i) => HeadPeerNumber(i) -> data)
+              )
+            )
+          )
+        )(RuntimeException("head peers must be a non-empty list (head peer 0 first)"))
+
+        coilPeers = CoilPeers.indexed(membership.coilPeers)
+        nHeadPeers = membership.headPeers.size
+
+        // Head peer 0 is the sole funder; its L1 enterprise address supplies the seed and funding.
+        funderVKey = membership.headPeers.head.verificationKey
+        peerAddress = funderVKey.shelleyAddress()(using cardanoNetwork)
+        _ <- logger.info(s"Funder (head peer 0) address: ${peerAddress.toBech32.get}")
 
         // Fetch UTXOs from backend
         utxosResult <- backend.utxosAt(peerAddress)
@@ -155,15 +182,22 @@ object Bootstrap:
           )
         )
 
-        // Calculate required value: minEquity + contingency + max non-Plutus tx fee for initialization
-        maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
-        zeroPeerContingency = headParams.fallbackContingency.totalContingencyFor(
-          HeadPeerNumber.zero
+        // The whole head's fallback contingency, all funded by head peer 0: the collective share
+        // once plus one individual share per head peer.
+        fallbackContingency = headParams.fallbackContingency
+        totalContingency = Coin(
+          fallbackContingency.collectiveContingency.total.value +
+              nHeadPeers.toLong * fallbackContingency.individualContingency.total.value
         )
-        requiredValue = Value(minEquity + zeroPeerContingency + maxNonPlutusTxFee)
+
+        // Calculate required value: equity + total head contingency + evacuation fee account +
+        // max non-Plutus tx fee for initialization
+        maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
+        requiredValue = Value(minEquity + totalContingency + maxNonPlutusTxFee) + feeAccValue
         _ <- logger.info(
           s"Required value: ${minEquity.value} lovelace (equity) + " +
-              s"${zeroPeerContingency} lovelace (peer contingency) + " +
+              s"${totalContingency.value} lovelace (total head contingency) + " +
+              s"${feeAccValue.coin.value} lovelace (evacuation fee account) + " +
               s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
         )
 
@@ -215,19 +249,25 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
-        headPeers = HeadPeers(NonEmptyMap.one(HeadPeerNumber.zero, HeadPeerData(vKey, "FIXME"))).get
+        // Only head peer 0 contributes equity; heads 1..N-1 contribute zero and just co-sign.
+        initialEquityContributions = NonEmptyMap.fromMapUnsafe(
+          SortedMap.from(
+            membership.headPeers.zipWithIndex.map((_, i) =>
+                HeadPeerNumber(i) -> (if i == 0 then minEquity else Coin.zero)
+            )
+          )
+        )
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
-          initialEquityContributions =
-              NonEmptyMap(HeadPeerNumber.zero -> minEquity, SortedMap.empty),
+          initialEquityContributions = initialEquityContributions,
           seedUtxo = seedUtxo,
           additionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
           initialChangeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
               value = valueSelected - Value(minEquity) -
-                  Value(zeroPeerContingency) - feeAccValue,
+                  Value(totalContingency) - feeAccValue,
               datumOption = None,
               scriptRef = None
             )
@@ -240,7 +280,7 @@ object Bootstrap:
                 cardanoNetwork = cardanoNetwork,
                 headParams = headParams,
                 headPeers = headPeers,
-                coilPeers = CoilPeers.empty,
+                coilPeers = coilPeers,
                 initializationParams = initializationParameters,
                 scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
               )
@@ -304,23 +344,7 @@ object Bootstrap:
                   RuntimeException("failure building head config; get logs for details")
                 )
         }
-    } yield {
-        NodeConfig
-            .mkHeadConfig(
-              headConfig = headConfig,
-              ownHeadWallet = ownHeadWallet,
-              nodeOperationEvacuationConfig = NodeOperationEvacuationConfig(
-                evacuationBotPollingPeriod = 1.minute,
-                // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
-                evacuationWallet = ownHeadWallet
-              ),
-              hydrozoaHost = ???,
-              hydrozoaPort = ???,
-              blockfrostApiKey = ???,
-              nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
-            )
-            .get
-    }
+    } yield headConfig
 
     // TODO: remove once we have a proper way of doing things
     def fakeScriptReferenceUtxos(network: CardanoNetwork.Section): ScriptReferenceUtxos =
@@ -375,6 +399,73 @@ object Bootstrap:
         )
 
 end Bootstrap
+
+/** Build the shared head config artifact every node loads.
+  *
+  * Usage: sbt "runMain hydrozoa.app.BuildHeadConfig <peers.json> [<out.json>]"
+  *
+  * Reads the head+coil membership from `<peers.json>`, funds the head from head peer 0's L1
+  * address, and writes the resulting [[HeadConfig]] as JSON to `<out.json>` (default
+  * `head-config.json`). Every node then loads this same artifact.
+  *
+  * Required environment variables:
+  *   - BLOCKFROST_API_KEY: Blockfrost API key for the Cardano backend
+  *   - EQUITY: head peer 0's equity contribution in lovelace
+  */
+object BuildHeadConfig extends IOApp:
+
+    private val logger = Logging.loggerIO("hydrozoa.app.BuildHeadConfig")
+
+    private val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
+
+    private lazy val dotenv: Dotenv = Dotenv.configure().ignoreIfMissing().load()
+
+    private def mandatoryEnvVar(name: String): IO[String] =
+        IO(
+          Option(dotenv.get(name))
+              .orElse(sys.env.get(name))
+              .getOrElse(
+                throw new IllegalStateException(
+                  s"Required environment variable not set: $name (checked .env file and system environment)"
+                )
+              )
+        )
+
+    override def run(args: List[String]): IO[ExitCode] = args match {
+        case membershipPath :: rest =>
+            val outPath = rest.headOption.getOrElse("head-config.json")
+            for {
+                blockfrostKey <- mandatoryEnvVar("BLOCKFROST_API_KEY")
+                equityStr <- mandatoryEnvVar("EQUITY")
+                minEquity <- IO.fromEither(
+                  equityStr.toLongOption
+                      .toRight(
+                        new IllegalArgumentException(
+                          s"EQUITY must be a valid long, got: $equityStr"
+                        )
+                      )
+                      .map(Coin.apply)
+                )
+                membershipStr <- IO.blocking(Files.readString(Path.of(membershipPath)))
+                membership <- IO.fromEither(parser.decode[Bootstrap.Membership](membershipStr))
+                _ <- logger.info(
+                  s"Building shared head config: ${membership.headPeers.size} head peer(s), " +
+                      s"${membership.coilPeers.size} coil peer(s), coil quorum ${membership.coilQuorum}"
+                )
+                backend <- CardanoBackendBlockfrost(Left(cardanoNetwork), blockfrostKey)
+                headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
+                  membership,
+                  minEquity
+                )
+                _ <- IO.blocking(Files.writeString(Path.of(outPath), headConfig.asJson.spaces2))
+                _ <- logger.info(s"Wrote shared head config to $outPath")
+            } yield ExitCode.Success
+        case Nil =>
+            IO.println(
+              "Usage: sbt \"runMain hydrozoa.app.BuildHeadConfig <peers.json> [<out.json>]\""
+            ).as(ExitCode.Error)
+    }
+end BuildHeadConfig
 
 /** Main entry point for generating a new Ed25519 key pair.
   *
