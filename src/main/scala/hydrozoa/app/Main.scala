@@ -13,9 +13,9 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBacke
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{MultisigRegimeManager, MultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -226,6 +226,11 @@ object Main extends IOApp {
             persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             backendStore <- RocksDbBackendStore.open(
               Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+              Cf.mkAll(
+                headPeers = nodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              ),
               persistenceTracer,
             )
             persistence <- Resource.eval(
@@ -247,7 +252,9 @@ object Main extends IOApp {
             // Main runs a head node (Bootstrap builds the config via NodeConfig.mkHeadConfig),
             // so the peer index is this node's head peer number.
             mrmTracer = Slf4jTracer.sink.contramap(
-              MultisigRegimeManagerEventFormat.humanFormat(HeadPeerNumber(nodeConfig.ownPeerIndex))
+              HeadMultisigRegimeManagerEventFormat.humanFormat(
+                HeadPeerNumber(nodeConfig.ownPeerIndex)
+              )
             )
             bindHost = Host
                 .fromString(env.hydrozoaHost)
@@ -259,7 +266,7 @@ object Main extends IOApp {
                 .getOrElse(
                   throw new IllegalArgumentException(s"Invalid HYDROZOA_PORT: ${env.hydrozoaPort}")
                 )
-            mrm <- MultisigRegimeManager.resource(
+            mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
               remoteL2Ledger,
@@ -272,7 +279,7 @@ object Main extends IOApp {
 
         resource.use { case (env, nodeConfig, system, mrm) =>
             for {
-                _ <- system.actorOf(mrm, "MultisigRegimeManager")
+                _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
                 _ <- log.info("Hydrozoa node started successfully")
 
                 // Start HTTP server once RequestSequencer is available

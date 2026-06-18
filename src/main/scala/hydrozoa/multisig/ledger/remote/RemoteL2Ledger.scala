@@ -8,7 +8,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
@@ -158,6 +158,17 @@ class RemoteL2Ledger private (
     ): EitherT[IO, L2LedgerError, Unit] = {
         sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
+
+    /** Unsupported: the remote ledger owns its own persistence + recovery behind the WebSocket, so
+      * the host does not track or restore its commandNumber (R2b is the EUTXO reference ledger
+      * only).
+      */
+    override def currentCommandNumber: IO[L2CommandNumber] =
+        IO.raiseError(L2LedgerError("currentCommandNumber is not supported by RemoteL2Ledger"))
+
+    /** Unsupported — see [[currentCommandNumber]]. */
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.leftT(L2LedgerError("restoreTo is not supported by RemoteL2Ledger"))
 }
 
 object RemoteL2Ledger {

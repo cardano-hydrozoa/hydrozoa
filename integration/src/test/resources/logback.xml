@@ -76,7 +76,7 @@
     <logger name="EventSequencer" level="info"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
-    <logger name="MultisigRegimeManager" level="info"/>
+    <logger name="HeadMultisigRegimeManager" level="info"/>
     <logger name="DisputeActor" level="info"/>
     <logger name="EvacuationActor" level="info"/>
     <logger name="Limiter" level="debug"/>

@@ -136,6 +136,16 @@ Hand-applied conventions — full rules and worked examples in
   `given x: T = summon` (resolves to itself → infinite loop).
   — [Types and givens](docs/style-guide.md#types-and-givens)
 
+### Terminology
+
+- **Reuse the project's existing names; don't coin new ones.** When a concept
+  already has a concrete name — an actor (`JointLedger`, `StackComposer`,
+  `FastConsensusActor`/`SCA`), a type, a spec term — use it in code, comments, and
+  docs. Don't invent a fresh descriptive phrase for something already named (e.g.
+  write "JointLedger", not "the signer / ledger side"; "fast-side" / "slow-side",
+  not "block-side" / "stack-side"). New synonyms fragment the vocabulary and make
+  the code harder to search and read.
+
 ### Comments
 
 See [Comments](docs/style-guide.md#comments) for the full rule. In short:

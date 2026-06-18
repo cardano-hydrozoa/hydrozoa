@@ -25,11 +25,15 @@ class StoreDumpTest extends AnyFunSuite:
             val populate = (b: BackendStore[IO]) =>
                 b.write(
                   RawWriteBatch.start
-                      .put(Cf.Block, LaneKey.Block(BlockNumber(1)).encode, Array[Byte](1, 2, 3))
-                      .put(Cf.Block, LaneKey.Block(BlockNumber(2)).encode, Array[Byte](1, 2, 3, 4))
+                      .put(Cf.Block, JournalKey.Block(BlockNumber(1)).encode, Array[Byte](1, 2, 3))
                       .put(
-                        Cf.SoftAck,
-                        LaneKey.SoftAck(ownPeer, SoftAckNumber(1)).encode,
+                        Cf.Block,
+                        JournalKey.Block(BlockNumber(2)).encode,
+                        Array[Byte](1, 2, 3, 4)
+                      )
+                      .put(
+                        Cf.SoftAck(ownPeer),
+                        JournalKey.SoftAck(ownPeer, SoftAckNumber(1)).encode,
                         Array[Byte](9)
                       )
                       .put(
@@ -59,8 +63,8 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                 )
             val stats = RocksDbBackendStore
-                .open(tempDir, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
-                .use(b => populate(b) *> StoreDump.stats(b))
+                .open(tempDir, testCfs, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
+                .use(b => populate(b) *> StoreDump.stats(b, testCfs))
                 .unsafeRunSync()
 
             // Build a name → entries map to assert key counts independent of CF ordering.
@@ -69,7 +73,7 @@ class StoreDumpTest extends AnyFunSuite:
             // 8 we wrote + the schema-version entry seeded by `RocksDbBackendStore.open` = 9.
             assert(
               byCf(Cf.Block) == 2 &&
-                  byCf(Cf.SoftAck) == 1 &&
+                  byCf(Cf.SoftAck(ownPeer)) == 1 &&
                   byCf(Cf.BlockResult) == 1 &&
                   byCf(Cf.SoftConfirmation) == 1 &&
                   byCf(Cf.HardConfirmation) == 1 &&
@@ -84,19 +88,19 @@ class StoreDumpTest extends AnyFunSuite:
         finally recursivelyDelete(tempDir)
     }
 
-    test("dump pretty-prints decoded keys per CF (lanes, spine-indexed, singletons, meta)") {
+    test("dump pretty-prints decoded keys per CF (journals, spine-indexed, singletons, meta)") {
         val tempDir = newTempDir()
         try
             val ownPeer = HeadPeerNumber(3)
             val rendered = RocksDbBackendStore
-                .open(tempDir, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
+                .open(tempDir, testCfs, Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat))
                 .use { b =>
                     b.write(
                       RawWriteBatch.start
-                          .put(Cf.Block, LaneKey.Block(BlockNumber(7)).encode, Array[Byte](1))
+                          .put(Cf.Block, JournalKey.Block(BlockNumber(7)).encode, Array[Byte](1))
                           .put(
-                            Cf.SoftAck,
-                            LaneKey.SoftAck(ownPeer, SoftAckNumber(2)).encode,
+                            Cf.SoftAck(ownPeer),
+                            JournalKey.SoftAck(ownPeer, SoftAckNumber(2)).encode,
                             Array[Byte](1)
                           )
                           .put(
@@ -110,7 +114,7 @@ class StoreDumpTest extends AnyFunSuite:
                             Array[Byte](1)
                           )
                           .put(Cf.DepositMap, StoreKey.DepositMap.encode, Array[Byte](1, 2, 3))
-                    ) *> StoreDump.dump(b)
+                    ) *> StoreDump.dump(b, testCfs)
                 }
                 .unsafeRunSync()
             // Each entry should print its decoded form somewhere in the dump. Note that opaque-Int
@@ -126,6 +130,10 @@ class StoreDumpTest extends AnyFunSuite:
             )
         finally recursivelyDelete(tempDir)
     }
+
+    /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     private def newTempDir(): Path =
         Files.createTempDirectory("hydrozoa-rocksdb-dump-test-")

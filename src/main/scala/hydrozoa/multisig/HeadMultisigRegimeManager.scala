@@ -11,9 +11,9 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager.*
-import hydrozoa.multisig.MultisigRegimeManagerEvent as MRMEvent
-import hydrozoa.multisig.MultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
+import hydrozoa.multisig.HeadMultisigRegimeManager.*
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as MRMEvent
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
@@ -27,12 +27,12 @@ import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.DurationInt
 
-trait MultisigRegimeManager(
+trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracer: ContraTracer[IO, MultisigRegimeManagerEvent],
+    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
     // TODO: This should be context => IO[RemoteActorProxies]
     //   This either gives you the:
     //   - Websockets, via `main`/`PeerWsTransport`
@@ -42,31 +42,31 @@ trait MultisigRegimeManager(
 ) extends Actor[IO, Request] {
 
     /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
-      * producer's narrow event type up into [[MultisigRegimeManagerEvent]] so it can reach the
+      * producer's narrow event type up into [[HeadMultisigRegimeManagerEvent]] so it can reach the
       * single sink composition the wiring layer assembled.
       */
     private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.BW.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.BW.apply)
     private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.JL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.JL.apply)
     private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.FCA.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.FCA.apply)
     private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.CL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.CL.apply)
     private val scTracer: ContraTracer[IO, StackComposerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.SC.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.SC.apply)
     private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.SCA.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.SCA.apply)
     private val esTracer: ContraTracer[IO, EventSequencerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.ES.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.ES.apply)
     private def plTracer(remotePeerId: PeerId): ContraTracer[IO, PeerLiaisonEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.PL(remotePeerId, _))
+        tracer.contramap(HeadMultisigRegimeManagerEvent.PL(remotePeerId, _))
     private val bwlTracer: ContraTracer[IO, LimiterEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.BWL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.BWL.apply)
     private val sclTracer: ContraTracer[IO, LimiterEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.SCL.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.SCL.apply)
     private val casTracer: ContraTracer[IO, CoilAckSequencerEvent] =
-        tracer.contramap(MultisigRegimeManagerEvent.CAS.apply)
+        tracer.contramap(HeadMultisigRegimeManagerEvent.CAS.apply)
 
     /** Deferred that will be completed with connections once actors are started */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
@@ -102,7 +102,7 @@ trait MultisigRegimeManager(
         for {
             _ <- tracer.traceWith(StartingActors)
 
-            pendingConnections <- Deferred[IO, MultisigRegimeManager.Connections]
+            pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
 
             blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, bwTracer))
 
@@ -116,7 +116,7 @@ trait MultisigRegimeManager(
 
             cardanoLiaison <-
                 context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer)
+                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer, persistence)
                 )
 
             consensusActor <- context.actorOf(
@@ -166,7 +166,7 @@ trait MultisigRegimeManager(
                 case PeerId.Head(n) => n
                 case PeerId.Coil(_) =>
                     throw new IllegalStateException(
-                      "MultisigRegimeManager runs only on head peers"
+                      "HeadMultisigRegimeManager runs only on head peers"
                     )
             }
 
@@ -195,7 +195,7 @@ trait MultisigRegimeManager(
                 if hubbedCoilPeers.isEmpty then IO.none[CoilAckSequencer.Handle]
                 else
                     context
-                        .actorOf(CoilAckSequencer(config, pendingConnections, casTracer))
+                        .actorOf(CoilAckSequencer(config, persistence, pendingConnections, casTracer))
                         .map(Some(_))
 
             coilRelay <-
@@ -215,7 +215,7 @@ trait MultisigRegimeManager(
                     )
                 )
 
-            connections = MultisigRegimeManager.Connections(
+            connections = HeadMultisigRegimeManager.Connections(
               blockWeaver = blockWeaver,
               blockWeaverLimiter = blockWeaverLimiter,
               cardanoLiaison = cardanoLiaison,
@@ -231,6 +231,29 @@ trait MultisigRegimeManager(
               coilPeerLiaisons = coilPeerLiaisons,
               remoteHeadLiaisons = remoteHeadProxies,
             )
+
+            // R3 boot replay (§8 step 3): before opening the start barrier, re-feed the consensus
+            // actors from the persisted lane tail and seed BlockWeaver's first L1 PollResults. Run
+            // INLINE here, not as a spawned actor, so every send queues in each actor's mailbox
+            // behind its PreStart and drains in order once `pendingConnections.complete` opens the
+            // barrier (Plan A). On a cold store this is a near-no-op: an empty tail plus the early
+            // L1 sample.
+            _ <- ReplayActor.replay(
+              persistence,
+              cardanoBackend,
+              ReplayActor.Targets(
+                blockWeaver = blockWeaver,
+                fastConsensusActor = consensusActor,
+                slowConsensusActor = slowConsensusActor,
+                stackComposer = stackComposer,
+                coilAckSequencer = coilAckSequencer
+              ),
+              own = PeerId.Head(ownHeadNum),
+              peers = config.headPeerIds.map(_.peerNum).toList,
+              hubs = config.hubHeadPeerNumbers,
+              coils = hubbedCoilPeers,
+              treasuryAddress = config.initializationTx.treasuryProduced.address
+            )(using config)
 
             _ <- pendingConnections.complete(connections)
             _ <- connectionsDeferred.complete(connections)
@@ -251,7 +274,7 @@ trait MultisigRegimeManager(
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.
   */
-object MultisigRegimeManager {
+object HeadMultisigRegimeManager {
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         /** Throttled-write handle for the FastConsensusActor → BlockWeaver lane. Other senders use
@@ -301,14 +324,14 @@ object MultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, MultisigRegimeManagerEvent],
+        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
         bindHost: Host,
         bindPort: Port,
-    )(using CardanoNetwork.Section): Resource[IO, MultisigRegimeManager] = {
+    )(using CardanoNetwork.Section): Resource[IO, HeadMultisigRegimeManager] = {
         val ownHeadPeerId = config.ownPeerId match {
             case PeerId.Head(n) => config.headPeerIds.find(_.peerNum == n).get
             case PeerId.Coil(_) =>
-                throw new IllegalStateException("MultisigRegimeManager runs only on head peers")
+                throw new IllegalStateException("HeadMultisigRegimeManager runs only on head peers")
         }
         val remotes: Map[HeadPeerId, Uri] = config.headPeerIds
             .filterNot(_.peerNum == ownHeadPeerId.peerNum)
@@ -321,14 +344,14 @@ object MultisigRegimeManager {
             .toMap
         for {
             client <- Resource.eval(JdkWSClient.simple[IO])
-            pwtTracer = tracer.contramap(MultisigRegimeManagerEvent.PWT.apply)
-            nwsTracer = tracer.contramap(MultisigRegimeManagerEvent.NWS.apply)
+            pwtTracer = tracer.contramap(HeadMultisigRegimeManagerEvent.PWT.apply)
+            nwsTracer = tracer.contramap(HeadMultisigRegimeManagerEvent.NWS.apply)
             transport <- Resource.eval(PeerWsTransport.create(ownHeadPeerId, remotes, pwtTracer))
             _ <- NodeWsServer.resource(bindHost, bindPort, List(transport.routes), nwsTracer)
             _ <- transport.startDialers(client)
             mrm <- Resource.eval(
               IO(
-                new MultisigRegimeManager(
+                new HeadMultisigRegimeManager(
                   config,
                   cardanoBackend,
                   virtualLedger,

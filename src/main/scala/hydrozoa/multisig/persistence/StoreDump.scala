@@ -8,9 +8,9 @@ import java.nio.ByteBuffer
   *
   * Intended for development / debugging / on-demand inspection from the REPL or a tool entrypoint —
   * never on a hot path. Walks every CF via the `cursor` API, decoding keys where the CF's schema
-  * allows it (lanes via [[LaneKey]], spine-indexed metadata as big-endian `Int`, `Meta` as UTF-8,
-  * singletons as the empty key). Bypasses the typed [[Persistence]] layer — byte-level inspection
-  * is the point.
+  * allows it (journals via [[JournalKey]], spine-indexed metadata as big-endian `Int`, `Meta` as
+  * UTF-8, singletons as the empty key). Bypasses the typed [[Persistence]] layer — byte-level
+  * inspection is the point.
   */
 object StoreDump:
 
@@ -63,9 +63,12 @@ object StoreDump:
         private def padRight(s: String, w: Int): String =
             if s.length >= w then s else s + " " * (w - s.length)
 
-    /** Walk every CF and tally entry counts + key/value byte totals. */
-    def stats(p: BackendStore[IO]): IO[Stats] =
-        Cf.all.traverse(statsFor(p, _)).map(Stats.apply)
+    /** Walk every CF in `cfs` and tally entry counts + key/value byte totals. With the per-author
+      * split the CF set is config-derived (§7.1), so the caller supplies it (e.g.
+      * `Cf.mkAll(headPeers, coilPeers, hubs)`).
+      */
+    def stats(p: BackendStore[IO], cfs: List[Cf]): IO[Stats] =
+        cfs.traverse(statsFor(p, _)).map(Stats.apply)
 
     private def statsFor(p: BackendStore[IO], cf: Cf): IO[CfStats] =
         p.cursor(cf, Array.emptyByteArray).use { c =>
@@ -78,11 +81,12 @@ object StoreDump:
             loop(0L, 0L, 0L)
         }
 
-    /** Full dump — every CF, every entry, one line per entry. Pretty-prints keys where the CF's
-      * schema allows it; falls back to a hex render otherwise.
+    /** Full dump — every CF in `cfs`, every entry, one line per entry. Pretty-prints keys where the
+      * CF's schema allows it; falls back to a hex render otherwise. The caller supplies the
+      * config-derived CF set (§7.1).
       */
-    def dump(p: BackendStore[IO]): IO[String] =
-        Cf.all
+    def dump(p: BackendStore[IO], cfs: List[Cf]): IO[String] =
+        cfs
             .traverse(cf =>
                 dumpCf(p, cf).map(section => if section.isEmpty then None else Some(section))
             )
@@ -105,23 +109,24 @@ object StoreDump:
     private def renderEntry(cf: Cf, key: Array[Byte], value: Array[Byte]): String =
         s"  ${renderKey(cf, key)} -> ${value.length} bytes"
 
-    /** Pretty-print a key. Lane CFs go through [[LaneKey.decode]]; spine-indexed metadata CFs
+    /** Pretty-print a key. Journal CFs go through [[JournalKey.decode]]; spine-indexed metadata CFs
       * decode as 4-byte big-endian `Int`; `Meta` decodes as UTF-8; singleton snapshot CFs show
       * "(singleton)"; anything malformed falls back to a hex dump.
       */
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
-            case Cf.Block | Cf.Stack | Cf.Request | Cf.SoftAck | Cf.HardAck | Cf.CoilHardAck |
-                Cf.HubHardAck =>
-                try LaneKey.decode(cf, key).toString
+            case Cf.Block | Cf.Stack | Cf.Request(_) | Cf.SoftAck(_) | Cf.HardAck(_) |
+                Cf.HubHardAck(_) =>
+                try JournalKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
-            case Cf.BlockResult | Cf.SoftConfirmation =>
+            case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
+                Cf.EvacuationMap | Cf.UnsignedStack =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>
                 if key.length == 4 then s"HardConfirmation(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
-            case Cf.DepositMap | Cf.Treasury | Cf.EvacuationMap =>
+            case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
                 if key.isEmpty then "(singleton)" else hex(key)
             case Cf.Meta =>
                 try s"Meta(${new String(key, "UTF-8")})"

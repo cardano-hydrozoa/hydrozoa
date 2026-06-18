@@ -43,9 +43,22 @@ trait Persistence[F[_]]:
     def write(batch: WriteBatch): F[Unit]
 
     /** A fresh [[ArrivalStamp]] for an entry admitted *now*: `(this process's generation, current
-      * monotonic)`. Used to stamp lane values (§5.4) — own entries at creation, inbound at receipt.
+      * monotonic)`. Used to stamp journal values (§5.4) — own entries at creation, inbound at
+      * receipt.
       */
     def arrivalStamp: F[ArrivalStamp]
+
+    /** Like [[get]] but **fails** (`raiseError`) when the key is absent — for reads that must be
+      * present. Recovery uses it for entries that, in a non-empty store, are store corruption when
+      * missing (fail-safe, §5 / §7).
+      */
+    def getOrFail(key: StoreKey): F[key.Value]
+
+    /** The underlying byte-level [[BackendStore]] this instance wraps — an escape hatch for
+      * **byte-level / boot-time** work the typed API can't express (recovery range-scans via
+      * `cursor`, marker derivation; §5). Steady-state actor code never needs it.
+      */
+    def backend: BackendStore[F]
 
 object Persistence:
     /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
@@ -71,11 +84,13 @@ object Persistence:
       * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`).
       */
     def fromBackend(
-        backend: BackendStore[IO],
+        store: BackendStore[IO],
         tracer: ContraTracer[IO, PersistenceEvent]
     )(using CardanoNetwork.Section): IO[Persistence[IO]] =
-        for generation <- bumpGeneration(backend)
+        for generation <- bumpGeneration(store)
         yield new Persistence[IO]:
+            val backend: BackendStore[IO] = store
+
             def arrivalStamp: IO[ArrivalStamp] =
                 IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
 
@@ -84,6 +99,15 @@ object Persistence:
                     .get(key.cf, key.encode)
                     .flatTap(bytesOpt => tracer.traceWith(Get(key, bytesOpt.isDefined)))
                     .map(_.map(key.decodeValue))
+
+            def getOrFail(key: StoreKey): IO[key.Value] =
+                get(key).flatMap {
+                    case Some(value) => IO.pure(value)
+                    case None =>
+                        IO.raiseError(
+                          new IllegalStateException(s"Persistence.getOrFail: no value at $key")
+                        )
+                }
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
                 backend.put(key.cf, key.encode, key.encodeValue(value)) *>

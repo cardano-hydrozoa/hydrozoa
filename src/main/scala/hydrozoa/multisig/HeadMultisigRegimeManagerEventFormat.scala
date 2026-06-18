@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.MultisigRegimeManagerEvent.*
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{BW, BWL, CAS, CL, ES, FCA, HWT, JL, NWS, PL, PWT, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -10,10 +10,10 @@ import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventF
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
 
 /** Top-level formatter delegating to each producer's per-event formatter. */
-object MultisigRegimeManagerEventFormat:
+object HeadMultisigRegimeManagerEventFormat:
 
-    def humanFormat(peerNum: HeadPeerNumber)(e: MultisigRegimeManagerEvent): LogEvent = {
-        val ev = LogEvent.From.forPeer("MultisigRegimeManager", peerNum)
+    def humanFormat(peerNum: HeadPeerNumber)(e: HeadMultisigRegimeManagerEvent): LogEvent = {
+        val ev = LogEvent.From.forPeer("HeadMultisigRegimeManager", peerNum)
         import ev.*
         e match
             case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)

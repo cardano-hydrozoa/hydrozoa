@@ -20,7 +20,7 @@ package hydrozoa.integration
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
   *     state).
   *   - Factory pattern: build all actors against a `Deferred[IO,
-  *     MultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
+  *     HeadMultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
   *     exist so the cross-peer `PeerLiaisonHeadToHead` graph can be wired.
   *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `FastConsensusActor` to capture
   *     both leader-produced and follower-reproduced block briefs into per-peer

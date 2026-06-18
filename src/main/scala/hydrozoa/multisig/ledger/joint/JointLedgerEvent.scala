@@ -45,6 +45,11 @@ object JointLedgerEvent:
         reason: String
     ) extends JointLedgerEvent
 
+    // ===== Boot recovery =====
+
+    /** The passive `Done(softAcked)` state was restored from a non-empty store at boot (R3). */
+    final case class PassiveStateRecovered(blockNum: BlockNumber) extends JointLedgerEvent
+
     // ===== Block lifecycle =====
 
     final case class BlockStarted(blockNum: BlockNumber, startTime: BlockCreationStartTime)

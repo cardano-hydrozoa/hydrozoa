@@ -14,18 +14,18 @@ import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger.NotTriggered
 import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
-import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer, UserRequestWithId, pollresults}
 import hydrozoa.multisig.ledger.block.*
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.JointLedger.*
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.*
 import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
@@ -33,7 +33,8 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.ReplayCursors
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -43,7 +44,7 @@ private case class UserRequestState(
 
 final case class JointLedger(
     config: JointLedger.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | JointLedger.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | JointLedger.Connections,
     l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, JointLedgerEvent],
     persistence: Persistence[IO]
@@ -51,7 +52,7 @@ final case class JointLedger(
     import config.*
 
     /** `config` is a `CardanoNetwork.Section` transitively (`HeadConfig.Section`); expose it as a
-      * given so the typed `WriteBatch.put` calls in [[persistOwnBlock]] pick it up.
+      * given so the typed `WriteBatch.put` calls in [[persistOwnAckBundle]] pick it up.
       */
     private given CardanoNetwork.Section = config
 
@@ -111,7 +112,7 @@ final case class JointLedger(
     } yield conn
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(
@@ -199,7 +200,25 @@ final case class JointLedger(
         executeL2ProxyCommand(l2Command)
     }
 
-    private def preStartLocal: IO[Unit] = initializeConnections
+    private def preStartLocal: IO[Unit] =
+        for {
+            _ <- initializeConnections
+            // On a non-empty store restore the passive `Done` and co-anchor the L2 ledger to the
+            // fast anchor. Cold start (empty store) leaves `State.initialize`. The
+            // `[anchor + 1, head]` block tail is re-driven by BlockWeaver, not restored here. The
+            // fast anchor is `fastBlockMark = max(BlockResult)` (§6), shared by head and coil peers:
+            // on a head peer it coincides with `max(own SoftAck)` (both written in the same atomic
+            // per-block batch); a coil peer authors no soft-ack and anchors on it directly.
+            fastBlockMark <- Markers.recoverFastBlockMark(persistence.backend)
+            recovered <- State.recover(persistence, l2Ledger, fastBlockMark)
+            _ <- recovered match {
+                case Some(done) =>
+                    state.set(done) >> tracer.traceWith(
+                      JointLedgerEvent.PassiveStateRecovered(done.previousBlockHeader.blockNum)
+                    )
+                case None => IO.unit
+            }
+        } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = e match {
         case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
@@ -665,9 +684,10 @@ final case class JointLedger(
             }
             // Every peer forwards the brief to its consensus actor.
             _ <- conn.fastConsensusActor ! brief
-            // Only a head peer emits on the fast cycle — it broadcasts the brief when it leads the
-            // block, and authors a soft-ack for every block. A coil peer never leads and authors
-            // none.
+            // Every peer persists its per-block snapshot bundle (its fast-side recovery anchor),
+            // but only a head peer EMITS on the fast cycle — it broadcasts the brief when it leads
+            // the block and authors a soft-ack for every block. A coil peer never leads and authors
+            // none, so it persists the snapshot subset and emits nothing.
             _ <- config.ownPeerId match {
                 case PeerId.Head(peerNum) =>
                     // Persist this peer's own per-soft-ack bundle before the soft-ack leaves (CR4
@@ -680,7 +700,7 @@ final case class JointLedger(
                       finalizationRequested = localFinalization.asBoolean
                     )
                     for {
-                        _ <- persistOwnBlock(brief, softAck, blockResult)
+                        _ <- persistOwnAckBundle(brief, softAck, blockResult)
 
                         // Broadcast our OWN-led brief to the head mesh and (on a hub) to CoilRelay,
                         // so coil peers get the blocks WE lead. Blocks led by OTHER heads reach
@@ -693,39 +713,99 @@ final case class JointLedger(
 
                         _ <- conn.fastConsensusActor ! softAck
                     } yield ()
-                case PeerId.Coil(_) => IO.unit
+                case PeerId.Coil(_) =>
+                    // No own brief lane (never leads) and no soft-ack (authors none) — persist only
+                    // the per-block snapshot bundle, anchored at coilBlockMark = max(BlockResult).
+                    persistCoilBlockBundle(brief, blockResult)
             }
             // Slow side: hand the block result to the stack composer (independent of fast cycle).
             _ <- conn.stackComposer ! blockResult
         } yield ()
 
-    /** Persist this peer's per-soft-ack bundle in one atomic `WriteBatch` (CR4/CR6/CR8, §6):
-      *   - own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this block);
-      *   - own `SoftAck` → `SoftAck` lane;
-      *   - the per-block `BlockResult` → `BlockResult` CF;
-      *   - the current deposits snapshot → `DepositMap` CF.
+    /** The per-block snapshot/derived bundle EVERY peer persists, independent of role (§6), in one
+      * atomic `WriteBatch` (CR4/CR6/CR8):
+      *   - the per-block `BlockResult` → `BlockResult` CF (also the coil fast-side anchor —
+      *     `coilBlockMark = max(BlockResult)`);
+      *   - the current deposits snapshot → `DepositMap` CF;
+      *   - the cumulative per-peer request high-water at this block → `RequestHighWater[blockNum]`
+      *     (the previous block's high-water with this block's included request ids merged in; the
+      *     `ReplayActor` reads the fast-anchor entry to seed each peer's RequestLane resume cursor,
+      *     §5.3);
+      *   - the L2 ledger's command number reached after this block's L2 commits →
+      *     `L2CommandNumber[blockNum]` (recover reads the fast-anchor entry and calls
+      *     `l2Ledger.restoreTo` to co-anchor the committed L2 state, §R2b).
       *
-      * Lane values carry the 8-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
+      * A head peer adds its own `Block` (leader) + `SoftAck` lanes on top
+      * ([[persistOwnAckBundle]]); a coil peer persists exactly this subset
+      * ([[persistCoilBlockBundle]]).
       */
-    private def persistOwnBlock(
+    private def snapshotBundleBatch(
+        brief: BlockBrief.Next,
+        blockResult: BlockResult
+    ): IO[WriteBatch] =
+        for {
+            deposits <- state.get.map(_.deposits)
+            // The high-water is cumulative: extend the previous block's map (blocks are contiguous
+            // and never pruned below the fast anchor, so the predecessor entry is always present
+            // once past the first block).
+            priorHighWater <- previousBlockHighWater(brief.blockNum)
+            highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.events.map(_._1))
+            // The L2 ledger has already committed this block's commands (JL is its sole, single-
+            // message-at-a-time driver), so its command number now reflects this block; record it
+            // so recover can co-anchor the L2 ledger to the fast anchor via restoreTo.
+            commandNumber <- l2Ledger.currentCommandNumber
+        } yield WriteBatch.start
+            .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
+            .put(StoreKey.DepositMap)(deposits)
+            .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
+            .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
+
+    /** A head peer's per-block write (CR4 write-before-send): the shared [[snapshotBundleBatch]]
+      * plus its own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this
+      * block) and its own `SoftAck` → `SoftAck` lane, in the same atomic batch. The two lane values
+      * carry the 12-byte arrival stamp (creation time — local monotonic; §5.4/§7.1).
+      */
+    private def persistOwnAckBundle(
         brief: BlockBrief.Next,
         softAck: SoftAck,
         blockResult: BlockResult
     ): IO[Unit] =
         for {
             stamp <- persistence.arrivalStamp
-            deposits <- state.get.map(_.deposits)
-            briefBatch =
+            common <- snapshotBundleBatch(brief, blockResult)
+            withLeaderBrief =
                 if config.canLeadFast(brief.blockNum) then
-                    WriteBatch.start.put(LaneKey.Block(brief.blockNum))(LaneValue(stamp, brief))
-                else WriteBatch.start
+                    common.put(JournalKey.Block(brief.blockNum))(JournalValue(stamp, brief))
+                else common
             _ <- persistence.write(
-              briefBatch
-                  .put(LaneKey.SoftAck(softAck.peerNum, softAck.ackNum))(LaneValue(stamp, softAck))
-                  .put(StoreKey.BlockResult(brief.blockNum))(blockResult)
-                  .put(StoreKey.DepositMap)(deposits)
+              withLeaderBrief
+                  .put(JournalKey.SoftAck(softAck.peerNum, softAck.ackNum))(
+                    JournalValue(stamp, softAck)
+                  )
             )
         } yield ()
+
+    /** A coil peer's per-block write: exactly the shared [[snapshotBundleBatch]] — no own `Block`
+      * lane (it never leads) and no `SoftAck` (it authors none, §2). Its fast side recovers from
+      * `coilBlockMark = max(BlockResult)`.
+      */
+    private def persistCoilBlockBundle(
+        brief: BlockBrief.Next,
+        blockResult: BlockResult
+    ): IO[Unit] =
+        snapshotBundleBatch(brief, blockResult).flatMap(persistence.write)
+
+    /** The cumulative request high-water persisted at the block before `blockNum`, or empty for the
+      * first block (no predecessor entry).
+      */
+    private def previousBlockHighWater(
+        blockNum: BlockNumber
+    ): IO[Map[HeadPeerNumber, RequestNumber]] =
+        if (blockNum: Int) <= 0 then IO.pure(Map.empty)
+        else
+            persistence
+                .get(StoreKey.RequestHighWater(BlockNumber((blockNum: Int) - 1)))
+                .map(_.getOrElse(Map.empty))
 
     // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.
     //   One specific subcase worth singling out is "a deposit absorbed by the leader was not
@@ -868,6 +948,62 @@ object JointLedger {
           previousBlockHeader = config.initialBlock.blockBrief.header,
           deposits = DepositsMap.empty,
         )
+
+        /** Reconstruct the passive [[Done]] state after a crash and co-anchor the L2 ledger to the
+          * same `fastBlockMark = max(BlockResult)` boundary, or `None` for an empty store (no
+          * `BlockResult` yet — cold start). Shared by head and coil peers: on a head peer the fast
+          * anchor coincides with `max(own SoftAck)` (both written in the same atomic per-block
+          * batch), and a coil peer authors no soft-ack, so `max(BlockResult)` is its sole fast
+          * anchor.
+          *
+          * Beyond rebuilding `Done` from the store ([[recoverState]]), this reads the L2 command
+          * number recorded for the `fastBlockMark` block and calls [[L2Ledger.restoreTo]] — the
+          * only effect on the L2 ledger. The consensus → L2 mapping stays wholly on this side; only
+          * the recorded command number crosses, never an ack (§R2b). A `RemoteL2Ledger` owns its
+          * own recovery and leaves `restoreTo` unsupported, so this path is for the EUTXO reference
+          * ledger.
+          */
+        def recover(
+            persistence: Persistence[IO],
+            l2Ledger: L2Ledger[IO],
+            fastBlockMark: Option[BlockNumber]
+        )(using CardanoNetwork.Section): IO[Option[Done]] =
+            fastBlockMark match
+                case None => IO.pure(None)
+                case Some(blockNum) =>
+                    for {
+                        done <- doneAt(persistence, blockNum)
+                        commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
+                        _ <- l2Ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
+                    } yield Some(done)
+
+        /** The store-only half of [[recover]]: rebuild `Done(previousBlockHeader, deposits)` from
+          * the `fastBlockMark` block's persisted brief + the deposits snapshot, with no L2 effect.
+          * `None` for an empty store. Exposed for tests that exercise the state reconstruction
+          * independently of the L2 ledger.
+          */
+        def recoverState(
+            persistence: Persistence[IO],
+            fastBlockMark: Option[BlockNumber]
+        )(using CardanoNetwork.Section): IO[Option[Done]] =
+            fastBlockMark match
+                case None           => IO.pure(None)
+                case Some(blockNum) => doneAt(persistence, blockNum).map(Some(_))
+
+        /** Build `Done` from the brief persisted at `blockNum` (its header) and the deposits
+          * snapshot. Both are present in any non-empty store — the brief in the `Block` journal via
+          * `persistOwnAckBundle` (if this peer led), `PeerLiaisonHeadToHead.persistInbound` (a head
+          * peer that received it), or `PeerLiaisonCoilToHub.persistInbound` (a coil peer's inbound
+          * population); the deposits via the per-block snapshot bundle — so a missing entry is
+          * store corruption (fail-safe throw).
+          */
+        private def doneAt(persistence: Persistence[IO], blockNum: BlockNumber)(using
+            CardanoNetwork.Section
+        ): IO[Done] =
+            for {
+                brief <- persistence.getOrFail(JournalKey.Block(blockNum))
+                deposits <- persistence.getOrFail(StoreKey.DepositMap)
+            } yield Done(brief.payload.header, deposits)
     }
 
     final case class Done private[JointLedger] (

@@ -11,13 +11,15 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.increment
 import hydrozoa.multisig.ledger.l1.tx.*
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.persistence.recovery.HardConfirmationScan
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, TransactionHash, TransactionInput}
@@ -50,10 +52,14 @@ object CardanoLiaison:
     def apply(
         config: Config,
         cardanoBackend: CardanoBackend[IO],
-        pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
-        tracer: ContraTracer[IO, CardanoLiaisonEvent]
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+            CardanoLiaison.Connections,
+        tracer: ContraTracer[IO, CardanoLiaisonEvent],
+        persistence: Persistence[IO]
     ): IO[CardanoLiaison] =
-        IO(new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer) {})
+        IO(
+          new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer, persistence) {}
+        )
 
     type Config = CardanoNetwork.Section & InitialBlock.Section &
         NodeOperationMultisigConfig.Section & OwnPeerPublic.Section
@@ -82,6 +88,12 @@ object CardanoLiaison:
 
     /** The state we want to achieve on L1. */
     enum TargetState:
+        /** The cold, pre-stack-0 target: the head is not yet on L1 and nothing is submittable. The
+          * real target is learned from the hard-confirmed stack 0 (see
+          * [[State.applyInitialEffects]]).
+          */
+        case Uninitialized
+
         /** Regular state of an active head represented by id of the treasury utxo. */
         case Active(treasuryUtxoId: TransactionInput)
 
@@ -118,26 +130,164 @@ object CardanoLiaison:
     )
 
     object State:
-        def initialState(config: Config): State = {
-            // The submittable init + fallback effects are NOT seeded from config: those bodies are
-            // the UNSIGNED genesis placeholders, never submittable. CardanoLiaison learns the real
-            // (multisigned) init + fallback only from the hard-confirmed stack 0, via
-            // `handleInitialStackL1Effects`. We only seed the target treasury utxo id, which is
-            // identified by the init tx id (a body hash, witness-independent) and so is exact even
-            // from the unsigned body — it tells the liaison what to look for on L1 before stack 0
-            // hard-confirms (until then `happyPathEffects` is empty, so nothing is submitted).
-            // TODO: I guess we don't need to set target state here, deferring to the persistent-recovery.
+        /** The cold, pre-stack-0 state: no L1 target and no effects. The live `stateRef` boots here
+          * and [[recover]] folds from here; [[applyInitialEffects]] instals the real target +
+          * init/fallback once stack 0 hard-confirms. Config-free — the (multisigned) init +
+          * fallback and the target treasury utxo id are all learned from the hard-confirmed stack
+          * 0, never seeded from the unsigned config bodies, so nothing is submittable until then.
+          */
+        val empty: State =
             State(
-              targetState = TargetState.Active(config.initializationTx.treasuryProduced.utxoId),
+              targetState = TargetState.Uninitialized,
               effectInputs = Map.empty,
               happyPathEffects = TreeMap.empty,
               fallbackEffects = Map.empty
             )
+
+        /** Apply a hard-confirmed *initial* stack's L1 effects — the pure transition shared by the
+          * live `Stack.HardConfirmed` path and [[recover]]: instal the ratified (multisigned) init
+          * tx + fallback from stack 0 into the cold [[empty]] state, setting the real `Active`
+          * target. This is what makes the head submittable; before it, the state is
+          * `Uninitialized`.
+          */
+        def applyInitialEffects(state: State, eff: StackEffects.HardConfirmed.Initial): State =
+            state.copy(
+              targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
+              happyPathEffects = state.happyPathEffects
+                  .updated(EffectId.initializationEffectId, eff.initializationTx),
+              fallbackEffects =
+                  state.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+            )
+
+        /** Apply a hard-confirmed *regular* stack's L1 effects — the pure transition shared by the
+          * live path and [[recover]]. A minor-only stack carries no backbone, so `state` is
+          * returned unchanged; otherwise the partition effects fold into
+          * `(effectInputs, happyPathEffects, fallbackEffects, targetState)`.
+          */
+        def applyRegularEffects(state: State, eff: StackEffects.HardConfirmed.Regular): State = {
+            val parts = eff.partitions.toList
+            val hasBackbone = parts.exists {
+                case _: PartitionEffects.Major[?] => true
+                case _: PartitionEffects.Final    => true
+                case _: PartitionEffects.Minor[?] => false
+            }
+            if !hasBackbone then state
+            else {
+                val settlements: List[SettlementTx] =
+                    parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
+                val fallbacks: List[FallbackTx] =
+                    parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
+                val finalization: Option[FinalizationTx] =
+                    parts.collectFirst { case PartitionEffects.Final(f, _) => f }
+                val allRollouts: List[RolloutTx] = parts.flatMap {
+                    case PartitionEffects.Major(_, _, ro, _, _) => ro
+                    case PartitionEffects.Final(_, ro)          => ro
+                    case PartitionEffects.Minor(_, _)           => Nil
+                }
+                val backbones: List[SettlementTx | FinalizationTx] =
+                    settlements ++ finalization.toList
+                val perBackbone =
+                    backbones.map(b =>
+                        mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
+                    )
+                val newEffectInputs = perBackbone.flatMap(_._1)
+                val newHappyPathEffects = perBackbone.flatMap(_._2)
+                val newFallbackEffects =
+                    settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
+                val newTarget: Option[TargetState] = finalization match {
+                    case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
+                    case None =>
+                        settlements.lastOption.map(s =>
+                            TargetState.Active(s.treasuryProduced.utxoId)
+                        )
+                }
+                state.copy(
+                  effectInputs = state.effectInputs ++ newEffectInputs,
+                  happyPathEffects = state.happyPathEffects ++ newHappyPathEffects,
+                  fallbackEffects = state.fallbackEffects ++ newFallbackEffects,
+                  targetState = newTarget.getOrElse(state.targetState)
+                )
+            }
         }
+
+        /** Reconstruct the submission state after a crash by folding every persisted
+          * `Cf.HardConfirmation` (ascending stack order) through the same kernels the live
+          * `Stack.HardConfirmed` path uses — so a recovered `State` equals a live run's. Submission
+          * progress is **not** restored: `runEffects` re-samples L1 (§5.5), so only the effect
+          * index is rebuilt. An empty CF folds to [[empty]] (the cold value); no `Option` (there is
+          * no own-ack to gate on).
+          */
+        def recover(persistence: Persistence[IO])(using
+            CardanoNetwork.Section
+        ): IO[State] =
+            HardConfirmationScan.scanFrom(persistence.backend, StackNumber.zero).map {
+                _.foldLeft(empty) { (state, eff) =>
+                    eff match {
+                        case ini: StackEffects.HardConfirmed.Initial =>
+                            applyInitialEffects(state, ini)
+                        case reg: StackEffects.HardConfirmed.Regular =>
+                            applyRegularEffects(state, reg)
+                    }
+                }
+            }
+
+        /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
+          *
+          * `StackEffects.HardConfirmed.Regular.rollouts` is flat across the whole stack; a backbone
+          * owns the rollout chain that starts at the rollout utxo it produces
+          * (`mbRolloutProduced`), each subsequent rollout spending the previous one's produced
+          * rollout utxo until a [[RolloutTx.Last]]. Linking by `utxo.input` is independent of the
+          * flat list's order and mirrors how `mkDirectAction` itself walks the chain on L1.
+          */
+        private def rolloutsFor(
+            backbone: SettlementTx | FinalizationTx,
+            all: List[RolloutTx]
+        ): List[RolloutTx] = {
+            @annotation.tailrec
+            def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
+                all.find(_.rolloutSpent.utxo.input == spentInput) match {
+                    case None => acc.reverse
+                    case Some(r: RolloutTx.NotLast) =>
+                        chain(r.rolloutProduced.utxo.input, r :: acc)
+                    case Some(r) => (r :: acc).reverse // RolloutTx.Last
+                }
+            backbone.mbRolloutProduced match {
+                case None    => Nil
+                case Some(u) => chain(u.utxo.input, Nil)
+            }
+        }
+
+        private def mkHappyPathEffectInputsAndEffects(
+            majorTx: SettlementTx | FinalizationTx,
+            rollouts: List[RolloutTx]
+        ): (
+            Seq[(TransactionInput, EffectId)],
+            Seq[(EffectId, HappyPathEffect)]
+        ) = {
+            val treasurySpent = majorTx.treasurySpent
+
+            val effects: List[(TransactionInput, HappyPathEffect)] =
+                List(treasurySpent.utxoId -> majorTx)
+                    ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
+            indexWithEffectId(effects, majorTx.majorVersionProduced).unzip
+        }
+
+        private def indexWithEffectId(
+            effects: List[(TransactionInput, HappyPathEffect)],
+            versionMajor: BlockVersion.Major
+        ): List[((TransactionInput, EffectId), (EffectId, HappyPathEffect))] =
+            effects.zipWithIndex
+                .map((utxoIdAndEffect, index) => {
+                    val effectId = versionMajor -> index
+
+                    utxoIdAndEffect._1
+                        -> effectId -> (effectId -> utxoIdAndEffect._2)
+                })
 
         extension (state: State)
             def prettyDump: String = {
                 val targetStateStr = state.targetState match {
+                    case TargetState.Uninitialized => "Uninitialized"
                     case TargetState.Active(treasuryUtxoId) =>
                         s"Active(treasuryUtxoId=${treasuryUtxoId})"
                     case TargetState.Finalized(finalizationTxHash) =>
@@ -191,14 +341,15 @@ end CardanoLiaison
 trait CardanoLiaison(
     config: CardanoLiaison.Config,
     cardanoBackend: CardanoBackend[IO],
-    pendingConnections: MultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
+    persistence: Persistence[IO],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
     private val connections = Ref.unsafe[IO, Option[CardanoLiaison.Connections]](None)
 
-    private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.initialState(config))
+    private val stateRef = Ref.unsafe[IO, CardanoLiaison.State](State.empty)
 
     private def getConnections: IO[Connections] = this.connections.get.flatMap(
       _.fold(
@@ -209,7 +360,7 @@ trait CardanoLiaison(
     )
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(
@@ -254,6 +405,11 @@ trait CardanoLiaison(
     private def preStartLocal: IO[Unit] =
         for {
             _ <- initializeConnections
+            // R3: rebuild the submission index by folding the persisted HardConfirmation CF (an
+            // empty CF folds to `State.empty`). Submission progress itself is NOT persisted —
+            // `runEffects` re-samples L1, so recover restores only the effect index.
+            recovered <- State.recover(persistence)(using config)
+            _ <- stateRef.set(recovered)
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(
@@ -268,12 +424,12 @@ trait CardanoLiaison(
 
     /** Learn the hard-confirmed *initial* stack's L1 effects (stack 0).
       *
-      * `State.initialState` seeds `EffectId.initializationEffectId` from `config.initializationTx`
-      * and `fallbackEffects(Major.zero)` from `config.initialFallbackTx`. That config init tx is
-      * the **unsigned** body — usable only as a pre-confirmation placeholder, never submittable.
-      * Once stack 0 is hard-confirmed, [[StackEffects.HardConfirmed.Initial]] carries the
-      * slow-consensus-ratified init tx (the round-2 Initial unlock) + the locally-derived fallback;
-      * this overrides the seeded entries with them so `runEffects` submits the correct init tx.
+      * Before stack 0, `State` is the cold [[State.empty]] — an `Uninitialized` target with no
+      * effects, so nothing is submittable. Once stack 0 is hard-confirmed,
+      * [[StackEffects.HardConfirmed.Initial]] carries the slow-consensus-ratified init tx (the
+      * round-2 Initial unlock) + the locally-derived fallback; [[State.applyInitialEffects]]
+      * instals them — the `Active` target, `EffectId.initializationEffectId`, and
+      * `fallbackEffects(Major.zero)` — so `runEffects` submits the correct init tx.
       *
       * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
       * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
@@ -285,15 +441,7 @@ trait CardanoLiaison(
     private def handleInitialStackL1Effects(eff: StackEffects.HardConfirmed.Initial): IO[Unit] =
         for {
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsLearned)
-            newState <- stateRef.updateAndGet { s =>
-                s.copy(
-                  targetState = TargetState.Active(eff.initializationTx.treasuryProduced.utxoId),
-                  happyPathEffects = s.happyPathEffects
-                      .updated(EffectId.initializationEffectId, eff.initializationTx),
-                  fallbackEffects =
-                      s.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
-                )
-            }
+            newState <- stateRef.updateAndGet(State.applyInitialEffects(_, eff))
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsState(newState.prettyDump))
         } yield ()
 
@@ -339,119 +487,37 @@ trait CardanoLiaison(
         }
         if !hasBackbone then tracer.traceWith(CardanoLiaisonEvent.MinorOnlyStackReceived)
         else {
-            // Flatten the partition-indexed effects into the (settlements, fallbacks, rollouts,
-            // finalization) the submission state machine consumes. Each Major partition carries
-            // its own settlement+fallback together (so `settlements.zip(fallbacks)` aligns
-            // exactly); rollouts come from every Major / Final partition; refunds + SEC are NOT
-            // submitted.
-            val settlements: List[SettlementTx] =
-                parts.collect { case PartitionEffects.Major(s, _, _, _, _) => s }
-            val fallbacks: List[FallbackTx] =
-                parts.collect { case PartitionEffects.Major(_, f, _, _, _) => f }
-            val finalization: Option[FinalizationTx] =
-                parts.collectFirst { case PartitionEffects.Final(f, _) => f }
-            val allRollouts: List[RolloutTx] = parts.flatMap {
-                case PartitionEffects.Major(_, _, ro, _, _) => ro
-                case PartitionEffects.Final(_, ro)          => ro
-                case PartitionEffects.Minor(_, _)           => Nil
+            // Counts for the trace event only — the state transition itself is
+            // `State.applyRegularEffects`, the pure kernel shared with `State.recover`. Each
+            // Major partition carries its settlement+fallback pair, so fallbacks == settlements.
+            val settlements = parts.count {
+                case _: PartitionEffects.Major[?] => true
+                case _                            => false
             }
-            val backbones: List[SettlementTx | FinalizationTx] =
-                settlements ++ finalization.toList
-
-            // Accumulate every state delta up front — each is a pure function of the flattened
-            // effects, independent of the current state — then apply them all in a single `copy`
-            // below.
-            val perBackbone =
-                backbones.map(b =>
-                    mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
-                )
-            val newEffectInputs: Seq[(TransactionInput, EffectId)] = perBackbone.flatMap(_._1)
-            val newHappyPathEffects: Seq[(EffectId, HappyPathEffect)] = perBackbone.flatMap(_._2)
-            val newFallbackEffects: Seq[(BlockVersion.Major, FallbackTx)] =
-                settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
-            // Always `Some` here (a backbone exists): finalization → Finalized, else the last
-            // settlement's treasury → Active.
-            val newTarget: Option[TargetState] = finalization match {
-                case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
-                case None =>
-                    settlements.lastOption.map(s => TargetState.Active(s.treasuryProduced.utxoId))
+            val fallbacks = settlements
+            val rollouts = parts.map {
+                case PartitionEffects.Major(_, _, ro, _, _) => ro.size
+                case PartitionEffects.Final(_, ro)          => ro.size
+                case PartitionEffects.Minor(_, _)           => 0
+            }.sum
+            val hasFinalization = parts.exists {
+                case _: PartitionEffects.Final => true
+                case _                         => false
             }
-
             for {
                 _ <- tracer.traceWith(
                   CardanoLiaisonEvent.StackEffectsLearned(
-                    settlements.size,
-                    fallbacks.size,
-                    allRollouts.size,
-                    finalization.isDefined
+                    settlements,
+                    fallbacks,
+                    rollouts,
+                    hasFinalization
                   )
                 )
-                newState <- stateRef.updateAndGet { s =>
-                    s.copy(
-                      effectInputs = s.effectInputs ++ newEffectInputs,
-                      happyPathEffects = s.happyPathEffects ++ newHappyPathEffects,
-                      fallbackEffects = s.fallbackEffects ++ newFallbackEffects,
-                      targetState = newTarget.getOrElse(s.targetState)
-                    )
-                }
+                newState <- stateRef.updateAndGet(State.applyRegularEffects(_, eff))
                 _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState.prettyDump))
             } yield ()
         }
     }
-
-    /** The rollout txs belonging to one backbone (settlement / finalization), in chain order.
-      *
-      * `StackEffects.HardConfirmed.Regular.rollouts` is flat across the whole stack; a backbone
-      * owns the rollout chain that starts at the rollout utxo it produces (`mbRolloutProduced`),
-      * each subsequent rollout spending the previous one's produced rollout utxo until a
-      * [[RolloutTx.Last]]. Linking by `utxo.input` is independent of the flat list's order and
-      * mirrors how `mkDirectAction` itself walks the chain on L1.
-      */
-    private def rolloutsFor(
-        backbone: SettlementTx | FinalizationTx,
-        all: List[RolloutTx]
-    ): List[RolloutTx] = {
-        @annotation.tailrec
-        def chain(spentInput: TransactionInput, acc: List[RolloutTx]): List[RolloutTx] =
-            all.find(_.rolloutSpent.utxo.input == spentInput) match {
-                case None => acc.reverse
-                case Some(r: RolloutTx.NotLast) =>
-                    chain(r.rolloutProduced.utxo.input, r :: acc)
-                case Some(r) => (r :: acc).reverse // RolloutTx.Last
-            }
-        backbone.mbRolloutProduced match {
-            case None    => Nil
-            case Some(u) => chain(u.utxo.input, Nil)
-        }
-    }
-
-    private def mkHappyPathEffectInputsAndEffects(
-        majorTx: SettlementTx | FinalizationTx,
-        rollouts: List[RolloutTx]
-    ): (
-        Seq[(TransactionInput, EffectId)],
-        Seq[(EffectId, HappyPathEffect)]
-    ) = {
-        val treasurySpent = majorTx.treasurySpent
-
-        val effects: List[(TransactionInput, HappyPathEffect)] =
-            List(treasurySpent.utxoId -> majorTx)
-            // TODO: implement utxoId?
-                ++ rollouts.map(r => r.rolloutSpent.utxo.input -> r)
-        indexWithEffectId(effects, majorTx.majorVersionProduced).unzip
-    }
-
-    private def indexWithEffectId(
-        effects: List[(TransactionInput, HappyPathEffect)],
-        versionMajor: BlockVersion.Major
-    ): List[((TransactionInput, EffectId), (EffectId, HappyPathEffect))] =
-        effects.zipWithIndex
-            .map((utxoIdAndEffect, index) => {
-                val effectId = versionMajor -> index
-
-                utxoIdAndEffect._1
-                    -> effectId -> (effectId -> utxoIdAndEffect._2)
-            })
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *
@@ -547,6 +613,10 @@ trait CardanoLiaison(
                                         }
                                         // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                                         state.targetState match {
+                                            case TargetState.Uninitialized =>
+                                                // Pre stack-0: no L1 target to reconcile and nothing
+                                                // submittable — wait for the Initial stack effects.
+                                                IO.pure(List.empty)
                                             case TargetState.Active(targetTreasuryUtxoId) =>
                                                 if utxoIds.contains(targetTreasuryUtxoId)
                                                 then

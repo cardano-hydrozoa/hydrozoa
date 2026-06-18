@@ -12,14 +12,16 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.BlockResultScan
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
+import scala.annotation.tailrec
 
 /** Stack composer.
   *
@@ -44,7 +46,7 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, StoreKey,
   */
 final case class StackComposer(
     config: StackComposer.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | StackComposer.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | StackComposer.Connections,
     tracer: ContraTracer[IO, StackComposerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, StackComposer.Request] {
@@ -70,7 +72,7 @@ final case class StackComposer(
         case PreStart =>
             for {
                 _ <- initializeConnections
-                _ <- bootstrapInitialStack
+                _ <- recoverOrBootstrap
             } yield ()
         case r: BlockResult =>
             handleBlockResult(r)
@@ -81,6 +83,31 @@ final case class StackComposer(
         case s: Stack.HardConfirmed =>
             handlePreviousStackHardConfirmed(s)
     }
+
+    /** Boot seam (R3): a cold store bootstraps stack 0, a non-empty one recovers instead.
+      *
+      * `Markers.hardAcked.isDefined` is the test — any own hard-ack proves stack 0 was long since
+      * composed and hard-confirmed, so re-handing it to [[SlowConsensusActor]] would re-issue acks
+      * (CR3). [[State.recover]] mirrors the same marker (it returns `None` exactly when `hardAcked`
+      * is empty), so we drive the branch off its result: `Some` ⇒ seed the recovered state and skip
+      * bootstrap, `None` ⇒ cold start.
+      *
+      * Head and coil share the one [[State.recover]] seam with no peer-type branch: the own-ack
+      * journal is the one `PeerId`-keyed `HardAck` journal ([[Markers.recoverHardAcked]] takes a
+      * [[PeerId]]), and the closing stack's `lastBlockNum` comes from the `UnsignedStack` every
+      * peer persists on every close (atomic with the hard-ack). `hardConfirmed` derives the same
+      * way on both ([[Markers.recoverHardConfirmed]]).
+      */
+    private def recoverOrBootstrap: IO[Unit] =
+        for {
+            hardAcked <- Markers.recoverHardAcked(persistence.backend, config.ownPeerId)
+            hardConfirmed <- Markers.recoverHardConfirmed(persistence.backend)
+            recovered <- State.recover(persistence, hardAcked, hardConfirmed, config.ownPeerId)
+            _ <- recovered match {
+                case Some(recoveredState) => state.set(recoveredState)
+                case None                 => bootstrapInitialStack
+            }
+        } yield ()
 
     /** Compose and hand off stack 0 (the init + fallback) at startup.
       *
@@ -178,6 +205,17 @@ final case class StackComposer(
                     ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
+                    // Persist the close bundle BEFORE anything leaves this node (CR4/CR8): the brief
+                    // and the own hard-acks both cross the peer boundary below (the brief direct to
+                    // PeerLiaisons, the acks via SlowConsensusActor's broadcast), so they must be
+                    // durable first.
+                    _ <- persistOwnStackClose(
+                      s.evacuationMap,
+                      partitions,
+                      newTreasury,
+                      unsigned,
+                      handoff.ownAcks
+                    )
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
                     _ <- (conn.headPeerLiaisons ! brief).parallel
@@ -189,13 +227,6 @@ final case class StackComposer(
                     // (which manages broadcast scheduling: round-1 / sole immediately, round-2
                     // withheld until local round-1 confirmation).
                     _ <- conn.slowConsensusActor ! handoff
-                    _ <- persistOwnStackClose(
-                      s.evacuationMap,
-                      partitions,
-                      newTreasury,
-                      brief,
-                      handoff.ownAcks
-                    )
                     _ <- state.update(_.afterClose(nextStackNum, prefix, newTreasury, newMap))
                 } yield ()
         }
@@ -225,26 +256,25 @@ final case class StackComposer(
         startMap: EvacuationMap,
         partitions: NonEmptyList[StackPartition],
         newTreasury: MultisigTreasuryUtxo,
-        brief: StackBrief,
+        unsigned: Stack.Unsigned,
         ownAcks: List[HardAck]
     ): IO[Unit] = {
+        val brief = unsigned.brief
         val committed = committedBlockNums(partitions)
         val orderedResults = partitions.toList.flatMap(_.blocks.toList)
         for {
             stamp <- persistence.arrivalStamp
-            // Own lane outputs: StackBrief (leader only — StackLane author) + this peer's HardAcks.
+            // Own outputs: the unsigned stack (so SCA can re-form its in-flight cell on recovery —
+            // every close, leader or follower), StackBrief (leader only — StackLane author), and
+            // this peer's HardAcks.
             laneBatch = {
+                val base = WriteBatch.start.put(StoreKey.UnsignedStack(brief.stackNum))(unsigned)
                 val withBrief =
                     if config.canLeadSlow(brief.stackNum) then
-                        WriteBatch.start.put(LaneKey.Stack(brief.stackNum))(LaneValue(stamp, brief))
-                    else WriteBatch.start
+                        base.put(JournalKey.Stack(brief.stackNum))(JournalValue(stamp, brief))
+                    else base
                 ownAcks.foldLeft(withBrief)((b, ack) =>
-                    ack.peerId match {
-                        case PeerId.Head(n) =>
-                            b.put(LaneKey.HardAck(n, ack.hardAckNum))(LaneValue(stamp, ack))
-                        case PeerId.Coil(c) =>
-                            b.put(LaneKey.CoilHardAck(c, ack.hardAckNum))(LaneValue(stamp, ack))
-                    }
+                    b.put(JournalKey.HardAck(ack.peerId, ack.hardAckNum))(JournalValue(stamp, ack))
                 )
             }
             // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
@@ -303,7 +333,7 @@ final case class StackComposer(
       *   1. **Structural divergence** — `firstBlockNum != lastClosedBlockNum + 1` (the leader is
       *      composing from a different single-flight position) or `last < first`. This is an
       *      unrecoverable consensus break: warn and panic to halt the node, so the
-      *      [[MultisigRegimeManager]] hands over to the rule-based regime.
+      *      [[HeadMultisigRegimeManager]] hands over to the rule-based regime.
       *   2. **Not yet covered** — structurally fine, but this follower hasn't paired every block in
       *      `[first, last]` yet (a constituent block's `BlockResult` or its `Block.SoftConfirmed`
       *      is still in flight). This is the common, benign case — NOT a divergence. Do nothing and
@@ -325,7 +355,7 @@ final case class StackComposer(
                 if !structurallyConsistent then
                     // (1) genuine divergence — leader's composition is inconsistent with our
                     // single-flight position. Unrecoverable: warn, then panic to halt the node so
-                    // the MultisigRegimeManager hands over to the rule-based regime.
+                    // the HeadMultisigRegimeManager hands over to the rule-based regime.
                     tracer.traceWith(
                       StackComposerEvent.StructuralDivergence(
                         nextStackNum,
@@ -357,14 +387,16 @@ final case class StackComposer(
                                 ComposedStack(unsigned, newTreasury, newMap, partitions) = res
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
-                                _ <- conn.slowConsensusActor ! handoff
+                                // Persist the close bundle before the own acks leave this node via
+                                // SlowConsensusActor's broadcast (CR4/CR8).
                                 _ <- persistOwnStackClose(
                                   s.evacuationMap,
                                   partitions,
                                   newTreasury,
-                                  brief,
+                                  unsigned,
                                   handoff.ownAcks
                                 )
+                                _ <- conn.slowConsensusActor ! handoff
                                 _ <- state.update(
                                   _.afterClose(nextStackNum, slice, newTreasury, newMap)
                                 )
@@ -651,12 +683,12 @@ final case class StackComposer(
         )(IO.pure)
     } yield conn
 
-    // Halt the node by failing the actor, so the MultisigRegimeManager (which watches this child)
+    // Halt the node by failing the actor, so the HeadMultisigRegimeManager (which watches this child)
     // can hand over to the rule-based regime. Mirrors `JointLedger.panic`.
     private def panic(msg: String): IO[Unit] = throw new RuntimeException(msg)
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 c <- x.get
                 _ <- connections.set(
@@ -797,6 +829,7 @@ object StackComposer {
 
         /** Longest contiguous run of ready blocks starting at `lastClosedBlockNum + 1`. */
         def longestReadyPrefix: List[ReadyBlock] = {
+            @tailrec
             def loop(n: BlockNumber, acc: List[ReadyBlock]): List[ReadyBlock] =
                 ready.get(n) match {
                     case Some(rb) => loop(n.increment, rb :: acc)
@@ -811,6 +844,7 @@ object StackComposer {
           * lastClosedBlockNum + 1`, `first <= last`).
           */
         def readySlice(first: BlockNumber, last: BlockNumber): Option[List[ReadyBlock]] = {
+            @tailrec
             def loop(n: BlockNumber, acc: List[ReadyBlock]): Option[List[ReadyBlock]] =
                 if n.convert > last.convert then Some(acc.reverse)
                 else
@@ -869,5 +903,61 @@ object StackComposer {
           treasury = config.initializationTx.treasuryProduced,
           evacuationMap = config.initialEvacuationMap
         )
+
+        /** Reconstruct the full [[State]] from the store after a crash, or `None` if the store
+          * holds no own hard-ack yet (cold start — the actor keeps [[initial]] and runs
+          * `bootstrapInitialStack`). The last own hard-ack's `stackNum` is the last stack this peer
+          * closed; from it we restore the treasury + evacuation-map snapshots and the counters, and
+          * rebuild `pending` from the `BlockResult`s soft-acked since that stack's last block.
+          * `ready` and `inboundLeaderBrief` start empty — the `Block.SoftConfirmed` halves and
+          * inbound briefs arrive from replay (R3), re-pairing into `ready`.
+          *
+          * `hardAcked` is a [[HardAckNumber]] (the satellite key), NOT a stack number, so the stack
+          * number is read from the last own `HardAck` **value** (the one `PeerId`-keyed journal, so
+          * `own` works for either peer type); the marker number gives only
+          * `nextOwnHardAckNum = hardAcked + 1`. The closing stack's `lastBlockNum`, treasury, and
+          * evacuation map are present on every peer for any hard-acked stack — the `UnsignedStack`,
+          * treasury, and evacuation map are all written by every peer in the same atomic close
+          * batch as the hard-ack (`persistOwnStackClose`) — so a missing entry is store corruption.
+          */
+        def recover(
+            persistence: Persistence[IO],
+            hardAcked: Option[HardAckNumber],
+            hardConfirmed: Option[StackNumber],
+            own: PeerId
+        )(using CardanoNetwork.Section): IO[Option[State]] =
+            hardAcked match
+                case None => IO.pure(None)
+                case Some(hardAckNum) =>
+                    for {
+                        // No peer-type branch: the own hard-ack lives in the one `PeerId`-keyed
+                        // `HardAck` journal, and the closing stack's `lastBlockNum` comes from the
+                        // `UnsignedStack` every peer persists on every close (atomic with the
+                        // hard-ack, so always present for a hard-acked stack).
+                        lastHardAck <- persistence.getOrFail(JournalKey.HardAck(own, hardAckNum))
+                        hardAckedStack = lastHardAck.payload.stackNum
+                        unsignedStack <- persistence.getOrFail(
+                          StoreKey.UnsignedStack(hardAckedStack)
+                        )
+                        lastBlockNum = unsignedStack.brief.lastBlockNum
+                        treasury <- persistence.getOrFail(StoreKey.Treasury)
+                        evacuationMap <- persistence.getOrFail(StoreKey.EvacuationMap(lastBlockNum))
+                        blockResults <- BlockResultScan.scanFrom(persistence, lastBlockNum)
+                    } yield Some(
+                      blockResults.foldLeft(
+                        State(
+                          pending = Map.empty,
+                          ready = Map.empty,
+                          inboundLeaderBrief = Map.empty,
+                          lastClosedStackNum = hardAckedStack,
+                          lastClosedBlockNum = lastBlockNum,
+                          previousStackHardConfirmed =
+                              hardConfirmed.exists(Ordering[StackNumber].gteq(_, hardAckedStack)),
+                          nextOwnHardAckNum = hardAckNum.increment,
+                          treasury = treasury,
+                          evacuationMap = evacuationMap
+                        )
+                      )(_.recordBlockResult(_))
+                    )
     }
 }

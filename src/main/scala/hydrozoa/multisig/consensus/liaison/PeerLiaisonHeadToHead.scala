@@ -9,16 +9,17 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.Mesh
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, PeerId}
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{BlockWeaver, CoilRelay, FastConsensusActor, SlowConsensusActor, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A head peer's mesh liaison toward one other head peer (§5.5 of `design/coil-network.md`)
   * [doc-ref].
@@ -32,7 +33,7 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatc
 abstract class PeerLiaisonHeadToHead(
     config: PeerLiaisonHeadToHead.Config,
     remoteHead: HeadPeerId,
-    pendingConnections: MultisigRegimeManager.PendingConnections |
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
         PeerLiaisonHeadToHead.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
@@ -42,12 +43,27 @@ abstract class PeerLiaisonHeadToHead(
     // codecs in `persistInbound` pick it up.
     private given CardanoNetwork.Section = config
 
+    // The mesh liaison runs only on head peers; the satellite backings are keyed by this head peer
+    // number.
+    private val ownHeadPeerNum: HeadPeerNumber = config.ownPeerId match {
+        case PeerId.Head(n) => n
+        case PeerId.Coil(_) =>
+            throw new IllegalStateException("PeerLiaisonHeadToHead runs only on a head peer")
+    }
+
+    // A head peer authors a `HubHardAck` journal (and so opens that CF, `Cf.mkAll`) only if it hubs
+    // ≥ 1 coil peer; a non-hub has no such CF. The hub-hard-ack lane therefore touches the store
+    // only when the relevant peer is a hub — outbound for our own production, inbound for the
+    // remote's. Off a non-hub it stays cold (no own production to seed/serve; nothing to receive).
+    private val ownIsHub: Boolean = config.hubHeadPeerNumbers.contains(ownHeadPeerNum)
+    private val remoteIsHub: Boolean = config.hubHeadPeerNumbers.contains(remoteHead.peerNum)
+
     /** Resolve this liaison's connections — either projected from the shared regime `Connections`
       * (the remote handle from the in-process `remoteHeadLiaisons` map) or supplied directly.
       */
     private def resolveConnections: IO[PeerLiaisonHeadToHead.Connections] =
         pendingConnections match {
-            case shared: MultisigRegimeManager.PendingConnections =>
+            case shared: HeadMultisigRegimeManager.PendingConnections =>
                 shared.get.map(s =>
                     PeerLiaisonHeadToHead.Connections(
                       blockWeaver = s.blockWeaver,
@@ -62,41 +78,64 @@ abstract class PeerLiaisonHeadToHead(
         }
 
     // ---- Lanes (bidirectional: outbox = our production, cursor = the remote head peer's next) ----
+    // Each outbound side is backed by the journal this peer's own production lives in, so a reply
+    // hot-loads entries below the in-memory outbox floor and preStart restores only the high-water.
+    // The spines carry every leader's brief, so their backings keep only the ones THIS peer leads;
+    // the satellites are this peer's own author (CF per author).
+    private val backend = persistence.backend
+    private val blockBacking =
+        LaneOutgoingBacking.block(backend, b => config.canLeadFast(b.blockNum))
+    private val stackBacking =
+        LaneOutgoingBacking.stack(backend, s => config.canLeadSlow(s.stackNum))
+    private val requestBacking = LaneOutgoingBacking.request(backend, ownHeadPeerNum)
+    private val softAckBacking = LaneOutgoingBacking.softAck(backend, ownHeadPeerNum)
+    private val hardAckBacking = LaneOutgoingBacking.hardAck(backend, PeerId.Head(ownHeadPeerNum))
+    // Only a hub has a `HubHardAck` CF to back this lane; a non-hub serves/seeds nothing here.
+    private val hubHardAckBacking: Option[LaneOutgoingBacking[HardAckWithId, HubHardAckNumber]] =
+        Option.when(ownIsHub)(LaneOutgoingBacking.hubHardAck(backend, ownHeadPeerNum))
+
     private val blockLane = LaneBidirectional.sparse[BlockBrief.Next, BlockNumber](
       numberOf = _.blockNum,
       zero = BlockNumber.zero,
       outboundNext = config.nextOwnLeaderBlock,
-      inboundNext = after => Some(remoteHead.nextLeaderBlock(after))
+      inboundNext = after => Some(remoteHead.nextLeaderBlock(after)),
+      backfill = blockBacking.backfill
     )
     private val stackLane = LaneBidirectional.sparse[StackBrief, StackNumber](
       numberOf = _.stackNum,
       zero = StackNumber.zero,
       outboundNext = config.nextOwnSlowLeaderStack,
-      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after))
+      inboundNext = after => Some(remoteHead.nextSlowLeaderStack(after)),
+      backfill = stackBacking.backfill
     )
     private val requestLane = LaneBidirectional.contiguous[UserRequestWithId, RequestNumber](
       _.requestId.requestNum,
       RequestNumber.zero,
       _.increment,
-      config.peerLiaisonMaxRequestsPerBatch
+      config.peerLiaisonMaxRequestsPerBatch,
+      backfill = requestBacking.backfill
     )
     private val softAckLane =
         LaneBidirectional.contiguous[SoftAck, SoftAckNumber](
           _.ackNum,
           SoftAckNumber.zero.increment,
-          _.increment
+          _.increment,
+          backfill = softAckBacking.backfill
         )
     private val hardAckLane =
         LaneBidirectional.contiguous[HardAck, HardAckNumber](
           _.hardAckNum,
           HardAckNumber.zero,
-          _.increment
+          _.increment,
+          backfill = hardAckBacking.backfill
         )
     private val hubHardAckLane =
         LaneBidirectional.contiguous[HardAckWithId, HubHardAckNumber](
           _.seqNum,
           HubHardAckNumber.zero,
-          _.increment
+          _.increment,
+          backfill = (from, limit) =>
+              hubHardAckBacking.fold(IO.pure(List.empty[HardAckWithId]))(_.backfill(from, limit))
         )
 
     // ---- Connections ----------------------------------------------------------------------------
@@ -170,29 +209,25 @@ abstract class PeerLiaisonHeadToHead(
       */
     private def persistInbound(m: Mesh.New): IO[Unit] =
         persistence.arrivalStamp.flatMap { stamp =>
-            def lv[P](payload: P): LaneValue[P] = LaneValue(stamp, payload)
+            def lv[P](payload: P): JournalValue[P] = JournalValue(stamp, payload)
             val puts: List[WriteBatch => WriteBatch] =
                 List(
-                  m.block.map(b => (wb: WriteBatch) => wb.put(LaneKey.Block(b.blockNum))(lv(b))),
-                  m.stack.map(s => (wb: WriteBatch) => wb.put(LaneKey.Stack(s.stackNum))(lv(s))),
+                  m.block.map(b => (wb: WriteBatch) => wb.put(JournalKey.Block(b.blockNum))(lv(b))),
+                  m.stack.map(s => (wb: WriteBatch) => wb.put(JournalKey.Stack(s.stackNum))(lv(s))),
                   m.softAck.map(a =>
-                      (wb: WriteBatch) => wb.put(LaneKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
+                      (wb: WriteBatch) => wb.put(JournalKey.SoftAck(a.peerNum, a.ackNum))(lv(a))
                   ),
-                  m.headHardAck.flatMap(a =>
-                      a.peerId match {
-                          case PeerId.Head(n) =>
-                              Some((wb: WriteBatch) =>
-                                  wb.put(LaneKey.HardAck(n, a.hardAckNum))(lv(a))
-                              )
-                          case PeerId.Coil(_) => None
-                      }
+                  m.headHardAck.map(a =>
+                      (wb: WriteBatch) => wb.put(JournalKey.HardAck(a.peerId, a.hardAckNum))(lv(a))
                   ),
                   m.hubHardAck.map(h =>
-                      (wb: WriteBatch) => wb.put(LaneKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
+                      (wb: WriteBatch) => wb.put(JournalKey.HubHardAck(h.hubPeer, h.seqNum))(lv(h))
                   )
                 ).flatten ++ m.requests.map(r =>
                     (wb: WriteBatch) =>
-                        wb.put(LaneKey.Request(r.requestId.peerNum, r.requestId.requestNum))(lv(r))
+                        wb.put(JournalKey.Request(r.requestId.peerNum, r.requestId.requestNum))(
+                          lv(r)
+                        )
                 )
             val full = puts.foldLeft(WriteBatch.start)((wb, put) => put(wb))
             IO.whenA(full.size > 0)(persistence.write(full))
@@ -244,30 +279,37 @@ abstract class PeerLiaisonHeadToHead(
             hhR <- hardAckLane.reply(get.headHardAck)
             hubR <- hubHardAckLane.reply(get.hubHardAck)
         } yield {
-            val all = List(blockR, stackR, reqR, saR, hhR, hubR)
-            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
-            else {
-                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
-                    case LaneOutbound.Items(xs)   => xs
-                    case LaneOutbound.OutOfBounds => Nil
-                if all.forall(items(_).isEmpty) then Server.Served.Empty
-                else
-                    Server.Served.Reply(
-                      Mesh.New(
-                        get.batchNum,
-                        items(blockR).headOption,
-                        items(stackR).headOption,
-                        items(reqR),
-                        items(saR).headOption,
-                        items(hhR).headOption,
-                        items(hubR).headOption
-                      )
-                    )
-            }
+            LaneOutbound.firstOutOfBounds(
+              "block" -> blockR,
+              "stack" -> stackR,
+              "request" -> reqR,
+              "softAck" -> saR,
+              "headHardAck" -> hhR,
+              "hubHardAck" -> hubR
+            ) match
+                case Some(detail) => Server.Served.OutOfBounds(detail)
+                case None =>
+                    def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                        case LaneOutbound.Items(xs)            => xs
+                        case LaneOutbound.OutOfBounds(_, _, _) => Nil
+                    val all = List(blockR, stackR, reqR, saR, hhR, hubR)
+                    if all.forall(items(_).isEmpty) then Server.Served.Empty
+                    else
+                        Server.Served.Reply(
+                          Mesh.New(
+                            get.batchNum,
+                            items(blockR).headOption,
+                            items(stackR).headOption,
+                            items(reqR),
+                            items(saR).headOption,
+                            items(hhR).headOption,
+                            items(hubR).headOption
+                          )
+                        )
         }
 
     private val server =
-        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remote ! n))
+        new Server[Mesh.Get, Mesh.New]("Mesh.Get", serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Append our own production (single-author = us) onto the matching outbox lane. */
     private def appendArtifact(
@@ -281,6 +323,57 @@ abstract class PeerLiaisonHeadToHead(
         case ha: HardAck          => hardAckLane.append(ha)
         case hub: HardAckWithId   => hubHardAckLane.append(hub)
     }
+
+    /** Restore each outbound lane's high-water from its backing journal, leaving the queues empty
+      * (R3): the Server half hot-loads older own-produced entries from the store on the remote's
+      * `Mesh.Get`, and replay / live production re-appends the tail. The hub-hard-ack lane restores
+      * on a **hub** head peer (its own `HubHardAck` is persisted by `CoilAckSequencer`); it is cold
+      * on a non-hub.
+      */
+    private def restoreOutboundHighWaters: IO[Unit] =
+        for {
+            _ <- blockBacking.highWater.flatMap(blockLane.seedHighWaterOutbox)
+            _ <- stackBacking.highWater.flatMap(stackLane.seedHighWaterOutbox)
+            _ <- requestBacking.highWater.flatMap(requestLane.seedHighWaterOutbox)
+            _ <- softAckBacking.highWater.flatMap(softAckLane.seedHighWaterOutbox)
+            _ <- hardAckBacking.highWater.flatMap(hardAckLane.seedHighWaterOutbox)
+            _ <- hubHardAckBacking.fold(IO.unit)(
+              _.highWater.flatMap(hubHardAckLane.seedHighWaterOutbox)
+            )
+        } yield ()
+
+    /** Restore each lane's inbound receive cursor to `next(max received from the remote)`, so on
+      * reconnect we pull only NEW entries — a stale re-serve is rejected by `verify` (which would
+      * otherwise re-dispatch to the consensus actors that `ReplayActor` already re-fed, CR8). The
+      * satellites read the **remote**'s own-keyed journal; the spines are a single shared CF (every
+      * leader's briefs, not per-author), so the whole-CF max stands in and the sparse lane's
+      * leader-schedule successor picks the remote's next-led number. All reads go through
+      * [[LaneIncomingCursors]] (whole-CF `lastKey`, no `keep` and no payload decode). An empty
+      * store leaves a lane at its cold initial cursor.
+      */
+    private def restoreInboundCursors: IO[Unit] =
+        val remoteNum = remoteHead.peerNum
+        for {
+            _ <- LaneIncomingCursors.block(backend).flatMap(blockLane.restoreInbound)
+            _ <- LaneIncomingCursors.stack(backend).flatMap(stackLane.restoreInbound)
+            _ <- LaneIncomingCursors
+                .request(backend, remoteNum)
+                .flatMap(requestLane.restoreInbound)
+            _ <- LaneIncomingCursors
+                .softAck(backend, remoteNum)
+                .flatMap(softAckLane.restoreInbound)
+            _ <- LaneIncomingCursors
+                .hardAck(backend, PeerId.Head(remoteNum))
+                .flatMap(hardAckLane.restoreInbound)
+            // Only restore the inbound hub-hard-ack cursor when the remote is a hub — only then does
+            // its `HubHardAck` CF exist; otherwise the lane stays at its cold cursor.
+            _ <-
+                if remoteIsHub then
+                    LaneIncomingCursors
+                        .hubHardAck(backend, remoteNum)
+                        .flatMap(hubHardAckLane.restoreInbound)
+                else IO.unit
+        } yield ()
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart
@@ -303,6 +396,12 @@ abstract class PeerLiaisonHeadToHead(
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            // Restore each lane's own-produced high-water; the Server half hot-loads older entries
+            // from the store on the remote's Mesh.Get, and replay / live production re-appends the
+            // tail. An empty store leaves every lane cold.
+            _ <- restoreOutboundHighWaters
+            // Restore the inbound receive cursors so we re-pull only NEW remote entries.
+            _ <- restoreInboundCursors
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -317,7 +416,7 @@ object PeerLiaisonHeadToHead {
     def apply(
         config: Config,
         remoteHead: HeadPeerId,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHeadToHead] =
@@ -341,4 +440,5 @@ object PeerLiaisonHeadToHead {
           */
         coilRelay: Option[CoilRelay.Handle] = None
     )
+
 }

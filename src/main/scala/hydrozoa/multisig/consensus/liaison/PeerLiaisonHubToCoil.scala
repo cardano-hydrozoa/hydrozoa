@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber, SoftAck, SoftAckNumber}
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.LiaisonProtocol.*
@@ -18,7 +18,8 @@ import hydrozoa.multisig.consensus.{CoilAckSequencer, SlowConsensusActor, UserRe
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
-import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatch}
+import hydrozoa.multisig.persistence.recovery.{LaneIncomingCursors, LaneOutgoingBacking}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Persistence, WriteBatch}
 
 /** A hub head peer's liaison toward one coil peer it serves (§5.5 of `design/coil-network.md`)
   * [doc-ref] — the mirror of [[PeerLiaisonCoilToHub]].
@@ -36,7 +37,8 @@ import hydrozoa.multisig.persistence.{LaneKey, LaneValue, Persistence, WriteBatc
 abstract class PeerLiaisonHubToCoil(
     config: PeerLiaisonHubToCoil.Config,
     coil: CoilPeerNumber,
-    pendingConnections: MultisigRegimeManager.PendingConnections | PeerLiaisonHubToCoil.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+        PeerLiaisonHubToCoil.Connections,
     tracer: ContraTracer[IO, PeerLiaisonEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, LiaisonProtocol.HubToCoilRequest] {
@@ -50,7 +52,7 @@ abstract class PeerLiaisonHubToCoil(
       */
     private def resolveConnections: IO[PeerLiaisonHubToCoil.Connections] =
         pendingConnections match {
-            case shared: MultisigRegimeManager.PendingConnections =>
+            case shared: HeadMultisigRegimeManager.PendingConnections =>
                 shared.get.flatMap(s =>
                     s.coilAckSequencer.fold(
                       IO.raiseError(
@@ -73,21 +75,43 @@ abstract class PeerLiaisonHubToCoil(
     private val hubNums: List[HeadPeerNumber] = config.coilPeers.hubHeadPeerNumbers
 
     // ---- Outbox lanes (the population we serve to the coil peer) ---------------------------------
+    // Each lane is backed by the journal the hub already persists as a head-mesh member (own-produced
+    // or inbound-replicated), so a reply hot-loads entries below the in-memory outbox floor and
+    // preStart restores only the high-water; the hub serves every author (no own-led filter).
+    private val backend = persistence.backend
+    private val blockBacking = LaneOutgoingBacking.block(backend, _ => true)
+    private val stackBacking = LaneOutgoingBacking.stack(backend, _ => true)
+    private val requestBackings =
+        headPeerNums.map(h => h -> LaneOutgoingBacking.request(backend, h)).toMap
+    private val softAckBackings =
+        headPeerNums.map(h => h -> LaneOutgoingBacking.softAck(backend, h)).toMap
+    private val headHardAckBackings =
+        headPeerNums.map(h => h -> LaneOutgoingBacking.hardAck(backend, PeerId.Head(h))).toMap
+    private val coilHardAckBackings =
+        hubNums.map(h => h -> LaneOutgoingBacking.hubHardAck(backend, h)).toMap
+
     private val blockLane =
         LaneOutbound.contiguous[BlockBrief.Next, BlockNumber](
           _.blockNum,
           BlockNumber(1),
-          _.increment
+          _.increment,
+          backfill = blockBacking.backfill
         )
     private val stackLane =
-        LaneOutbound.contiguous[StackBrief, StackNumber](_.stackNum, StackNumber(1), _.increment)
+        LaneOutbound.contiguous[StackBrief, StackNumber](
+          _.stackNum,
+          StackNumber(1),
+          _.increment,
+          backfill = stackBacking.backfill
+        )
     private val requestLanes: Map[HeadPeerNumber, LaneOutbound[UserRequestWithId, RequestNumber]] =
         headPeerNums.map { h =>
             h -> LaneOutbound.contiguous[UserRequestWithId, RequestNumber](
               _.requestId.requestNum,
               RequestNumber.zero,
               _.increment,
-              config.peerLiaisonMaxRequestsPerBatch
+              config.peerLiaisonMaxRequestsPerBatch,
+              backfill = requestBackings(h).backfill
             )
         }.toMap
     private val softAckLanes: Map[HeadPeerNumber, LaneOutbound[SoftAck, SoftAckNumber]] =
@@ -95,7 +119,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[SoftAck, SoftAckNumber](
               _.ackNum,
               SoftAckNumber.zero.increment,
-              _.increment
+              _.increment,
+              backfill = softAckBackings(h).backfill
             )
         }.toMap
     private val headHardAckLanes: Map[HeadPeerNumber, LaneOutbound[HardAck, HardAckNumber]] =
@@ -103,7 +128,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[HardAck, HardAckNumber](
               _.hardAckNum,
               HardAckNumber.zero,
-              _.increment
+              _.increment,
+              backfill = headHardAckBackings(h).backfill
             )
         }.toMap
     private val coilHardAckLanes
@@ -112,7 +138,8 @@ abstract class PeerLiaisonHubToCoil(
             h -> LaneOutbound.contiguous[HardAckWithId, HubHardAckNumber](
               _.seqNum,
               HubHardAckNumber.zero,
-              _.increment
+              _.increment,
+              backfill = coilHardAckBackings(h).backfill
             )
         }.toMap
 
@@ -152,42 +179,58 @@ abstract class PeerLiaisonHubToCoil(
                 l.reply(get.coilHardAcks(h)).map(h -> _)
             }
         } yield {
-            val all = blockR :: stackR :: (reqR ::: saR ::: hhR ::: chR).map(_._2)
-            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
-            else {
-                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
-                    case LaneOutbound.Items(xs)   => xs
-                    case LaneOutbound.OutOfBounds => Nil
-                val block = items(blockR).headOption
-                val stack = items(stackR).headOption
-                val requests = reqR.map { case (h, r) => h -> items(r) }.toMap
-                val softAcks = saR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val headHardAcks = hhR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val coilHardAcks = chR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val anyContent =
-                    block.nonEmpty || stack.nonEmpty || requests.values.exists(_.nonEmpty) ||
-                        softAcks.values.exists(_.nonEmpty) || headHardAcks.values.exists(
-                          _.nonEmpty
-                        ) ||
-                        coilHardAcks.values.exists(_.nonEmpty)
-                if !anyContent then Server.Served.Empty
-                else
-                    Server.Served.Reply(
-                      Population.New(
-                        get.batchNum,
-                        block,
-                        stack,
-                        requests,
-                        softAcks,
-                        headHardAcks,
-                        coilHardAcks
-                      )
-                    )
-            }
+            val firstOob =
+                LaneOutbound
+                    .firstOutOfBounds("block" -> blockR, "stack" -> stackR)
+                    .orElse(LaneOutbound.firstOutOfBounds(reqR.map { case (h, r) =>
+                        s"request[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(saR.map { case (h, r) =>
+                        s"softAck[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(hhR.map { case (h, r) =>
+                        s"headHardAck[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(chR.map { case (h, r) =>
+                        s"coilHardAck[$h]" -> r
+                    }*))
+            firstOob match
+                case Some(detail) => Server.Served.OutOfBounds(detail)
+                case None =>
+                    def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                        case LaneOutbound.Items(xs)            => xs
+                        case LaneOutbound.OutOfBounds(_, _, _) => Nil
+                    val block = items(blockR).headOption
+                    val stack = items(stackR).headOption
+                    val requests = reqR.map { case (h, r) => h -> items(r) }.toMap
+                    val softAcks = saR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val headHardAcks = hhR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val coilHardAcks = chR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val anyContent =
+                        block.nonEmpty || stack.nonEmpty || requests.values.exists(_.nonEmpty) ||
+                            softAcks.values.exists(_.nonEmpty) || headHardAcks.values.exists(
+                              _.nonEmpty
+                            ) ||
+                            coilHardAcks.values.exists(_.nonEmpty)
+                    if !anyContent then Server.Served.Empty
+                    else
+                        Server.Served.Reply(
+                          Population.New(
+                            get.batchNum,
+                            block,
+                            stack,
+                            requests,
+                            softAcks,
+                            headHardAcks,
+                            coilHardAcks
+                          )
+                        )
         }
 
     private val server =
-        new Server[Population.Get, Population.New](serve)(n => getConnections.flatMap(_.remote ! n))
+        new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
+            getConnections.flatMap(_.remote ! n)
+        )
 
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
@@ -229,15 +272,18 @@ abstract class PeerLiaisonHubToCoil(
             }
         }
 
-    /** Persist the coil peer's inbound hard-ack to its [[LaneKey.CoilHardAck]] receive lane,
-      * receipt- stamped, before the cursor advances. A missing ack is a no-op.
+    /** Persist the coil peer's inbound hard-ack to its `HardAck` receive lane (keyed by the BOUND
+      * coil — this liaison's trust boundary — not the ack's self-reported author), receipt-stamped,
+      * before the cursor advances. A missing ack is a no-op.
       */
     private def persistInbound(own: OwnHardAck.New): IO[Unit] =
         own.hardAck.traverse_ { ack =>
             persistence.arrivalStamp.flatMap { stamp =>
                 persistence.write(
                   WriteBatch.start
-                      .put(LaneKey.CoilHardAck(coil, ack.hardAckNum))(LaneValue(stamp, ack))
+                      .put(JournalKey.HardAck(PeerId.Coil(coil), ack.hardAckNum))(
+                        JournalValue(stamp, ack)
+                      )
                 )
             }
         }
@@ -278,11 +324,53 @@ abstract class PeerLiaisonHubToCoil(
             appendArtifact(artifact) >> server.afterAppend
     }
 
+    /** Restore each population outbox lane's high-water from its backing journal, leaving the
+      * queues empty. The Server half answers the coil peer's `Population.Get` by hot-loading older
+      * entries from the store (`LaneOutgoingBacking.backfill`); live `CoilRelay` production
+      * re-appends the tail. An empty store leaves every lane cold.
+      */
+    private def restoreHighWaters: IO[Unit] =
+        for {
+            _ <- blockBacking.highWater.flatMap(blockLane.seedHighWater)
+            _ <- stackBacking.highWater.flatMap(stackLane.seedHighWater)
+            _ <- requestLanes.toList.traverse_ { case (h, l) =>
+                requestBackings(h).highWater.flatMap(l.seedHighWater)
+            }
+            _ <- softAckLanes.toList.traverse_ { case (h, l) =>
+                softAckBackings(h).highWater.flatMap(l.seedHighWater)
+            }
+            _ <- headHardAckLanes.toList.traverse_ { case (h, l) =>
+                headHardAckBackings(h).highWater.flatMap(l.seedHighWater)
+            }
+            _ <- coilHardAckLanes.toList.traverse_ { case (h, l) =>
+                coilHardAckBackings(h).highWater.flatMap(l.seedHighWater)
+            }
+        } yield ()
+
+    /** Restore the inbound coil-ack receive cursor to `next(max(coil HardAck))` (CR8 persisted each
+      * ack before the cursor advanced), so we re-pull only NEW acks: the hub's `CoilAckSequencer`
+      * stamps any received-but-unstamped tail from the store, and `verify` rejects a stale re-serve
+      * — we must not re-receive (and re-stamp) what we already hold. A single inbound lane (the
+      * coil peer's own hard-acks), so one cursor.
+      */
+    private def restoreInboundCursors: IO[Unit] =
+        for {
+            _ <- LaneIncomingCursors
+                .hardAck(backend, PeerId.Coil(coil))
+                .flatMap(ownHardAckLane.restoreCursor)
+        } yield ()
+
     private def preStartLocal: IO[Unit] =
         for {
             c <- resolveConnections
             _ <- connections.set(Some(c))
             _ <- tracer.traceWith(PeerLiaisonEvent.Started)
+            // Restore each lane's high-water; the Server half hot-loads older population entries
+            // from the store on the coil peer's Population.Get, and live CoilRelay production
+            // re-appends the tail. An empty store leaves every lane cold.
+            _ <- restoreHighWaters
+            // Restore the inbound coil-ack receive cursor so we re-pull only NEW acks.
+            _ <- restoreInboundCursors
             _ <- puller.start
             _ <- startResendTimer
         } yield ()
@@ -297,7 +385,7 @@ object PeerLiaisonHubToCoil {
     def apply(
         config: Config,
         coil: CoilPeerNumber,
-        pendingConnections: MultisigRegimeManager.PendingConnections | Connections,
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections | Connections,
         tracer: ContraTracer[IO, PeerLiaisonEvent],
         persistence: Persistence[IO]
     ): IO[PeerLiaisonHubToCoil] =
@@ -316,4 +404,5 @@ object PeerLiaisonHubToCoil {
         coilAckSequencer: CoilAckSequencer.Handle,
         remote: LiaisonProtocol.CoilToHubHandle
     )
+
 }

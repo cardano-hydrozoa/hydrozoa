@@ -4,12 +4,19 @@ import java.nio.ByteBuffer
 
 /** The persistence-layer schema version.
   *
-  * Bumped whenever the on-disk format (CF set, key layout, codecs) changes in a
-  * backward-incompatible way. The store rejects opens that find a version it does not understand —
-  * better fail-safe than silently misread (CR6 / §7 versioning note).
+  * The store rejects opens that find a version it does not understand — better fail-safe than
+  * silently misread (CR6 / §7 versioning note). The mechanism is in place from day one; bumping it
+  * on backward-incompatible format changes (CF set, key layout, codecs) waits until the layout
+  * stabilizes — see [[current]].
   */
 object StoreVersion:
-    /** Current on-disk schema version. */
+    /** Current on-disk schema version — held at **1**.
+      *
+      * The format still churns freely during development, so we do **not** track
+      * backward-incompatible bumps yet: a format change just rebuilds the store. Versioning starts
+      * (and the per-version deltas get recorded here) once the layout stabilizes and stores must
+      * survive upgrades.
+      */
     val current: Int = 1
 
     /** The key under which the schema version is stored in [[Cf.Meta]]. */

@@ -587,6 +587,13 @@ object HeadConfig {
             final def hubbedCoilPeerNums(headNum: HeadPeerNumber): List[CoilPeerNumber] =
                 coilPeers.hubbedBy(headNum)
 
+            /** Every hub head peer — those that hub ≥ 1 coil peer (one `HubHardAck` journal each; a
+              * coil peer reads them all to reconstruct the coil quorum on recovery). Empty with no
+              * coil peers.
+              */
+            final def hubHeadPeerNumbers: List[HeadPeerNumber] =
+                coilPeers.hubHeadPeerNumbers
+
             /** The head multisig native script including the coil threshold branch — all head peers
               * plus `MOf(coilQuorum, coilPeerVKeys)`. Overrides the head-only derivation on
               * [[HeadPeers.Section]] so every `headMultisigScript` / `headMultisigAddress` call
