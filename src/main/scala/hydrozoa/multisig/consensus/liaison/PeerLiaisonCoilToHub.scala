@@ -280,14 +280,19 @@ abstract class PeerLiaisonCoilToHub(
     // ---- Serve half (own hard-ack) --------------------------------------------------------------
     private def serve(get: OwnHardAck.Get): IO[Server.Served[OwnHardAck.New]] =
         ownHardAckLane.reply(get.hardAck).map {
-            case LaneOutbound.OutOfBounds => Server.Served.OutOfBounds
-            case LaneOutbound.Items(Nil)  => Server.Served.Empty
+            case LaneOutbound.OutOfBounds(asked, bound, lastAppended) =>
+                Server.Served.OutOfBounds(
+                  s"lane 'ownHardAck' (asked=$asked bound=$bound lastAppended=$lastAppended)"
+                )
+            case LaneOutbound.Items(Nil) => Server.Served.Empty
             case LaneOutbound.Items(items) =>
                 Server.Served.Reply(OwnHardAck.New(get.batchNum, items.headOption))
         }
 
     private val server =
-        new Server[OwnHardAck.Get, OwnHardAck.New](serve)(n => getConnections.flatMap(_.remote ! n))
+        new Server[OwnHardAck.Get, OwnHardAck.New]("OwnHardAck.Get", serve)(n =>
+            getConnections.flatMap(_.remote ! n)
+        )
 
     // ---- Actor shell ----------------------------------------------------------------------------
     override def preStart: IO[Unit] = context.self ! PreStart

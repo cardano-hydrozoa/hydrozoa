@@ -87,7 +87,14 @@ final class LaneOutbound[T, N] private (
         lastAppended.get.flatMap { last =>
             // The remote may never legitimately ask past our next-producible number.
             val bound = next(last)
-            if bound.exists(_ < remoteCursor) then IO.pure(OutOfBounds)
+            if bound.exists(_ < remoteCursor) then
+                IO.pure(
+                  OutOfBounds(
+                    asked = remoteCursor.toString,
+                    bound = bound.fold("none")(_.toString),
+                    lastAppended = last.fold("none")(_.toString)
+                  )
+                )
             else
                 outbox
                     .modify { q =>
@@ -112,9 +119,22 @@ object LaneOutbound {
     /** Result of [[LaneOutbound.reply]]: the desync sentinel or the (possibly empty) slice to send.
       */
     enum Reply[+T]:
-        case OutOfBounds
+        /** The remote's cursor is ahead of our next-producible number — protocol desync. Carries
+          * the diagnostic indices (stringified — a lane is generic over its number type `N`): what
+          * the remote `asked` for, our `bound` (`next(lastAppended)`), and `lastAppended` itself.
+          */
+        case OutOfBounds(asked: String, bound: String, lastAppended: String)
         case Items(items: List[T])
     export Reply.*
+
+    /** The first out-of-bounds reply among the given `labeled` lanes, rendered as a diagnostic
+      * string naming the lane and its asked/bound indices — the `detail` a `Server` reports on a
+      * [[Server.Served.OutOfBounds]]. `None` if no lane is out of bounds.
+      */
+    def firstOutOfBounds(labeled: (String, Reply[?])*): Option[String] =
+        labeled.collectFirst { case (name, OutOfBounds(asked, bound, lastAppended)) =>
+            s"lane '$name' (asked=$asked bound=$bound lastAppended=$lastAppended)"
+        }
 
     final case class AppendOutOfOrder(last: String, attempted: String, expected: String)
         extends Throwable(

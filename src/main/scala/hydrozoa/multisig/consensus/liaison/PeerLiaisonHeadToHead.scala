@@ -279,30 +279,37 @@ abstract class PeerLiaisonHeadToHead(
             hhR <- hardAckLane.reply(get.headHardAck)
             hubR <- hubHardAckLane.reply(get.hubHardAck)
         } yield {
-            val all = List(blockR, stackR, reqR, saR, hhR, hubR)
-            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
-            else {
-                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
-                    case LaneOutbound.Items(xs)   => xs
-                    case LaneOutbound.OutOfBounds => Nil
-                if all.forall(items(_).isEmpty) then Server.Served.Empty
-                else
-                    Server.Served.Reply(
-                      Mesh.New(
-                        get.batchNum,
-                        items(blockR).headOption,
-                        items(stackR).headOption,
-                        items(reqR),
-                        items(saR).headOption,
-                        items(hhR).headOption,
-                        items(hubR).headOption
-                      )
-                    )
-            }
+            LaneOutbound.firstOutOfBounds(
+              "block" -> blockR,
+              "stack" -> stackR,
+              "request" -> reqR,
+              "softAck" -> saR,
+              "headHardAck" -> hhR,
+              "hubHardAck" -> hubR
+            ) match
+                case Some(detail) => Server.Served.OutOfBounds(detail)
+                case None =>
+                    def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                        case LaneOutbound.Items(xs)            => xs
+                        case LaneOutbound.OutOfBounds(_, _, _) => Nil
+                    val all = List(blockR, stackR, reqR, saR, hhR, hubR)
+                    if all.forall(items(_).isEmpty) then Server.Served.Empty
+                    else
+                        Server.Served.Reply(
+                          Mesh.New(
+                            get.batchNum,
+                            items(blockR).headOption,
+                            items(stackR).headOption,
+                            items(reqR),
+                            items(saR).headOption,
+                            items(hhR).headOption,
+                            items(hubR).headOption
+                          )
+                        )
         }
 
     private val server =
-        new Server[Mesh.Get, Mesh.New](serve)(n => getConnections.flatMap(_.remote ! n))
+        new Server[Mesh.Get, Mesh.New]("Mesh.Get", serve)(n => getConnections.flatMap(_.remote ! n))
 
     /** Append our own production (single-author = us) onto the matching outbox lane. */
     private def appendArtifact(

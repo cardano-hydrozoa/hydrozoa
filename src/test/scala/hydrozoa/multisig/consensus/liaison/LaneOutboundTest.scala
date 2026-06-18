@@ -64,7 +64,10 @@ class LaneOutboundTest extends AnyFunSuite {
         lane.append(1).unsafeRunSync()
         // Highest appended is 1, so the remote may legitimately ask up to 2 (next-producible).
         val _ = assert(lane.reply(2).unsafeRunSync() == Items(Nil))
-        assert(lane.reply(3).unsafeRunSync() == OutOfBounds)
+        // Asking past the bound is out of bounds, carrying the diagnostic indices.
+        assert(
+          lane.reply(3).unsafeRunSync() == OutOfBounds(asked = "3", bound = "2", lastAppended = "1")
+        )
     }
 
     test("request-style lane batches up to maxPerReply") {

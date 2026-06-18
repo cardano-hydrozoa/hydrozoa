@@ -179,42 +179,58 @@ abstract class PeerLiaisonHubToCoil(
                 l.reply(get.coilHardAcks(h)).map(h -> _)
             }
         } yield {
-            val all = blockR :: stackR :: (reqR ::: saR ::: hhR ::: chR).map(_._2)
-            if all.contains(LaneOutbound.OutOfBounds) then Server.Served.OutOfBounds
-            else {
-                def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
-                    case LaneOutbound.Items(xs)   => xs
-                    case LaneOutbound.OutOfBounds => Nil
-                val block = items(blockR).headOption
-                val stack = items(stackR).headOption
-                val requests = reqR.map { case (h, r) => h -> items(r) }.toMap
-                val softAcks = saR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val headHardAcks = hhR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val coilHardAcks = chR.map { case (h, r) => h -> items(r).headOption }.toMap
-                val anyContent =
-                    block.nonEmpty || stack.nonEmpty || requests.values.exists(_.nonEmpty) ||
-                        softAcks.values.exists(_.nonEmpty) || headHardAcks.values.exists(
-                          _.nonEmpty
-                        ) ||
-                        coilHardAcks.values.exists(_.nonEmpty)
-                if !anyContent then Server.Served.Empty
-                else
-                    Server.Served.Reply(
-                      Population.New(
-                        get.batchNum,
-                        block,
-                        stack,
-                        requests,
-                        softAcks,
-                        headHardAcks,
-                        coilHardAcks
-                      )
-                    )
-            }
+            val firstOob =
+                LaneOutbound
+                    .firstOutOfBounds("block" -> blockR, "stack" -> stackR)
+                    .orElse(LaneOutbound.firstOutOfBounds(reqR.map { case (h, r) =>
+                        s"request[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(saR.map { case (h, r) =>
+                        s"softAck[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(hhR.map { case (h, r) =>
+                        s"headHardAck[$h]" -> r
+                    }*))
+                    .orElse(LaneOutbound.firstOutOfBounds(chR.map { case (h, r) =>
+                        s"coilHardAck[$h]" -> r
+                    }*))
+            firstOob match
+                case Some(detail) => Server.Served.OutOfBounds(detail)
+                case None =>
+                    def items[T](r: LaneOutbound.Reply[T]): List[T] = r match
+                        case LaneOutbound.Items(xs)            => xs
+                        case LaneOutbound.OutOfBounds(_, _, _) => Nil
+                    val block = items(blockR).headOption
+                    val stack = items(stackR).headOption
+                    val requests = reqR.map { case (h, r) => h -> items(r) }.toMap
+                    val softAcks = saR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val headHardAcks = hhR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val coilHardAcks = chR.map { case (h, r) => h -> items(r).headOption }.toMap
+                    val anyContent =
+                        block.nonEmpty || stack.nonEmpty || requests.values.exists(_.nonEmpty) ||
+                            softAcks.values.exists(_.nonEmpty) || headHardAcks.values.exists(
+                              _.nonEmpty
+                            ) ||
+                            coilHardAcks.values.exists(_.nonEmpty)
+                    if !anyContent then Server.Served.Empty
+                    else
+                        Server.Served.Reply(
+                          Population.New(
+                            get.batchNum,
+                            block,
+                            stack,
+                            requests,
+                            softAcks,
+                            headHardAcks,
+                            coilHardAcks
+                          )
+                        )
         }
 
     private val server =
-        new Server[Population.Get, Population.New](serve)(n => getConnections.flatMap(_.remote ! n))
+        new Server[Population.Get, Population.New]("Population.Get", serve)(n =>
+            getConnections.flatMap(_.remote ! n)
+        )
 
     /** Route an artifact relayed to this hub onto its outbox lane, keyed by embedded author. */
     private def appendArtifact(
