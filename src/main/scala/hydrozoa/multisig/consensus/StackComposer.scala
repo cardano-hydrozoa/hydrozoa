@@ -21,7 +21,6 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.stack.*
 import hydrozoa.multisig.persistence.recovery.BlockResultScan
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
-
 import scala.annotation.tailrec
 
 /** Stack composer.

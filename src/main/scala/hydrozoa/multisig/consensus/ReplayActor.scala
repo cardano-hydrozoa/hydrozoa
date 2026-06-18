@@ -188,7 +188,7 @@ object ReplayActor:
             case _                              => true
         IO.raiseUnless(softOk && hardOk)(
           new IllegalStateException(
-            s"Recovery refused: store inconsistency (confirmed > acked). " +
+            "Recovery refused: store inconsistency (confirmed > acked). " +
                 s"softConfirmed=$softConfirmed hardConfirmed=$hardConfirmed " +
                 s"fastBlockMark=$fastBlockMark, hardAckedStack=$hardAckedStack"
           )
