@@ -160,6 +160,9 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-heads-one-coil works") =
         Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoilPeers = 1).property()
 
+    val _ = property("Two-heads-one-coil works (quick)") =
+        Stage4Suite(label = "stage4-quick-2h1c", nPeers = 2, nCoilPeers = 1, nCommands = 10).property()
+
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
 
@@ -228,6 +231,15 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
           label = "stage4-ws-2h1c",
           nPeers = 2,
           nCoilPeers = 1,
+          transportMode = TransportMode.WebSocket(),
+        ).property()
+
+    val _ = property("Two-heads-one-coil works WS (quick)") =
+        Stage4Suite(
+          label = "stage4-ws-quick-2h1c",
+          nPeers = 2,
+          nCoilPeers = 1,
+          nCommands = 10,
           transportMode = TransportMode.WebSocket(),
         ).property()
 
