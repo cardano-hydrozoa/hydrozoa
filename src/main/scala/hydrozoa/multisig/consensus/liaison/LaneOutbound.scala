@@ -79,9 +79,11 @@ final class LaneOutbound[T, N] private (
       * requested number, serve up to [[maxPerReply]] items from it (the live / replayed tail,
       * including not-yet-persisted entries); otherwise the requested entry is below the outbox
       * floor (older, already durable, or the remote regressed across a restart), so hot-load it
-      * from the store via [[backfill]]. Returns [[OutOfBounds]] if the remote's cursor is ahead of
-      * what we could have produced (protocol desync — the caller raises), else the (possibly empty)
-      * slice.
+      * from the store via [[backfill]] — **capped at the released high-water `lastAppended`**: the
+      * store may hold entries persisted but not yet released onto this lane (a postponed own
+      * soft-ack), and serving those would push the remote's cursor past our bound. Returns
+      * [[OutOfBounds]] if the remote's cursor is ahead of what we could have produced (protocol
+      * desync — the caller raises), else the (possibly empty) slice.
       */
     def reply(remoteCursor: N): IO[Reply[T]] =
         lastAppended.get.flatMap { last =>
@@ -106,7 +108,20 @@ final class LaneOutbound[T, N] private (
                             case Some(head) if numberOf(head) == remoteCursor =>
                                 IO.pure(Items(pruned.take(maxPerReply).toList))
                             case _ =>
-                                backfill(remoteCursor, maxPerReply).map(Items(_))
+                                // The store can hold entries already persisted but **not yet
+                                // released** onto this lane (e.g. a postponed own soft-ack that the
+                                // producer persisted at block time but `announceAck`s only when the
+                                // previous block's cell completes). Serve only up to the announced
+                                // high-water — never past `lastAppended` — or the remote's cursor
+                                // would run ahead of our bound and the next pull would be a false
+                                // out-of-bounds.
+                                backfill(remoteCursor, maxPerReply).map(fromStore =>
+                                    Items(
+                                      last.fold(List.empty[T])(hw =>
+                                          fromStore.filter(item => numberOf(item) <= hw)
+                                      )
+                                    )
+                                )
                     }
         }
 

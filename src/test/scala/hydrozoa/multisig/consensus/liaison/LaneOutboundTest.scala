@@ -138,4 +138,28 @@ class LaneOutboundTest extends AnyFunSuite {
         lane.append(4).unsafeRunSync()
         assertThrows[AppendOutOfOrder](lane.append(5).unsafeRunSync()) // 5 is remote-led
     }
+
+    test("reply backfill never serves a store entry above the released high-water") {
+        // The store durably holds 0..3, but only 0..1 are released (appended) — e.g. #2 is a
+        // postponed own soft-ack the producer persisted at block time but has not yet announced
+        // onto the lane. seedHighWater(1) models that: high-water 1, empty outbox, so every serve
+        // is a backfill from the store.
+        val store = (0 to 3).toList
+        val lane = LaneOutbound.contiguous[Int, Int](
+          numberOf = identity,
+          first = 0,
+          increment = _ + 1,
+          maxPerReply = 2,
+          backfill = (from, limit) => IO.pure(store.filter(_ >= from).take(limit))
+        )
+        lane.seedHighWater(Some(1)).unsafeRunSync()
+        // The released prefix is served from the store, capped at the high-water (no #2/#3 leak)...
+        val _ = assert(lane.reply(0).unsafeRunSync() == Items(List(0, 1)))
+        // ...and a pull for the not-yet-released #2 comes back empty, not hot-loaded — otherwise the
+        // remote's cursor would run past our bound and the next pull would be a false OutOfBounds.
+        val _ = assert(lane.reply(2).unsafeRunSync() == Items(Nil))
+        // Once #2 is released (announced), it serves; #3 (still unreleased) stays withheld.
+        lane.append(2).unsafeRunSync()
+        assert(lane.reply(2).unsafeRunSync() == Items(List(2)))
+    }
 }
