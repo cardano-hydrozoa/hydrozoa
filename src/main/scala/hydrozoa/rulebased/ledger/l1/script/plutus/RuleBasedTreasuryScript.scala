@@ -114,6 +114,8 @@ object RuleBasedTreasuryValidator extends Validator {
         "setupG2 in treasuryInput and treasuryOutput must match"
     private inline val EvacuateTreasuryWrongAddress =
         "Treasury output must remain at the treasury script address"
+    private inline val EvacuateMustMakeProgress =
+        "Evacuate must evacuate at least one utxo"
 
     // Deinit redeemer
     private inline val DeinitRequiresResolvedTreasury =
@@ -303,6 +305,12 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 // Evacuatees
+                // An Evacuate must make progress (remove at least one utxo). A zero-evacuatee tx
+                // would be a permissionless no-op that just re-creates the treasury, enabling a
+                // UTxO-contention DoS against legitimate evacuations; forbidding it means the only
+                // way to spend the treasury is to actually pay out a committed evacuee.
+                require(!evacuationKeys.isEmpty, EvacuateMustMakeProgress)
+
                 // The number of evacuations should match the number of utxos ids in the redeemer
                 require(
                   evacuationOutputs.size == evacuationKeys.size,
