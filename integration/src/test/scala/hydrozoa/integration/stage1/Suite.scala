@@ -553,7 +553,7 @@ case class Suite(
                 consensusConnections = FastConsensusActor.Connections(
                   blockWeaver = blockWeaver,
                   cardanoLiaison = cardanoLiaison,
-                  requestSequencer = requestSequencerStub,
+                  requestSequencer = Some(requestSequencerStub),
                   headPeerLiaisons = List.empty,
                   jointLedger = jointLedger,
                   stackComposer = stackComposerStub,

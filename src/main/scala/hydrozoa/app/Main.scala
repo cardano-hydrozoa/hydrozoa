@@ -295,7 +295,9 @@ object Main extends IOApp {
                     log.info("Starting HTTP server...") *>
                         HydrozoaServer
                             .create(
-                              connections.requestSequencer,
+                              connections.requestSequencer.getOrElse(
+                                sys.error("RequestSequencer required on head peers")
+                              ),
                               connections.blockWeaver,
                               nodeConfig.headConfig,
                               serverConfig,

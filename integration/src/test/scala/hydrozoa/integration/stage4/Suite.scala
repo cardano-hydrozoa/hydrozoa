@@ -447,7 +447,7 @@ case class Stage4Suite(
                 yield PeerStack(
                   blockWeaver,
                   cardanoLiaison,
-                  requestSequencer,
+                  Some(requestSequencer),
                   jointLedger,
                   consensusActor,
                   stackComposer,
@@ -597,8 +597,6 @@ case class Stage4Suite(
                         Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(labelNum))
                     val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
                         Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(labelNum))
-                    val esTracer: ContraTracer[IO, EventSequencerEvent] =
-                        Slf4jTracer.sink.contramap(EventSequencerEventFormat.humanFormat(labelNum))
                     val jlTracer: ContraTracer[IO, JointLedgerEvent] =
                         Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(labelNum))
                     val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
@@ -650,9 +648,6 @@ case class Stage4Suite(
                                 clTracer,
                                 coilPersistence
                               )
-                            )
-                            requestSequencer <- system.actorOf(
-                              RequestSequencer(coilConfig, coilPending, esTracer, coilPersistence)
                             )
                             l2Ledger <- EutxoL2Ledger(coilConfig)
                             jointLedger <- system.actorOf(
@@ -707,7 +702,7 @@ case class Stage4Suite(
                           stack = PeerStack(
                             blockWeaver,
                             cardanoLiaison,
-                            requestSequencer,
+                            None,
                             jointLedger,
                             consensusActor,
                             stackComposer,
@@ -830,7 +825,6 @@ case class Stage4Suite(
                                 blockWeaverLimiter = blockWeaverLimiter,
                                 cardanoLiaison = c.stack.cardanoLiaison,
                                 consensusActor = c.stack.consensusActor,
-                                requestSequencer = c.stack.requestSequencer,
                                 jointLedger = c.stack.jointLedger,
                                 stackComposer = c.stack.stackComposer,
                                 stackComposerLimiter = stackComposerLimiter,
@@ -881,7 +875,11 @@ case class Stage4Suite(
               system = system,
               cardanoBackend = cardanoBackend,
               peers = peerStackMap.map { case (peerNum, stack) =>
-                  peerNum -> Stage4PeerHandle(requestSequencer = stack.requestSequencer)
+                  peerNum -> Stage4PeerHandle(
+                    requestSequencer = stack.requestSequencer.getOrElse(
+                      sys.error(s"head peer $peerNum missing RequestSequencer")
+                    )
+                  )
               },
               sutErrors = sutErrors,
               errorDrainer = errorDrainer,

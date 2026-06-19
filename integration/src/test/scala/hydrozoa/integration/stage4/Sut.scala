@@ -23,7 +23,8 @@ import org.scalacheck.commands.SutCommand
 private[stage4] case class PeerStack(
     blockWeaver: BlockWeaver.Handle,
     cardanoLiaison: CardanoLiaison.Handle,
-    requestSequencer: RequestSequencer.Handle,
+    /** Head peers only — coil followers don't accept user requests. */
+    requestSequencer: Option[RequestSequencer.Handle],
     jointLedger: JointLedger.Handle,
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,

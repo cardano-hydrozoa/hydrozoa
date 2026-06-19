@@ -56,7 +56,7 @@ object FastConsensusActor:
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,

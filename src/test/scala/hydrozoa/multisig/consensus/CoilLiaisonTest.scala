@@ -125,7 +125,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
           blockWeaverLimiter = blockWeaver,
           cardanoLiaison = cardanoLiaison,
           consensusActor = consensusActor,
-          requestSequencer = requestSequencer,
+          requestSequencer = Some(requestSequencer),
           jointLedger = jointLedger,
           stackComposer = stackComposer,
           stackComposerLimiter = stackComposer,

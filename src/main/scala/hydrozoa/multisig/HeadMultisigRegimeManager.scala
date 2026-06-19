@@ -38,6 +38,7 @@ trait HeadMultisigRegimeManager(
     //   - Websockets, via `main`/`PeerWsTransport`
     //   - Process-local actor-refs for TestControl-compatible integration tests (which will be something like
     //     `integrationMain`). This will need an IntegrationActor that spawns MRMs
+    //   Rename to just "transport" and "PeerTransport"
     wsTransport: PeerWsTransport,
 ) extends Actor[IO, Request] {
 
@@ -222,7 +223,7 @@ trait HeadMultisigRegimeManager(
               blockWeaverLimiter = blockWeaverLimiter,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
-              requestSequencer = requestSequencer,
+              requestSequencer = Some(requestSequencer),
               jointLedger = jointLedger,
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposerLimiter,
@@ -285,7 +286,10 @@ object HeadMultisigRegimeManager {
         blockWeaverLimiter: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
         consensusActor: FastConsensusActor.Handle,
-        requestSequencer: RequestSequencer.Handle,
+        /** Head-peer-only: the request sequencer that accepts user submissions. `None` on a coil
+          * peer (followers don't accept user requests).
+          */
+        requestSequencer: Option[RequestSequencer.Handle] = None,
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
         /** Throttled-write handle for the SlowConsensusActor → StackComposer lane. */
