@@ -10,7 +10,6 @@ import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
 import io.circe.*
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import scala.util.Try
 import scalus.cardano.address.Address
