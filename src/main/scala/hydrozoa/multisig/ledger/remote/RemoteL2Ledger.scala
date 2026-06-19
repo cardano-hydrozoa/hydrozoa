@@ -194,12 +194,12 @@ class RemoteL2Ledger private (
         sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
 
-    /** Unsupported: the remote ledger owns its own persistence + recovery behind the WebSocket, so
-      * the host does not track or restore its commandNumber (R2b is the EUTXO reference ledger
-      * only).
+    /** The remote ledger owns its own persistence + recovery behind the WebSocket, so the host does
+      * not track its commandNumber (R2b is the EUTXO reference ledger only); always report
+      * [[L2CommandNumber.zero]].
       */
     override def currentCommandNumber: IO[L2CommandNumber] =
-        IO.raiseError(L2LedgerError("currentCommandNumber is not supported by RemoteL2Ledger"))
+        IO.pure(L2CommandNumber.zero)
 
     /** Unsupported — see [[currentCommandNumber]]. */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
