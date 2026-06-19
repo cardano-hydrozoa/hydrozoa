@@ -45,9 +45,6 @@ final case class Limiter[Msg](
                     now <- IO.realTimeInstant
                     gate = throttled.limiterTimestamp.plusMillis(throttled.minPeriod.toMillis)
                     waitMs = gate.toEpochMilli - now.toEpochMilli
-                    // TODO: IO.sleep inside receive blocks actor system shutdown for the full hold
-                    // period (up to ~3 min for long holds). Move the sleep to a background fiber
-                    // so cats-actors can cancel it on termination without waiting.
                     _ <-
                         if waitMs > 0 then
                             tracer.traceWith(
