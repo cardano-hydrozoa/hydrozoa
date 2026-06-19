@@ -140,9 +140,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 override lazy val id = fallbackTxId
             }
 
-            // Real wall-clock time is already in the valid Cardano era (post-2020).
-            // No clock warmup is needed, unlike when using TestControl.
-            now = QuantizedInstant.ofEpochSeconds(env.slotConfig, 20000000000L)
+            // Use real wall-clock time so the mock's currentSlot (also real wall-clock)
+            // advances past the voting deadline naturally as the test runs.
+            now <- lift(IO.realTimeInstant.map(t => QuantizedInstant(env.slotConfig, t)))
 
             nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
 
@@ -177,14 +177,14 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                   knownTxs = Set(fallbackTxId),
                   submittedTxs = List((Map.empty, mockFallback))
                 ),
-                mkContext = _ =>
+                mkContext = currentSlot =>
                     // Needed so that the headConfig's network, slot config, etc. is used.
                     // TODO: This should probably be factored out into a helper in CardanoBackedMock
                     //   and used by default.
                     Context(
                       fee = Coin.zero,
                       env = UtxoEnv.apply(
-                        now.toSlot.slot,
+                        currentSlot,
                         env.headConfig.cardanoProtocolParams,
                         certState = CertState.empty,
                         env.headConfig.network
