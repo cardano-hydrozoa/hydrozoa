@@ -11,7 +11,7 @@ import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{Logging, Slf4jTracer, withCtx}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -203,15 +203,28 @@ object Main extends IOApp {
         }
 
     /** Load and resolve the shared head config artifact every node shares. */
-    private def loadHeadConfig(path: String, backend: CardanoBackend[IO]): IO[HeadConfig] =
+    private def loadHeadConfig(path: String): IO[HeadConfig] =
         for {
             jsonStr <- IO.blocking(Files.readString(Path.of(path)))
-            headConfig <- HeadConfig.fromJson(jsonStr, backend).value.flatMap {
-                case Right(hc) => IO.pure(hc)
-                case Left(err) =>
-                    IO.raiseError(
-                      new RuntimeException(s"Failed to load head config from $path: $err")
-                    )
+            headConfig <- IO.fromEither {
+                import io.circe.parser
+                val result = for {
+                    network <- {
+                        given onlyNetwork: io.circe.Decoder[CardanoNetwork] =
+                            io.circe.Decoder.instance(
+                              _.downField("cardanoNetwork").as[CardanoNetwork]
+                            )
+                        parser.decode[CardanoNetwork](jsonStr)
+                    }
+                    hc <- {
+                        given hydrozoa.config.ScriptReferenceUtxos =
+                            Bootstrap.fakeScriptReferenceUtxos(network)
+                        parser.decode[HeadConfig](jsonStr)
+                    }
+                } yield hc
+                result.left.map(e =>
+                    new RuntimeException(s"Failed to load head config from $path: $e")
+                )
             }
         } yield headConfig
 
@@ -294,7 +307,7 @@ object Main extends IOApp {
               )
             )
 
-            headConfig <- Resource.eval(loadHeadConfig(headConfigPath, backend))
+            headConfig <- Resource.eval(loadHeadConfig(headConfigPath))
             ownWallet = PeerWallet.scalusWallet(env.verificationKey, env.signingKey)
             nodeConfig <- Resource.eval(
               buildNodeConfig(
