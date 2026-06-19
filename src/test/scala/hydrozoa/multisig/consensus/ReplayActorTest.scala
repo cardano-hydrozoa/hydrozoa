@@ -53,16 +53,16 @@ class ReplayActorTest extends AnyFunSuite:
       "ReplayActor routes the recovered tail into the right mailboxes (floors + in-flight stack)"
     ) {
         val c = runReplay(seedRecoverable)
-        assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        val _ = assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
         // BlockWeaver: first PollResults + the block brief (>= fastBlockMark+1 = 0).
-        assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
-        assert(hasBlock(c.bw, 5), "BW block 5")
+        val _ = assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
+        val _ = assert(hasBlock(c.bw, 5), "BW block 5")
         // FastConsensusActor: the block brief (aggregator floor softConfirmed+1).
-        assert(hasBlock(c.fca, 5), "FCA block 5")
+        val _ = assert(hasBlock(c.fca, 5), "FCA block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every HardAck (own round-1 +
         // round-2 for stack 1, plus the remote peer's).
-        assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
-        assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks")
+        val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
+        val _ = assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks")
         // StackComposer: only stack >= hardAcked+1 = 2 (stack 1 is the in-flight band, handled by
         // the handoff, not its brief).
         assert(
@@ -81,7 +81,7 @@ class ReplayActorTest extends AnyFunSuite:
 
     test("ReplayActor (head) replays the hubs' HubHardAck to SCA (coil-quorum recovery, P14)") {
         val c = runReplay(seedHubHardAck, hubs = List(HeadPeerNumber(1)))
-        assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        val _ = assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
         // The hub's HubHardAck, unwrapped to its `.ack`, reaches SlowConsensusActor.
         assert(c.sca.count(_.isInstanceOf[HardAck]) == 1, "SCA gets the hub-relayed ack")
     }
@@ -105,26 +105,26 @@ class ReplayActorTest extends AnyFunSuite:
                   p.put(StoreKey.CoilStampMark)(Map(coil -> HardAckNumber(0))),
           coils = List(coil)
         )
-        assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
+        val _ = assert(c.outcome.isRight, s"replay failed: ${c.outcome}")
         val fed = c.coilAckSeq.collect { case h: HardAck => h.hardAckNum: Int }
-        assert(fed == Vector(1, 2), s"gap = acks above the mark (1,2), none <= 0; got $fed")
+        val _ = assert(fed == Vector(1, 2), s"gap = acks above the mark (1,2), none <= 0; got $fed")
     }
 
     test(
       "ReplayActor.replay (coil) routes the coil tail (coil anchors, HubHardAck + own coil HardAck)"
     ) {
         val c = runReplayCoil(seedRecoverableCoil)
-        assert(c.outcome.isRight, s"coil replay failed: ${c.outcome}")
+        val _ = assert(c.outcome.isRight, s"coil replay failed: ${c.outcome}")
         // BlockWeaver: first PollResults + the block brief (>= coilBlockMark+1 = 3).
-        assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
-        assert(hasBlock(c.bw, 5), "BW block 5")
+        val _ = assert(c.bw.exists(_.isInstanceOf[PollResults]), "BW PollResults")
+        val _ = assert(hasBlock(c.bw, 5), "BW block 5")
         // FastConsensusActor: the block brief (aggregator floor softConfirmed+1 = 0).
-        assert(hasBlock(c.fca, 5), "FCA block 5")
+        val _ = assert(hasBlock(c.fca, 5), "FCA block 5")
         // SlowConsensusActor: the reconstructed in-flight handoff + every coil-quorum hard-ack —
         // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
-        assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
-        assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
+        val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
+        val _ = assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
         // StackComposer: only stack >= coilHardAckedStack+1 = 2 (stack 1 is the in-flight band).
         assert(
           c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
