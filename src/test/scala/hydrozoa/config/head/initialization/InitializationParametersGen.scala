@@ -11,7 +11,7 @@ import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.given_Choose_Coin
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, asUtxos}
-import hydrozoa.lib.cardano.value.coin.Distribution.unsafeNormalizeWeights
+import hydrozoa.lib.math.Distribution.unsafeNormalizeWeights
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
