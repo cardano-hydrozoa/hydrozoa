@@ -86,6 +86,32 @@ private case class WsNetwork(
     remoteHubProxies: Map[CoilPeerNumber, LiaisonProtocol.HubToCoilHandle],
 )
 
+/** Shared state assembled in `sutResource` between starting the `ActorSystem` and building the
+  * per-peer actor stacks: the mock L1 backend, the per-peer `Deferred`/`Ref` plumbing, and the
+  * settlement/coverage signals + targets consumed by the property runners.
+  *
+  *   - `cardanoBackend` — single mock L1 shared by every peer.
+  *   - `pendingConnsMap(p)` — completed in `acquireSut` with peer `p`'s full `Connections`.
+  *   - `blockBriefsMap(p)` / `stacksMap(p)` — capture sinks: every `BlockBrief.Intermediate` from
+  *     JL and every `Stack.HardConfirmed` from SCA, per peer.
+  *   - `submittedRequestIds` — every `RequestId` the model submits across the run.
+  *   - `fastSettlementSignal` / `fastSettlementTarget` — fires once every targeted request id has
+  *     surfaced in some peer's captured briefs; target is set by `beforeFinalize`.
+  *   - `slowCoverageSignal` / `slowCoverageTarget` — fires once every targeted block number is
+  *     covered by some hard-confirmed stack on *every* peer (cross-peer barrier).
+  */
+private case class PostSystemState(
+    cardanoBackend: CardanoBackend[IO],
+    pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
+    blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+    stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    submittedRequestIds: Ref[IO, Vector[RequestId]],
+    fastSettlementSignal: Deferred[IO, Unit],
+    slowCoverageSignal: Deferred[IO, Unit],
+    fastSettlementTarget: Deferred[IO, Set[RequestId]],
+    slowCoverageTarget: Deferred[IO, Set[Int]],
+)
+
 /** Selects the persistence backend for stage4 peers.
   *
   *   - [[InMemory]] (default) — per-peer [[InMemoryBackendStore]]. No disk I/O; test isolation is
@@ -113,7 +139,7 @@ case class Stage4Suite(
     override type Sut = Stage4Sut
 
     private val log: ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Suite"))
+        Slf4jTracer.sink.contramap(msg => Slf4jMsgFormat.humanFormat("Stage4.Suite")(msg)(using ctx = Map(("label", label))))
 
     /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS scheduler
       * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
@@ -151,6 +177,13 @@ case class Stage4Suite(
 
     override def canStartupNewSut(): Boolean = true
 
+    // Resources acquired:
+    //   1. `ActorSystem[IO]
+    //   2. Per-head-peer `BackendStore` (RocksDB on disk or in-memory)
+    //   3. `WsNetwork` via `transportSetup` — `Resource.pure` in Direct mode; in WebSocket, the web socket servers
+    //   4. Per-coil-peer `InMemoryBackendStore` (always in-memory).
+    //   5. `Stage4Sut` via `Resource.make` — release cancels the per-peer CardanoLiaison
+    //      polling fibers and the event-stream error drainer.
     override def sutResource(state: ModelState): Resource[IO, Stage4Sut] = {
         val multiNodeConfig = state.params.multiNodeConfig
         val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
@@ -220,19 +253,7 @@ case class Stage4Suite(
         } yield ()
 
         // ------ Post-system, pre-stack IO: backend + per-peer Deferred/Ref maps. ------
-        val postSystem: IO[
-          (
-              CardanoBackend[IO],
-              Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
-              Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
-              Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-              Ref[IO, Vector[RequestId]],
-              Deferred[IO, Unit],
-              Deferred[IO, Unit],
-              Deferred[IO, Set[RequestId]],
-              Deferred[IO, Set[Int]],
-          )
-        ] = {
+        val postSystem: IO[PostSystemState] = {
             // All peers share one mock L1 backend, starting from the merged pre-init UTxOs.
             // The head initialization tx is submitted by the protocol through normal operation.
             val genesisUtxos = state.preinitPeerUtxosL1.values.reduce(_ ++ _)
@@ -275,16 +296,16 @@ case class Stage4Suite(
                 slowCoverageSignal   <- IO.deferred[Unit]
                 fastSettlementTarget <- IO.deferred[Set[RequestId]]
                 slowCoverageTarget   <- IO.deferred[Set[Int]]
-            } yield (
-              cardanoBackend,
-              pendingConnsMap,
-              blockBriefsMap,
-              stacksMap,
-              submittedRequestIds,
-              fastSettlementSignal,
-              slowCoverageSignal,
-              fastSettlementTarget,
-              slowCoverageTarget,
+            } yield PostSystemState(
+              cardanoBackend = cardanoBackend,
+              pendingConnsMap = pendingConnsMap,
+              blockBriefsMap = blockBriefsMap,
+              stacksMap = stacksMap,
+              submittedRequestIds = submittedRequestIds,
+              fastSettlementSignal = fastSettlementSignal,
+              slowCoverageSignal = slowCoverageSignal,
+              fastSettlementTarget = fastSettlementTarget,
+              slowCoverageTarget = slowCoverageTarget,
             )
         }
 
@@ -313,6 +334,8 @@ case class Stage4Suite(
                 Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
             val scTracer: ContraTracer[IO, StackComposerEvent] =
                 Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
+
+
             val captureScaSink: ContraTracer[IO, SlowConsensusActorEvent] =
                 ContraTracer.emit[IO, SlowConsensusActorEvent] {
                     case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
@@ -881,55 +904,52 @@ case class Stage4Suite(
         for {
             _ <- Resource.eval(preSystem)
             system <- ActorSystem[IO](label)
-            postSystemState <- Resource.eval(postSystem)
-            (cardanoBackend, pendingConnsMap, blockBriefsMap, stacksMap,
-             submittedRequestIds, fastSettlementSignal, slowCoverageSignal,
-             fastSettlementTarget, slowCoverageTarget) = postSystemState
+            pss <- Resource.eval(postSystem)
             peerStackMap <- peers.toList
                 .traverse { peerNum =>
                     buildPeerStack(
                       peerNum,
                       system,
-                      cardanoBackend,
-                      pendingConnsMap,
-                      blockBriefsMap,
-                      stacksMap,
-                      submittedRequestIds,
-                      fastSettlementSignal,
-                      slowCoverageSignal,
-                      fastSettlementTarget,
-                      slowCoverageTarget,
+                      pss.cardanoBackend,
+                      pss.pendingConnsMap,
+                      pss.blockBriefsMap,
+                      pss.stacksMap,
+                      pss.submittedRequestIds,
+                      pss.fastSettlementSignal,
+                      pss.slowCoverageSignal,
+                      pss.fastSettlementTarget,
+                      pss.slowCoverageTarget,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
-            peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pendingConnsMap))
+            peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pss.pendingConnsMap))
             ws <- transportSetup(system, peerLiaisonMap)
             coilParts <- buildCoilWirings(
               system,
-              cardanoBackend,
+              pss.cardanoBackend,
               peerStackMap,
-              pendingConnsMap,
+              pss.pendingConnsMap,
               ws,
             )
             (coilAckSequencer, coilRelay, coilWirings) = coilParts
             sut <- Resource.make(
               acquireSut(
                 system,
-                cardanoBackend,
+                pss.cardanoBackend,
                 peerStackMap,
-                pendingConnsMap,
-                blockBriefsMap,
-                stacksMap,
+                pss.pendingConnsMap,
+                pss.blockBriefsMap,
+                pss.stacksMap,
                 peerLiaisonMap,
                 ws,
                 coilAckSequencer,
                 coilRelay,
                 coilWirings,
-                submittedRequestIds,
-                fastSettlementSignal,
-                slowCoverageSignal,
-                fastSettlementTarget,
-                slowCoverageTarget,
+                pss.submittedRequestIds,
+                pss.fastSettlementSignal,
+                pss.slowCoverageSignal,
+                pss.fastSettlementTarget,
+                pss.slowCoverageTarget,
               )
             )(sut =>
                 sut.liaisonTickFibers.traverse_(_.cancel) >>
@@ -1135,10 +1155,16 @@ case class Stage4Suite(
             _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
             errors <- sut.sutErrors.get
             analysisProp <- analyzeBlockBriefs(lastState, sut)
+            sortedPeers = sut.stacks.keys.toSeq.sortBy(p => p: Int)
+            stacksByPeer <- sut.stacks.toList
+                                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                                .map(_.toMap)
+            persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
+            props = analysisProp && persistenceProp
         yield
             if errors.nonEmpty then
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
-            else analysisProp
+            else props
 
     private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
         for
@@ -1195,14 +1221,13 @@ case class Stage4Suite(
               attempts = 1,
               sleep = 0.seconds,
             )
-            persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
+
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
             propStackCoverage(canonicalBriefs, canonicalStacks) &&
             propCoilParticipation(coilStacksByCoil, canonicalStacks) &&
-            effectsLandedProp &&
-            persistenceProp
+            effectsLandedProp
     }
 
     /** Post-scenario verification of the §6 producer-side persistence writes:
