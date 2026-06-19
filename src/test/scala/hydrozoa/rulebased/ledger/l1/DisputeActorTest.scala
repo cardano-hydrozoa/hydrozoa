@@ -13,12 +13,11 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.state.{TreasuryState, VoteState}
+import hydrozoa.rulebased.ledger.l1.state.{StandaloneEvacuationCommitmentOnchain, TreasuryState, VoteState}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -141,7 +140,7 @@ object DisputeActorTestHelpers {
             now <- lift(realTimeQuantizedInstant(env.slotConfig))
             currentSlot = now.toSlot
 
-            blockHeader = StandaloneEvacuationCommitment.Onchain(
+            blockHeader = StandaloneEvacuationCommitmentOnchain(
               headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = versionMajor,
               versionMinor = versionMinor,

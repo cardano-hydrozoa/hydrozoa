@@ -3,6 +3,7 @@ package hydrozoa.rulebased.ledger.l1.utxo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, RuleBasedTreasuryDatumOnchain}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryStateConversions.{toOffchain, toOnchain}
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
 import scala.collection.immutable.SortedMap
 import scala.util.{Failure, Success, Try}

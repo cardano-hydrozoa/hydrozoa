@@ -5,8 +5,9 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Vo
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.onchain.plutus.prelude.{===, Eq}
-import scalus.cardano.onchain.plutus.v3.PubKeyHash
-import scalus.uplc.builtin.Data.{FromData, ToData}
+import scalus.cardano.onchain.plutus.v3.{PubKeyHash, TokenName}
+import scalus.uplc.builtin.Builtins.serialiseData
+import scalus.uplc.builtin.Data.{FromData, ToData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 object VoteDatum {
@@ -104,4 +105,42 @@ object VoteState:
     // G1 compressed point
     type KzgCommitment = ByteString
 
+    given secFromData: FromData[StandaloneEvacuationCommitmentOnchain] = FromData.derived
+    given secToData: ToData[StandaloneEvacuationCommitmentOnchain] = ToData.derived
+
 end VoteState
+
+/** On-chain shape of a standalone evacuation commitment consumed by
+  * [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator]] as the `sec` field of
+  * a [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.VoteRedeemer]].
+  *
+  * Lives in `cardano-onchain` so the validator can reference it without a back-dependency on core.
+  * Core keeps `StandaloneEvacuationCommitment.Onchain` as a type alias pointing here.
+  */
+final case class StandaloneEvacuationCommitmentOnchain(
+    headId: TokenName,
+    versionMajor: BigInt,
+    versionMinor: BigInt,
+    commitment: VoteState.KzgCommitment
+)
+
+object StandaloneEvacuationCommitmentOnchain:
+    import VoteState.secToData
+
+    opaque type Serialized = IArray[Byte]
+
+    def apply(onchainHeader: StandaloneEvacuationCommitmentOnchain): Serialized =
+        IArray.from(serialiseData(toData(onchainHeader)).bytes)
+
+    def fromBytes(bytes: Array[Byte]): Serialized = IArray.from(bytes)
+
+    given Conversion[Serialized, IArray[Byte]] = identity
+
+    given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
+
+    given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
+
+    extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
+
+    trait Section:
+        def headerSerialized: Serialized
