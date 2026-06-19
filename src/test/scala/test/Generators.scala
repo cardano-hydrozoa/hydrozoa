@@ -5,9 +5,9 @@ import cats.syntax.all.toTraverseOps
 import cats.{Hash as _, *}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.value.coin.Distribution
-import hydrozoa.lib.cardano.value.coin.Distribution.NormalizedWeights
 import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.math.Distribution
+import hydrozoa.lib.math.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Tx}

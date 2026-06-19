@@ -290,7 +290,6 @@ class CodecsTest extends AnyFunSuite {
         // RequestId codec as the ledger scope (where blockBrief events are derived) — there is no
         // transport-local codec anymore, so both fall through to the type's companion.
         val transportShape = {
-            import hydrozoa.multisig.consensus.transport.Codecs.given
             rid.asJson
         }
         val ledgerShape = {
