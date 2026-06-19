@@ -345,11 +345,11 @@ final case class SlowConsensusActor(
         evac = ackAggregator.collectSecSignatures(restricted, secSigners)
         signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
         hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
-        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
         _ <- persistHardConfirmation(stackNum, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
+        _ <- tracer.traceWith(SlowConsensusActorEvent.StackHardConfirmed(hardConfirmed))
     } yield ()
 
     /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6

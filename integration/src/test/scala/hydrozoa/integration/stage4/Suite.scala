@@ -139,7 +139,7 @@ case class Stage4Suite(
     override type Sut = Stage4Sut
 
     private val log: ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(msg => Slf4jMsgFormat.humanFormat("Stage4.Suite")(msg)(using ctx = Map(("label", label))))
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Suite"))
 
     /** TestControl is incompatible with real sockets — virtual time doesn't drive the OS scheduler
       * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
