@@ -35,13 +35,12 @@ import hydrozoa.multisig.ledger.joint.JointLedger.{Done, Producing}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import monocle.Focus
 import monocle.Focus.focus
 import org.scalacheck.*
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.PropertyM.monadForPropM
 import org.scalacheck.util.Pretty
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -130,60 +129,56 @@ object JointLedgerTestHelpers {
         type Request = FastConsensusActor.Request | GetState.Sync
     }
 
-    val defaultInitializer: PropertyM[IO, TestR] = {
-        for {
-            multiNodeConfig <- PropertyM.pick[IO, MultiNodeConfig](
-              for {
-                  testPeersSpec <- TestPeersSpec.generate()
-                  mnc <- MultiNodeConfig.generate(
-                    testPeersSpec.withPeersNumberSpec(PeersNumberSpec.Exact(1))
+    val defaultResource: PropertyM[IO, Resource[IO, TestR]] =
+        PropertyM
+            .pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generate(
+                    TestPeersSpec.default.withPeersNumberSpec(PeersNumberSpec.Exact(1))
                   )()
-              } yield mnc
             )
+            .map { multiNodeConfig =>
+                val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
+                for {
+                    system <- ActorSystem[IO]("JointLedger")
+                    consensusAgent <- Resource.eval(system.actorOf(ConsensusAgent()))
+                    stackComposerSink <- Resource.eval(system.actorOf(StackComposerSink()))
 
-            // testPeers <- PropertyM.pick[IO, TestHeadPeers](generateTestPeers())
-            // config <- PropertyM.pick[IO, NodeConfig](
-            //  generateNodeConfig(Exact(SeedPhrase.Yaci, testPeers.headPeers.nHeadPeers.toInt))()
-            // )
-
-            config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
-
-            // We should be using _.use instead...
-            system <- PropertyM.run(ActorSystem[IO]("JointLedger").allocated.map(_._1))
-
-            consensusAgent <- PropertyM.run(system.actorOf(ConsensusAgent()))
-            stackComposerSink <- PropertyM.run(system.actorOf(StackComposerSink()))
-
-            eutxoLedger <- PropertyM.run(EutxoL2Ledger(config))
-            persistenceBackend <- PropertyM.run(InMemoryBackendStore.open.allocated.map(_._1))
-            persistence <- PropertyM.run(
-              Persistence.fromBackend(persistenceBackend)(using config)
-            )
-            jointLedger <- PropertyM.run(
-              system.actorOf(
-                JointLedger(
-                  config,
-                  JointLedger.Connections(
-                    fastConsensusActor = consensusAgent.narrowRequest[FastConsensusActor.Request],
-                    stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
-                    headPeerLiaisons = List()
-                  ),
-                  eutxoLedger,
-                  Slf4jTracer.sink.contramap(
-                    JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
-                  ),
-                  persistence
+                    eutxoLedger <- Resource.eval(EutxoL2Ledger(config))
+                    persistenceTracer =
+                        Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                    persistenceBackend <- InMemoryBackendStore.open(persistenceTracer)
+                    persistence <- Resource.eval(
+                      Persistence.fromBackend(persistenceBackend, persistenceTracer)(using
+                        config
+                      )
+                    )
+                    jointLedger <- Resource.eval(
+                      system.actorOf(
+                        JointLedger(
+                          config,
+                          JointLedger.Connections(
+                            fastConsensusActor =
+                                consensusAgent.narrowRequest[FastConsensusActor.Request],
+                            stackComposer = stackComposerSink.narrowRequest[StackComposer.Request],
+                            headPeerLiaisons = List()
+                          ),
+                          eutxoLedger,
+                          Slf4jTracer.sink.contramap(
+                            JointLedgerEventFormat.humanFormat(HeadPeerNumber.zero)
+                          ),
+                          persistence
+                        )
+                      )
+                    )
+                } yield TestR(
+                  multiNodeConfig = multiNodeConfig,
+                  config = config,
+                  actorSystem = system,
+                  jointLedger = jointLedger,
+                  consensusAgent = consensusAgent
                 )
-              )
-            )
-        } yield TestR(
-          multiNodeConfig = multiNodeConfig,
-          config = config,
-          actorSystem = system,
-          jointLedger = jointLedger,
-          consensusAgent = consensusAgent
-        )
-    }
+            }
 
     /** The "environment" that is contained in the ReaderT of the JLTest
       */
@@ -486,8 +481,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     //    - Sorting does not change the number of elements
     //    - The sequences of deposits grouped by the same start times are all sub-sequences of the unsorted stream.
     val _ = property("deposit sorting") = run(
-      // FIXME: initializer is too bulky, we can reduce it significantly
-      initializer = defaultInitializer,
+      // FIXME: resource is too bulky, we can reduce it significantly
+      resource = defaultResource,
       testM = {
           def genEventStream(
               config: CardanoNetwork.Section & TxTiming.Section,
@@ -676,7 +671,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property("Joint Ledger Happy Path") = run(
-      initializer = defaultInitializer,
+      resource = defaultResource,
       testM = for {
           env <- ask
 
@@ -833,7 +828,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property("Accepts deposit registration with sensible submission deadline") = run(
-      initializer = defaultInitializer,
+      resource = defaultResource,
       testM = for {
           env <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)
@@ -878,7 +873,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
     )
 
     val _ = property("Rejects deposit registration with expired submission deadline") = run(
-      initializer = defaultInitializer,
+      resource = defaultResource,
       testM = for {
           env <- ask
           blockStartTime <- startBlockNow(BlockNumber.zero.increment)

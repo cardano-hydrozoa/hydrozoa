@@ -9,6 +9,7 @@ import hydrozoa.multisig.persistence.{ArrivalStamp, JournalKey, JournalValue}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import scala.math.Ordering.Implicits.*
 
 /** Property tests for [[ArrivalOrderedMerge]] — the §5.4 stamp-ordered interleaving of journal
   * tails.
@@ -41,8 +42,12 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
 
     /** A stable projection for multiset / order comparison (Array has no structural equality). */
     private def project(e: RawJournalEntry): (Int, Long, String, String) =
-        (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name,
-         e.key.encode.map(b => f"${b & 0xff}%02x").mkString)
+        (
+          e.stamp.generation,
+          e.stamp.monotonicNanos,
+          e.key.cf.name,
+          e.key.encode.map(b => f"${b & 0xff}%02x").mkString
+        )
 
     test("merge output is non-decreasing by (generation, monotonicNanos)") {
         forAll(Gen.listOf(genEntry)) { entries =>

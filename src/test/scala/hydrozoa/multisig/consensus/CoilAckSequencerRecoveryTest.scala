@@ -2,13 +2,15 @@ package hydrozoa.multisig.consensus
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -71,10 +73,12 @@ class CoilAckSequencerRecoveryTest extends AnyFunSuite:
 
     /** Open a fresh in-memory store, seed it, and run `recover` against this hub. */
     private def run(seed: Persistence[IO] => IO[Unit]): CoilAckSequencer.Recovered =
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 for {
-                    p <- Persistence.fromBackend(backend)
+                    p <- Persistence.fromBackend(backend, persistenceTracer)
                     _ <- seed(p)
                     recovered <- CoilAckSequencer.recover(p, hub)
                 } yield recovered

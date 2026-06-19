@@ -26,8 +26,8 @@ import scala.concurrent.duration.DurationInt
   * entirely in the config seam (`OwnCoilPeerPrivate`) — so the only structural differences are:
   *   - exactly one liaison ([[liaison.PeerLiaisonCoilToHub]]), toward the coil peer's hub head peer
   *     (§5.5) [doc-ref], instead of the head mesh;
-  *   - no user-request surface (the spawned [[RequestSequencer]] is inert: no HTTP server routes to
-  *     it, and a coil peer authors no requests).
+  *   - no user-request surface (no [[RequestSequencer]] is spawned; `Connections.requestSequencer`
+  *     stays `None`).
   *
   * It completes the shared [[HeadMultisigRegimeManager.Connections]] so the reused child actors
   * resolve their slots exactly as on a head.
@@ -108,11 +108,6 @@ trait CoilMultisigRegimeManager(
               FastConsensusActor(config, pendingConnections, fcaTracer, persistence)
             )
 
-            // No-op placeholder: a coil peer authors no user requests, but the reused actors resolve
-            // the whole `Connections`, so the slot must still hold a valid handle.
-            // TODO: restructure `Connections` (a coil-specific subset, or make request-only slots
-            // optional) so a coil peer doesn't carry this inert slot at all — rule of least knowledge.
-            requestSequencer <- context.actorOf(NoopActor[RequestSequencer.Request])
             jointLedger <- context.actorOf(
               JointLedger(config, pendingConnections, l2Ledger, jlTracer, persistence)
             )
@@ -143,7 +138,6 @@ trait CoilMultisigRegimeManager(
               blockWeaverLimiter = blockWeaver,
               cardanoLiaison = cardanoLiaison,
               consensusActor = consensusActor,
-              requestSequencer = requestSequencer,
               jointLedger = jointLedger,
               stackComposer = stackComposer,
               stackComposerLimiter = stackComposer,

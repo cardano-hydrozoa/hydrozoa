@@ -17,8 +17,10 @@ import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestW
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import org.scalacheck.Gen
+import cats.effect.IO
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
+import org.scalacheck.util.Pretty
+import org.scalacheck.{Gen, PropertyM}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -427,18 +429,23 @@ end CommandGenerators
 
 object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
 
+    private def pick[A](gen: Gen[A])(using pp: A => Pretty): PropertyM[IO, A] =
+        PropertyM.pick[IO, A](gen)
+
     override def genNextCommand(
         state: ModelState
-    ): Gen[AnyCommand[ModelState, Stage4Sut]] =
+    ): PropertyM[IO, AnyCommand[ModelState, Stage4Sut]] =
         // Single global Poisson superposition: sample (peer, gap-since-last-event). Each peer's
         // marginal stream is exactly Poisson at its configured rate, so peers with smaller mean
         // inter-arrival are picked proportionally more often and the global rate is Σλ_p.
-        for {
-            (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
-              state.params.meanInterArrivalTimes
-            )
-            cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
-        } yield cmd
+        pick(
+            for {
+                (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
+                  state.params.meanInterArrivalTimes
+                )
+                cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
+            } yield cmd
+        )
 
     private def genCommandForPeer(
         peerNum: HeadPeerNumber,

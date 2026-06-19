@@ -68,16 +68,6 @@ object InitializationTx {
         type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
             TxTiming.Section & InitializationParameters.Section
 
-        private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTx")
-
-        private def time[A](label: String)(block: => A): A = {
-            val start = System.nanoTime()
-            val result = block
-            val elapsed = (System.nanoTime() - start) / 1_000_000.0
-            logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
-            result
-        }
-
         final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
 
             import Build.*
@@ -100,13 +90,13 @@ object InitializationTx {
                           ""
                     )
 
-                unbalanced <- time("TransactionBuilder.build") {
+                unbalanced <- {
                     TransactionBuilder
                         .build(config.network, Steps())
                         .explainConst("Initialization tx build steps failed.")
                 }
 
-                finalized <- time("finalizeContext") {
+                finalized <- {
                     TxBuilder
                         .finalizeContext(unbalanced)
                         .explainConst("Initialization tx failed to finalize")

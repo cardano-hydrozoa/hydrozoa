@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence.recovery
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.syntax.traverse.*
+import cats.syntax.all.*
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -173,4 +174,5 @@ class JournalScanTest extends AnyFunSuite:
     }
 
     private def withStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
-        InMemoryBackendStore.open.use(prog).unsafeRunSync()
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore.open(persistenceTracer).use(prog).unsafeRunSync()

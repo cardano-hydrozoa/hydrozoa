@@ -5,7 +5,6 @@ import cats.syntax.all.toTraverseOps
 import cats.{Hash as _, *}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.logging.Logging
 import hydrozoa.lib.math.Distribution
 import hydrozoa.lib.math.Distribution.NormalizedWeights
 import hydrozoa.multisig.ledger
@@ -54,11 +53,6 @@ given genMonad: Monad[Gen] = new Monad[Gen] {
 //   We should lift the config into a `case class Generators(config : Generators.Config)` or a Reader Equivalent
 object Generators {
     export Generators.Hydrozoa.ArbitraryInstances.given
-
-    // This guy is used everywhere through tests to log some traces when generating various things.
-    // Use:
-    //   - trace level for diversity traces (z-print-results property)
-    val loggerGenerators = Logging.logger("Generators")
 
     /** NOTE: generators here are opinionated. They are not directly suitable for upstreaming and
       * contain reasonable, hydrozoa-specific defaults.

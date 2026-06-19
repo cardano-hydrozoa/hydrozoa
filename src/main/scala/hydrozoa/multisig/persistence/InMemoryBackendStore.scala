@@ -1,7 +1,8 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.{IO, Ref, Resource}
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.persistence.PersistenceEvent.{OpenInMemoryReady, OpenInMemoryStart}
 import scala.collection.immutable.TreeMap
 
 /** An in-memory [[BackendStore]] for tests. Mirrors the RocksDB contract (atomic batches across
@@ -12,8 +13,6 @@ import scala.collection.immutable.TreeMap
   * for production / on-disk persistence.
   */
 object InMemoryBackendStore:
-
-    private val logger = Logging.loggerIO("Persistence")
 
     private given byteVectorOrdering: Ordering[Vector[Byte]] =
         Ordering.Implicits.seqOrdering(
@@ -27,11 +26,12 @@ object InMemoryBackendStore:
       * any [[Cf]] as an empty keyspace until first written. So it needs no config-derived CF list
       * (§7.1, the per-author split) — a CF the code touches simply springs into being.
       */
-    def open: Resource[IO, BackendStore[IO]] =
+    def open(tracer: ContraTracer[IO, PersistenceEvent]): Resource[IO, BackendStore[IO]] =
         Resource.eval(
           for
-              _ <- logger.info("opening in-memory backend")
+              _ <- tracer.traceWith(OpenInMemoryStart)
               state <- Ref.of[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]](Map.empty)
+              _ <- tracer.traceWith(OpenInMemoryReady(Cf.fixed.size))
           yield new Impl(state)
         )
 

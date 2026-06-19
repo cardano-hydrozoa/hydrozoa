@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -81,25 +82,29 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 coilSignatures = coilSigs
               )
           ),
-          PropertyM.pick(
-            MultiNodeConfig
-                .generate(TestPeersSpec.default)(
-                  generateNodeOperationEvacuationConfig = fastEvacConfig
-                )
-                .label("MultiNodeConfig")
-          )
+          PropertyM
+              .pick[IO, MultiNodeConfig](
+                MultiNodeConfig
+                    .generate(TestPeersSpec.default)(
+                      generateNodeOperationEvacuationConfig = fastEvacConfig
+                    )
+                    .label("MultiNodeConfig")
+              )
+              .map(Resource.pure[IO, MultiNodeConfig](_))
         )
 
     lazy val _ = property("evacuation resolves via abstain: treasury present, no votes remain") =
         run(
           scenario(mkAction = (_, _, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
-          PropertyM.pick(
-            MultiNodeConfig
-                .generate(TestPeersSpec.default)(
-                  generateNodeOperationEvacuationConfig = fastEvacConfig
-                )
-                .label("MultiNodeConfig")
-          )
+          PropertyM
+              .pick[IO, MultiNodeConfig](
+                MultiNodeConfig
+                    .generate(TestPeersSpec.default)(
+                      generateNodeOperationEvacuationConfig = fastEvacConfig
+                    )
+                    .label("MultiNodeConfig")
+              )
+              .map(Resource.pure[IO, MultiNodeConfig](_))
         )
 
     /** Shared happy-path scenario: synthesize the post-fallback UTxO set, spawn the
@@ -136,9 +141,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                 override lazy val id = fallbackTxId
             }
 
-            // Real wall-clock time is already in the valid Cardano era (post-2020).
-            // No clock warmup is needed, unlike when using TestControl.
-            now = QuantizedInstant.ofEpochSeconds(env.slotConfig, 20000000000L)
+            // Use real wall-clock time so the mock's currentSlot (also real wall-clock)
+            // advances past the voting deadline naturally as the test runs.
+            now <- lift(IO.realTimeInstant.map(t => QuantizedInstant(env.slotConfig, t)))
 
             nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
 
@@ -150,7 +155,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             )
 
             // block header: all peers vote for the same commitment (happy path).
-            blockHeader = StandaloneEvacuationCommitment.Onchain(
+            blockHeader = StandaloneEvacuationCommitmentOnchain(
               headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = BigInt(1),
               versionMinor = BigInt(1),
@@ -173,14 +178,14 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                   knownTxs = Set(fallbackTxId),
                   submittedTxs = List((Map.empty, mockFallback))
                 ),
-                mkContext = _ =>
+                mkContext = currentSlot =>
                     // Needed so that the headConfig's network, slot config, etc. is used.
                     // TODO: This should probably be factored out into a helper in CardanoBackedMock
                     //   and used by default.
                     Context(
                       fee = Coin.zero,
                       env = UtxoEnv.apply(
-                        now.toSlot.slot,
+                        currentSlot,
                         env.headConfig.cardanoProtocolParams,
                         certState = CertState.empty,
                         env.headConfig.network
@@ -272,7 +277,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               EvacuationOutputPlaceId -> nEvacs,
               ResolvedTreasuryPlaceId -> 1,
               CollateralPlaceId -> nPeers,
-              AmbientPlaceId -> env.nHeadPeers
             )
 
             _ <- assertWith(

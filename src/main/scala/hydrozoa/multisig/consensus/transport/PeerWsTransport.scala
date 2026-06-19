@@ -6,9 +6,10 @@ import cats.syntax.all.*
 import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
+import hydrozoa.multisig.consensus.transport.PeerWsTransportEvent.*
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
@@ -36,9 +37,8 @@ final class PeerWsTransport private (
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val remotes: Map[HeadPeerId, Uri],
+    private val tracer: ContraTracer[IO, PeerWsTransportEvent],
 )(using CardanoNetwork.Section) {
-
-    private val logger = Logging.loggerIO(s"PeerWsTransport.${ownPeerId.peerNum: Int}")
 
     /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
       * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
@@ -56,14 +56,11 @@ final class PeerWsTransport private (
                 val line = HeadFrame.encode(HeadFrame.Msg(wire))
                 outboxes.get(remote) match {
                     case Some(q) => q.offer(line)
-                    case None =>
-                        logger.warn(s"send: no outbox for remote=${remote.peerNum: Int}")
+                    case None    => tracer.traceWith(NoOutboxForRemote(remote))
                 }
             // TODO: this should be panic at least, better should be not possible by types @Claude
             case None =>
-                logger.warn(
-                  s"send: dropping non-wire request to remote=${remote.peerNum: Int}: $request"
-                )
+                tracer.traceWith(DroppingNonWireRequest(remote))
         }
 
     private def dispatchInbound(
@@ -73,11 +70,8 @@ final class PeerWsTransport private (
         inboundRef.get.flatMap { m =>
             m.get(remote) match {
                 case Some(liaison) => liaison ! payload
-                case None          =>
-                    // TODO This may be panic, but then there will be a very simple way to shut down any peer
-                    logger.warn(
-                      s"inbound from remote=${remote.peerNum: Int} but no liaison registered"
-                    )
+                // TODO This may be panic, but then there will be a very simple way to shut down any peer
+                case None => tracer.traceWith(NoLiaisonForInbound(remote))
             }
         }
 
@@ -90,14 +84,14 @@ final class PeerWsTransport private (
                 // Hello is only valid on the first frame; subsequent ones ignored.
                 IO.unit
             case Left(err) =>
-                logger.warn(
-                  s"failed to decode frame from remote=${remote.peerNum: Int}: ${err.getMessage}"
-                )
+                tracer.traceWith(ClientDecodeError(remote, err))
         }
 
-    /** Long-running dialer for a single remote. Reconnects with exponential backoff (capped).
-      * Outbox is preserved across reconnects.
+    /** Long-running dialer for a single remote. Attempts to reconnect forever with a 1-second
+      * delay. Outbox is preserved across reconnects.
       */
+    // FIXME: The comment previously read "attempts to reconnect with an exponential backoff", but this wasn't
+    //   reflected in the code. I'm leaving the old behavior until someone can say which is correct.
     private def dialerLoop(
         client: WSClient[IO],
         remote: HeadPeerId,
@@ -108,14 +102,12 @@ final class PeerWsTransport private (
         def once: IO[Unit] =
             client.connectHighLevel(request).use { conn =>
                 val helloLine = HeadFrame.encode(HeadFrame.Hello(ownPeerId.peerNum))
-                logger.info(s"dialer: connected to remote=${remote.peerNum: Int} at $uri") >>
+                tracer.traceWith(DialerConnected(remote, uri)) >>
                     conn.send(WSFrame.Text(helloLine)) >>
                     WsDuplex.run(conn, outboxes(remote), onLine(remote))
             }
 
-        val attempt: IO[Unit] = once.handleErrorWith(e =>
-            logger.warn(s"dialer to remote=${remote.peerNum: Int} failed: ${e.getMessage}")
-        )
+        val attempt: IO[Unit] = once.handleErrorWith(e => tracer.traceWith(DialerFailed(remote, e)))
 
         (attempt >> IO.sleep(1.second)).foreverM
     }
@@ -144,21 +136,18 @@ final class PeerWsTransport private (
                             val ownPn: Int = ownPeerId.peerNum
                             if pn < ownPn && pn >= 0 then {
                                 val remote = HeadPeerId(pn, ownPeerId.nHeadPeers)
-                                logger.info(s"server: accepted inbound from remote=$pn") >>
+                                tracer.traceWith(ServerAccepted(remote)) >>
                                     peerD.complete(remote).void
                             } else {
-                                logger.warn(
-                                  s"server: rejecting hello from peerNum=$pn " +
-                                      s"(own=$ownPn, must be lower)"
-                                )
+                                tracer.traceWith(ServerRejectedHello(pn, ownPn))
                             }
                         case Right(HeadFrame.Msg(payload)) =>
                             peerD.tryGet.flatMap {
                                 case Some(remote) => dispatchInbound(remote, payload)
-                                case None => logger.warn("server: msg before hello, dropping")
+                                case None         => tracer.traceWith(ServerMsgBeforeHello)
                             }
                         case Left(err) =>
-                            logger.warn(s"server: failed to decode frame: ${err.getMessage}")
+                            tracer.traceWith(ServerDecodeError(err))
                     }
                 case _ => IO.unit
             }
@@ -178,7 +167,11 @@ final class PeerWsTransport private (
         remotes.toList
             .filter { case (rid, _) => (rid.peerNum: Int) > (ownPeerId.peerNum: Int) }
             .traverse_ { case (rid, uri) =>
-                Resource.make(dialerLoop(client, rid, uri).start)(_.cancel).void
+                Resource
+                    .make(dialerLoop(client, rid, uri).start)(fiber =>
+                        tracer.traceWith(DialerStopped(rid, uri)) >> fiber.cancel
+                    )
+                    .void
             }
 }
 
@@ -192,15 +185,18 @@ object PeerWsTransport {
       *   identity of this peer.
       * @param remotes
       *   remote peers to their WebSocket URI (used for dialing higher-numbered peers).
+      * @param tracer
+      *   sink for transport-level events.
       */
     def create(
         ownPeerId: HeadPeerId,
         remotes: Map[HeadPeerId, Uri],
+        tracer: ContraTracer[IO, PeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[PeerWsTransport] =
         for {
             outboxes <- remotes.keys.toList
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new PeerWsTransport(ownPeerId, outboxes, inboundRef, remotes)
+        } yield new PeerWsTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
 }

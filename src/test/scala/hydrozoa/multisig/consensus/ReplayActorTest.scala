@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
+import cats.syntax.all.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
@@ -11,6 +12,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
@@ -19,7 +21,7 @@ import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, Block
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, Cf, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -124,7 +126,10 @@ class ReplayActorTest extends AnyFunSuite:
         // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
         val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
-        val _ = assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
+        val _ = assert(
+          c.sca.count(_.isInstanceOf[HardAck]) == 3,
+          "SCA 3 hard-acks (2 own coil + 1 hub)"
+        )
         // StackComposer: only stack >= coilHardAckedStack+1 = 2 (stack 1 is the in-flight band).
         assert(
           c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
@@ -154,11 +159,13 @@ class ReplayActorTest extends AnyFunSuite:
         val own = ownNum
         val peers = config.headPeerIds.map(_.peerNum).toList
         val treasuryAddress = config.initializationTx.treasuryProduced.address
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("replay-test").use(system =>
                     for {
-                        persistence <- Persistence.fromBackend(backend)
+                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
                         cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)
@@ -201,11 +208,13 @@ class ReplayActorTest extends AnyFunSuite:
         val peers = config.headPeerIds.map(_.peerNum).toList
         val hubs = List(HeadPeerNumber(1))
         val treasuryAddress = config.initializationTx.treasuryProduced.address
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("replay-coil-test").use(system =>
                     for {
-                        persistence <- Persistence.fromBackend(backend)
+                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
                         cardanoBackend <- CardanoBackendMock.mockIO(MockState(Map.empty))
                         bwSink <- Ref.of[IO, Vector[BlockWeaver.Request]](Vector.empty)
                         fcaSink <- Ref.of[IO, Vector[FastConsensusActor.Request]](Vector.empty)

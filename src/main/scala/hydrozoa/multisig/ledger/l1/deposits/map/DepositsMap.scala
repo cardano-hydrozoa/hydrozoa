@@ -1,16 +1,18 @@
 package hydrozoa.multisig.ledger.l1.deposits.map
 
+import cats.Monad
+import cats.syntax.flatMap.*
+import cats.syntax.foldable.*
+import cats.syntax.functor.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, SettlementTxEndTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.DepositAbsorptionStartTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, given_Ordering_DepositAbsorptionStartTime}
-import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Entry
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.Partition.Compartment
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap.{Entry, Partition}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import io.circe.syntax.*
 import scala.collection.immutable.{Queue, TreeMap}
 
 /** deposits in a TreeMap according to their absorption start time. The Tree map ensures that the
@@ -21,8 +23,6 @@ import scala.collection.immutable.{Queue, TreeMap}
 final case class DepositsMap private[map] (
     treeMap: TreeMap[DepositAbsorptionStartTime, Queue[Entry]]
 ) {
-
-    private val logger = Logging.logger("DepositsMap")
 
     /** Append a request to the end of the queue of requests with the same start time.
       */
@@ -76,55 +76,44 @@ final case class DepositsMap private[map] (
       *   - NotInPollResults -- mature, but not eligible for absorption because the deposit is not on chain
       *   - - expire -- deposits absorption window is expire before this settlement tx's TTL is reached
       */
-    def partition(
+    def partition[F[_]: Monad](tracer: ContraTracer[F, DepositsMapEvent])(
         blockCreationEndTime: BlockCreationEndTime,
         settlementTxEndTime: SettlementTxEndTime,
         pollResults: PollResults
-    ): DepositsMap.Partition = {
-        logger.debug(
-          "[partition]" +
-              s"\n\t blockCreationEndTime: $blockCreationEndTime" +
-              s"\n\t settlementTxEndTime: $settlementTxEndTime" +
-              s"\n\t pollResults: ${pollResults.utxos.asJson}"
-        )
-        treeMap.foldLeft(DepositsMap.Partition.empty) {
-            case (outerAcc, (_absorptionStartTime, depositQueue)) =>
-                depositQueue.foldLeft(outerAcc) { case (innerAcc, entry) =>
-                    import DepositsMap.Partition.Compartment.*
-                    import entry.*
-
-                    val isImmature = TxTiming.depositIsImmature(
-                      depositUtxo.absorptionStartTime,
-                      blockCreationEndTime
-                    )
-
-                    val isExpired = TxTiming.depositIsExpired(
-                      settlementTxEndTime,
-                      depositUtxo.absorptionEndTime
-                    )
-
-                    val isExistent = pollResults.utxos.contains(depositUtxo.toUtxo.input)
-
+    ): F[DepositsMap.Partition] =
+        for {
+            _ <- tracer.traceWith(
+              DepositsMapEvent.PartitionStarted(
+                blockCreationEndTime,
+                settlementTxEndTime,
+                pollResults
+              )
+            )
+            result <- treeMap.toList.foldM(Partition.empty) { case (outerAcc, (_, depositQueue)) =>
+                depositQueue.toList.foldM(outerAcc) { case (innerAcc, entry) =>
+                    import Compartment.*
+                    val isImmature =
+                        TxTiming.depositIsImmature(
+                          entry.depositUtxo.absorptionStartTime,
+                          blockCreationEndTime
+                        )
+                    val isExpired =
+                        TxTiming.depositIsExpired(
+                          settlementTxEndTime,
+                          entry.depositUtxo.absorptionEndTime
+                        )
+                    val isExistent = pollResults.utxos.contains(entry.depositUtxo.toUtxo.input)
                     val compartment =
-                        if isImmature then {
-                            logger.debug(s"$entry is immature.")
-                            Immature
-                        } else if isExpired then {
-                            logger.debug(s"$entry is expired (rejected).")
-                            Expired
-                        } else if isExistent then {
-                            logger.debug(s"$entry is eligible")
-                            Eligible
-                        } else {
-                            logger.debug(s"$entry is mature, but not in the poll results.")
-                            NotInPollResults
-                        }
-
-                    innerAcc.append(compartment, entry)
-
+                        if isImmature then Immature
+                        else if isExpired then Expired
+                        else if isExistent then Eligible
+                        else NotInPollResults
+                    tracer
+                        .traceWith(DepositsMapEvent.EntryClassified(entry, compartment))
+                        .as(innerAcc.append(compartment, entry))
                 }
-        }
-    }
+            }
+        } yield result
 }
 
 object DepositsMap {

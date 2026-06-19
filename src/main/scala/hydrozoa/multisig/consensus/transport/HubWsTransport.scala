@@ -5,10 +5,11 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHubToCoil}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
+import hydrozoa.multisig.consensus.transport.HubWsTransportEvent.*
 import org.http4s.HttpRoutes
 import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
@@ -26,9 +27,8 @@ import org.http4s.websocket.WebSocketFrame
 final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
+    private val tracer: ContraTracer[IO, HubWsTransportEvent],
 )(using CardanoNetwork.Section) {
-
-    private val logger = Logging.loggerIO("HubWsTransport")
 
     /** Wire a local PeerLiaisonHubToCoil handle as the inbound dispatch target for the given coil
       * peer. Must be called before that coil's link starts receiving traffic.
@@ -43,10 +43,10 @@ final class HubWsTransport private (
                 val line = CoilFrame.encode(CoilFrame.Msg(wire))
                 outboxes.get(coil) match {
                     case Some(q) => q.offer(line)
-                    case None    => logger.warn(s"send: no outbox for coil=${coil.convert}")
+                    case None    => tracer.traceWith(NoOutboxForCoil(coil))
                 }
             case None =>
-                logger.warn(s"send: dropping non-wire request to coil=${coil.convert}: $request")
+                tracer.traceWith(DroppingNonWireRequest(coil, request.toString))
         }
 
     private def dispatchInbound(coil: CoilPeerNumber, payload: CoilFrame.Wire): IO[Unit] =
@@ -56,14 +56,11 @@ final class HubWsTransport private (
                 inboundRef.get.flatMap { m =>
                     m.get(coil) match {
                         case Some(liaison) => liaison ! p
-                        case None =>
-                            logger.warn(
-                              s"inbound from coil=${coil.convert} but no liaison registered"
-                            )
+                        case None          => tracer.traceWith(NoLiaisonForInbound(coil))
                     }
                 }
             case other =>
-                logger.warn(s"unexpected hub-bound wire from coil=${coil.convert}: $other")
+                tracer.traceWith(UnexpectedInboundWire(coil, other.toString))
         }
 
     private def serverHandler(wsb: WebSocketBuilder2[IO]): IO[org.http4s.Response[IO]] =
@@ -83,19 +80,16 @@ final class HubWsTransport private (
                         case Right(CoilFrame.Hello(coilNum)) =>
                             val coil = CoilPeerNumber(coilNum)
                             if outboxes.contains(coil) then
-                                logger.info(s"coil server: accepted inbound from coil=$coilNum") >>
+                                tracer.traceWith(ServerAccepted(coilNum)) >>
                                     coilD.complete(coil).void
-                            else
-                                logger.warn(
-                                  s"coil server: rejecting hello from unknown coil=$coilNum"
-                                )
+                            else tracer.traceWith(ServerRejectedHello(coilNum))
                         case Right(CoilFrame.Msg(payload)) =>
                             coilD.tryGet.flatMap {
                                 case Some(coil) => dispatchInbound(coil, payload)
-                                case None => logger.warn("coil server: msg before hello, dropping")
+                                case None       => tracer.traceWith(ServerMsgBeforeHello)
                             }
                         case Left(err) =>
-                            logger.warn(s"coil server: failed to decode frame: ${err.getMessage}")
+                            tracer.traceWith(ServerDecodeError(err))
                     }
                 case _ => IO.unit
             }
@@ -116,12 +110,13 @@ object HubWsTransport {
       * coil's liaison once it is spawned.
       */
     def create(
-        coils: List[CoilPeerNumber]
+        coils: List[CoilPeerNumber],
+        tracer: ContraTracer[IO, HubWsTransportEvent],
     )(using CardanoNetwork.Section): IO[HubWsTransport] =
         for {
             outboxes <- coils
                 .traverse(c => Queue.unbounded[IO, String].map(c -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[CoilPeerNumber, PeerLiaisonHubToCoil.Handle])
-        } yield new HubWsTransport(outboxes, inboundRef)
+        } yield new HubWsTransport(outboxes, inboundRef, tracer)
 }
