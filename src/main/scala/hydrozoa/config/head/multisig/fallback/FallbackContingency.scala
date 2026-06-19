@@ -144,17 +144,11 @@ object FallbackContingency {
         private def fallbackTxFee: Coin = config.maxNonPlutusTxFee
 
         private def collateralDeposit(tallyTxFee: Coin, voteTxFee: Coin): Coin = {
-            import hydrozoa.lib.cardano.value.coin.Coin as HCoin
-            import hydrozoa.lib.cardano.value.coin.Coin.coinMax
-
-            val c1 = HCoin.unsafeApply(collateralUtxoMinLovelace.value)
-            val c2 = HCoin.unsafeApply(tallyTxFee.value)
-            val c3 = HCoin.unsafeApply(voteTxFee.value)
-
-            val max = List(c1, c2, c3).coinMax
-            val ret = max *~ Rational(config.cardanoProtocolParams.collateralPercentage, 100)
-
-            Coin(ret.underlying.ceil.toLong)
+            val maxLovelace =
+                List(collateralUtxoMinLovelace.value, tallyTxFee.value, voteTxFee.value).max
+            val scaled =
+                Rational(config.cardanoProtocolParams.collateralPercentage, 100) * maxLovelace
+            Coin(scaled.ceil.toLong)
         }
 
         private def noLiabilitesTreasuryMinLovelace: Coin =

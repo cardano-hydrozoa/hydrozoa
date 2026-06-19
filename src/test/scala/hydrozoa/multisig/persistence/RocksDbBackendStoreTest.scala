@@ -22,6 +22,13 @@ import org.scalatest.funsuite.AnyFunSuite
   */
 class RocksDbBackendStoreTest extends AnyFunSuite:
 
+    /** The config-derived CF set these tests open over (§7.1, the per-author split): the fixed CFs
+      * plus per-author satellites for head peers 0..5 — covering every author the tests touch. The
+      * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
+      */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
+
     test("put then get returns the same bytes in the same CF") {
         withFreshStore { p =>
             val key = JournalKey.Block(BlockNumber(7)).encode
@@ -197,13 +204,6 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
     }
 
     // ---- helpers ----
-
-    /** The config-derived CF set these tests open over (§7.1, the per-author split): the fixed CFs
-      * plus per-author satellites for head peers 0..5 — covering every author the tests touch. The
-      * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
-      */
-    private val testCfs: List[Cf] =
-        Cf.mkAll((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =

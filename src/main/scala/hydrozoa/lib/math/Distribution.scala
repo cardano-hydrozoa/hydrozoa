@@ -1,4 +1,4 @@
-package hydrozoa.lib.cardano.value.coin
+package hydrozoa.lib.math
 
 import cats.data.NonEmptyList
 import spire.implicits.toRational

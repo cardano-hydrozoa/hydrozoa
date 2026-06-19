@@ -16,6 +16,10 @@ import org.scalatest.funsuite.AnyFunSuite
   */
 class StoreDumpTest extends AnyFunSuite:
 
+    /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
+
     test("stats counts entries per CF after a mixed-CF write") {
         val tempDir = newTempDir()
         try
@@ -128,10 +132,6 @@ class StoreDumpTest extends AnyFunSuite:
             )
         finally recursivelyDelete(tempDir)
     }
-
-    /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
-    private val testCfs: List[Cf] =
-        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     private def newTempDir(): Path =
         Files.createTempDirectory("hydrozoa-rocksdb-dump-test-")

@@ -40,8 +40,9 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
         yield RawJournalEntry(key, stamp, JournalValue.frame(stamp, payload))
 
     /** A stable projection for multiset / order comparison (Array has no structural equality). */
-    private def project(e: RawJournalEntry): (Int, Long, String, Vector[Byte]) =
-        (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name, e.key.encode.toVector)
+    private def project(e: RawJournalEntry): (Int, Long, String, String) =
+        (e.stamp.generation, e.stamp.monotonicNanos, e.key.cf.name,
+         e.key.encode.map(b => f"${b & 0xff}%02x").mkString)
 
     test("merge output is non-decreasing by (generation, monotonicNanos)") {
         forAll(Gen.listOf(genEntry)) { entries =>
@@ -105,7 +106,7 @@ class ArrivalOrderedMergeTest extends AnyFunSuite with ScalaCheckPropertyChecks:
         // order — the (gen, mono, cf.name) tuple, not insertion order, decides.
         val block = entryAt(JournalKey.Block(BlockNumber(0)), stamp)
         val stack = entryAt(JournalKey.Stack(StackNumber(0)), stamp)
-        assert(
+        val _ = assert(
           block.key.cf.name < stack.key.cf.name,
           "precondition: Block sorts before Stack"
         )

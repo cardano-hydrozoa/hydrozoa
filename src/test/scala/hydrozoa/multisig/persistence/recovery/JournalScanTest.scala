@@ -33,7 +33,7 @@ class JournalScanTest extends AnyFunSuite:
                 _ <- keys.traverse(k => putLane(backend, k, stampN(k.num)))
                 entries <- JournalScan.scan(backend, JournalKey.Block(BlockNumber(1)))
             yield
-                assert(entries.map(_.key) == keys.drop(1))
+                val _ = assert(entries.map(_.key) == keys.drop(1))
                 assert(entries.map(_.stamp) == List(1, 2, 3).map(stampN))
         }
     }
@@ -49,7 +49,7 @@ class JournalScanTest extends AnyFunSuite:
                 fromP0 <- JournalScan.scan(backend, JournalKey.HardAck(peer0, HardAckNumber(0)))
                 fromP1 <- JournalScan.scan(backend, JournalKey.HardAck(peer1, HardAckNumber(0)))
             yield
-                assert(fromP0.map(_.key) == p0Keys, "peer 0 scan must stop before peer 1")
+                val _ = assert(fromP0.map(_.key) == p0Keys, "peer 0 scan must stop before peer 1")
                 assert(fromP1.map(_.key) == p1Keys)
         }
     }
@@ -80,8 +80,8 @@ class JournalScanTest extends AnyFunSuite:
                 _ <- putLane(backend, key, stampN(7))
                 entries <- JournalScan.scan(backend, key)
             yield
-                assert(entries.size == 1)
-                assert(new String(entries.head.payloadBytes, "UTF-8") == s"payload-$key")
+                val _ = assert(entries.size == 1)
+                val _ = assert(new String(entries.head.payloadBytes, "UTF-8") == s"payload-$key")
                 assert(entries.head.stamp == stampN(7))
         }
     }
@@ -161,11 +161,11 @@ class JournalScanTest extends AnyFunSuite:
             yield
                 val gotKeys = merged.map(_.key)
                 // (a) exactly the above-floor keys: no below-floor leak, no cross-peer bleed.
-                assert(gotKeys.toSet == above.toSet, s"got ${gotKeys.toSet}")
+                val _ = assert(gotKeys.toSet == above.toSet, s"got ${gotKeys.toSet}")
                 // (b)+(d) nothing dropped or duplicated: count matches both the expected set and the
                 // sum of per-journal tail sizes.
-                assert(gotKeys.size == above.size)
-                assert(merged.size == perJournal.map(_.size).sum)
+                val _ = assert(gotKeys.size == above.size)
+                val _ = assert(merged.size == perJournal.map(_.size).sum)
                 // (c) merged stream is exactly arrival-stamp ordered (generation, then monotonic).
                 val stamps = merged.map(e => (e.stamp.generation, e.stamp.monotonicNanos))
                 assert(stamps == stamps.sorted)
