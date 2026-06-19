@@ -5,8 +5,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{byteStringDecoder, byteStringEncoder}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.joint.EvacuationKey.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap.mkScalar
+import hydrozoa.multisig.ledger.joint.EvacuationMapInstances.given
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{payoutObligationDecoder, payoutObligationEncoder}
@@ -34,12 +34,12 @@ given evacuationKeyOrdering: Ordering[EvacuationKey] with {
         summon[Ordering[ByteString]].compare(x.byteString, y.byteString)
 }
 
-final case class EvacuationKey private (byteString: ByteString)
-
-object EvacuationKey:
-    def apply(bytes: ByteString): Option[EvacuationKey] = Some(new EvacuationKey(bytes))
-    // if bytes.length == 32 then Some(new EvacuationKey(bytes)) else None
-
+/** Circe and collection given instances for [[EvacuationKey]].
+  *
+  * Defined here (not in the companion in `cardano-onchain`) to keep circe out of the on-chain
+  * subproject.
+  */
+object EvacuationMapInstances:
     given Encoder[EvacuationKey] = Encoder.instance { ek =>
         byteStringEncoder(ek.byteString)
     }
@@ -199,8 +199,6 @@ object EvacuationDiff {
     }
 
     given evacuationDiffDecoder(using config: CardanoNetwork.Section): Decoder[EvacuationDiff] = {
-        import EvacuationKey.given
-
         Decoder.instance { c =>
             c.downField("tag").as[String].flatMap {
                 case "Update" =>

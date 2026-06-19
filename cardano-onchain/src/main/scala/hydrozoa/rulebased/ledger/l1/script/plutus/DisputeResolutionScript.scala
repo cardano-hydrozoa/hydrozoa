@@ -1,17 +1,16 @@
 package hydrozoa.rulebased.ledger.l1.script.plutus
 
-import hydrozoa.*
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ByteStringExtension.take
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineDatumOfType
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.UnresolvedOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus, secFromData, secToData}
 import scala.annotation.tailrec
 import scalus.*
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
@@ -38,7 +37,7 @@ object DisputeResolutionValidator extends Validator {
     given ToData[DisputeRedeemer] = ToData.derived
 
     case class VoteRedeemer(
-        sec: StandaloneEvacuationCommitment.Onchain,
+        sec: StandaloneEvacuationCommitmentOnchain,
         headMultisig: List[Signature],
         coilMultisig: List[Option[Signature]]
     )
