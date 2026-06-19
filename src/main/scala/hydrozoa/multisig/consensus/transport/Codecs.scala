@@ -11,7 +11,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
@@ -53,27 +53,11 @@ object Codecs {
           )
         )
 
-    // TODO(GUM-131): unify RequestId JSON shape with the codec in
-    //   `hydrozoa.multisig.ledger.event.RequestId` (which uses `headPeerNumber` /
-    //   `requestNumber`). Both codecs are in scope at different derivation sites, so the same
-    //   RequestId is serialized two different ways within a single NewMsgBatch:
-    //     - NewMsgBatch.requests[i].requestId         → `{ "peerNum", "requestNum" }`  (here)
-    //     - NewMsgBatch.blockBrief.body.events[i][0]  → `{ "headPeerNumber", "requestNumber" }`
-    //   It currently round-trips correctly because each subtree uses a matching encoder/decoder
-    //   pair, but it's confusing and brittle. Pick one shape and align both call sites.
-    //   https://linear.app/gummiworm-labs/issue/GUM-131
-    given Codec[RequestId] =
-        io.circe.Codec.from(
-          Decoder.instance(c =>
-              for {
-                  pn <- c.downField("peerNum").as[HeadPeerNumber]
-                  rn <- c.downField("requestNum").as[RequestNumber]
-              } yield RequestId(pn, rn)
-          ),
-          Encoder.instance((id: RequestId) =>
-              Json.obj("peerNum" -> id.peerNum.asJson, "requestNum" -> id.requestNum.asJson)
-          )
-        )
+    // RequestId has a single canonical JSON shape (GUM-131): the codec on the type's companion
+    // (`hydrozoa.multisig.ledger.event.RequestId` → `{ "headPeerNumber", "requestNumber" }`), which
+    // is in implicit scope here automatically. There is deliberately **no** transport-local codec —
+    // one shape everywhere it appears on the wire and in persistence, including this batch's
+    // `requests[i].requestId` and `blockBrief…events[i][0]`.
 
     private given Codec[BlockHeader.HeaderSignature] =
         io.circe.Codec.from(
