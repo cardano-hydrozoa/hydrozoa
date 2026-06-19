@@ -276,7 +276,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               EvacuationOutputPlaceId -> nEvacs,
               ResolvedTreasuryPlaceId -> 1,
               CollateralPlaceId -> nPeers,
-              AmbientPlaceId -> env.nHeadPeers
             )
 
             _ <- assertWith(

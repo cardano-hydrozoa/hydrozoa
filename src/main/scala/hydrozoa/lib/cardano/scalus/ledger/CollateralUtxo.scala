@@ -69,6 +69,8 @@ case class CollateralUtxo(input: TransactionInput, collateralOutput: CollateralO
     // TODO: These methods could probably be extracted into a "UtxoLike" trait
     final def add(using network: CardanoNetwork.Section): AddCollateral = AddCollateral(this.toUtxo)
 
+    final def send(using network: CardanoNetwork.Section): Send = collateralOutput.send
+
     final def spend(using network: CardanoNetwork.Section): Spend =
         Spend(this.toUtxo, PubKeyWitness)
 
