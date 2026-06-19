@@ -53,8 +53,8 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
                 fromOne <- backing.backfill(HardAckNumber(1), 16)
             } yield (hw, fromZero, fromOne)
         }
-        assert(hw == Some(HardAckNumber(1)), s"high-water = max; got $hw")
-        assert(fromZero.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)), s"$fromZero")
+        val _ = assert(hw == Some(HardAckNumber(1)), s"high-water = max; got $hw")
+        val _ = assert(fromZero.map(_.hardAckNum) == List(HardAckNumber(0), HardAckNumber(1)), s"$fromZero")
         assert(fromOne.map(_.hardAckNum) == List(HardAckNumber(1)), s"load from 1 → tail; $fromOne")
     }
 
@@ -114,10 +114,10 @@ class PeerLiaisonCoilRecoveryTest extends AnyFunSuite:
               relay.map(_.seqNum)
             )
         }
-        assert(out.blockHw == Some(BlockNumber(2)), "block high-water = max")
-        assert(out.blocks == List(BlockNumber(1), BlockNumber(2)), "all blocks, no canLead filter")
-        assert(out.stacks == List(StackNumber(1)), "the stack")
-        assert(out.headAcks == List(HardAckNumber(0)), "head hard-ack")
+        val _ = assert(out.blockHw == Some(BlockNumber(2)), "block high-water = max")
+        val _ = assert(out.blocks == List(BlockNumber(1), BlockNumber(2)), "all blocks, no canLead filter")
+        val _ = assert(out.stacks == List(StackNumber(1)), "the stack")
+        val _ = assert(out.headAcks == List(HardAckNumber(0)), "head hard-ack")
         assert(out.relay == List(HubHardAckNumber(0)), "hub relay lane")
     }
 
