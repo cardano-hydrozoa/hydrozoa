@@ -126,7 +126,10 @@ class ReplayActorTest extends AnyFunSuite:
         // this coil peer's own two coil HardAcks (stack 1) routed back, plus the hub's HubHardAck
         // (unwrapped to its `.ack`).
         val _ = assert(c.sca.exists(_.isInstanceOf[SlowConsensusActor.StackHandoff]), "SCA handoff")
-        val _ = assert(c.sca.count(_.isInstanceOf[HardAck]) == 3, "SCA 3 hard-acks (2 own coil + 1 hub)")
+        val _ = assert(
+          c.sca.count(_.isInstanceOf[HardAck]) == 3,
+          "SCA 3 hard-acks (2 own coil + 1 hub)"
+        )
         // StackComposer: only stack >= coilHardAckedStack+1 = 2 (stack 1 is the in-flight band).
         assert(
           c.sc.collect { case b: StackBrief => b.stackNum } == Vector(StackNumber(2)),
