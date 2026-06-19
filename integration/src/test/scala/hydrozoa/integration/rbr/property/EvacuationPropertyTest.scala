@@ -20,6 +20,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scalus.cardano.ledger.ArbitraryInstances.given
@@ -154,7 +155,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             )
 
             // block header: all peers vote for the same commitment (happy path).
-            blockHeader = StandaloneEvacuationCommitment.Onchain(
+            blockHeader = StandaloneEvacuationCommitmentOnchain(
               headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
               versionMajor = BigInt(1),
               versionMinor = BigInt(1),
