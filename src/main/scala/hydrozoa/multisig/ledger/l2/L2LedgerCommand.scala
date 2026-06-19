@@ -90,6 +90,7 @@ object L2LedgerCommand {
             import Destination.given
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
+            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             (r: L2LedgerCommand.RegisterDeposit) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
@@ -109,6 +110,7 @@ object L2LedgerCommand {
         given depositRegistrationDecoder: io.circe.Decoder[L2LedgerCommand.RegisterDeposit] = {
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{valueEncoder as _, valueDecoder as _, coinDecoder as _, coinEncoder as _, given}
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Decoder_Value, given_Decoder_Coin}
+            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             io.circe.generic.semiauto.deriveDecoder
         }
     }
@@ -121,7 +123,11 @@ object L2LedgerCommand {
     ) extends L2LedgerCommand.Real
 
     object ApplyDepositDecisions {
-        given Codec[L2LedgerCommand.ApplyDepositDecisions] = io.circe.generic.semiauto.deriveCodec
+        given Codec[L2LedgerCommand.ApplyDepositDecisions] = {
+            import BlockNumber.given
+            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+            io.circe.generic.semiauto.deriveCodec
+        }
     }
 
     /** An L2Event, as forwarded to black-box L2 ledger. It can only be constructed with respect to
@@ -136,7 +142,7 @@ object L2LedgerCommand {
     ) extends L2LedgerCommand.Real
 
     object ApplyTransaction {
-        import RequestId.given
+        import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
         import BlockNumber.given
         import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 
@@ -151,14 +157,23 @@ object L2LedgerCommand {
                   "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
                 )
 
-        // FIXME: As above, this can't possibly round-trip...
+        // Hand-written to match the encoder's `userVk` key (the case-class field is `userVKey`, so a
+        // derived decoder looks for the wrong key and never round-trips). Ported from PR #465.
         given applyTransactionDecoder: io.circe.Decoder[L2LedgerCommand.ApplyTransaction] =
-            deriveDecoder
+            io.circe.Decoder.instance(c =>
+                for {
+                    rid <- c.downField("requestId").as[RequestId]
+                    vk <- c.downField("userVk").as[VerificationKey]
+                    bn <- c.downField("blockNumber").as[BlockNumber]
+                    t <- c.downField("blockCreationStartTime").as[PosixTime]
+                    p <- c.downField("l2Payload").as[ByteString]
+                } yield L2LedgerCommand.ApplyTransaction(rid, vk, bn, t, p)
+            )
     }
 
     object ProxyBlockConfirmation {
         given Codec[L2LedgerCommand.ProxyBlockConfirmation] = {
-            import RequestId.given
+            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
 
             io.circe.generic.semiauto.deriveCodec
@@ -171,7 +186,10 @@ object L2LedgerCommand {
     ) extends L2LedgerCommand.Proxy
 
     object ProxyRequestError {
-        given Codec[ProxyRequestError] = io.circe.generic.semiauto.deriveCodec
+        given Codec[ProxyRequestError] = {
+            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+            io.circe.generic.semiauto.deriveCodec
+        }
     }
 
     final case class ProxyRequestError(
