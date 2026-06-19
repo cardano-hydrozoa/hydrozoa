@@ -134,19 +134,17 @@ object Stage4Runner:
 // Test entry points
 // ===================================
 
+// N.B.: The tests default to 10 commands. Mark longer ones with (extended) to filter them out in CI
 object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
             .withWorkers(1)
-            .withMinSuccessfulTests(1)
+            .withMinSuccessfulTests(100)
+            .withPropFilter(Some("Twenty-peers head works \\(quick\\)"))
 
-    // Fast variants (CI): small command sequences, minimal peer count
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
-
-    val _ = property("Two-peers head works (quick)") =
-        Stage4Suite(label = "stage4-quick-two-peers", nPeers = 2, nCommands = 10).property()
 
     // Two head peers hubbing one coil peer (coilQuorum = 1). The Pc4 multi-head relay makes the coil peer a full
     // participant: it follows every leader's blocks (relayed briefs + relayed user requests,
@@ -160,14 +158,8 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-heads-one-coil works") =
         Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoilPeers = 1).property()
 
-    val _ = property("Two-heads-one-coil works (quick)") =
-        Stage4Suite(label = "stage4-quick-2h1c", nPeers = 2, nCoilPeers = 1, nCommands = 10).property()
-
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
-
-    val _ = property("Three-peers head works (quick)") =
-        Stage4Suite(label = "stage4-quick-three-peers", nPeers = 3, nCommands = 10).property()
 
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
@@ -180,14 +172,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works WS") = Stage4Suite(
       label = "stage4-ws-two-peers",
       nPeers = 2,
-      transportMode = TransportMode.WebSocket(),
-      backendMode = BackendMode.RocksDb()
-    ).property()
-
-    val _ = property("Two-peers head works WS (quick)") = Stage4Suite(
-      label = "stage4-ws-quick-two-peers",
-      nPeers = 2,
-      nCommands = 10,
       transportMode = TransportMode.WebSocket(),
       backendMode = BackendMode.RocksDb()
     ).property()
@@ -231,15 +215,6 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
           label = "stage4-ws-2h1c",
           nPeers = 2,
           nCoilPeers = 1,
-          transportMode = TransportMode.WebSocket(),
-        ).property()
-
-    val _ = property("Two-heads-one-coil works WS (quick)") =
-        Stage4Suite(
-          label = "stage4-ws-quick-2h1c",
-          nPeers = 2,
-          nCoilPeers = 1,
-          nCommands = 10,
           transportMode = TransportMode.WebSocket(),
         ).property()
 
