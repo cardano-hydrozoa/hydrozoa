@@ -5,6 +5,7 @@ import cats.implicits.*
 import com.comcast.ip4s.{Host, Port, host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
@@ -212,7 +213,7 @@ object Main extends IOApp {
                     network <- {
                         given onlyNetwork: io.circe.Decoder[CardanoNetwork] =
                             io.circe.Decoder.instance(
-                              _.downField("cardanoNetwork").as[CardanoNetwork]
+                              _.downField("cardanoNetwork").as[CardanoNetwork](using cardanoNetworkDecoder)
                             )
                         parser.decode[CardanoNetwork](jsonStr)
                     }
