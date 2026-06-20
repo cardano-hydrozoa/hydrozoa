@@ -20,6 +20,7 @@ import hydrozoa.multisig.server.HydrozoaServer
 import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.{Files, Path}
+import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -332,7 +333,28 @@ object Main extends IOApp {
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system, httpHost, httpPort)
+
+            // Per-process WS transports: bind this node's server and dial its peers. The wiring's
+            // tag (Left = head, Right = coil) carries the right transports for the manager to
+            // register its liaisons on and build remote proxy handles from.
+            wsClient <- Resource.eval(JdkWSClient.simple[IO])
+            wsWiring <- nodeConfig.ownPeerId match {
+                case PeerId.Head(n) =>
+                    NodeTransport.headResource(nodeConfig, wsClient, n).map(Left(_))
+                case PeerId.Coil(n) =>
+                    NodeTransport.coilResource(nodeConfig, wsClient, n).map(Right(_))
+            }
+        } yield (
+          env,
+          backend,
+          nodeConfig,
+          remoteL2Ledger,
+          persistence,
+          system,
+          httpHost,
+          httpPort,
+          wsWiring
+        )
 
         resource.use {
             case (
@@ -343,7 +365,8 @@ object Main extends IOApp {
                   persistence,
                   system,
                   httpHost,
-                  httpPort
+                  httpPort,
+                  wsWiring
                 ) =>
                 // The regime-manager formatter is keyed by head peer number; for a coil node we
                 // reuse it for the shared sub-actor events and override the "peer" context with the
@@ -357,15 +380,17 @@ object Main extends IOApp {
                           )
                         )
 
-                nodeConfig.ownPeerId match {
-                    case PeerId.Head(_) =>
+                // The wiring's tag is this node's kind (Left = head, Right = coil).
+                wsWiring match {
+                    case Left(headWiring) =>
                         for {
                             mrm <- HeadMultisigRegimeManager.apply(
                               nodeConfig,
                               backend,
                               remoteL2Ledger,
                               persistence,
-                              mrmTracer
+                              mrmTracer,
+                              headWiring
                             )
                             _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
                             _ <- logger.info("Hydrozoa head node started successfully")
@@ -394,14 +419,15 @@ object Main extends IOApp {
                             _ <- system.waitForTermination
                         } yield ExitCode.Success
 
-                    case PeerId.Coil(_) =>
+                    case Right(coilWiring) =>
                         for {
                             mrm <- CoilMultisigRegimeManager.apply(
                               nodeConfig,
                               backend,
                               remoteL2Ledger,
                               persistence,
-                              mrmTracer
+                              mrmTracer,
+                              coilWiring
                             )
                             _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
                             _ <- logger.info("Hydrozoa coil node started successfully")

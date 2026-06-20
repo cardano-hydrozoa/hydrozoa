@@ -37,7 +37,8 @@ trait CoilMultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
+    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+    wsWiring: CoilMultisigRegimeManager.WsWiring
 ) extends Actor[IO, Request] {
 
     /** Specialize the regime-wide tracer down to per-actor channels, exactly as
@@ -124,8 +125,8 @@ trait CoilMultisigRegimeManager(
             )
 
             // Exactly one liaison, toward the hub head peer (§5.5) [doc-ref]. It projects its connections from
-            // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) stays empty in
-            // this production placeholder (in-process wiring fills it).
+            // the shared `Connections`; the hub-liaison handle (`remoteHubLiaison`) is filled below
+            // from this coil's WS uplink transport.
             hubLiaison <- context.actorOf(
               liaison.PeerLiaisonCoilToHub(
                 config,
@@ -134,6 +135,13 @@ trait CoilMultisigRegimeManager(
                 persistence
               )
             )
+
+            // Wire the WS uplink: register the local hub liaison for inbound dispatch and build the
+            // remote hub proxy the coil's SlowConsensusActor broadcasts its hard-ack through.
+            _ <- wsWiring.coilTransport.register(hubLiaison)
+            remoteHubProxy <- transport
+                .RemoteHubProxy(wsWiring.coilTransport)
+                .flatMap(context.actorOf)
 
             // A coil peer never leads, so there is nothing to pace against L1 timing: the limiter
             // slots alias the unthrottled handles directly (no `Limiter` actors spawned). A coil has
@@ -149,6 +157,7 @@ trait CoilMultisigRegimeManager(
               stackComposerLimiter = stackComposer,
               slowConsensusActor = slowConsensusActor,
               coilUplink = Some(hubLiaison),
+              remoteHubLiaison = Some(remoteHubProxy),
             )
 
             // R3 boot replay (§8 step 3, coil path — §10 Q10): before opening the start barrier,
@@ -197,12 +206,19 @@ trait CoilMultisigRegimeManager(
 }
 
 object CoilMultisigRegimeManager {
+
+    /** This coil node's WS uplink transport toward its hub. The manager registers its hub liaison
+      * on it and builds the remote hub proxy handle from it.
+      */
+    final case class WsWiring(coilTransport: transport.CoilPeerWsTransport)
+
     def apply(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
+        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        wsWiring: WsWiring
     ): IO[CoilMultisigRegimeManager] =
         IO(
           new CoilMultisigRegimeManager(
@@ -210,7 +226,8 @@ object CoilMultisigRegimeManager {
             cardanoBackend,
             virtualLedger,
             persistence,
-            tracer
+            tracer,
+            wsWiring
           ) {}
         )
 }

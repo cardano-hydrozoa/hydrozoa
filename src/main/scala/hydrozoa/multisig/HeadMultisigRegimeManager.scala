@@ -27,7 +27,8 @@ trait HeadMultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
+    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+    wsWiring: HeadMultisigRegimeManager.WsWiring
 ) extends Actor[IO, Request] {
 
     /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
@@ -129,11 +130,12 @@ trait HeadMultisigRegimeManager(
             )
 
             // One peer liaison toward every other head peer (the head mesh). The liaisons project
-            // their connections from the shared `Connections`; the remote-handle maps stay empty in
-            // this production placeholder (in-process wiring fills them — see stage4).
+            // their connections from the shared `Connections`; the remote-handle maps are filled
+            // below from this node's WS transports.
+            remoteHeadIds = config.headPeerIds
+                .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
             headPeerLiaisons <-
-                config.headPeerIds
-                    .filterNot(id => config.ownPeerId == PeerId.Head(id.peerNum))
+                remoteHeadIds
                     .traverse(pid =>
                         context.actorOf(
                           liaison.PeerLiaisonHeadToHead(
@@ -183,6 +185,40 @@ trait HeadMultisigRegimeManager(
                     )
                 )
 
+            // Wire this node's WS transports onto its liaisons: register each local liaison for
+            // inbound dispatch, and build the remote proxy handles the liaisons reach their
+            // counterpart processes through (a hub additionally serves its coil peers).
+            _ <- remoteHeadIds.zip(headPeerLiaisons).traverse_ { case (remoteId, localLiaison) =>
+                wsWiring.meshTransport.register(remoteId, localLiaison)
+            }
+            remoteHeadLiaisons <- remoteHeadIds
+                .zip(headPeerLiaisons)
+                .traverse { case (remoteId, _) =>
+                    transport
+                        .RemotePeerProxy(remoteId, wsWiring.meshTransport)
+                        .flatMap(context.actorOf)
+                        .map(remoteId.peerNum -> _)
+                }
+                .map(_.toMap)
+            _ <- wsWiring.hubTransport.traverse_ { hub =>
+                hubbedCoilPeers.zip(coilPeerLiaisons).traverse_ { case (coilNum, localLiaison) =>
+                    hub.register(coilNum, localLiaison)
+                }
+            }
+            remoteCoilLiaisons <- wsWiring.hubTransport match {
+                case Some(hub) =>
+                    hubbedCoilPeers
+                        .traverse(coilNum =>
+                            transport
+                                .RemoteCoilProxy(coilNum, hub)
+                                .flatMap(context.actorOf)
+                                .map(coilNum -> _)
+                        )
+                        .map(_.toMap)
+                case None =>
+                    IO.pure(Map.empty[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle])
+            }
+
             connections = HeadMultisigRegimeManager.Connections(
               blockWeaver = blockWeaver,
               blockWeaverLimiter = blockWeaverLimiter,
@@ -194,6 +230,8 @@ trait HeadMultisigRegimeManager(
               stackComposerLimiter = stackComposerLimiter,
               slowConsensusActor = slowConsensusActor,
               headPeerLiaisons = headPeerLiaisons,
+              remoteHeadLiaisons = remoteHeadLiaisons,
+              remoteCoilLiaisons = remoteCoilLiaisons,
               coilRelay = coilRelay,
               coilAckSequencer = coilAckSequencer,
               coilPeerLiaisons = coilPeerLiaisons,
@@ -300,12 +338,22 @@ object HeadMultisigRegimeManager {
 
     type PendingConnections = Deferred[IO, Connections]
 
+    /** This head node's per-process WS transports: the head-mesh transport (always) and, on a hub
+      * head peer, the hub transport serving its coil peers. The manager registers its local
+      * liaisons on these and builds the remote proxy handles from them.
+      */
+    final case class WsWiring(
+        meshTransport: transport.PeerWsTransport,
+        hubTransport: Option[transport.HubWsTransport]
+    )
+
     def apply(
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
+        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        wsWiring: WsWiring
     ): IO[HeadMultisigRegimeManager] =
         IO(
           new HeadMultisigRegimeManager(
@@ -313,7 +361,8 @@ object HeadMultisigRegimeManager {
             cardanoBackend,
             virtualLedger,
             persistence,
-            tracer
+            tracer,
+            wsWiring
           ) {}
         )
 
