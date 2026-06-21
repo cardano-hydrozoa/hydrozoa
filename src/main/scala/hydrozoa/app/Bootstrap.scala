@@ -122,7 +122,9 @@ object Bootstrap:
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
           coilQuorum = membership.coilQuorum,
-          l2ParamsHash = Hash32.fromByteString(ByteString.empty),
+          // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
+          // a zero hash rather than empty bytes (which fail the length check).
+          l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
