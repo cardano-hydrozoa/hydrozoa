@@ -242,7 +242,11 @@ object JsonCodecs {
         Decoder.decodeInt.map(HeadPeerNumber.apply)
 
     // Response types
-    given requestAcceptedEncoder: Encoder[RequestAccepted] = deriveEncoder[RequestAccepted]
+    given requestAcceptedEncoder: Encoder[RequestAccepted] =
+        (ra: RequestAccepted) => {
+            import RequestId.i64.given
+            Json.obj("requestId" -> ra.requestId.asJson)
+        }
 
 //    given requestAcceptedDecoder: Decoder[RequestAccepted] = deriveDecoder[RequestAccepted]
 

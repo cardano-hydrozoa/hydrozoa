@@ -5,13 +5,14 @@ import cats.implicits.*
 import com.comcast.ip4s.{Host, Port, host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{Logging, Slf4jTracer, withCtx}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -59,7 +60,9 @@ object Main extends IOApp {
         sugarRushPort: String,
         tokenRecoveryAddress: Option[ShelleyAddress],
         adminUsername: String,
-        adminPassword: String
+        adminPassword: String,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
     ) {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
@@ -160,6 +163,10 @@ object Main extends IOApp {
             adminUsername <- getMandatoryEnvVar("ADMIN_USERNAME")
             adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
             _ <- logger.info(s"Loaded admin credentials for user: $adminUsername")
+
+            hydrozoaHost <- getMandatoryEnvVar("HTTP_HOST")
+            hydrozoaPort <- getMandatoryEnvVar("HTTP_PORT")
+            _ <- logger.info(s"Loaded HTTP endpoint config: $hydrozoaHost:$hydrozoaPort")
         } yield EnvConfig(
           verificationKey = vKey,
           signingKey = sKey,
@@ -168,7 +175,9 @@ object Main extends IOApp {
           sugarRushPort = sugarRushPort,
           tokenRecoveryAddress = tokenRecoveryAddressOpt,
           adminUsername = adminUsername,
-          adminPassword = adminPassword
+          adminPassword = adminPassword,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
         )
 
     /** Parse the `NODE_ID` env (`<head|coil>:<index>`) into a [[NodeIdentity]]. */
@@ -196,15 +205,28 @@ object Main extends IOApp {
         }
 
     /** Load and resolve the shared head config artifact every node shares. */
-    private def loadHeadConfig(path: String, backend: CardanoBackend[IO]): IO[HeadConfig] =
+    private def loadHeadConfig(path: String): IO[HeadConfig] =
         for {
             jsonStr <- IO.blocking(Files.readString(Path.of(path)))
-            headConfig <- HeadConfig.fromJson(jsonStr, backend).value.flatMap {
-                case Right(hc) => IO.pure(hc)
-                case Left(err) =>
-                    IO.raiseError(
-                      new RuntimeException(s"Failed to load head config from $path: $err")
-                    )
+            headConfig <- IO.fromEither {
+                import io.circe.parser
+                val result = for {
+                    network <- {
+                        given onlyNetwork: io.circe.Decoder[CardanoNetwork] =
+                            io.circe.Decoder.instance(
+                              _.downField("cardanoNetwork").as[CardanoNetwork](using cardanoNetworkDecoder)
+                            )
+                        parser.decode[CardanoNetwork](jsonStr)
+                    }
+                    hc <- {
+                        given hydrozoa.config.ScriptReferenceUtxos =
+                            Bootstrap.fakeScriptReferenceUtxos(network)
+                        parser.decode[HeadConfig](jsonStr)
+                    }
+                } yield hc
+                result.left.map(e =>
+                    new RuntimeException(s"Failed to load head config from $path: $e")
+                )
             }
         } yield headConfig
 
@@ -287,7 +309,7 @@ object Main extends IOApp {
               )
             )
 
-            headConfig <- Resource.eval(loadHeadConfig(headConfigPath, backend))
+            headConfig <- Resource.eval(loadHeadConfig(headConfigPath))
             ownWallet = PeerWallet.scalusWallet(env.verificationKey, env.signingKey)
             nodeConfig <- Resource.eval(
               buildNodeConfig(
