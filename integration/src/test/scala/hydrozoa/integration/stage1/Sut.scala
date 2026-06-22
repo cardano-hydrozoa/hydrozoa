@@ -22,11 +22,10 @@ import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import org.scalacheck.commands.SutCommand
+import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.Transaction
 import scalus.utils.Pretty
-
-import scala.concurrent.duration.DurationInt
 
 // ===================================
 // Stage 1 SUT

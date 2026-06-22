@@ -7,39 +7,13 @@ import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.consensus.*
+import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.stack.Stack
-import hydrozoa.multisig.persistence.{BackendStore, Persistence}
+import hydrozoa.multisig.persistence.BackendStore
 import org.scalacheck.commands.SutCommand
-
-// ===================================
-// Per-peer actor stack (local to sutResource)
-// ===================================
-
-private[stage4] case class PeerStack(
-    blockWeaver: BlockWeaver.Handle,
-    cardanoLiaison: CardanoLiaison.Handle,
-    /** Head peers only — coil followers don't accept user requests. */
-    requestSequencer: Option[RequestSequencer.Handle],
-    jointLedger: JointLedger.Handle,
-    consensusActor: FastConsensusActor.Handle,
-    stackComposer: StackComposer.Handle,
-    slowConsensusActor: SlowConsensusActor.Handle,
-    /** Per-peer in-memory persistence backend — exposed for post-scenario verification that
-      * SC's stack-close writes (Treasury + EvacuationMap) and SCA's hard-confirmation writes
-      * (HardConfirmation) landed in the store. See `analyzePersistence` in `Suite.scala`.
-      */
-    backendStore: BackendStore[IO],
-    /** Per-peer typed persistence over [[backendStore]] — shared by all of this peer's actors
-      * (the ones here + the peer's `PeerLiaison`s, built later). One per peer so the arrival-stamp
-      * generation is bumped exactly once per peer/process.
-      */
-    persistence: Persistence[IO],
-)
 
 // ===================================
 // Stage 4 SUT

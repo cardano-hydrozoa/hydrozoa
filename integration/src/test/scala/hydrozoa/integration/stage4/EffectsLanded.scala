@@ -6,9 +6,8 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import org.scalacheck.Prop
-import scalus.cardano.ledger.TransactionHash
-
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scalus.cardano.ledger.TransactionHash
 
 /** Stage4-local "effects landed" assertion.
   *
@@ -352,6 +351,6 @@ object EffectsLanded {
                 )
             } yield Prop(pending.isEmpty) :|
                 s"effects landed: ${pending.size} of ${exps.size} block(s) before any fallback " +
-                s"completed via neither happy nor fallback path:\n" + diag.mkString("\n")
+                "completed via neither happy nor fallback path:\n" + diag.mkString("\n")
     }
 }

@@ -1,14 +1,13 @@
 package org.scalacheck.commands
 
+import cats.MonadThrow
 import cats.data.StateT
 import cats.effect.testkit.TestControl
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
-import cats.MonadThrow
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, error, info, warn}
 import org.scalacheck.{Gen, Prop, PropertyM}
-
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 // ===================================

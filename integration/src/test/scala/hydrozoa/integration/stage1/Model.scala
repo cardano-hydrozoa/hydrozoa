@@ -18,8 +18,8 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug, warn}
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.block.*
+import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -31,11 +31,10 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
-import scalus.cardano.ledger.{BlockHeader as _, *}
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
+import scalus.cardano.ledger.{BlockHeader as _, *}
 
 object Model:
     // ===================================
@@ -261,7 +260,7 @@ object Model:
                     _ <- newState.getCurrentTime match {
                         case CurrentTime.InSilencePeriod(_) |
                             CurrentTime.AfterCompetingFallbackStartTime(_) =>
-                            log.warn(s"MODEL>> DelayCommand: model time entering silence/fallback zone")
+                            log.warn("MODEL>> DelayCommand: model time entering silence/fallback zone")
                         case _ => MonadThrow[M].pure(())
                     }
                 yield newState

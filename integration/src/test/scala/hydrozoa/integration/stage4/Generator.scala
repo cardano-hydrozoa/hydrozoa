@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage4
 
 import cats.data.NonEmptyList
+import cats.effect.IO
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.integration.stage4.Commands.{*, given}
@@ -17,10 +18,10 @@ import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestW
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import cats.effect.IO
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
+import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -28,8 +29,6 @@ import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionInput, 
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
-
-import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 
 // ===================================
 // Per-command generators

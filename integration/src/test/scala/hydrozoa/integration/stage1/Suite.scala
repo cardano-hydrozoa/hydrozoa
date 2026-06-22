@@ -1,15 +1,15 @@
 package hydrozoa.integration.stage1
 
-import cats.syntax.all.*
+import cats.data.ReaderT
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import com.suprnation.typelevel.actors.syntax.*
-import cats.data.ReaderT
+import hydrozoa.config.head.InitParamsType
 import hydrozoa.config.head.initialization.{CappedValueGen, InitializationParametersGenTopDown}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.config.head.InitParamsType
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.evacuation.generateNodeOperationEvacuationConfig
@@ -31,9 +31,11 @@ import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.{Network, ShelleyAddress}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Coin, EvaluatorMode, PlutusScriptEvaluator, ProtocolParams, SlotConfig, Transaction, TransactionOutput, Utxo, Utxos, Value}
@@ -41,9 +43,6 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import test.TestPeerName.Alice
 import test.{GenWithTestPeers, SeedPhrase, TestPeerName, TestPeers, given}
-
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /** Integration Stage 1 (the simplest).
   *   - Only three real actors are involved: [[JointLedger]], [[FastConsensusActor]], and
@@ -472,7 +471,7 @@ case class Suite(
                             if now.isAfter(t) then
                                 IO.raiseError(
                                   RuntimeException(
-                                    s"Suite aborted: initialization took too long " +
+                                    "Suite aborted: initialization took too long " +
                                         s"(takeoff: $t, now: $now)"
                                   )
                                 )

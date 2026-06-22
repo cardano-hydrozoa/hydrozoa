@@ -1,20 +1,20 @@
 package hydrozoa.integration.stage1.model
 
+import cats.*
+import cats.data.{RWS, State}
+import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.integration.stage1.Commands.RegisterDepositCommand
 import hydrozoa.integration.stage1.Model
-
-import scala.collection.immutable.Queue
 import monocle.*
 import monocle.syntax.all.*
+import scala.collection.immutable.Queue
+import scalus.cardano.ledger.{Transaction, TransactionInput}
 import scalus.|>
-import cats.data.{RWS, State}
-import cats.*
-import cats.syntax.all.*
+
 import Deposits.DepositStatus
 import Deposits.DepositStatus.*
-import scalus.cardano.ledger.{Transaction, TransactionInput}
 
 /** A state machine for Deposits. Each deposit can only be in one state at a time. Possible transitions are:
   *

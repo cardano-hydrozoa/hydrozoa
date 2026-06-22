@@ -9,7 +9,6 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.commands.AnyCommand
 import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
-
 import scala.concurrent.duration.DurationInt
 
 object Stage4Runner:

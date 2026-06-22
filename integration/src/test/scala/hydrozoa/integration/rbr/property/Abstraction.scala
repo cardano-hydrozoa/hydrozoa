@@ -9,9 +9,8 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{TransactionOutput, Utxo}
-import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** Histogram of every UTxO in the shared mock backend, bucketed by [[RBRPlaceId]].
   *

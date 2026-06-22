@@ -15,7 +15,7 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.{NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.WsPeerTransport
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
@@ -176,16 +176,15 @@ object Main
                 given CardanoNetwork.Section = nodeConfig
                 for {
                     wsClient <- Resource.eval(JdkWSClient.simple[IO])
-                    transport <- Resource.eval(
-                      WsPeerTransport.create(ownHeadPeerId, remoteHeadUris, pwtTracer)
+                    transport <- WsPeerTransport.resource(
+                      ownPeerId = ownHeadPeerId,
+                      remotes = remoteHeadUris,
+                      wsClient = wsClient,
+                      bindHost = bindHost,
+                      bindPort = bindPort,
+                      transportTracer = pwtTracer,
+                      serverTracer = nwsTracer,
                     )
-                    _ <- NodeWsServer.resource(
-                      bindHost,
-                      bindPort,
-                      List(transport.routes),
-                      nwsTracer
-                    )
-                    _ <- transport.startDialers(wsClient)
                 } yield (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) => transport
             }
 

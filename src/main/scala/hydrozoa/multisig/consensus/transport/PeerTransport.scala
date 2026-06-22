@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus.transport
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
+import com.comcast.ip4s.{Host, Port}
 import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
@@ -215,4 +216,27 @@ object WsPeerTransport {
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
         } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
+
+    /** Allocate a runtime-ready WS transport: build the [[WsPeerTransport]], mount its `/head`
+      * route on a [[NodeWsServer]] bound at `bindHost:bindPort`, and start the outbound dialers
+      * against [[wsClient]]. The Resource owns all three lifetimes — dialers stop, server unbinds,
+      * transport drops when released.
+      *
+      * Callers (`Main`, stage4) just hand this Resource to
+      * [[hydrozoa.multisig.HeadMultisigRegimeManager.resource]] via the `peerTransport` factory.
+      */
+    def resource(
+        ownPeerId: HeadPeerId,
+        remotes: Map[HeadPeerId, Uri],
+        wsClient: WSClient[IO],
+        bindHost: Host,
+        bindPort: Port,
+        transportTracer: ContraTracer[IO, PeerTransportEvent],
+        serverTracer: ContraTracer[IO, NodeWsServerEvent],
+    )(using CardanoNetwork.Section): Resource[IO, WsPeerTransport] =
+        for {
+            transport <- Resource.eval(create(ownPeerId, remotes, transportTracer))
+            _ <- NodeWsServer.resource(bindHost, bindPort, List(transport.routes), serverTracer)
+            _ <- transport.startDialers(wsClient)
+        } yield transport
 }
