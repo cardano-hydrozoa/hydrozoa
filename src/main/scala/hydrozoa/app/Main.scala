@@ -15,7 +15,7 @@ import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.{NodeWsServer, PeerTransport}
+import hydrozoa.multisig.consensus.transport.{NodeWsServer, WsPeerTransport}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
@@ -151,7 +151,7 @@ object Main
                 )
 
             // Build the WS-backed head-mesh transport: open one shared dialer client, the
-            // PeerTransport instance, bind a NodeWsServer for its inbound route, and start the
+            // WsPeerTransport instance, bind a NodeWsServer for its inbound route, and start the
             // outbound dialers. The MRM's resource() owns this Resource's lifecycle and
             // ignores the ActorContext (the WS variant doesn't need it to allocate).
             ownHeadPeerId = nodeConfig.ownPeerId match {
@@ -177,7 +177,7 @@ object Main
                 for {
                     wsClient <- Resource.eval(JdkWSClient.simple[IO])
                     transport <- Resource.eval(
-                      PeerTransport.create(ownHeadPeerId, remoteHeadUris, pwtTracer)
+                      WsPeerTransport.create(ownHeadPeerId, remoteHeadUris, pwtTracer)
                     )
                     _ <- NodeWsServer.resource(
                       bindHost,

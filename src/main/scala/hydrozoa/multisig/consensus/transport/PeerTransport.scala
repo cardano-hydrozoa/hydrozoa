@@ -17,9 +17,25 @@ import org.http4s.websocket.WebSocketFrame
 import org.http4s.{HttpRoutes, Uri}
 import scala.concurrent.duration.*
 
-/** The head-peer mesh WS link for one peer: contributes the `/head` route to the peer's shared
+/** The head-peer mesh transport one peer uses to talk to the others. */
+trait PeerTransport {
+
+    /** This transport's own identity in the head mesh. */
+    def ownPeerId: HeadPeerId
+
+    /** Wire a local `PeerLiaisonHeadToHead` handle as the inbound dispatch target for messages
+      * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
+      * traffic.
+      */
+    def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit]
+
+    /** Enqueue a request for delivery to [[remote]]. Returns immediately. */
+    def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit]
+}
+
+/** Real WS-backed [[PeerTransport]]: contributes the `/head` route to the peer's shared
   * [[NodeWsServer]], dials peers with higher peerNum, accepts inbound from peers with lower
-  * peerNum, and exposes a [[send]] / [[register]] API.
+  * peerNum.
   *
   * It does NOT own the Ember server — a hub head peer shares one server across the mesh and the
   * hub→coil link, so server ownership lives in [[NodeWsServer]] and the caller mounts [[routes]]
@@ -32,25 +48,25 @@ import scala.concurrent.duration.*
   * ([[PeerLiaisonHeadToHead]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so
   * a brief window where the same message is delivered twice during a reconnect is harmless.
   */
-final class PeerTransport private (
+final class WsPeerTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val remotes: Map[HeadPeerId, Uri],
     private val tracer: ContraTracer[IO, PeerTransportEvent],
-)(using CardanoNetwork.Section) {
+)(using CardanoNetwork.Section)
+    extends PeerTransport {
 
-    /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
-      * arriving from [[remote]]. Must be called before the link to [[remote]] starts receiving
-      * traffic.
-      */
-    def register(remote: HeadPeerId, localLiaison: PeerLiaisonHeadToHead.Handle): IO[Unit] =
+    override def register(
+        remote: HeadPeerId,
+        localLiaison: PeerLiaisonHeadToHead.Handle
+    ): IO[Unit] =
         inboundRef.update(_.updated(remote, localLiaison))
 
     /** Enqueue a request for delivery to [[remote]]. Returns immediately. The message is held in
       * the per-remote outbox queue until the WS link drains it.
       */
-    def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
+    override def send(remote: HeadPeerId, request: LiaisonProtocol.HeadToHeadRequest): IO[Unit] =
         HeadFrame.fromWire(request) match {
             case Some(wire) =>
                 val line = HeadFrame.encode(HeadFrame.Msg(wire))
@@ -175,11 +191,11 @@ final class PeerTransport private (
             }
 }
 
-object PeerTransport {
+object WsPeerTransport {
 
     /** Allocate the per-peer mesh transport: one outbox per remote + an empty inbound map. The
-      * caller mounts [[routes]] on a [[NodeWsServer]] and calls [[startDialers]] with a shared
-      * [[WSClient]].
+      * caller mounts [[WsPeerTransport.routes]] on a [[NodeWsServer]] and calls
+      * [[WsPeerTransport.startDialers]] with a shared [[WSClient]].
       *
       * @param ownPeerId
       *   identity of this peer.
@@ -192,11 +208,11 @@ object PeerTransport {
         ownPeerId: HeadPeerId,
         remotes: Map[HeadPeerId, Uri],
         tracer: ContraTracer[IO, PeerTransportEvent],
-    )(using CardanoNetwork.Section): IO[PeerTransport] =
+    )(using CardanoNetwork.Section): IO[WsPeerTransport] =
         for {
             outboxes <- remotes.keys.toList
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new PeerTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
+        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
 }

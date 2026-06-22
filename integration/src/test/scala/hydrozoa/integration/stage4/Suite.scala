@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerTransportEventFormat}
+import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, WsPeerTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerTransportEventFormat}
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, CoilAckSequencer, CoilRelay, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
 import hydrozoa.multisig.consensus.CoilAckSequencerEventFormat
@@ -966,7 +966,7 @@ case class Stage4Suite(
     ): HeadPeerId =
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
-    /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerTransport]] and (on the hub)
+    /** WS-mode helper. Builds, per head peer, the head-mesh [[WsPeerTransport]] and (on the hub)
       * the [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes
       * `/head` and `/hub`), and starts the mesh dialers. For each coil peer it builds a
       * [[CoilPeerWsTransport]] dialing the hub's `/hub`. Returns the head-mesh remote-proxy map
@@ -1015,7 +1015,7 @@ case class Stage4Suite(
                         val pwsTracer = Slf4jTracer.sink.contramap(
                           PeerTransportEventFormat.humanFormat(ownPeerNum)
                         )
-                        PeerTransport.create(ownPeerId, remotes, pwsTracer).map(ownPeerNum -> _)
+                        WsPeerTransport.create(ownPeerId, remotes, pwsTracer).map(ownPeerNum -> _)
                     }
                     .map(_.toMap)
                 coilHubTransportOpt <-
