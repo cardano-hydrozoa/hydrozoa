@@ -599,18 +599,28 @@ trait CardanoLiaison(
                                     case Some(fallback) =>
                                         IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
                                     case None => {
-                                        lazy val initAction = {
-                                            if currentTime < config.initializationTx.initializationTxEndTime.convert
-                                            then
-                                                Seq(
-                                                  Action.InitializeHead(
-                                                    state.happyPathEffects.values.map(_.tx).toSeq
+                                        // The init tx is only submittable inside its (config-baked)
+                                        // validity window; once `initializationTxEndTime` passes it
+                                        // can never confirm. Past the window, trace it explicitly
+                                        // rather than silently returning no action.
+                                        val initEndTime =
+                                            config.initializationTx.initializationTxEndTime.convert
+                                        val initAction: IO[Seq[Action]] =
+                                            if currentTime < initEndTime then
+                                                IO.pure(
+                                                  Seq(
+                                                    Action.InitializeHead(
+                                                      state.happyPathEffects.values.map(_.tx).toSeq
+                                                    )
                                                   )
                                                 )
-                                            else {
-                                                Seq.empty
-                                            }
-                                        }
+                                            else
+                                                tracer.traceWith(
+                                                  CardanoLiaisonEvent.InitWindowElapsed(
+                                                    currentTime.toString,
+                                                    initEndTime.toString
+                                                  )
+                                                ) >> IO.pure(Seq.empty)
                                         // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
                                         state.targetState match {
                                             case TargetState.Uninitialized =>
@@ -633,7 +643,7 @@ trait CardanoLiaison(
                                                         targetTreasuryUtxoId.toString,
                                                         found = false
                                                       )
-                                                    ) >> IO.pure(initAction)
+                                                    ) >> initAction
 
                                             case TargetState.Finalized(finalizationTxHash) =>
                                                 for {
@@ -656,8 +666,8 @@ trait CardanoLiaison(
                                                                     if isKnown then "known"
                                                                     else "not known"
                                                                   )
-                                                            ) >> IO.pure(
-                                                              if isKnown then Seq.empty
+                                                            ) >> (
+                                                              if isKnown then IO.pure(Seq.empty)
                                                               else initAction
                                                             )
                                                     }

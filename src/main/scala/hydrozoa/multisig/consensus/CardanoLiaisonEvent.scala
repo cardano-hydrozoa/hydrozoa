@@ -48,6 +48,15 @@ object CardanoLiaisonEvent:
 
     final case class TargetUtxoStatus(targetId: String, found: Boolean) extends CardanoLiaisonEvent
 
+    /** The hard-confirmed init tx could not be submitted because its (config-baked) validity window
+      * has already elapsed (`currentTime >= initializationTxEndTime`): the head can no longer be
+      * initialized on the happy path. Usually means too much wall-clock passed between head-config
+      * generation (which anchors the window) and stack-0 hard-confirmation — e.g. a long
+      * restart/debug cycle.
+      */
+    final case class InitWindowElapsed(currentTime: String, endTime: String)
+        extends CardanoLiaisonEvent
+
     final case class FinalizationTxStatus(hash: String, isKnown: String) extends CardanoLiaisonEvent
 
     final case class FinalizationTxQueryError(err: String) extends CardanoLiaisonEvent
