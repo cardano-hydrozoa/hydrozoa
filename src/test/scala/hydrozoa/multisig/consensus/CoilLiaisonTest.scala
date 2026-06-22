@@ -77,7 +77,12 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                   nodeOperationMultisigConfig = hubPrivate.nodeOperationMultisigConfig,
                   hydrozoaHost = "localhost",
                   hydrozoaPort = "4973",
-                  blockfrostApiKey = "not-a-real-key"
+                  blockfrostApiKey = "not-a-real-key",
+                  sugarRushUri = "ws://localhost:3001/ws",
+                  adminUsername = "admin",
+                  adminPassword = "welcome",
+                  httpHost = "0.0.0.0",
+                  httpPort = "8080",
                 )
                 .get
         )

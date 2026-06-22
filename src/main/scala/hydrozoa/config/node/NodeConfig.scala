@@ -14,7 +14,7 @@ import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
 import hydrozoa.lib.logging.Slf4jTracer
-import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 
@@ -45,21 +45,20 @@ object NodeConfig {
 
     def fromJson(
         headConfigStr: String,
-        nodePrivateConfigStr: String
-    ): EitherT[IO, ScriptReferenceUtxos.Error | io.circe.Error, NodeConfig] =
+        nodePrivateConfigStr: String,
+        backendOverride: Option[CardanoBackend[IO]] = None,
+    ): EitherT[IO, ScriptReferenceUtxos.Error | io.circe.Error, (NodeConfig, CardanoBackend[IO])] =
         for {
             network <- EitherT.fromEither[IO] {
                 given onlyNetwork: Decoder[CardanoNetwork] = Decoder.instance(c =>
-                    c.downField("headConfigBootstrap")
-                        .downField("cardanoNetwork")
+                    c.downField("cardanoNetwork")
                         .as[CardanoNetwork](using cardanoNetworkDecoder)
                 )
                 parser.decode(headConfigStr)
             }
             headPeers <- EitherT.fromEither[IO] {
                 given onlyHeadPeers: Decoder[HeadPeers] = Decoder.instance(c =>
-                    c.downField("headConfigBootstrap")
-                        .downField("headPeers")
+                    c.downField("headPeers")
                         .as[HeadPeers](using headPeersDecoder)
                 )
                 parser.decode(headConfigStr)
@@ -71,23 +70,28 @@ object NodeConfig {
                 io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
             }
 
-            blockfrostNetwork = network match {
-                case n: StandardCardanoNetwork => Left(n)
-                // TODO: need a blockfrost url here
-                case custom: Custom => Right((custom, ??? : CardanoBackendBlockfrost.URL))
+            // Use the caller-provided backend (e.g., a mock from a test) when supplied; otherwise
+            // build a real Blockfrost backend from the private config's API key + the network.
+            cardanoBackend <- backendOverride match {
+                case Some(b) => EitherT.pure[IO, ScriptReferenceUtxos.Error | io.circe.Error](b)
+                case None =>
+                    val blockfrostNetwork = network match {
+                        case n: StandardCardanoNetwork => Left(n)
+                        // TODO: need a blockfrost url here
+                        case custom: Custom => Right((custom, ??? : CardanoBackendBlockfrost.URL))
+                    }
+                    EitherT.liftF(
+                      CardanoBackendBlockfrost(
+                        blockfrostNetwork,
+                        privateConfig.blockfrostApiKey,
+                        tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                      )
+                    )
             }
-
-            cardanoBackend <- EitherT.liftF(
-              CardanoBackendBlockfrost(
-                blockfrostNetwork,
-                privateConfig.blockfrostApiKey,
-                tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-              )
-            )
 
             headConfig <- HeadConfig.fromJson(headConfigStr, cardanoBackend)
 
-        } yield NodeConfig(headConfig, privateConfig)
+        } yield (NodeConfig(headConfig, privateConfig), cardanoBackend)
 
     /** Build a head node's config: the shared `headConfig` plus the private identity layer carrying
       * an [[OwnHeadPeerPrivate]] (this head's wallet + its derived `HeadPeerNumber`). `None` if the
@@ -100,7 +104,12 @@ object NodeConfig {
         nodeOperationMultisigConfig: NodeOperationMultisigConfig,
         hydrozoaHost: String,
         hydrozoaPort: String,
-        blockfrostApiKey: String
+        blockfrostApiKey: String,
+        sugarRushUri: String,
+        adminUsername: String,
+        adminPassword: String,
+        httpHost: String,
+        httpPort: String,
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -109,7 +118,12 @@ object NodeConfig {
           nodeOperationMultisigConfig,
           hydrozoaHost,
           hydrozoaPort,
-          blockfrostApiKey
+          blockfrostApiKey,
+          sugarRushUri,
+          adminUsername,
+          adminPassword,
+          httpHost,
+          httpPort,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
@@ -124,7 +138,12 @@ object NodeConfig {
         nodeOperationMultisigConfig: NodeOperationMultisigConfig,
         hydrozoaHost: String,
         hydrozoaPort: String,
-        blockfrostApiKey: String
+        blockfrostApiKey: String,
+        sugarRushUri: String,
+        adminUsername: String,
+        adminPassword: String,
+        httpHost: String,
+        httpPort: String,
     ): Option[NodeConfig] = for {
         ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeerVKeys)
         nodePrivateConfig = NodePrivateConfig(
@@ -133,7 +152,12 @@ object NodeConfig {
           nodeOperationMultisigConfig,
           hydrozoaHost,
           hydrozoaPort,
-          blockfrostApiKey
+          blockfrostApiKey,
+          sugarRushUri,
+          adminUsername,
+          adminPassword,
+          httpHost,
+          httpPort,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
