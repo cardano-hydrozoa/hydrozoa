@@ -2,15 +2,15 @@ package hydrozoa.multisig.consensus.transport
 
 import hydrozoa.lib.logging.LogEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.transport.PeerWsTransportEvent.*
+import hydrozoa.multisig.consensus.transport.PeerTransportEvent.*
 
-/** Renderers from [[PeerWsTransportEvent]] to [[LogEvent]]. */
-object PeerWsTransportEventFormat:
+/** Renderers from [[PeerTransportEvent]] to [[LogEvent]]. */
+object PeerTransportEventFormat:
 
-    /** Routes under `PeerWsTransport.<own>` — tune all transport events for one peer at once. */
-    def humanFormat(own: HeadPeerNumber)(e: PeerWsTransportEvent): LogEvent = {
+    /** Routes under `PeerTransport.<own>` — tune all transport events for one peer at once. */
+    def humanFormat(own: HeadPeerNumber)(e: PeerTransportEvent): LogEvent = {
         val ownPn: Int = own
-        val ev = LogEvent.From(Map("peer" -> ownPn.toString), s"PeerWsTransport.$ownPn")
+        val ev = LogEvent.From(Map("peer" -> ownPn.toString), s"PeerTransport.$ownPn")
         import ev.*
         e match {
             case NoOutboxForRemote(remote) =>

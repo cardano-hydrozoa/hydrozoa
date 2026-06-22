@@ -4,7 +4,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager.{Actors, Dependencies}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.LimiterEvent
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.consensus.transport.{HubWsTransportEvent, NodeWsServerEvent, PeerWsTransportEvent}
+import hydrozoa.multisig.consensus.transport.{HubWsTransportEvent, NodeWsServerEvent, PeerTransportEvent}
 import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 
@@ -31,7 +31,7 @@ object HeadMultisigRegimeManagerEvent:
         extends HeadMultisigRegimeManagerEvent
     final case class BWL(event: LimiterEvent) extends HeadMultisigRegimeManagerEvent
     final case class SCL(event: LimiterEvent) extends HeadMultisigRegimeManagerEvent
-    final case class PWT(event: PeerWsTransportEvent) extends HeadMultisigRegimeManagerEvent
+    final case class PT(event: PeerTransportEvent) extends HeadMultisigRegimeManagerEvent
     final case class HWT(event: HubWsTransportEvent) extends HeadMultisigRegimeManagerEvent
     final case class NWS(event: NodeWsServerEvent) extends HeadMultisigRegimeManagerEvent
     final case class CAS(event: CoilAckSequencerEvent) extends HeadMultisigRegimeManagerEvent

@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Round-trip tests for the wire codecs used by [[PeerWsTransport]] — the head ↔ head mesh batch
+/** Round-trip tests for the wire codecs used by [[PeerTransport]] — the head ↔ head mesh batch
   * messages ([[Mesh.Get]] / [[Mesh.New]]) only, since the hub↔coil links are in-process and never
   * hit the wire.
   *

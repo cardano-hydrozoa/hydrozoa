@@ -5,19 +5,22 @@ import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{Host, Port, host, port}
-import com.suprnation.actor.ActorSystem
+import com.suprnation.actor.{ActorContext, ActorSystem}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.transport.{NodeWsServer, PeerTransport}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
+import org.http4s.Uri
+import org.http4s.jdkhttpclient.JdkWSClient
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.Coin
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -266,14 +269,45 @@ object Main extends IOApp {
                 .getOrElse(
                   throw new IllegalArgumentException(s"Invalid HYDROZOA_PORT: ${env.hydrozoaPort}")
                 )
+
+            // Build the WS-backed head-mesh transport: open one shared dialer client, the
+            // PeerTransport instance, bind a NodeWsServer for its inbound route, and start the
+            // outbound dialers. The MRM's resource() owns this Resource's lifecycle and
+            // ignores the ActorContext (the WS variant doesn't need it to allocate).
+            ownHeadPeerId = nodeConfig.ownPeerId match {
+                case PeerId.Head(n) => nodeConfig.headPeerIds.find(_.peerNum == n).get
+                case PeerId.Coil(_) =>
+                    throw new IllegalStateException(
+                      "HeadMultisigRegimeManager runs only on head peers"
+                    )
+            }
+            remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
+                .filterNot(_.peerNum == ownHeadPeerId.peerNum)
+                .toList
+                .flatMap { pid =>
+                    nodeConfig.headConfig.headPeers.headPeerData
+                        .lookup(pid.peerNum)
+                        .map(hpd => pid -> (hpd.webSocketAddress / "head"))
+                }
+                .toMap
+            pwtTracer = mrmTracer.contramap(HeadMultisigRegimeManagerEvent.PT.apply)
+            nwsTracer = mrmTracer.contramap(HeadMultisigRegimeManagerEvent.NWS.apply)
+            wsPeerTransport = for {
+                wsClient <- Resource.eval(JdkWSClient.simple[IO])
+                transport <- Resource.eval(
+                  PeerTransport.create(ownHeadPeerId, remoteHeadUris, pwtTracer)
+                )
+                _ <- NodeWsServer.resource(bindHost, bindPort, List(transport.routes), nwsTracer)
+                _ <- transport.startDialers(wsClient)
+            } yield (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) => transport
+
             mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
               remoteL2Ledger,
               persistence,
               mrmTracer,
-              bindHost,
-              bindPort,
+              wsPeerTransport,
             )
         } yield (env, nodeConfig, system, mrm)
 

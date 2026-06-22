@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerWsTransportEventFormat}
+import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerTransportEventFormat}
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, CoilAckSequencer, CoilRelay, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
 import hydrozoa.multisig.consensus.CoilAckSequencerEventFormat
@@ -508,7 +508,7 @@ case class Stage4Suite(
         // ------ Build the per-peer remote-liaison map. In Direct mode this is the actual
         // ------ PeerLiaisonHeadToHead handle from the other peer's actor stack. In WebSocket
         // ------ mode it's a RemotePeerProxy that forwards messages over the local
-        // ------ PeerWsTransport. ws.remoteHeadByPeer(A)(B) = the handle that A's
+        // ------ PeerTransport. ws.remoteHeadByPeer(A)(B) = the handle that A's
         // ------ PeerLiaisonHeadToHead(A->B) uses to reach B's PeerLiaisonHeadToHead(B->A).
         // ------ WS transports (head mesh and coil links) are released when the Resource is
         // ------ finalized.
@@ -966,7 +966,7 @@ case class Stage4Suite(
     ): HeadPeerId =
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
-    /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub)
+    /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerTransport]] and (on the hub)
       * the [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes
       * `/head` and `/hub`), and starts the mesh dialers. For each coil peer it builds a
       * [[CoilPeerWsTransport]] dialing the hub's `/hub`. Returns the head-mesh remote-proxy map
@@ -1013,9 +1013,9 @@ case class Stage4Suite(
                             .map(rpn => headPeerId(multiNodeConfig, rpn) -> uriFor(rpn))
                             .toMap
                         val pwsTracer = Slf4jTracer.sink.contramap(
-                          PeerWsTransportEventFormat.humanFormat(ownPeerNum)
+                          PeerTransportEventFormat.humanFormat(ownPeerNum)
                         )
-                        PeerWsTransport.create(ownPeerId, remotes, pwsTracer).map(ownPeerNum -> _)
+                        PeerTransport.create(ownPeerId, remotes, pwsTracer).map(ownPeerNum -> _)
                     }
                     .map(_.toMap)
                 coilHubTransportOpt <-

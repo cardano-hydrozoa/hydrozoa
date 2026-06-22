@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonHeadToHead}
 import hydrozoa.multisig.consensus.peer.HeadPeerId
-import hydrozoa.multisig.consensus.transport.PeerWsTransportEvent.*
+import hydrozoa.multisig.consensus.transport.PeerTransportEvent.*
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
@@ -32,12 +32,12 @@ import scala.concurrent.duration.*
   * ([[PeerLiaisonHeadToHead]]) is idempotent (GetMsgBatch/NewMsgBatch with explicit numbering), so
   * a brief window where the same message is delivered twice during a reconnect is harmless.
   */
-final class PeerWsTransport private (
+final class PeerTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
     private val remotes: Map[HeadPeerId, Uri],
-    private val tracer: ContraTracer[IO, PeerWsTransportEvent],
+    private val tracer: ContraTracer[IO, PeerTransportEvent],
 )(using CardanoNetwork.Section) {
 
     /** Wire a local PeerLiaisonHeadToHead handle as the inbound dispatch target for messages
@@ -175,7 +175,7 @@ final class PeerWsTransport private (
             }
 }
 
-object PeerWsTransport {
+object PeerTransport {
 
     /** Allocate the per-peer mesh transport: one outbox per remote + an empty inbound map. The
       * caller mounts [[routes]] on a [[NodeWsServer]] and calls [[startDialers]] with a shared
@@ -191,12 +191,12 @@ object PeerWsTransport {
     def create(
         ownPeerId: HeadPeerId,
         remotes: Map[HeadPeerId, Uri],
-        tracer: ContraTracer[IO, PeerWsTransportEvent],
-    )(using CardanoNetwork.Section): IO[PeerWsTransport] =
+        tracer: ContraTracer[IO, PeerTransportEvent],
+    )(using CardanoNetwork.Section): IO[PeerTransport] =
         for {
             outboxes <- remotes.keys.toList
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new PeerWsTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
+        } yield new PeerTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
 }

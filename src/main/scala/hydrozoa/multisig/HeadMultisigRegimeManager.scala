@@ -3,12 +3,10 @@ package hydrozoa.multisig
 import cats.*
 import cats.effect.{Deferred, IO, Resource}
 import cats.implicits.*
-import com.comcast.ip4s.{Host, Port}
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
 import com.suprnation.actor.SupervisorStrategy.Escalate
-import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
-import hydrozoa.config.head.network.CardanoNetwork
+import com.suprnation.actor.{ActorContext, OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
@@ -18,13 +16,11 @@ import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.{NodeWsServer, NodeWsServerEvent, PeerWsTransport, PeerWsTransportEvent, RemotePeerProxy}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.transport.{PeerTransport, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
-import org.http4s.Uri
-import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.DurationInt
 
 trait HeadMultisigRegimeManager(
@@ -33,13 +29,7 @@ trait HeadMultisigRegimeManager(
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
     tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
-    // TODO: This should be context => IO[RemoteActorProxies]
-    //   This either gives you the:
-    //   - Websockets, via `main`/`PeerWsTransport`
-    //   - Process-local actor-refs for TestControl-compatible integration tests (which will be something like
-    //     `integrationMain`). This will need an IntegrationActor that spawns MRMs
-    //   Rename to just "transport" and "PeerTransport"
-    wsTransport: PeerWsTransport,
+    peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
 ) extends Actor[IO, Request] {
 
     /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
@@ -173,15 +163,16 @@ trait HeadMultisigRegimeManager(
 
             // Register local liaisons and spawn one RemotePeerProxy per remote head peer.
             remoteHeadProxies <- {
+                val transport = peerTransport(context)
                 val remoteIds = config.headPeerIds.toList.filterNot(_.peerNum == ownHeadNum)
                 for {
                     _ <- remoteIds.zip(headPeerLiaisons).traverse_ {
                         case (remoteId, localLiaison) =>
-                            wsTransport.register(remoteId, localLiaison)
+                            transport.register(remoteId, localLiaison)
                     }
                     proxies <- remoteIds.traverse { remoteId =>
                         context
-                            .actorOf(RemotePeerProxy(remoteId, wsTransport))
+                            .actorOf(RemotePeerProxy(remoteId, transport))
                             .map(remoteId.peerNum -> _)
                     }
                 } yield proxies.toMap
@@ -331,31 +322,10 @@ object HeadMultisigRegimeManager {
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
         tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
-        bindHost: Host,
-        bindPort: Port,
-    )(using CardanoNetwork.Section): Resource[IO, HeadMultisigRegimeManager] = {
-        val ownHeadPeerId = config.ownPeerId match {
-            case PeerId.Head(n) => config.headPeerIds.find(_.peerNum == n).get
-            case PeerId.Coil(_) =>
-                throw new IllegalStateException("HeadMultisigRegimeManager runs only on head peers")
-        }
-        val remotes: Map[HeadPeerId, Uri] = config.headPeerIds
-            .filterNot(_.peerNum == ownHeadPeerId.peerNum)
-            .toList
-            .flatMap { pid =>
-                config.headPeers.headPeerData
-                    .lookup(pid.peerNum)
-                    .map(hpd => pid -> (hpd.webSocketAddress / "head"))
-            }
-            .toMap
-        for {
-            client <- Resource.eval(JdkWSClient.simple[IO])
-            pwtTracer = tracer.contramap(HeadMultisigRegimeManagerEvent.PWT.apply)
-            nwsTracer = tracer.contramap(HeadMultisigRegimeManagerEvent.NWS.apply)
-            transport <- Resource.eval(PeerWsTransport.create(ownHeadPeerId, remotes, pwtTracer))
-            _ <- NodeWsServer.resource(bindHost, bindPort, List(transport.routes), nwsTracer)
-            _ <- transport.startDialers(client)
-            mrm <- Resource.eval(
+        peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
+    ): Resource[IO, HeadMultisigRegimeManager] =
+        peerTransport.flatMap { factory =>
+            Resource.eval(
               IO(
                 new HeadMultisigRegimeManager(
                   config,
@@ -363,12 +333,11 @@ object HeadMultisigRegimeManager {
                   virtualLedger,
                   persistence,
                   tracer,
-                  transport,
+                  factory,
                 ) {}
               )
             )
-        } yield mrm
-    }
+        }
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]
