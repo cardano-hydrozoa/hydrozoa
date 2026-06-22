@@ -437,18 +437,19 @@ object PropertyM:
       */
     def useResource[R, A](r: cats.effect.Resource[cats.effect.IO, R])(
         body: R => PropertyM[cats.effect.IO, A]
-    )(using @scala.annotation.unused toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM { k =>
-        Gen.gen { (p, s) =>
-            val io: cats.effect.IO[Prop] = cats.effect.IO.uncancelable { poll =>
-                r.allocated.flatMap { case (env, release) =>
-                    body(env).unPropertyM(k).doApply(p, s).retrieve match {
-                        case Some(bodyIo) => poll(bodyIo).guarantee(release)
-                        case None         => release.as(Prop.undecided)
+    )(using @scala.annotation.unused toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM {
+        k =>
+            Gen.gen { (p, s) =>
+                val io: cats.effect.IO[Prop] = cats.effect.IO.uncancelable { poll =>
+                    r.allocated.flatMap { case (env, release) =>
+                        body(env).unPropertyM(k).doApply(p, s).retrieve match {
+                            case Some(bodyIo) => poll(bodyIo).guarantee(release)
+                            case None         => release.as(Prop.undecided)
+                        }
                     }
                 }
+                Gen.r(Some(io), s.next)
             }
-            Gen.r(Some(io), s.next)
-        }
     }
 
     // ===================================

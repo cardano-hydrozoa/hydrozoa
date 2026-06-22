@@ -549,7 +549,7 @@ object HeadConfig {
             ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
-                case Valid(())           => Valid(headConfigBootstrap)
+                case Valid(())       => Valid(headConfigBootstrap)
                 case Invalid(errors) => Invalid(errors)
             }
         }
