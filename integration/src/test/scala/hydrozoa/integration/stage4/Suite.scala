@@ -625,10 +625,12 @@ case class Stage4Suite(
               sleep = 0.seconds,
             )
 
+            targetBlockNums <- sut.slowCoverageTarget.get
+
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
-            propStackCoverage(canonicalBriefs, canonicalStacks) &&
+            propStackCoverage(targetBlockNums, canonicalStacks) &&
             propCoilParticipation(coilStacksByCoil, canonicalStacks) &&
             effectsLandedProp
     }
@@ -908,14 +910,13 @@ case class Stage4Suite(
             "(SUT is more permissive than the model)"
     }
 
-    /** Property: the slow cycle made progress and kept up — it hard-confirmed at least one stack
-      * and, by shutdown idle, every block the fast cycle produced (captured via the brief
-      * ContraTracer in `buildPeerStack`) is contained in some hard-confirmed stack (captured via
-      * the SCA ContraTracer sink). Catches a slow side that stalls, never closes a stack, or fails
-      * to aggregate hard-acks into [[Stack.HardConfirmed]]. Both observers read the canonical peer.
+    /** Property: the slow cycle hard-confirmed at least one stack, and every block in the frozen
+      * `slowCoverageTarget` lies in some hard-confirmed stack on the canonical peer. Using the
+      * frozen target — the contract the shutdown waited on — rather than a fresh brief re-read
+      * avoids drift if the leader produces another block between the signal and the snapshot.
       */
     private def propStackCoverage(
-        canonicalBriefs: Vector[BlockBrief.Intermediate],
+        targetBlockNums: Set[Int],
         canonicalStacks: Vector[Stack.HardConfirmed]
     ): Prop = {
         // A stack covers the inclusive block range [firstBlockNum, lastBlockNum] from its
@@ -926,10 +927,9 @@ case class Stage4Suite(
                 val b = s.brief
                 ((b.firstBlockNum: Int), (b.lastBlockNum: Int))
             }
-        def covered(n: BlockNumber): Boolean =
-            coveredRanges.exists { case (lo, hi) => lo <= (n: Int) && (n: Int) <= hi }
-        val observedBlocks: Set[BlockNumber] = canonicalBriefs.map(_.blockNum).toSet
-        val uncovered = observedBlocks.filterNot(covered)
+        def covered(n: Int): Boolean =
+            coveredRanges.exists { case (lo, hi) => lo <= n && n <= hi }
+        val uncovered = targetBlockNums.filterNot(covered)
         (Prop(canonicalStacks.nonEmpty) :|
             "stack coverage: slow cycle hard-confirmed no stacks") &&
         (Prop(uncovered.isEmpty) :|

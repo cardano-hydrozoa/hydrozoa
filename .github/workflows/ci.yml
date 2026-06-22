@@ -33,8 +33,7 @@ jobs:
       - name: Unit tests
         run: nix develop --command just test
 
-      # Integration tests temporarily disabled pending werror fixes.
-      # - name: Integration tests
-      #   env:
-      #     JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
-      #   run: nix develop --command just integration-fast
+      - name: Integration tests
+        env:
+          JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
+        run: nix develop --command just integration-fast
