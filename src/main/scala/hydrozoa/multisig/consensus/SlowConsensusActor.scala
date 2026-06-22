@@ -230,7 +230,15 @@ final case class SlowConsensusActor(
             stateRef.get.flatMap { s =>
                 s.cells.get(h.stackNum) match {
                     case None =>
-                        stateRef.update(_.bufferOrphan(h))
+                        // No cell: either a genuinely early orphan (this peer's handoff for the
+                        // stack hasn't arrived yet — buffer it for replay at cell creation) or a
+                        // late surplus ack for an already hard-confirmed stack. Buffering the latter
+                        // would leak: orphans for a dropped cell are never replayed.
+                        if s.lastConfirmed.exists(Ordering[StackNumber].lteq(h.stackNum, _)) then
+                            tracer.traceWith(
+                              SlowConsensusActorEvent.SurplusHardAckIgnored(h.stackNum, h.peerId)
+                            )
+                        else stateRef.update(_.bufferOrphan(h))
                     case Some(_) =>
                         applyRemote(h) >> tryAdvance(h.stackNum)
                 }
@@ -258,9 +266,12 @@ final case class SlowConsensusActor(
                         IO.raiseError(CellError.UnexpectedPayload(h.stackNum, other.roundLabel))
                 }
             case c: Cell.WaitingRound2 =>
-                // Round-1 is already saturated and the peer-liaison lane delivers each hard-ack
-                // exactly once (next-expected cursors, no resends), so only round-2 is expected
-                // now; any other payload — including a second round-1 — is a protocol violation.
+                // Round 1 is saturated; only round-2 advances the cell now. A late round-1 is NOT a
+                // violation, though: round 1 saturates at the coil quorum, not the full coil set, so
+                // a coil peer beyond the quorum can still have its round-1 ack in flight when the
+                // cell advanced. Its signature is surplus — `selectSigners` keeps only `coilQuorum`
+                // coils — so drop it rather than fail the cell. A `Sole` payload here, by contrast,
+                // is a genuine protocol violation (sole belongs to 1-phase stacks).
                 h.payload match {
                     case p: HardAck.Payload.Round2 =>
                         ackVerifier
@@ -268,6 +279,12 @@ final case class SlowConsensusActor(
                             .as(
                               c.copy(round2 = c.round2.updated(peer, p))
                             )
+                    case _: HardAck.Payload.Round1 =>
+                        tracer
+                            .traceWith(
+                              SlowConsensusActorEvent.SurplusHardAckIgnored(h.stackNum, peer)
+                            )
+                            .as(c)
                     case other =>
                         IO.raiseError(CellError.UnexpectedPayload(h.stackNum, other.roundLabel))
                 }
@@ -529,7 +546,13 @@ object SlowConsensusActor {
 
     final case class State(
         cells: Map[StackNumber, Cell],
-        orphanAcks: Map[StackNumber, List[HardAck]]
+        orphanAcks: Map[StackNumber, List[HardAck]],
+        /** Highest stack number this actor has hard-confirmed (and dropped the cell for). Stacks
+          * confirm strictly in order, so any ack for `stackNum <= lastConfirmed` is a late surplus
+          * for an already-finished stack — it must be dropped, not re-buffered as an orphan, since
+          * orphans are replayed only at cell creation, which never recurs for a dropped stack.
+          */
+        lastConfirmed: Option[StackNumber]
     ) {
         def bufferOrphan(h: HardAck): State =
             copy(orphanAcks =
@@ -537,10 +560,11 @@ object SlowConsensusActor {
             )
         def clearOrphans(stackNum: StackNumber): State =
             copy(orphanAcks = orphanAcks - stackNum)
-        def dropCell(stackNum: StackNumber): State = copy(cells = cells - stackNum)
+        def dropCell(stackNum: StackNumber): State =
+            copy(cells = cells - stackNum, lastConfirmed = Some(stackNum))
     }
     object State {
-        def initial: State = State(Map.empty, Map.empty)
+        def initial: State = State(Map.empty, Map.empty, None)
     }
 
     enum HandoffError extends Throwable:

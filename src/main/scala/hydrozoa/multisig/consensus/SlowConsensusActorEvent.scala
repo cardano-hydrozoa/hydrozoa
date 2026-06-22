@@ -1,5 +1,6 @@
 package hydrozoa.multisig.consensus
 
+import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.stack.{Stack, StackNumber}
 
 /** Typed events emitted by [[SlowConsensusActor]]. Pure data; formatters in
@@ -23,6 +24,15 @@ object SlowConsensusActorEvent:
       * original is already held locally.
       */
     final case class OwnHardAckEchoIgnored(stackNum: StackNumber) extends SlowConsensusActorEvent
+
+    /** A surplus hard-ack was ignored rather than raised as a protocol violation: a round-1 ack
+      * from a coil peer beyond the round's `coilQuorum` arriving after the cell already advanced
+      * past round 1, or any late ack for a stack already hard-confirmed (its cell dropped). The
+      * signer contributes no witness — `selectSigners` keeps only `coilQuorum` coils — so the ack
+      * is redundant and dropped.
+      */
+    final case class SurplusHardAckIgnored(stackNum: StackNumber, peer: PeerId)
+        extends SlowConsensusActorEvent
 
     /** All acks collected and aggregated; [[Stack.HardConfirmed]] emitted downstream. */
     final case class StackHardConfirmed(stack: Stack.HardConfirmed) extends SlowConsensusActorEvent
