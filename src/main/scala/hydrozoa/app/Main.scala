@@ -214,7 +214,9 @@ object Main extends IOApp {
                     network <- {
                         given onlyNetwork: io.circe.Decoder[CardanoNetwork] =
                             io.circe.Decoder.instance(
-                              _.downField("cardanoNetwork").as[CardanoNetwork](using cardanoNetworkDecoder)
+                              _.downField("cardanoNetwork").as[CardanoNetwork](using
+                                cardanoNetworkDecoder
+                              )
                             )
                         parser.decode[CardanoNetwork](jsonStr)
                     }

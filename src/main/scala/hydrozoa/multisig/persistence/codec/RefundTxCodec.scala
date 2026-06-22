@@ -19,9 +19,9 @@ import io.circe.{Decoder, Encoder}
   *     `CardanoNetwork.Section`, threaded through from this codec);
   *   - [[DestinationCodec]] — fresh CBOR-hex round-trip (the codec on the type itself is
   *     asymmetric);
-  *   - the `RequestId.i64` codec (packed i64 form) — shadows the companion object's default
-  *     object shape so the on-disk `requestId` field is a plain number, matching the
-  *     SugarRush `u64` expectation.
+  *   - the `RequestId.i64` codec (packed i64 form) — shadows the companion object's default object
+  *     shape so the on-disk `requestId` field is a plain number, matching the SugarRush `u64`
+  *     expectation.
   *
   * `txLens` and `resolvedUtxos = ResolvedUtxos.empty` are derived from the case-class body, not
   * stored in JSON; on decode the case-class default values restore them.
