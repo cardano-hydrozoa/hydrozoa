@@ -3,7 +3,7 @@ package hydrozoa.integration.stage4
 import cats.data.ReaderT
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
-import com.suprnation.actor.ActorSystem
+import com.suprnation.actor.{ActorContext, ActorSystem}
 import com.suprnation.actor.event.Error as ActorError
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
@@ -18,10 +18,10 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.HeadMultisigRegimeManager
+import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, WsPeerTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerTransportEventFormat}
+import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, InProcessPeerTransport, NodeWsServer, PeerTransport, WsPeerTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerTransportEventFormat}
 import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, CoilAckSequencer, CoilRelay, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
 import hydrozoa.multisig.consensus.CoilAckSequencerEventFormat
@@ -899,62 +899,251 @@ case class Stage4Suite(
             )
         }
 
-        for {
-            _ <- Resource.eval(preSystem)
-            system <- ActorSystem[IO](label)
-            pss <- Resource.eval(postSystem)
-            peerStackMap <- peers.toList
-                .traverse { peerNum =>
-                    buildPeerStack(
+        // ------ Direct + no-coil path: one HMRM per peer over InProcessPeerTransport. ------
+        // Older code paths (PeerStack + postStack + buildCoilWirings) are still used for
+        // WebSocket-mode tests and for any future coil-mixed scenario (currently disabled).
+
+        case class PeerMrm(
+            mrm: HeadMultisigRegimeManager,
+            backendStore: BackendStore[IO],
+        )
+
+        def buildPeerMrm(
+            peerNum: HeadPeerNumber,
+            system: ActorSystem[IO],
+            cardanoBackend: CardanoBackend[IO],
+            registry: InProcessPeerTransport.Registry,
+            blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+            stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+            fastSettlementSignal: Deferred[IO, Unit],
+            slowCoverageSignal: Deferred[IO, Unit],
+            fastSettlementTarget: Deferred[IO, Set[RequestId]],
+            slowCoverageTarget: Deferred[IO, Set[Int]],
+        ): Resource[IO, PeerMrm] = {
+            val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
+            val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+
+            // HMRM-level tracer = slf4j sink + per-peer capture observers (SCA stacks + JL briefs).
+            // Single source of truth feeds both the logger and the test's assertion refs.
+            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+                Slf4jTracer.sink.contramap(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
+                )
+            val mrmTracer =
+                slf4jMrm |+|
+                    Observers.captureStackHardConfirmed(
                       peerNum,
-                      system,
-                      pss.cardanoBackend,
-                      pss.pendingConnsMap,
-                      pss.blockBriefsMap,
-                      pss.stacksMap,
-                      pss.submittedRequestIds,
-                      pss.fastSettlementSignal,
-                      pss.slowCoverageSignal,
-                      pss.fastSettlementTarget,
-                      pss.slowCoverageTarget,
-                    ).map(peerNum -> _)
+                      stacksMap,
+                      slowCoverageSignal,
+                      slowCoverageTarget,
+                    ) |+|
+                    Observers.captureBriefProduced(
+                      peerNum,
+                      blockBriefsMap,
+                      fastSettlementSignal,
+                      fastSettlementTarget,
+                    )
+
+            val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+
+            openPeerBackend(
+              peerNum,
+              Cf.mkAll(
+                headPeers = multiNodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = multiNodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              ),
+              persistenceTracer
+            ).flatMap { backendStore =>
+                for {
+                    persistence <- Resource.eval {
+                        given CardanoNetwork.Section = nodeConfig
+                        Persistence.fromBackend(backendStore, persistenceTracer)
+                    }
+                    l2Ledger  <- Resource.eval(EutxoL2Ledger(nodeConfig))
+                    transport <- Resource.eval(
+                      InProcessPeerTransport.create(ownHeadPeerId, registry)
+                    )
+                    mrm <- HeadMultisigRegimeManager.resource(
+                      nodeConfig,
+                      cardanoBackend,
+                      l2Ledger,
+                      persistence,
+                      mrmTracer,
+                      Resource.pure(
+                        (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                            transport: PeerTransport
+                      ),
+                    )
+                    _ <- Resource.eval(system.actorOf(mrm, s"hmrm-$peerNum"))
+                } yield PeerMrm(mrm, backendStore)
+            }
+        }
+
+        def acquireSutFromMrms(
+            system: ActorSystem[IO],
+            cardanoBackend: CardanoBackend[IO],
+            peerMrms: Map[HeadPeerNumber, PeerMrm],
+            blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+            stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+            submittedRequestIds: Ref[IO, Vector[RequestId]],
+            fastSettlementSignal: Deferred[IO, Unit],
+            slowCoverageSignal: Deferred[IO, Unit],
+            fastSettlementTarget: Deferred[IO, Set[RequestId]],
+            slowCoverageTarget: Deferred[IO, Set[Int]],
+        ): IO[Stage4Sut] =
+            for {
+                peerConnections <- peerMrms.toList
+                    .traverse { case (peerNum, peerMrm) =>
+                        peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
+                    }
+                    .map(_.toMap)
+                sutErrors <- Ref[IO].of(List.empty[String])
+                errorDrainer <- system.eventStream.take
+                    .flatMap {
+                        case e: ActorError if e.cause != ActorError.NoCause =>
+                            sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                        case _ => IO.unit
+                    }
+                    .foreverM
+                    .start
+                liaisonTickFibers <- peerConnections.toList.traverse { case (peerNum, conns) =>
+                    val pollingPeriod = multiNodeConfig
+                        .nodeConfigs(peerNum)
+                        .nodeOperationMultisigConfig
+                        .cardanoLiaisonPollingPeriod
+                    (IO.sleep(pollingPeriod) >>
+                        (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
                 }
-                .map(_.toMap)
-            peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pss.pendingConnsMap))
-            ws <- transportSetup(system, peerLiaisonMap)
-            coilParts <- buildCoilWirings(
-              system,
-              pss.cardanoBackend,
-              peerStackMap,
-              pss.pendingConnsMap,
-              ws,
+            } yield Stage4Sut(
+              system = system,
+              cardanoBackend = cardanoBackend,
+              peers = peerConnections.map { case (peerNum, conns) =>
+                  peerNum -> Stage4PeerHandle(
+                    conns.requestSequencer.getOrElse(
+                      sys.error(s"head peer $peerNum missing RequestSequencer")
+                    )
+                  )
+              },
+              sutErrors = sutErrors,
+              errorDrainer = errorDrainer,
+              liaisonTickFibers = liaisonTickFibers,
+              blockBriefs = blockBriefsMap,
+              stacks = stacksMap,
+              coilStacks = Map.empty,
+              backendStores = peerMrms.map { case (peerNum, peerMrm) =>
+                  peerNum -> peerMrm.backendStore
+              },
+              submittedRequestIds = submittedRequestIds,
+              fastSettlementSignal = fastSettlementSignal,
+              slowCoverageSignal = slowCoverageSignal,
+              fastSettlementTarget = fastSettlementTarget,
+              slowCoverageTarget = slowCoverageTarget,
+              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
-            (coilAckSequencer, coilRelay, coilWirings) = coilParts
-            sut <- Resource.make(
-              acquireSut(
-                system,
-                pss.cardanoBackend,
-                peerStackMap,
-                pss.pendingConnsMap,
-                pss.blockBriefsMap,
-                pss.stacksMap,
-                peerLiaisonMap,
-                ws,
-                coilAckSequencer,
-                coilRelay,
-                coilWirings,
-                pss.submittedRequestIds,
-                pss.fastSettlementSignal,
-                pss.slowCoverageSignal,
-                pss.fastSettlementTarget,
-                pss.slowCoverageTarget,
-              )
-            )(sut =>
-                sut.liaisonTickFibers.traverse_(_.cancel) >>
-                    IO.sleep(100.millis) >>
-                    sut.errorDrainer.cancel
-            )
-        } yield sut
+
+        val useMrm = !wsMode && coilConfigs.isEmpty
+
+        if useMrm then
+            for {
+                _      <- Resource.eval(preSystem)
+                system <- ActorSystem[IO](label)
+                pss    <- Resource.eval(postSystem)
+                registry <- Resource.eval(InProcessPeerTransport.emptyRegistry)
+                peerMrms <- peers.toList
+                    .traverse { peerNum =>
+                        buildPeerMrm(
+                          peerNum,
+                          system,
+                          pss.cardanoBackend,
+                          registry,
+                          pss.blockBriefsMap,
+                          pss.stacksMap,
+                          pss.fastSettlementSignal,
+                          pss.slowCoverageSignal,
+                          pss.fastSettlementTarget,
+                          pss.slowCoverageTarget,
+                        ).map(peerNum -> _)
+                    }
+                    .map(_.toMap)
+                sut <- Resource.make(
+                  acquireSutFromMrms(
+                    system,
+                    pss.cardanoBackend,
+                    peerMrms,
+                    pss.blockBriefsMap,
+                    pss.stacksMap,
+                    pss.submittedRequestIds,
+                    pss.fastSettlementSignal,
+                    pss.slowCoverageSignal,
+                    pss.fastSettlementTarget,
+                    pss.slowCoverageTarget,
+                  )
+                )(sut =>
+                    sut.liaisonTickFibers.traverse_(_.cancel) >>
+                        IO.sleep(100.millis) >>
+                        sut.errorDrainer.cancel
+                )
+            } yield sut
+        else
+            for {
+                _      <- Resource.eval(preSystem)
+                system <- ActorSystem[IO](label)
+                pss    <- Resource.eval(postSystem)
+                peerStackMap <- peers.toList
+                    .traverse { peerNum =>
+                        buildPeerStack(
+                          peerNum,
+                          system,
+                          pss.cardanoBackend,
+                          pss.pendingConnsMap,
+                          pss.blockBriefsMap,
+                          pss.stacksMap,
+                          pss.submittedRequestIds,
+                          pss.fastSettlementSignal,
+                          pss.slowCoverageSignal,
+                          pss.fastSettlementTarget,
+                          pss.slowCoverageTarget,
+                        ).map(peerNum -> _)
+                    }
+                    .map(_.toMap)
+                peerLiaisonMap <- Resource.eval(
+                  postStack(system, peerStackMap, pss.pendingConnsMap)
+                )
+                ws        <- transportSetup(system, peerLiaisonMap)
+                coilParts <- buildCoilWirings(
+                  system,
+                  pss.cardanoBackend,
+                  peerStackMap,
+                  pss.pendingConnsMap,
+                  ws,
+                )
+                (coilAckSequencer, coilRelay, coilWirings) = coilParts
+                sut <- Resource.make(
+                  acquireSut(
+                    system,
+                    pss.cardanoBackend,
+                    peerStackMap,
+                    pss.pendingConnsMap,
+                    pss.blockBriefsMap,
+                    pss.stacksMap,
+                    peerLiaisonMap,
+                    ws,
+                    coilAckSequencer,
+                    coilRelay,
+                    coilWirings,
+                    pss.submittedRequestIds,
+                    pss.fastSettlementSignal,
+                    pss.slowCoverageSignal,
+                    pss.fastSettlementTarget,
+                    pss.slowCoverageTarget,
+                  )
+                )(sut =>
+                    sut.liaisonTickFibers.traverse_(_.cancel) >>
+                        IO.sleep(100.millis) >>
+                        sut.errorDrainer.cancel
+                )
+            } yield sut
     }
 
     /** This peer's [[HeadPeerId]] — derived from its number + the head-set size; `NodeConfig` does
