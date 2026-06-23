@@ -1,10 +1,11 @@
 package hydrozoa.multisig.ledger.joint
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
-import hydrozoa.lib.logging.Level
-import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
+import hydrozoa.config.head.multisig.timing.TxTimingEvent
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockHeaderEvent, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEvent
 import hydrozoa.multisig.ledger.l2.L2LedgerError
 
 /** Typed events emitted by [[JointLedger]]. Pure data; formatters in [[JointLedgerEventFormat]]
@@ -72,11 +73,19 @@ object JointLedgerEvent:
 
     final case class BlockBriefBuilt(brief: BlockBrief.Intermediate) extends JointLedgerEvent
 
-    // ===== Pure-function log pass-through =====
+    // ===== Pure-function sub-tracer pass-through =====
 
-    /** Wraps a [[hydrozoa.lib.logging.LogEvent]] emitted by a pure function returning `Traced[A]`
-      * (e.g. `BlockHeader.nextHeader*`), so it can flow through JL's typed tracer instead of an
-      * ambient `IOLocal[Slf4jTracer]`.
+    /** Wraps a [[BlockHeaderEvent]] emitted by the polymorphic `BlockHeader.nextHeader*` functions,
+      * so it flows through JL's typed tracer.
       */
-    final case class HeaderLog(level: Level, msg: String, ctx: Map[String, String])
-        extends JointLedgerEvent
+    final case class HeaderEvent(event: BlockHeaderEvent) extends JointLedgerEvent
+
+    /** Wraps a [[TxTimingEvent]] emitted by the polymorphic `TxTiming.blockCanStayMinor` predicate,
+      * so it flows through JL's typed tracer.
+      */
+    final case class TimingEvent(event: TxTimingEvent) extends JointLedgerEvent
+
+    /** Wraps a [[DepositsMapEvent]] emitted by the polymorphic `DepositsMap.partition`, so it flows
+      * through JL's typed tracer.
+      */
+    final case class DepositsEvent(event: DepositsMapEvent) extends JointLedgerEvent

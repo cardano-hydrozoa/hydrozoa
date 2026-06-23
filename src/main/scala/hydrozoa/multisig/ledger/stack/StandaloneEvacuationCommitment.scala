@@ -2,11 +2,8 @@ package hydrozoa.multisig.ledger.stack
 
 import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.rulebased.ledger.l1.state.VoteState
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import scalus.cardano.onchain.plutus.v3.TokenName
-import scalus.uplc.builtin.Builtins.serialiseData
-import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{ByteString, FromData, ToData}
 
 /** A standalone evacuation commitment — the per-spec record a **minor** block carries (see
   * `replicated-state-machine/effects#standalone-evacuation-commitment`).
@@ -50,7 +47,7 @@ final case class StandaloneEvacuationCommitment(
     blockNum: BlockNumber,
     blockVersion: BlockVersion.Full,
     kzgCommitment: KzgCommitment,
-    header: StandaloneEvacuationCommitment.Onchain.Serialized
+    header: StandaloneEvacuationCommitmentOnchain.Serialized
 )
 
 object StandaloneEvacuationCommitment {
@@ -70,11 +67,8 @@ object StandaloneEvacuationCommitment {
     )
 
     /** The PlutusData shape the rule-based dispute-resolution script consumes as the vote
-      * redeemer's `sec` field. This is the off-chain ⇄ on-chain interface for the SEC: an SEC
-      * effect produced off-chain is serialized into [[Onchain.Serialized]] for signing, and on
-      * dispute presentation the same shape (with the multisig) is fed to
-      * [[hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator]] as a
-      * `VoteRedeemer.sec`.
+      * redeemer's `sec` field. Type alias for [[StandaloneEvacuationCommitmentOnchain]], which
+      * lives in `cardano-onchain` so validators can reference it without a back-dependency on core.
       *
       * @param headId
       *   this head's `HYDR` token asset name. Pins the SEC to this head; the dispute script rejects
@@ -90,15 +84,17 @@ object StandaloneEvacuationCommitment {
       *   the SEC's KZG commitment (spec content) — read by the dispute script as the value to vote
       *   on.
       */
-    final case class Onchain(
-        headId: TokenName,
-        versionMajor: BigInt,
-        versionMinor: BigInt,
-        commitment: VoteState.KzgCommitment
-    ) derives FromData,
-          ToData
+    type Onchain = StandaloneEvacuationCommitmentOnchain
 
+    /** Factory and [[Serialized]] accessor, preserving the former `object Onchain` interface. */
     object Onchain {
+
+        type Serialized = StandaloneEvacuationCommitmentOnchain.Serialized
+
+        /** Delegates to [[StandaloneEvacuationCommitmentOnchain]] companion. */
+        object Serialized {
+            export StandaloneEvacuationCommitmentOnchain.*
+        }
 
         /** Build the on-chain SEC datum from this head's `headId`, the offchain block header, and
           * the KZG commitment of the evacuation map at that block. KZG is passed explicitly (not
@@ -111,38 +107,11 @@ object StandaloneEvacuationCommitment {
             offchainHeader: BlockHeader.Section,
             kzgCommitment: KzgCommitment
         ): Onchain =
-            new Onchain(
+            StandaloneEvacuationCommitmentOnchain(
               headId = headId,
               versionMajor = BigInt(offchainHeader.blockVersion.major.convert),
               versionMinor = BigInt(offchainHeader.blockVersion.minor.convert),
               commitment = kzgCommitment
             )
-
-        type Serialized = Serialized.Serialized
-
-        object Serialized {
-            // TODO: consider using ByteString instead of IArray[Byte]
-            opaque type Serialized = IArray[Byte]
-
-            def apply(onchainHeader: Onchain): Serialized =
-                IArray.from(serialiseData(onchainHeader.toData).bytes)
-
-            /** Reconstruct a [[Serialized]] from its raw bytes. Used by the persistence codec to
-              * round-trip an already-built SEC; the bytes must be the exact `serialiseData` form.
-              */
-            def fromBytes(bytes: Array[Byte]): Serialized = IArray.from(bytes)
-
-            given Conversion[Serialized, IArray[Byte]] = identity
-
-            given Conversion[Serialized, Array[Byte]] = msg => IArray.genericWrapArray(msg).toArray
-
-            given Conversion[Serialized, ByteString] = msg => ByteString.fromArray(msg)
-
-            extension (msg: Serialized) def untagged: IArray[Byte] = identity(msg)
-
-            trait Section {
-                def headerSerialized: Onchain.Serialized
-            }
-        }
     }
 }

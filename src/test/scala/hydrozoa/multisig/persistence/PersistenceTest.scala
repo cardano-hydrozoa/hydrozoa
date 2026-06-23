@@ -2,6 +2,7 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -28,6 +29,12 @@ import org.scalatest.funsuite.AnyFunSuite
 class PersistenceTest extends AnyFunSuite:
 
     given CardanoNetwork.Section = CardanoNetwork.Preview
+
+    /** The config-derived CF set (§7.1) — head peers 0..3, no coil; covers every CF these tests
+      * touch (fixed CFs plus a few per-author satellites).
+      */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     test("typed put/get round-trips a typed value") {
         withTypedStore { p =>
@@ -145,23 +152,14 @@ class PersistenceTest extends AnyFunSuite:
 
     // ---- helpers ----
 
-    /** The config-derived CF set (§7.1) — head peers 0..3, no coil; covers every CF these tests
-      * touch (fixed CFs plus a few per-author satellites).
-      */
-    private val testCfs: List[Cf] =
-        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
-
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
+        val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         try
-            (for
-                tracerLocal <- Slf4jTracer.makeLocal
-                result <- {
-                    RocksDbBackendStore
-                        .open(tempDir, testCfs)
-                        .use(backend => Persistence.fromBackend(backend).flatMap(prog))
-                }
-            yield result).unsafeRunSync()
+            RocksDbBackendStore
+                .open(tempDir, testCfs, tracer)
+                .use(backend => Persistence.fromBackend(backend, tracer).flatMap(prog))
+                .unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =

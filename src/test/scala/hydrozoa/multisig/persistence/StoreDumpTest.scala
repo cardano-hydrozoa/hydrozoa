@@ -2,6 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.syntax.all.*
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.SoftAckNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -15,6 +17,10 @@ import org.scalatest.funsuite.AnyFunSuite
   * table and the presence of expected decoded keys in the dump.
   */
 class StoreDumpTest extends AnyFunSuite:
+
+    /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     test("stats counts entries per CF after a mixed-CF write") {
         val tempDir = newTempDir()
@@ -61,7 +67,11 @@ class StoreDumpTest extends AnyFunSuite:
                       )
                 )
             val stats = RocksDbBackendStore
-                .open(tempDir, testCfs)
+                .open(
+                  tempDir,
+                  testCfs,
+                  Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                )
                 .use(b => populate(b) *> StoreDump.stats(b, testCfs))
                 .unsafeRunSync()
 
@@ -91,7 +101,11 @@ class StoreDumpTest extends AnyFunSuite:
         try
             val ownPeer = HeadPeerNumber(3)
             val rendered = RocksDbBackendStore
-                .open(tempDir, testCfs)
+                .open(
+                  tempDir,
+                  testCfs,
+                  Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+                )
                 .use { b =>
                     b.write(
                       RawWriteBatch.start
@@ -128,10 +142,6 @@ class StoreDumpTest extends AnyFunSuite:
             )
         finally recursivelyDelete(tempDir)
     }
-
-    /** The config-derived CF set these tests open + dump over (head peers 0..3, no coil). */
-    private val testCfs: List[Cf] =
-        Cf.mkAll((0 to 3).map(HeadPeerNumber(_)).toList, Nil, Nil)
 
     private def newTempDir(): Path =
         Files.createTempDirectory("hydrozoa-rocksdb-dump-test-")

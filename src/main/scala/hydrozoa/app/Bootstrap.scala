@@ -3,6 +3,7 @@ package hydrozoa.app
 import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.unsafe.implicits.global
 import cats.effect.{ExitCode, IO, IOApp}
+import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.app.Main.loadEnv
 import hydrozoa.config.head.HeadConfig
@@ -24,9 +25,9 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.wallet.WalletModule
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info, warn}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEvent, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -37,6 +38,7 @@ import java.security.SecureRandom
 import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
+import org.http4s.Uri
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
@@ -51,7 +53,8 @@ import scalus.uplc.builtin.ByteString
   */
 object Bootstrap:
 
-    private val logger = Logging.loggerIO("hydrozoa.app.Bootstrap")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Bootstrap"))
 
     /** Generate a new Ed25519 key pair for Cardano.
       *
@@ -94,6 +97,8 @@ object Bootstrap:
         vKey: VerificationKey,
         sKey: SigningKey,
         minEquity: Coin,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
     ): IO[NodeConfig] = for {
         _ <- IO.pure(())
 
@@ -145,7 +150,7 @@ object Bootstrap:
         )
 
         peerAddress = vKey.shelleyAddress()(using cardanoNetwork)
-        _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
+        _ <- log.info(s"Peer address: ${peerAddress.toBech32.get}")
 
         // Fetch UTXOs from backend
         utxosResult <- backend.utxosAt(peerAddress)
@@ -161,7 +166,7 @@ object Bootstrap:
           HeadPeerNumber.zero
         )
         requiredValue = Value(minEquity + zeroPeerContingency + maxNonPlutusTxFee)
-        _ <- logger.info(
+        _ <- log.info(
           s"Required value: ${minEquity.value} lovelace (equity) + " +
               s"${zeroPeerContingency} lovelace (peer contingency) + " +
               s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
@@ -170,7 +175,7 @@ object Bootstrap:
         // Select UTXOs that cover the required value
         utxosSelected <- {
             if utxosMap.isEmpty then {
-                logger.error(s"No UTXOs found at address ${peerAddress.toBech32.get}") *>
+                log.error(s"No UTXOs found at address ${peerAddress.toBech32.get}") *>
                     IO.raiseError(
                       new RuntimeException(
                         s"No UTXOs available at address ${peerAddress.toBech32.get}. " +
@@ -193,12 +198,12 @@ object Bootstrap:
                             s"Available: ${accumulated.coin.value} lovelace, " +
                             s"Required: ${requiredValue.coin.value} lovelace (${minEquity.value} equity + ${maxNonPlutusTxFee.value} fee). " +
                             s"Please fund address ${peerAddress.toBech32.get} with at least ${requiredValue.coin.value - accumulated.coin.value} more lovelace."
-                    logger.error(errorMsg) *>
+                    log.error(errorMsg) *>
                         IO.raiseError(new RuntimeException(errorMsg))
                 } else {
                     NonEmptyList.fromList(selected) match {
                         case Some(nel) =>
-                            logger.info(
+                            log.info(
                               s"Selected ${nel.size} UTXO(s) with total value: ${accumulated.coin.value} lovelace"
                             ) *>
                                 IO.pure(nel)
@@ -215,7 +220,12 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
-        headPeers = HeadPeers(NonEmptyMap.one(HeadPeerNumber.zero, HeadPeerData(vKey, "FIXME"))).get
+        headPeers = HeadPeers(
+          NonEmptyMap.one(
+            HeadPeerNumber.zero,
+            HeadPeerData(vKey, Uri.unsafeFromString(s"ws://$hydrozoaHost:$hydrozoaPort"))
+          )
+        ).get
 
         initializationParameters = InitializationParameters(
           initialEvacuationMap = evacMap,
@@ -264,7 +274,7 @@ object Bootstrap:
             .result
             .fold(
               e => {
-                  logger.error(e.toString).unsafeRunSync()
+                  log.error(e.toString).unsafeRunSync()
                   throw e
               },
               x => x
@@ -314,8 +324,8 @@ object Bootstrap:
                 // NOTE: Reusing the same multisig wallet, in production this should be a different wallet
                 evacuationWallet = ownHeadWallet
               ),
-              hydrozoaHost = ???,
-              hydrozoaPort = ???,
+              hydrozoaHost = hydrozoaHost,
+              hydrozoaPort = hydrozoaPort,
               blockfrostApiKey = ???,
               nodeOperationMultisigConfig = NodeOperationMultisigConfig.default
             )
@@ -413,7 +423,8 @@ end GenerateKeyPair
   */
 object Migrate extends IOApp:
 
-    private val logger = Logging.loggerIO("hydrozoa.app.Migrate")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Migrate"))
 
 //    /** Load environment configuration from .env file (copied from Main). */
 //    private lazy val dotenv = io.github.cdimascio.dotenv.Dotenv.configure().ignoreIfMissing().load()
@@ -423,13 +434,13 @@ object Migrate extends IOApp:
             IO.println("Usage: sbt \"runMain hydrozoa.app.Migrate <bech32-address>\"") *>
                 IO.println("Example: sbt \"runMain hydrozoa.app.Migrate addr_test1vz...\"") *>
                 IO.pure(ExitCode.Error)
-        else
-            val destinationBech32 = args.head
-            migrateAllFunds(destinationBech32)
+        else migrateAllFunds(args.head)
 
-    private def migrateAllFunds(destinationBech32: String): IO[ExitCode] =
+    private def migrateAllFunds(
+        destinationBech32: String
+    ): IO[ExitCode] =
         for {
-            _ <- logger.info(s"Starting migration to $destinationBech32")
+            _ <- log.info(s"Starting migration to $destinationBech32")
 
             // Load environment configuration (same as Main)
             env <- loadEnv
@@ -439,7 +450,7 @@ object Migrate extends IOApp:
                 .delay(scalus.cardano.address.Address.fromBech32(destinationBech32))
                 .flatMap {
                     case addr: scalus.cardano.address.ShelleyAddress =>
-                        logger.info(s"Destination address: ${addr.toBech32.get}") *>
+                        log.info(s"Destination address: ${addr.toBech32.get}") *>
                             IO.pure(addr)
                     case other =>
                         IO.raiseError(
@@ -454,19 +465,20 @@ object Migrate extends IOApp:
 
             // Create backend
             cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
-            _ <- logger.info("Creating Cardano Blockfrost backend...")
+            _ <- log.info("Creating Cardano Blockfrost backend...")
 
             backend <- CardanoBackendBlockfrost(
               network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
+              apiKey = env.blockfrostApiKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
 
             // Get peer address
             peerAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork)
-            _ <- logger.info(s"Peer address: ${peerAddress.toBech32.get}")
+            _ <- log.info(s"Peer address: ${peerAddress.toBech32.get}")
 
             // Fetch all UTXOs from peer address
-            _ <- logger.info("Fetching UTXOs from peer address...")
+            _ <- log.info("Fetching UTXOs from peer address...")
             utxosResult <- backend.utxosAt(peerAddress)
             utxosMap <- IO.fromEither(
               utxosResult.left.map(err => new RuntimeException(s"Failed to fetch UTXOs: $err"))
@@ -474,20 +486,20 @@ object Migrate extends IOApp:
 
             _ <-
                 if utxosMap.isEmpty then
-                    logger.warn("No UTXOs found at peer address. Nothing to migrate.") *>
+                    log.warn("No UTXOs found at peer address. Nothing to migrate.") *>
                         IO.pure(ExitCode.Success)
                 else
                     for {
-                        _ <- logger.info(s"Found ${utxosMap.size} UTXO(s) to migrate")
+                        _ <- log.info(s"Found ${utxosMap.size} UTXO(s) to migrate")
 
                         // Calculate total value
                         totalValue = Value.combine(utxosMap.map((_, output) => output.value))
-                        _ <- logger.info(
+                        _ <- log.info(
                           s"Total value to migrate: ${totalValue.coin.value} lovelace + ${totalValue.assets.assets.size} asset(s)"
                         )
 
                         // Build transaction
-                        _ <- logger.info("Building transaction...")
+                        _ <- log.info("Building transaction...")
                         unbalanced = TransactionBuilder
                             .build(
                               cardanoNetwork.network,
@@ -510,7 +522,7 @@ object Migrate extends IOApp:
                             )
 
                         // Balance transaction
-                        _ <- logger.info("Balancing transaction...")
+                        _ <- log.info("Balancing transaction...")
                         protocolParams <- backend.fetchLatestParams.flatMap(
                           IO.fromEither(_)
                               .adaptError(err =>
@@ -547,16 +559,16 @@ object Migrate extends IOApp:
                         )
 
                         // Sign transaction
-                        _ <- logger.info("Signing transaction...")
+                        _ <- log.info("Signing transaction...")
                         signed = wallet.signTx(balanced)
 
-                        _ <- logger.info(s"Transaction hash: ${signed.id}")
-                        _ <- logger.info(
+                        _ <- log.info(s"Transaction hash: ${signed.id}")
+                        _ <- log.info(
                           s"Transaction CBOR: ${HexUtil.encodeHexString(signed.toCbor)}"
                         )
 
                         // Submit transaction
-                        _ <- logger.info("Submitting transaction...")
+                        _ <- log.info("Submitting transaction...")
                         submitResult <- backend.submitTx(signed)
                         _ <- IO.fromEither(
                           submitResult.left.map(err =>
@@ -564,8 +576,8 @@ object Migrate extends IOApp:
                           )
                         )
 
-                        _ <- logger.info("✅ Transaction submitted successfully!")
-                        _ <- logger.info(
+                        _ <- log.info("✅ Transaction submitted successfully!")
+                        _ <- log.info(
                           s"Explorer: https://preview.cexplorer.io/tx/${signed.id.toHex}"
                         )
                     } yield ExitCode.Success

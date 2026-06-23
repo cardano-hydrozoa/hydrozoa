@@ -1,7 +1,6 @@
 package hydrozoa.multisig.persistence.codec
 
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.multisig.consensus.transport.Codecs.given
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.persistence.codec.DepositUtxoCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
@@ -13,8 +12,7 @@ import io.circe.{Decoder, Encoder}
   * `DepositsMap` is order-bearing (a `TreeMap` keyed by absorption start time) behind a private
   * constructor, so it is encoded as the flat in-order [[DepositsMap.Entry]] list (`flatten`) and
   * rebuilt with `append` — which recomputes each entry's key from its deposit, restoring the same
-  * map. Entries reuse the `RequestId` codec (`consensus.transport.Codecs`) and
-  * [[DepositUtxoCodec]].
+  * map. Entries reuse the canonical `RequestId` codec (on its companion) and [[DepositUtxoCodec]].
   */
 object DepositMapCodec:
 

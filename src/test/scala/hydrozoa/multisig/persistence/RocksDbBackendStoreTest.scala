@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.syntax.traverse.*
+import cats.syntax.all.*
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -21,6 +22,15 @@ import org.scalatest.funsuite.AnyFunSuite
   * ([[Persistence]] + [[WriteBatch]]) is exercised in `PersistenceTest`.
   */
 class RocksDbBackendStoreTest extends AnyFunSuite:
+
+    /** The config-derived CF set these tests open over (§7.1, the per-author split): the fixed CFs
+      * plus per-author satellites for head peers 0..5 — covering every author the tests touch. The
+      * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
+      */
+    private val testCfs: List[Cf] =
+        Cf.mkAll((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
+
+    private lazy val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
     test("put then get returns the same bytes in the same CF") {
         withFreshStore { p =>
@@ -106,14 +116,14 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
             val value = "durable".getBytes("UTF-8")
             // First session: write.
             RocksDbBackendStore
-                .open(tempDir, testCfs)
+                .open(tempDir, testCfs, tracer)
                 .use { p =>
                     p.put(Cf.Block, k, value)
                 }
                 .unsafeRunSync()
             // Second session: read back.
             val got = RocksDbBackendStore
-                .open(tempDir, testCfs)
+                .open(tempDir, testCfs, tracer)
                 .use { p =>
                     p.get(Cf.Block, k)
                 }
@@ -173,10 +183,10 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
         val tempDir = newTempDir()
         try
             // First open seeds the current version.
-            RocksDbBackendStore.open(tempDir, testCfs).use(_ => IO.unit).unsafeRunSync()
+            RocksDbBackendStore.open(tempDir, testCfs, tracer).use(_ => IO.unit).unsafeRunSync()
             // Tamper: rewrite the version key with a bogus value.
             RocksDbBackendStore
-                .open(tempDir, testCfs)
+                .open(tempDir, testCfs, tracer)
                 .use { p =>
                     p.put(
                       Cf.Meta,
@@ -187,7 +197,11 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
                 .unsafeRunSync()
             // Reopen — must fail.
             val outcome =
-                RocksDbBackendStore.open(tempDir, testCfs).use(_ => IO.unit).attempt.unsafeRunSync()
+                RocksDbBackendStore
+                    .open(tempDir, testCfs, tracer)
+                    .use(_ => IO.unit)
+                    .attempt
+                    .unsafeRunSync()
             assert(
               outcome.left.toOption
                   .exists(_.getMessage.contains("schema version mismatch")),
@@ -198,17 +212,10 @@ class RocksDbBackendStoreTest extends AnyFunSuite:
 
     // ---- helpers ----
 
-    /** The config-derived CF set these tests open over (§7.1, the per-author split): the fixed CFs
-      * plus per-author satellites for head peers 0..5 — covering every author the tests touch. The
-      * reopen tests must use the same list (RocksDB matches the descriptor set on reopen).
-      */
-    private val testCfs: List[Cf] =
-        Cf.mkAll((0 to 5).map(HeadPeerNumber(_)).toList, Nil, Nil)
-
     /** Run `prog(backend)` against a fresh temp-dir store; clean up afterward. */
     private def withFreshStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
         val tempDir = newTempDir()
-        try RocksDbBackendStore.open(tempDir, testCfs).use(prog).unsafeRunSync()
+        try RocksDbBackendStore.open(tempDir, testCfs, tracer).use(prog).unsafeRunSync()
         finally recursivelyDelete(tempDir)
 
     private def newTempDir(): Path =

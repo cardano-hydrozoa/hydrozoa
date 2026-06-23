@@ -45,6 +45,7 @@
     <!-- default: warn -->
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
     <logger name="test.CardanoBackendMock" level="warn"/>
+    <logger name="CardanoBackend" level="warn"/>
 
     <!-- stage1 loggers -->
     <!-- default: info -->
@@ -85,7 +86,13 @@
     <logger name="PeerLiaison.CoilToHub" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
     <logger name="PeerWsTransport" level="debug"/>
+    <logger name="CoilPeerWsTransport" level="debug"/>
+    <logger name="HubWsTransport" level="debug"/>
+    <logger name="CoilAckSequencer" level="info"/>
+    <logger name="HydrozoaHttp" level="info"/>
+    <logger name="RemoteL2Ledger" level="info"/>
     <logger name="Persistence" level="info"/>
+    <logger name="BlockHeader" level="info"/>
     <logger name="TxTiming" level="info"/>
     <logger name="DepositsMap" level="info"/>
 

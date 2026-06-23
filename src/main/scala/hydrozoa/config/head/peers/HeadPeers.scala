@@ -8,6 +8,7 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber}
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import io.circe.*
 import io.circe.generic.semiauto.*
+import org.http4s.Uri
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.AddrKeyHash
 import scalus.crypto.ed25519.VerificationKey
@@ -16,9 +17,9 @@ import scalus.uplc.builtin.Builtins.blake2b_224
 import HeadPeerNumber.given
 
 /** @param webSocketAddress
-  *   The connection address for the head peer, i.e. "ws://192.168.10.8081"
+  *   The connection address for the head peer, e.g. `ws://192.168.1.1:8081`
   */
-final case class HeadPeerData(verificationKey: VerificationKey, webSocketAddress: String)
+final case class HeadPeerData(verificationKey: VerificationKey, webSocketAddress: Uri)
 
 /** Invariant: Peer numbers must be contiguous, starting from 0.
   * @param headPeerData
@@ -59,6 +60,10 @@ object HeadPeers {
     ): Decoder[NonEmptyMap[HeadPeerNumber, A]] =
         Decoder.decodeNonEmptyMap
 
+    private given uriEncoder: Encoder[Uri] = Encoder.encodeString.contramap(_.renderString)
+    private given uriDecoder: Decoder[Uri] =
+        Decoder.decodeString.emap(Uri.fromString(_).left.map(_.message))
+
     given headPeersEncoder: Encoder[HeadPeers] =
         Encoder.instance(headPeers =>
             Json.obj(
@@ -74,7 +79,7 @@ object HeadPeers {
                 vKeys <- headPeerDataFieldDecoder[VerificationKey].tryDecode(
                   c.downField("headPeerVKeys")
                 )
-                addresses <- headPeerDataFieldDecoder[String].tryDecode(
+                addresses <- headPeerDataFieldDecoder[Uri].tryDecode(
                   c.downField("headPeerAddresses")
                 )
 

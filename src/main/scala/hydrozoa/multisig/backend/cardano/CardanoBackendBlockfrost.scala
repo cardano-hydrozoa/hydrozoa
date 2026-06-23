@@ -11,7 +11,7 @@ import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService
 import com.bloxbean.cardano.client.backend.model.{AssetTransactionContent, ScriptDatumCbor, TxContentRedeemers, TxContentUtxo}
 import com.bloxbean.cardano.client.plutus.spec.RedeemerTag
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
 import io.bullet.borer.Cbor
@@ -43,9 +43,8 @@ class CardanoBackendBlockfrost private (
     private val backendService: BackendService,
     private val pageSize: Int,
     private val blockfrostProviderFuture: Future[BlockfrostProvider],
+    protected val tracer: ContraTracer[IO, CardanoBackendEvent]
 ) extends CardanoBackend[IO] {
-
-    private val logger = Logging.logger(getClass)
 
     override def resolve(input: Input): IO[Either[Error, Option[ledger.Utxo]]] =
         (for {
@@ -106,14 +105,21 @@ class CardanoBackendBlockfrost private (
                     Option(utxo.getReferenceScriptHash) match {
                         case None => IO.pure(Right(None))
                         case Some(scriptHash) =>
-                            IO.delay(fetchScript(scriptHash)).map {
+                            IO.delay(fetchScript(scriptHash)).flatMap {
                                 case Left(error) =>
-                                    logger.warn(
-                                      s"Failed to fetch reference script for UTXO ${utxo.getTxHash}:${utxo.getOutputIndex}: $error"
+                                    val utxoId = TransactionInput(
+                                      Hash[Blake2b_256, HashPurpose.TransactionHash](
+                                        ByteString.fromHex(utxo.getTxHash)
+                                      ),
+                                      utxo.getOutputIndex
                                     )
-                                    Left(error)
+                                    tracer
+                                        .traceWith(
+                                          CardanoBackendEvent.FetchScriptFailed(utxoId, error)
+                                        )
+                                        .as(Left(error))
                                 case Right(script) =>
-                                    Right(Some(scalus.cardano.ledger.ScriptRef(script)))
+                                    IO.pure(Right(Some(scalus.cardano.ledger.ScriptRef(script))))
                             }
                     }
 
@@ -176,63 +182,33 @@ class CardanoBackendBlockfrost private (
 
         lazy val nativeResult: Either[String, scalus.cardano.ledger.Script] =
             Try(backendService.getScriptService.getNativeScript(scriptHash)).toEither.left
-                .map { ex =>
-                    val msg = s"Exception fetching native script $scriptHash: ${ex.getMessage}"
-                    logger.debug(msg)
-                    msg
-                }
+                .map(ex => s"Exception fetching native script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
-                    if res.isSuccessful then {
-                        val bloxbeanNative = res.getValue
-                        convertNativeScript(bloxbeanNative) match {
-                            case Some(script) =>
-                                logger.debug(s"Successfully converted native script $scriptHash")
-                                Right(script)
-                            case None =>
-                                val msg =
-                                    s"Failed to convert native script $scriptHash: conversion returned None"
-                                logger.debug(msg)
-                                Left(msg)
-                        }
-                    } else {
-                        val msg = s"Failed to fetch native script $scriptHash: ${res.getResponse}"
-                        logger.debug(msg)
-                        Left(msg)
-                    }
+                    if res.isSuccessful then
+                        convertNativeScript(res.getValue)
+                            .toRight(
+                              s"Failed to convert native script $scriptHash: conversion returned None"
+                            )
+                    else Left(s"Failed to fetch native script $scriptHash: ${res.getResponse}")
                 }
 
         lazy val plutusResult: Either[String, scalus.cardano.ledger.Script] =
             Try(backendService.getScriptService.getPlutusScript(scriptHash)).toEither.left
-                .map { ex =>
-                    val msg = s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}"
-                    logger.debug(msg)
-                    msg
-                }
+                .map(ex => s"Exception fetching Plutus script $scriptHash: ${ex.getMessage}")
                 .flatMap { res =>
-                    if res.isSuccessful then {
-                        val bloxbeanPlutus = res.getValue
-                        convertPlutusScript(bloxbeanPlutus) match {
-                            case Some(script) =>
-                                logger.debug(s"Successfully converted Plutus script $scriptHash")
-                                Right(script)
-                            case None =>
-                                val msg =
-                                    s"Failed to convert Plutus script $scriptHash: conversion returned None"
-                                logger.debug(msg)
-                                Left(msg)
-                        }
-                    } else {
-                        val msg = s"Failed to fetch Plutus script $scriptHash: ${res.getResponse}"
-                        logger.debug(msg)
-                        Left(msg)
-                    }
+                    if res.isSuccessful then
+                        convertPlutusScript(res.getValue)
+                            .toRight(
+                              s"Failed to convert Plutus script $scriptHash: conversion returned None"
+                            )
+                    else Left(s"Failed to fetch Plutus script $scriptHash: ${res.getResponse}")
                 }
 
         // Alternative-like behavior: try native first, fallback to Plutus if it fails
-        nativeResult.orElse(plutusResult).left.map { errorMsg =>
-            logger.warn(s"Failed to fetch script $scriptHash as both native and Plutus: $errorMsg")
-            Unexpected(s"Failed to fetch script with hash $scriptHash: $errorMsg")
-        }
+        nativeResult
+            .orElse(plutusResult)
+            .left
+            .map(errorMsg => Unexpected(s"Failed to fetch script with hash $scriptHash: $errorMsg"))
     }
 
     /** Converts a BloxBean NativeScript to a Scalus Script.Native.
@@ -250,12 +226,7 @@ class CardanoBackendBlockfrost private (
             import scalus.cardano.ledger.Timelock
             val timelock = Cbor.decode(scriptBytes).to[Timelock].value
             scalus.cardano.ledger.Script.Native(timelock)
-        }.toEither match {
-            case Right(script) => Some(script)
-            case Left(ex) =>
-                logger.debug(s"Failed to convert native script: ${ex.getMessage}", ex)
-                None
-        }
+        }.toOption
     }
 
     /** Converts a BloxBean PlutusScript to a Scalus Script (PlutusV1, PlutusV2, or PlutusV3).
@@ -271,22 +242,11 @@ class CardanoBackendBlockfrost private (
         scala.util.Try {
             val scriptBytes = ByteString.fromArray(plutus.serializeScriptBody())
             plutus.getLanguage match {
-                case Language.PLUTUS_V1 =>
-                    logger.debug("Converting PlutusV1 script")
-                    scalus.cardano.ledger.Script.PlutusV1(scriptBytes)
-                case Language.PLUTUS_V2 =>
-                    logger.debug("Converting PlutusV2 script")
-                    scalus.cardano.ledger.Script.PlutusV2(scriptBytes)
-                case Language.PLUTUS_V3 =>
-                    logger.debug("Converting PlutusV3 script")
-                    scalus.cardano.ledger.Script.PlutusV3(scriptBytes)
+                case Language.PLUTUS_V1 => scalus.cardano.ledger.Script.PlutusV1(scriptBytes)
+                case Language.PLUTUS_V2 => scalus.cardano.ledger.Script.PlutusV2(scriptBytes)
+                case Language.PLUTUS_V3 => scalus.cardano.ledger.Script.PlutusV3(scriptBytes)
             }
-        }.toEither match {
-            case Right(script) => Some(script)
-            case Left(ex) =>
-                logger.debug(s"Failed to convert Plutus script: ${ex.getMessage}", ex)
-                None
-        }
+        }.toOption
     }
 
     /** Pure function to convert a BloxBean UTXO to Scalus types.
@@ -603,6 +563,7 @@ object CardanoBackendBlockfrost:
         network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
         apiKey: ApiKey = "",
         pageSize: Int = 100,
+        tracer: ContraTracer[IO, CardanoBackendEvent]
     ): CardanoBackendBlockfrost = {
         // 1. BloxBean service
         val baseUrl = network.fold(_.baseUrl, _._2)
@@ -634,7 +595,8 @@ object CardanoBackendBlockfrost:
         new CardanoBackendBlockfrost(
           backendService,
           pageSize,
-          blockfrostProviderFuture
+          blockfrostProviderFuture,
+          tracer
         )
     }
 
@@ -642,9 +604,9 @@ object CardanoBackendBlockfrost:
         network: Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)],
         apiKey: ApiKey = "",
         pageSize: Int = 100,
-    ): IO[CardanoBackendBlockfrost] = {
-        IO.delay(apply_(network, apiKey, pageSize))
-    }
+        tracer: ContraTracer[IO, CardanoBackendEvent]
+    ): IO[CardanoBackendBlockfrost] =
+        IO.delay(apply_(network, apiKey, pageSize, tracer))
 
     extension (self: StandardCardanoNetwork)
         def baseUrl: URL = self match {

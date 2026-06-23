@@ -4,7 +4,8 @@ import hydrozoa.multisig.HeadMultisigRegimeManager.{Actors, Dependencies}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.limiter.LimiterEvent
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
+import hydrozoa.multisig.consensus.transport.{HubWsTransportEvent, NodeWsServerEvent, PeerWsTransportEvent}
+import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 
 /** Roll-up of every typed event flowing through the multisig regime. One `ContraTracer[IO,
@@ -30,6 +31,10 @@ object HeadMultisigRegimeManagerEvent:
         extends HeadMultisigRegimeManagerEvent
     final case class BWL(event: LimiterEvent) extends HeadMultisigRegimeManagerEvent
     final case class SCL(event: LimiterEvent) extends HeadMultisigRegimeManagerEvent
+    final case class PWT(event: PeerWsTransportEvent) extends HeadMultisigRegimeManagerEvent
+    final case class HWT(event: HubWsTransportEvent) extends HeadMultisigRegimeManagerEvent
+    final case class NWS(event: NodeWsServerEvent) extends HeadMultisigRegimeManagerEvent
+    final case class CAS(event: CoilAckSequencerEvent) extends HeadMultisigRegimeManagerEvent
     case object StartingActors extends HeadMultisigRegimeManagerEvent
     case object WatchingActors extends HeadMultisigRegimeManagerEvent
     final case class TerminatedActor(actor: Actors) extends HeadMultisigRegimeManagerEvent

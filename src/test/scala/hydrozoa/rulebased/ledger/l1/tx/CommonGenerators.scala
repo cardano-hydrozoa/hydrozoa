@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
@@ -132,7 +133,7 @@ object CommonGenerators {
         for {
             versionMinor <- Gen.choose(0L, 100L).map(BigInt(_))
             commitment <- genByteStringOfN(48) // KZG commitment (G1 compressed point)
-        } yield StandaloneEvacuationCommitment.Onchain(
+        } yield StandaloneEvacuationCommitmentOnchain(
           headId = config.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
           versionMinor = versionMinor,

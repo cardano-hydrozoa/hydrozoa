@@ -46,37 +46,36 @@ class TimeActorSpec extends AnyFlatSpec with Matchers {
         program.unsafeRunSync() // Executes instantly!
     }
 
-    "TimeActor" should "use virtual time in TestControl with ActorSystem.allocated" in {
+    "TimeActor" should "use virtual time in TestControl with ActorSystem.use" in {
         val program = TestControl.executeEmbed {
-            for {
-                system <- ActorSystem[IO]("test-system").allocated.map(_._1)
+            ActorSystem[IO]("test-system").use { system =>
+                for {
+                    // Spawn actor inside TestControl
+                    actorRef <- system.actorOf(new TimeActor, "time-actor")
+                    actorRef_ <- system.actorOf(new TimeActor, "time-actor_")
 
-                // Spawn actor inside TestControl
-                actorRef <- system.actorOf(new TimeActor, "time-actor")
-                actorRef_ <- system.actorOf(new TimeActor, "time-actor_")
+                    // Get initial time (should be epoch 0)
+                    reply1 <- Deferred[IO, Instant]
+                    _ <- actorRef ! GetTime(reply1)
+                    time1 <- reply1.get
 
-                // Get initial time (should be epoch 0)
-                reply1 <- Deferred[IO, Instant]
-                _ <- actorRef ! GetTime(reply1)
-                time1 <- reply1.get
+                    _ <- IO(time1.toEpochMilli shouldBe 0)
 
-                _ <- IO(time1.toEpochMilli shouldBe 0)
+                    // Advance virtual time by 1 hour
+                    _ <- IO.sleep(1.hour)
 
-                // Advance virtual time by 1 hour
-                _ <- IO.sleep(1.hour)
+                    // Get time again
+                    reply2 <- Deferred[IO, Instant]
+                    _ <- actorRef ! GetTime(reply2)
+                    time2 <- reply2.get
 
-                // Get time again
-                reply2 <- Deferred[IO, Instant]
-                _ <- actorRef ! GetTime(reply2)
-                time2 <- reply2.get
+                    _ <- IO {
+                        val elapsed = time2.toEpochMilli - time1.toEpochMilli
+                        elapsed shouldBe 1.hour.toMillis
+                    }
 
-                _ <- IO {
-                    val elapsed = time2.toEpochMilli - time1.toEpochMilli
-                    elapsed shouldBe 1.hour.toMillis
-                }
-
-                _ <- system.terminate()
-            } yield ()
+                } yield ()
+            }
         }
 
         program.unsafeRunSync() // Executes instantly!

@@ -15,6 +15,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
 import hydrozoa.multisig.ledger.l1.tx.Tx
+import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
@@ -24,7 +25,6 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Transaction, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.|>
-import test.Generators.loggerGenerators
 
 type GenWithTestPeers[A] = ReaderT[Gen, TestPeers, A]
 
@@ -74,7 +74,7 @@ case class TestPeers private (
 
         val headPeerVKeys: NonEmptyList[VerificationKey] = helper(verificationKeyFor)
 
-        val headPeersAddresses: NonEmptyList[String] = helper(webSocketAddressFor)
+        val headPeersAddresses: NonEmptyList[Uri] = helper(webSocketAddressFor)
 
         headPeerVKeys
             .zip(headPeersAddresses)
@@ -90,13 +90,13 @@ case class TestPeers private (
 
     }
 
-    def webSocketAddressFor(peerNumber: HeadPeerNumber): String =
+    def webSocketAddressFor(peerNumber: HeadPeerNumber): Uri =
         webSocketAddressFor(TestPeerName.fromOrdinal(peerNumber))
 
     // TODO: What do we want here?
-    def webSocketAddressFor(peer: TestPeerName): String = {
+    def webSocketAddressFor(peer: TestPeerName): Uri = {
         _require(peer)
-        s"ws://localhost/${peer.name}"
+        Uri.unsafeFromString(s"ws://localhost/${peer.name}")
     }
 
     def verificationKeyFor(peerNumber: HeadPeerNumber): VerificationKey =
@@ -318,28 +318,9 @@ object TestPeersTest extends Properties("Test peers") {
     override def overrideParameters(p: Parameters): Parameters =
         p.withMinSuccessfulTests(500)
 
-    val distinct = mutable.Set.empty[TestPeers]
-    var hasLogged = false
-
     val _ = property("generates") = Prop.forAll(
       TestPeersSpec
           .generate()
           .flatMap(TestPeers.generate)
-    )(testPeers => {
-        val _ = distinct.add(testPeers)
-        true
-    })
-
-    val _ = property("z-print-results") = Prop.forAllNoShrink(Gen.const(())) { _ =>
-        if !hasLogged then {
-            loggerGenerators.trace(
-              distinct.toList
-                  .map(_.toString)
-                  .sorted
-                  .mkString("Unique values:", "\n\t-", "\n\n-----")
-            )
-            hasLogged = true
-        }
-        Prop.passed
-    }
+    )(testPeers => Prop.collect(testPeers)(Prop.passed))
 }

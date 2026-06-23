@@ -41,8 +41,25 @@ val scalusVersion = "0.15.1"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
 
+// Cardano on-chain validators and shared on-chain types
+lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
+    .settings(
+      name := "hydrozoa-cardano-onchain",
+      publish / skip := true,
+      resolvers +=
+          "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
+      resolvers += Resolver.defaultLocal,
+      libraryDependencies ++= Seq(
+        "org.scalus" % "scalus_3" % scalusVersion withSources (),
+        "org.scalus" % "scalus-cardano-ledger_3" % scalusVersion withSources (),
+        "org.typelevel" %% "cats-core" % "2.13.0",
+      ),
+      addCompilerPlugin("org.scalus" % "scalus-plugin_3" % scalusVersion),
+    )
+
 // Main application
 lazy val core: Project = (project in file("."))
+    .dependsOn(cardanoOnchain)
     .settings(
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",

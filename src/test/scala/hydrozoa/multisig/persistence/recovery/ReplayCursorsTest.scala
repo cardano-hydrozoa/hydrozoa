@@ -31,9 +31,9 @@ class ReplayCursorsTest extends AnyFunSuite:
           rid(2, 0) // peer 2 high-water = 0
         )
         val hw = ReplayCursors.maxRequestNumberPerPeer(events)
-        assert(hw(HeadPeerNumber(0)) == RequestNumber(7))
-        assert(hw(HeadPeerNumber(1)) == RequestNumber(5))
-        assert(hw(HeadPeerNumber(2)) == RequestNumber(0))
+        val _ = assert(hw(HeadPeerNumber(0)) == RequestNumber(7))
+        val _ = assert(hw(HeadPeerNumber(1)) == RequestNumber(5))
+        val _ = assert(hw(HeadPeerNumber(2)) == RequestNumber(0))
         assert(hw.size == 3)
     }
 
@@ -48,9 +48,9 @@ class ReplayCursorsTest extends AnyFunSuite:
         )
         // peer 0 sees only older ids (≤ 7 → unchanged); peer 1 advances; peer 2 is new.
         val merged = ReplayCursors.mergeHighWater(prior, List(rid(0, 2), rid(1, 9), rid(2, 0)))
-        assert(merged(HeadPeerNumber(0)) == RequestNumber(7))
-        assert(merged(HeadPeerNumber(1)) == RequestNumber(9))
-        assert(merged(HeadPeerNumber(2)) == RequestNumber(0))
+        val _ = assert(merged(HeadPeerNumber(0)) == RequestNumber(7))
+        val _ = assert(merged(HeadPeerNumber(1)) == RequestNumber(9))
+        val _ = assert(merged(HeadPeerNumber(2)) == RequestNumber(0))
         assert(merged.size == 3)
     }
 
@@ -82,41 +82,41 @@ class ReplayCursorsTest extends AnyFunSuite:
             )
 
         // BlockSpine: aggregator floor = softConfirmed + 1; ledger floor = fastBlockMark + 1.
-        assert(
+        val _ = assert(
           cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(6)),
           "softConfirmed 5 + 1"
         )
-        assert(
+        val _ = assert(
           cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(7)),
           "fastBlockMark 6 + 1"
         )
         // StackSpine: aggregator floor = hardConfirmed + 1; composer floor = hardAckedStack + 1.
-        assert(
+        val _ = assert(
           cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(4)),
           "hardConfirmed 3 + 1"
         )
-        assert(
+        val _ = assert(
           cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(5)),
           "hardAckedStack 4 + 1"
         )
         // Soft-ack floor coincides with the fast-side confirmed mark + 1, for every peer.
         peers.foreach(p => assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(6))))
         // Request floor = per-peer high-water + 1; peers with no included request start at 0.
-        assert(
+        val _ = assert(
           cursors
               .requests(HeadPeerNumber(0)) == JournalKey.Request(
             HeadPeerNumber(0),
             RequestNumber(8)
           )
         )
-        assert(
+        val _ = assert(
           cursors
               .requests(HeadPeerNumber(1)) == JournalKey.Request(
             HeadPeerNumber(1),
             RequestNumber(3)
           )
         )
-        assert(
+        val _ = assert(
           cursors
               .requests(HeadPeerNumber(2)) == JournalKey.Request(
             HeadPeerNumber(2),
@@ -150,13 +150,13 @@ class ReplayCursorsTest extends AnyFunSuite:
               hardAckedStack = Some(StackNumber(2)),
               own = ownHead
             )
-        assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
-        assert(
+        val _ = assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
+        val _ = assert(
           cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(6)),
           "fastBlockMark 5 + 1"
         )
-        assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
-        assert(
+        val _ = assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
+        val _ = assert(
           cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(3)),
           "hardAckedStack 2 + 1"
         )
@@ -174,13 +174,13 @@ class ReplayCursorsTest extends AnyFunSuite:
           own = ownHead
         )
 
-        assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
-        assert(cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(0)))
-        assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
-        assert(cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(0)))
+        val _ = assert(cursors.blockSpineForAggregator == JournalKey.Block(BlockNumber(0)))
+        val _ = assert(cursors.blockSpineForLedger == JournalKey.Block(BlockNumber(0)))
+        val _ = assert(cursors.stackSpineForAggregator == JournalKey.Stack(StackNumber(0)))
+        val _ = assert(cursors.stackSpineForComposer == JournalKey.Stack(StackNumber(0)))
         peers.foreach { p =>
-            assert(cursors.requests(p) == JournalKey.Request(p, RequestNumber(0)))
-            assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(0)))
+            val _ = assert(cursors.requests(p) == JournalKey.Request(p, RequestNumber(0)))
+            val _ = assert(cursors.softAcks(p) == JournalKey.SoftAck(p, SoftAckNumber(0)))
             assert(cursors.hardAcks(p) == JournalKey.HardAck(PeerId.Head(p), HardAckNumber(0)))
         }
     }
@@ -195,9 +195,9 @@ class ReplayCursorsTest extends AnyFunSuite:
               None,
               own = ownHead
             )
-        assert(cursors.scanFloors.size == 2 + 3 * peers.size)
+        val _ = assert(cursors.scanFloors.size == 2 + 3 * peers.size)
         // The spines in scanFloors are the lower (aggregator) floor, not the ledger one.
-        assert(cursors.scanFloors.contains(cursors.blockSpineForAggregator))
+        val _ = assert(cursors.scanFloors.contains(cursors.blockSpineForAggregator))
         assert(cursors.scanFloors.contains(cursors.stackSpineForAggregator))
     }
 
@@ -215,8 +215,8 @@ class ReplayCursorsTest extends AnyFunSuite:
         hubs.foreach(h =>
             assert(cursors.hubHardAcks(h) == JournalKey.HubHardAck(h, HubHardAckNumber.zero))
         )
-        assert(cursors.hubHardAcks.size == hubs.size)
-        assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
+        val _ = assert(cursors.hubHardAcks.size == hubs.size)
+        val _ = assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size)
         hubs.foreach(h => assert(cursors.scanFloors.contains(cursors.hubHardAcks(h))))
         // A head peer carries no own coil HardAck floor.
         assert(cursors.ownCoilHardAck.isEmpty)
@@ -234,12 +234,12 @@ class ReplayCursorsTest extends AnyFunSuite:
               None,
               own
             )
-        assert(
+        val _ = assert(
           cursors.ownCoilHardAck.contains(
             JournalKey.HardAck(PeerId.Coil(CoilPeerNumber(0)), HardAckNumber.zero)
           )
         )
         // 2 spines + 3N satellites + H hubs + 1 own coil HardAck.
-        assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size + 1)
+        val _ = assert(cursors.scanFloors.size == 2 + 3 * peers.size + hubs.size + 1)
         assert(cursors.scanFloors.contains(cursors.ownCoilHardAck.get))
     }
