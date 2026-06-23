@@ -1,11 +1,12 @@
 package hydrozoa.app
 
 import cats.effect.IO
+import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import scala.collection.immutable.SortedMap
@@ -18,7 +19,8 @@ import scalus.cardano.txbuilder.{Change, TransactionBuilder}
   */
 object Janitor:
 
-    val logger = Logging.loggerIO("hydrozoa.app.Janitor")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Janitor"))
 
     /** Upon the process finalization tries to build and submit a tx that:
       *   - grabs all utxos at [[headAddress]]
@@ -48,7 +50,7 @@ object Janitor:
         _ <- IO.whenA(headUtxos.nonEmpty) {
             for {
 
-                _ <- logger.info(
+                _ <- log.info(
                   s"Found ${headUtxos.size} utxo(s) at the head multisig address, cleaning up..."
                 )
 
@@ -165,11 +167,11 @@ object Janitor:
 
                 signed = peerWallet.signTx(balanced)
 
-                _ <- logger.info(s"clean-up tx: ${HexUtil.encodeHexString(signed.toCbor)}")
+                _ <- log.info(s"clean-up tx: ${HexUtil.encodeHexString(signed.toCbor)}")
 
                 ret <- backend.submitTx(signed)
 
-                _ <- logger.info(s"submission result: $ret")
+                _ <- log.info(s"submission result: $ret")
             } yield ()
         }
     } yield ()

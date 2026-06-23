@@ -43,16 +43,6 @@ object SettlementTxSeq {
 private object SettlementTxSeqOps {
     type Config = HeadConfig.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("SettlementTxSeq")
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
-        result
-    }
-
     object Build {
         enum Error:
             case SettlementError(e: (SomeBuildError | SettlementTx.Error, String))
@@ -203,7 +193,7 @@ private object SettlementTxSeqOps {
                 case None =>
 
                     for {
-                        settlementTx <- time("SettlementTx.NoPayouts.Build") {
+                        settlementTx <- {
                             SettlementTx.Build
                                 .NoPayouts(config)(
                                   kzgCommitment,
@@ -217,7 +207,7 @@ private object SettlementTxSeqOps {
                                 .map(Build.Error.SettlementError(_))
                         }
 
-                        fallbackTx <- time("FallbackTx.Build") {
+                        fallbackTx <- {
                             FallbackTx
                                 .Build(
                                   newFallbackValidityEnd,
@@ -233,7 +223,7 @@ private object SettlementTxSeqOps {
                 case Some(nePayouts) =>
 
                     for {
-                        rolloutTxSeqPartial <- time("RolloutTxSeq.Build.partialResult") {
+                        rolloutTxSeqPartial <- {
                             RolloutTxSeq
                                 .Build(config)(nePayouts)
                                 .partialResult
@@ -241,7 +231,7 @@ private object SettlementTxSeqOps {
                                 .map(Error.RolloutSeqError(_))
                         }
 
-                        settlementTxRes <- time("SettlementTx.WithPayouts.Build") {
+                        settlementTxRes <- {
                             SettlementTx.Build
                                 .WithPayouts(config)(
                                   kzgCommitment,
@@ -256,7 +246,7 @@ private object SettlementTxSeqOps {
                                 .map(Error.SettlementError(_))
                         }
 
-                        fallbackTx <- time("FallbackTx.Build") {
+                        fallbackTx <- {
                             FallbackTx
                                 .Build(
                                   newFallbackValidityEnd,

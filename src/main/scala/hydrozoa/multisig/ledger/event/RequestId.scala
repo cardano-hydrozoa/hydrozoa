@@ -37,6 +37,8 @@ object RequestId {
       }
     )
 
+    // Canonical JSON shape, used everywhere by default (GUM-131): a `{ headPeerNumber, requestNumber }`
+    // object, in implicit scope automatically as the companion codec.
     given Encoder[Id] = Encoder.instance(id =>
         Json.obj(
           "headPeerNumber" -> id._1.asJson,
@@ -49,6 +51,17 @@ object RequestId {
             rn <- c.downField("requestNumber").as[RequestNumber]
         } yield (hpn, rn)
     )
+
+    /** The **L2-ledger / SugarRush** wire form: the RequestId packed into a single i64 (`asI64` /
+      * `fromI64`), which the remote L2 ledger expects as a `u64`. Opt in *locally* at the L2 codec
+      * sites with `import RequestId.i64.given` — it shadows the companion object codec there. The
+      * default everywhere else (consensus wire, persistence journals, HTTP API) stays the object
+      * shape above; this is deliberately **not** the global default (GUM-131).
+      */
+    object i64 {
+        given Encoder[Id] = Encoder.instance(id => Json.fromLong(id.asI64))
+        given Decoder[Id] = Decoder.decodeLong.map(fromI64)
+    }
 
     opaque type Id = (HeadPeerNumber, RequestNumber)
 

@@ -7,14 +7,14 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPublic
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.CoilAckSequencer.*
+import hydrozoa.multisig.consensus.CoilAckSequencerEvent.SequencedCoilAck
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckNumber, HardAckWithId, HubHardAckNumber}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.persistence.{Cf, JournalKey, JournalValue, Persistence, StoreKey, WriteBatch}
 import java.nio.ByteBuffer
-import org.typelevel.log4cats.Logger
 
 /** The hub-side relay sequencer for coil peer hard-acks — analogous to the request sequencer
   * ([[RequestSequencer]]).
@@ -47,7 +47,8 @@ import org.typelevel.log4cats.Logger
 trait CoilAckSequencer(
     config: Config,
     persistence: Persistence[IO],
-    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections | CoilAckSequencer.Connections,
+    tracer: ContraTracer[IO, CoilAckSequencerEvent]
 ) extends Actor[IO, Request] {
     private val connections = Ref.unsafe[IO, Option[CoilAckSequencer.Connections]](None)
     private val state = State()
@@ -62,8 +63,6 @@ trait CoilAckSequencer(
         case PeerId.Coil(_) =>
             throw new IllegalStateException("CoilAckSequencer runs only on a hub head peer")
     }
-
-    private given logger: Logger[IO] = Logging.loggerIO(s"CoilAckSequencer.${config.ownPeerLabel}")
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -123,6 +122,7 @@ trait CoilAckSequencer(
             hubAck = HardAckWithId(hubPeer = hubPeerNum, seqNum = seq, ack = ack)
             _ <- persistStamp(seq, hubAck, newMarks)
             _ <- state.commit(seq, newMarks)
+            _ <- tracer.traceWith(SequencedCoilAck(coilNum, ack.hardAckNum, seq))
         } yield hubAck
 
     /** Persist a newly-sequenced relay ack to this hub's own `HubHardAck` journal **and** the
@@ -145,9 +145,7 @@ trait CoilAckSequencer(
     /** Fan a stamped relay ack out to the head-peer mesh and (on a hub) the coil relay. */
     private def fanOut(hubAck: HardAckWithId): IO[Unit] =
         getConnections.flatMap(conn =>
-            logger.debug(
-              s"sequenced coil ${hubAck.ack.hardAckNum} as seq ${hubAck.seqNum}"
-            ) >> (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(_ ! hubAck)
+            (conn.liaisons ! hubAck).parallel >> conn.coilRelay.traverse_(_ ! hubAck)
         )
 
     private final class State {
@@ -172,9 +170,10 @@ object CoilAckSequencer {
     def apply(
         config: Config,
         persistence: Persistence[IO],
-        pendingConnections: HeadMultisigRegimeManager.PendingConnections
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections,
+        tracer: ContraTracer[IO, CoilAckSequencerEvent]
     ): IO[CoilAckSequencer] =
-        IO(new CoilAckSequencer(config, persistence, pendingConnections) {})
+        IO(new CoilAckSequencer(config, persistence, pendingConnections, tracer) {})
 
     // `& CardanoNetwork.Section`: the `WriteBatch.put` codecs in `persistStamp` need it (same
     // shape as `RequestSequencer.Config`).

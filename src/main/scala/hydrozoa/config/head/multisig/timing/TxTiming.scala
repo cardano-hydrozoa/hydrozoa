@@ -1,8 +1,10 @@
 package hydrozoa.config.head.multisig.timing
 
+import cats.Monad
+import cats.implicits.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize, given}
-import hydrozoa.lib.logging.{Level, LogEvent, Traced}
+import hydrozoa.lib.logging.ContraTracer
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -103,19 +105,26 @@ final case class TxTiming(
     def blockCanStayMinor(
         blockCreationEndTime: BlockCreationEndTime,
         competingFallbackStartTime: FallbackTxStartTime
-    ): Traced[Boolean] = {
-        val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime).convert
-        val result = fmbt > blockCreationEndTime.convert
-        (
-          result,
-          List(
-            LogEvent(
-              Level.Trace,
-              s"blockCanStayMinor: competingFallbackStartTime: $competingFallbackStartTime, forcedMajorBlockWakeupTime: $fmbt, blockCreationEndTime: $blockCreationEndTime",
-              routingKey = Some("TxTiming")
+    ): Boolean =
+        forcedMajorBlockWakeupTime(
+          competingFallbackStartTime
+        ).convert > blockCreationEndTime.convert
+
+    /** Traced variant of [[blockCanStayMinor]]. IO callers pass a real
+      * `ContraTracer[IO, TxTimingEvent]`; pure callers use the untraced overload.
+      */
+    def blockCanStayMinor[F[_]: Monad](
+        tracer: ContraTracer[F, TxTimingEvent]
+    )(
+        blockCreationEndTime: BlockCreationEndTime,
+        competingFallbackStartTime: FallbackTxStartTime
+    ): F[Boolean] = {
+        val fmbt = forcedMajorBlockWakeupTime(competingFallbackStartTime)
+        tracer
+            .traceWith(
+              TxTimingEvent.CanStayMinor(competingFallbackStartTime, fmbt, blockCreationEndTime)
             )
-          )
-        )
+            .as(fmbt.convert > blockCreationEndTime.convert)
     }
 
     def depositSubmissionDeadline(

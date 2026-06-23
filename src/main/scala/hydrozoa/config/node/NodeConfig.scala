@@ -2,6 +2,7 @@ package hydrozoa.config.node
 
 import cats.data.EitherT
 import cats.effect.*
+import cats.syntax.contravariant.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
@@ -12,7 +13,8 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.{OwnCoilPeerPrivate, OwnHeadPeerPrivate}
-import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 
@@ -76,7 +78,11 @@ object NodeConfig {
             }
 
             cardanoBackend <- EitherT.liftF(
-              CardanoBackendBlockfrost(blockfrostNetwork, privateConfig.blockfrostApiKey)
+              CardanoBackendBlockfrost(
+                blockfrostNetwork,
+                privateConfig.blockfrostApiKey,
+                tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+              )
             )
 
             headConfig <- HeadConfig.fromJson(headConfigStr, cardanoBackend)

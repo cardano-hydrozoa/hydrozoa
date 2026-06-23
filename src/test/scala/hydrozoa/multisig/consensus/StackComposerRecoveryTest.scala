@@ -3,6 +3,7 @@ package hydrozoa.multisig.consensus
 import cats.data.NonEmptyList
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
+import cats.syntax.contravariant.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.HeadConfig
@@ -10,7 +11,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.StackTimes.StackCreationEnd
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
@@ -18,7 +19,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.codec.TreasuryFixture
-import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{ArrivalStamp, InMemoryBackendStore, JournalKey, JournalValue, Persistence, PersistenceEventFormat, StoreKey}
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
@@ -95,11 +96,13 @@ class StackComposerRecoveryTest extends AnyFunSuite:
     private def bootWith[A](
         seed: Persistence[IO] => IO[Unit]
     )(check: Deferred[IO, SlowConsensusActor.StackHandoff] => IO[A]): A =
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use(backend =>
                 ActorSystem[IO]("sc-recovery").use(system =>
                     for {
-                        persistence <- Persistence.fromBackend(backend)
+                        persistence <- Persistence.fromBackend(backend, persistenceTracer)
                         _ <- seed(persistence)
                         gotHandoff <- Deferred[IO, SlowConsensusActor.StackHandoff]
                         probe <- system.actorOf(HandoffProbe(gotHandoff))

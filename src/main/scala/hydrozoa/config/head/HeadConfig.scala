@@ -20,8 +20,8 @@ import hydrozoa.config.node.NodePrivateConfig.given
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
-import hydrozoa.lib.logging.Logging
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost}
+import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -173,8 +173,6 @@ object HeadConfig {
             } yield hc
         }
 
-    private val logger = Logging.logger("HeadConfig")
-
     type HeadConfigError = InitializationTxSeq.Build.Error | HeadConfigBootstrapError
 
     /** Construct a HeadConfig from its bootstrap context and the unsigned initial-block payload.
@@ -286,7 +284,11 @@ object HeadConfig {
                 }
 
                 cardanoBackend <- EitherT.liftF(
-                  CardanoBackendBlockfrost(blockfrostNetwork, privateConfig.blockfrostApiKey)
+                  CardanoBackendBlockfrost(
+                    blockfrostNetwork,
+                    privateConfig.blockfrostApiKey,
+                    tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                  )
                 )
 
                 bootstrapConfig <- Bootstrap.fromJson(bootstrapConfigStr, cardanoBackend)
@@ -545,13 +547,8 @@ object HeadConfig {
             ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
                 x.combine(y.leftMap(NonEmptyList.one))
             ) match {
-                case Valid(()) => Valid(headConfigBootstrap)
-                case x @ Invalid(errors) => {
-                    // We log in the constructor rather than the pattern match. If this causes spurious errors,
-                    // it can be removed.
-                    errors.toList.foreach(logger.error)
-                    Invalid(errors)
-                }
+                case Valid(())           => Valid(headConfigBootstrap)
+                case x @ Invalid(errors) => Invalid(errors)
             }
         }
 

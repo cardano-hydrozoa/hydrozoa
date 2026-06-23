@@ -1,10 +1,10 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{Fiber, IO, IOLocal, Ref}
+import cats.effect.{Deferred, Fiber, IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.consensus.*
@@ -17,13 +17,14 @@ import hydrozoa.multisig.persistence.{BackendStore, Persistence}
 import org.scalacheck.commands.SutCommand
 
 // ===================================
-// Per-peer actor stack (local to startupSut)
+// Per-peer actor stack (local to sutResource)
 // ===================================
 
 private[stage4] case class PeerStack(
     blockWeaver: BlockWeaver.Handle,
     cardanoLiaison: CardanoLiaison.Handle,
-    requestSequencer: RequestSequencer.Handle,
+    /** Head peers only — coil followers don't accept user requests. */
+    requestSequencer: Option[RequestSequencer.Handle],
     jointLedger: JointLedger.Handle,
     consensusActor: FastConsensusActor.Handle,
     stackComposer: StackComposer.Handle,
@@ -77,11 +78,18 @@ case class Stage4Sut(
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
-    tracerLocal: IOLocal[Slf4jTracer],
-    // Cleanup hooks for resources allocated outside the actor system (currently the
-    // optional WebSocket transport when running with [[TransportMode.WebSocket]]).
-    // Empty in [[TransportMode.Direct]] mode. Run during [[shutdownSut]].
-    transportCleanup: IO[Unit] = IO.unit,
+    fastSettlementSignal: Deferred[IO, Unit],
+    slowCoverageSignal: Deferred[IO, Unit],
+    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL capture sink reads it
+      * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
+      * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
+      */
+    fastSettlementTarget: Deferred[IO, Set[RequestId]],
+    /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
+      * the SCA capture sink reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
+      */
+    slowCoverageTarget: Deferred[IO, Set[Int]],
+    log: ContraTracer[IO, Slf4jMsg],
 )
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
@@ -117,10 +125,9 @@ object Stage4SutCommands:
     // predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
                 reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
@@ -130,10 +137,9 @@ object Stage4SutCommands:
     // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
                 reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- Slf4jTracer.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
             } yield ValidityFlag.Valid

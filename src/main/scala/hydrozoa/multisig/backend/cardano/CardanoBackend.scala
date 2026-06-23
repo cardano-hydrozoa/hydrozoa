@@ -1,5 +1,6 @@
 package hydrozoa.multisig.backend.cardano
 
+import hydrozoa.lib.logging.ContraTracer
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
@@ -11,6 +12,8 @@ import scalus.uplc.builtin.Data
   */
 trait CardanoBackend[F[_]]:
     import CardanoBackend.*
+
+    protected def tracer: ContraTracer[F, CardanoBackendEvent]
 
     /** @return
       *   - Left(error) if resolution itself fails; i.e., if an unhandled exception is thrown during

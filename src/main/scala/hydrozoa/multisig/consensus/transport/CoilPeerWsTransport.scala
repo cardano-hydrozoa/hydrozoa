@@ -4,10 +4,11 @@ import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.liaison.BatchMessages.{OwnHardAck, Population}
 import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub}
 import hydrozoa.multisig.consensus.peer.CoilPeerNumber
+import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEvent.*
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import scala.concurrent.duration.*
@@ -25,9 +26,8 @@ final class CoilPeerWsTransport private (
     private val hubUri: Uri,
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
+    private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
 )(using CardanoNetwork.Section) {
-
-    private val logger = Logging.loggerIO(s"CoilPeerWsTransport.c${ownCoilNum.convert}")
 
     /** Wire the local PeerLiaisonCoilToHub as the inbound dispatch target. Must be called before
       * the link starts receiving traffic.
@@ -39,7 +39,7 @@ final class CoilPeerWsTransport private (
     def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
-            case None       => logger.warn(s"send: dropping non-wire request to hub: $request")
+            case None       => tracer.traceWith(DroppingNonWireRequest(request.toString))
         }
 
     private def dispatchInbound(payload: CoilFrame.Wire): IO[Unit] =
@@ -48,17 +48,16 @@ final class CoilPeerWsTransport private (
             case p @ (_: Population.New | _: OwnHardAck.Get) =>
                 inboundRef.get.flatMap {
                     case Some(liaison) => liaison ! p
-                    case None          => logger.warn("inbound from hub but no liaison registered")
+                    case None          => tracer.traceWith(NoLiaisonForInbound)
                 }
-            case other => logger.warn(s"unexpected coil-bound wire from hub: $other")
+            case other => tracer.traceWith(UnexpectedInboundWire(other.toString))
         }
 
     private def onLine(s: String): IO[Unit] =
         CoilFrame.parse(s) match {
             case Right(CoilFrame.Msg(payload)) => dispatchInbound(payload)
             case Right(CoilFrame.Hello(_))     => IO.unit
-            case Left(err) =>
-                logger.warn(s"failed to decode coil frame from hub: ${err.getMessage}")
+            case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
 
     private def dialerLoop(client: WSClient[IO]): IO[Nothing] = {
@@ -67,13 +66,13 @@ final class CoilPeerWsTransport private (
         def once: IO[Unit] =
             client.connectHighLevel(request).use { conn =>
                 val helloLine = CoilFrame.encode(CoilFrame.Hello(ownCoilNum.convert))
-                logger.info(s"dialer: connected to hub at $hubUri") >>
+                tracer.traceWith(DialerConnected(hubUri)) >>
                     conn.send(WSFrame.Text(helloLine)) >>
                     WsDuplex.run(conn, outbox, onLine)
             }
 
         val attempt: IO[Unit] =
-            once.handleErrorWith(e => logger.warn(s"dialer to hub failed: ${e.getMessage}"))
+            once.handleErrorWith(e => tracer.traceWith(DialerFailed(e)))
 
         (attempt >> IO.sleep(1.second)).foreverM
     }
@@ -88,9 +87,10 @@ object CoilPeerWsTransport {
     def create(
         ownCoilNum: CoilPeerNumber,
         hubUri: Uri,
+        tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilPeerWsTransport(ownCoilNum, hubUri, outbox, inboundRef)
+        } yield new CoilPeerWsTransport(ownCoilNum, hubUri, outbox, inboundRef, tracer)
 }

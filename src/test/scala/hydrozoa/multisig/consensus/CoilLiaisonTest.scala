@@ -19,7 +19,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
@@ -125,7 +125,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
           blockWeaverLimiter = blockWeaver,
           cardanoLiaison = cardanoLiaison,
           consensusActor = consensusActor,
-          requestSequencer = requestSequencer,
+          requestSequencer = Some(requestSequencer),
           jointLedger = jointLedger,
           stackComposer = stackComposer,
           stackComposerLimiter = stackComposer,
@@ -152,16 +152,20 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         val (hubConfig, coilConfigs) = genConfigs(nCoil)
         given CardanoNetwork.Section = hubConfig
 
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        val casTracer = Slf4jTracer.sink.contramap(CoilAckSequencerEventFormat.humanFormat(hubNum))
+
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use { backend =>
-                Persistence.fromBackend(backend).flatMap { persistence =>
+                Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
                             headPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
-                              CoilAckSequencer(hubConfig, persistence, headPending)
+                              CoilAckSequencer(hubConfig, persistence, headPending, casTracer)
                             )
                             coilRelay <- system.actorOf(CoilRelay(headPending))
 

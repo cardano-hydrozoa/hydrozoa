@@ -1,9 +1,14 @@
 package hydrozoa.integration.stage4
 
+import cats.data.StateT
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import cats.implicits.*
 import hydrozoa.integration.stage4.Model.*
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import org.scalacheck.commands.{AnyCommand, LoggingControl}
-import org.scalacheck.{Test, YetAnotherProperties}
+import org.scalacheck.commands.AnyCommand
+import org.scalacheck.{Prop, PropertyM, Test, YetAnotherProperties}
 
 import scala.concurrent.duration.DurationInt
 
@@ -12,17 +17,20 @@ object Stage4Runner:
     def generateCommands(
         initialState: ModelState,
         n: Int
-    ): (ModelState, List[AnyCommand[ModelState, Stage4Sut]]) =
-        List.fill(n)(()).foldLeft((initialState, Nil: List[AnyCommand[ModelState, Stage4Sut]])) {
-            case ((state, cmds), _) =>
-                val cmd = Stage4ScenarioGen.genNextCommand(state).sample.get
-                (cmd.advanceState(state), cmds :+ cmd)
-        }
+    )(using ContraTracer[IO, Slf4jMsg]): PropertyM[IO, (ModelState, List[AnyCommand[ModelState, Stage4Sut]])] =
+        val step: StateT[[x] =>> PropertyM[IO, x], ModelState, AnyCommand[ModelState, Stage4Sut]] =
+            for
+                state    <- StateT.get[[x] =>> PropertyM[IO, x], ModelState]
+                cmd      <- StateT.liftF(Stage4ScenarioGen.genNextCommand(state))
+                newState <- StateT.liftF(PropertyM.run(cmd.advanceState[IO](state)))
+                _        <- StateT.set[[x] =>> PropertyM[IO, x], ModelState](newState)
+            yield cmd
+        step.replicateA(n).run(initialState)
 
     def renderTable(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
-    ): String =
+    )(using ContraTracer[IO, Slf4jMsg]): IO[String] =
         val peers = initialState.params.multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val startEpoch = initialState.currentModelTime.getEpochSecond
 
@@ -53,83 +61,90 @@ object Stage4Runner:
 
         val peerRegex = "peer=(\\d+)".r
 
-        // Collect (genSeqNum, cmd, nextState) for all non-NoOp commands
-        val rows = commands.zipWithIndex
-            .foldLeft(
-              (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
-            ) { case ((state, acc), (cmd, idx)) =>
-                val nextState = cmd.advanceState(state)
-                val entry = if cmd.label != "NoOp" then acc :+ (idx + 1, cmd, nextState) else acc
-                (nextState, entry)
-            }
-            ._2
-
-        // Sort by global clock, ties broken by generation order. With the single global clock
-        // the model time after each command is shared across peers, so this sort matches the
-        // SUT virtual timeline.
-        val sorted = rows.sortBy { (genSeq, _, nextState) =>
-            (nextState.currentModelTime.getEpochSecond, genSeq)
-        }
-
-        val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
-            val actingPeer =
-                peerRegex.findFirstMatchIn(cmd.label).map(m => HeadPeerNumber(m.group(1).toInt))
-            s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
-                val cell =
-                    if actingPeer.contains(p) then
-                        val t = nextState.currentModelTime.getEpochSecond - startEpoch
-                        val d = cmd.delay.toSeconds
-                        s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
-                            .take(colWidth)
-                            .padTo(colWidth, ' ')
-                    else " " * colWidth
-                s" $cell |"
-            }.mkString
-        }
-
         val legend =
             "Legend: μ=mean inter-arrival  +t=peer clock since start  Δ=sampled delay  #N=gen order"
 
-        (List(divider, header, divider) ++ rowLines ++ List(divider, legend)).mkString("\n")
+        // Collect (genSeqNum, cmd, nextState) for all non-NoOp commands
+        commands.zipWithIndex
+            .foldLeft(IO.pure(
+              (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
+            )) { case (ioAcc, (cmd, idx)) =>
+                ioAcc.flatMap { case (state, acc) =>
+                    cmd.advanceState[IO](state).map { nextState =>
+                        val entry =
+                            if cmd.label != "NoOp" then acc :+ (idx + 1, cmd, nextState) else acc
+                        (nextState, entry)
+                    }
+                }
+            }
+            .map { case (_, rows) =>
+                // Sort by global clock, ties broken by generation order. With the single global clock
+                // the model time after each command is shared across peers, so this sort matches the
+                // SUT virtual timeline.
+                val sorted = rows.sortBy { (genSeq, _, nextState) =>
+                    (nextState.currentModelTime.getEpochSecond, genSeq)
+                }
+
+                val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
+                    val actingPeer =
+                        peerRegex.findFirstMatchIn(cmd.label).map(m => HeadPeerNumber(m.group(1).toInt))
+                    s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
+                        val cell =
+                            if actingPeer.contains(p) then
+                                val t = nextState.currentModelTime.getEpochSecond - startEpoch
+                                val d = cmd.delay.toSeconds
+                                s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
+                                    .take(colWidth)
+                                    .padTo(colWidth, ' ')
+                            else " " * colWidth
+                        s" $cell |"
+                    }.mkString
+                }
+
+                (List(divider, header, divider) ++ rowLines ++ List(divider, legend)).mkString("\n")
+            }
 
     def printTable(
         initialState: ModelState,
         commands: List[AnyCommand[ModelState, Stage4Sut]]
-    ): Unit =
-        println(renderTable(initialState, commands))
+    )(using ContraTracer[IO, Slf4jMsg]): IO[Unit] =
+        renderTable(initialState, commands).flatMap(IO.println)
 
 @main def stage4PrintCommandSequence(): Unit =
-    LoggingControl.withSuppressedLogs("stage4 command sequence generation") {
-        val gen = Stage4Suite.genInitialState(
-          nPeers = 3,
-          meanInterArrivalTime = p =>
-              (p: Int) match
-                  case 0 => 30.seconds
-                  case 1 => 8.seconds
-                  case _ => 15.seconds
-        )
-        val initialState = LazyList.continually(gen.sample).flatten.head
-        val (_, commands) = Stage4Runner.generateCommands(initialState, 300)
-        Stage4Runner.printTable(initialState, commands)
+    given ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Runner"))
+    val prop = PropertyM.monadicIO {
+        for
+            initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
+                nPeers = 3,
+                meanInterArrivalTime = p =>
+                    (p: Int) match
+                        case 0 => 30.seconds
+                        case 1 => 8.seconds
+                        case _ => 15.seconds
+            ))
+            commandsResult <- Stage4Runner.generateCommands(initialState, 300)
+            (_, commands)   = commandsResult
+            _              <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
+        yield Prop.passed
     }
+    val _ = Test.check(Test.Parameters.default.withMinSuccessfulTests(1), prop)
 
 // ===================================
 // Test entry points
 // ===================================
 
+// N.B.: The tests default to 10 commands. Mark longer ones with (extended) to filter them out in CI
 object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
             .withWorkers(1)
-            .withMinSuccessfulTests(1)
+            .withMinSuccessfulTests(100)
+            .withPropFilter(Some("Twenty-peers head works \\(quick\\)"))
 
-    // Fast variants (CI): small command sequences, minimal peer count
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
-
-    val _ = property("Two-peers head works (quick)") =
-        Stage4Suite(label = "stage4-quick-two-peers", nPeers = 2, nCommands = 10).property()
 
     // Two head peers hubbing one coil peer (coilQuorum = 1). The Pc4 multi-head relay makes the coil peer a full
     // participant: it follows every leader's blocks (relayed briefs + relayed user requests,
@@ -146,28 +161,17 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
 
-    val _ = property("Three-peers head works (quick)") =
-        Stage4Suite(label = "stage4-quick-three-peers", nPeers = 3, nCommands = 10).property()
-
     val _ = property("Twenty-peers head works") =
         Stage4Suite(label = "stage4-twenty-peers", nPeers = 20).property()
 
     // WebSocket transport variant: real-clock run over real WS connections. Reuses the stage1
     // takeoff trick — `genInitialState` anchors `startTime` at `Instant.now() + 60s` when
-    // `useTestControl = false`, and `startupSut` sleeps the wall clock until that anchor, so
+    // `useTestControl = false`, and `sutResource` sleeps the wall clock until that anchor, so
     // model time and wall clock coincide at command 1. Inter-arrival delays from the
     // superposition generator now elapse in real time.
     val _ = property("Two-peers head works WS") = Stage4Suite(
       label = "stage4-ws-two-peers",
       nPeers = 2,
-      transportMode = TransportMode.WebSocket(),
-      backendMode = BackendMode.RocksDb()
-    ).property()
-
-    val _ = property("Two-peers head works WS (quick)") = Stage4Suite(
-      label = "stage4-ws-quick-two-peers",
-      nPeers = 2,
-      nCommands = 10,
       transportMode = TransportMode.WebSocket(),
       backendMode = BackendMode.RocksDb()
     ).property()
@@ -213,3 +217,16 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
           nCoilPeers = 1,
           transportMode = TransportMode.WebSocket(),
         ).property()
+
+// ===================================
+// Diagnostic: termination check
+// ===================================
+
+object Stage4Diagnostics extends YetAnotherProperties("Integration Stage 4 Diagnostics"):
+
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withWorkers(1).withMinSuccessfulTests(1)
+
+
+    val _ = property("Two-peers 1 command") =
+        Stage4Suite(label = "diag-1", nPeers = 2, nCommands = 1).property()

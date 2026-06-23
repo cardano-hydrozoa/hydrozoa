@@ -3,7 +3,8 @@ package hydrozoa.multisig.consensus.liaison
 import cats.effect.unsafe.implicits.global
 import cats.effect.{IO, Ref}
 import cats.implicits.*
-import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Unit tests for the [[Puller]] pull-side state machine, with `Int`-cursor fake batch types so it
@@ -35,7 +36,10 @@ class PullerTest extends AnyFunSuite {
           dispatch = dispatch,
           numberOfBatchRequest = _.batchNum,
           numberOfBatch = _.batchNum,
-          tracer = ContraTracer.nullTracer[IO, PeerLiaisonEvent]
+          tracer = Slf4jTracer.sink.contramap(
+            PeerLiaisonEventFormat
+                .humanFormat(PeerId.Head(HeadPeerNumber(0)), PeerId.Head(HeadPeerNumber(1)))
+          )
         )(g => sent.update(_ :+ g))
 
         puller.start.unsafeRunSync()

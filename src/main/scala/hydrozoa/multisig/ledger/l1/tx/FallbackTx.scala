@@ -69,16 +69,6 @@ object FallbackTx {
 private object FallbackTxOps {
     type Config = HeadConfig.Bootstrap.Section & InitializationParameters.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("FallbackTx")
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: $elapsed%.2f ms")
-        result
-    }
-
     // TODO: Distribute equity
     final case class Build(
         validityStartTime: FallbackTxStartTime,
@@ -148,7 +138,7 @@ private object FallbackTxOps {
                 object Treasury {
                     def apply(): Send = output.send
 
-                    val datum: Unresolved = time("newTreasuryDatum") {
+                    val datum: Unresolved = {
                         Unresolved(
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
@@ -186,7 +176,7 @@ private object FallbackTxOps {
                     private object Public {
                         def apply() = Send(utxo)
 
-                        private val utxo = time("publicBallotBox") {
+                        private val utxo = {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
@@ -198,7 +188,7 @@ private object FallbackTxOps {
                     object Peers {
                         def apply(): NonEmptyList[Send] = utxos.map(Send(_))
 
-                        private val utxos = time("peerBallotBoxes") {
+                        private val utxos = {
                             val datums = VD(
                               config.headPeerVKeys
                                   .map(x => PubKeyHash(blake2b_224(x)))

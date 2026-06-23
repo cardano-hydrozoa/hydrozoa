@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import cats.syntax.traverse.*
+import cats.syntax.all.*
+import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -14,6 +15,8 @@ import org.scalatest.funsuite.AnyFunSuite
   * implementations agree on the contract.
   */
 class InMemoryBackendStoreTest extends AnyFunSuite:
+
+    private val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
     test("put then get returns the same bytes in the same CF") {
         withStore { p =>
@@ -133,4 +136,4 @@ class InMemoryBackendStoreTest extends AnyFunSuite:
     }
 
     private def withStore(prog: BackendStore[IO] => IO[Assertion]): Assertion =
-        InMemoryBackendStore.open.use(prog).unsafeRunSync()
+        InMemoryBackendStore.open(tracer).use(prog).unsafeRunSync()

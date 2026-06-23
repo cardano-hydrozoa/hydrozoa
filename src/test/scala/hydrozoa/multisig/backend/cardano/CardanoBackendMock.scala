@@ -3,11 +3,13 @@ package hydrozoa.multisig.backend.cardano
 import cats.arrow.FunctionK
 import cats.data.State
 import cats.effect.{IO, Ref}
+import cats.implicits.toContravariantOps
 import cats.syntax.all.catsSyntaxFlatMapOps
+import cats.syntax.foldable.*
 import cats.~>
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
@@ -16,13 +18,12 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State as LedgerStat
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, RedeemerTag, Slot, Transaction, TransactionHash, TransactionInput, Utxo, Utxos, Value}
 import scalus.uplc.builtin.Data
 
-val logger = Logging.logger("test.CardanoBackendMock")
-
 final case class MockState(
     ledgerState: LedgerState,
     currentSlot: Slot = Slot(0),
     knownTxs: Set[TransactionHash] = Set.empty,
-    submittedTxs: List[(Utxos, Transaction)] = List.empty
+    submittedTxs: List[(Utxos, Transaction)] = List.empty,
+    pendingLogs: List[LogEvent] = Nil
 )
 
 object MockState:
@@ -40,6 +41,15 @@ class CardanoBackendMock private (
 ) extends CardanoBackend[MockStateF] {
     import CardanoBackend.*
     import State.*
+
+    private val log: ContraTracer[MockStateF, CardanoBackendEvent] =
+        ContraTracer
+            .emit[MockStateF, LogEvent](ev =>
+                State.modify[MockState](s => s.copy(pendingLogs = s.pendingLogs :+ ev))
+            )
+            .contramap(CardanoBackendEventFormat.humanFormat)
+
+    protected def tracer: ContraTracer[MockStateF, CardanoBackendEvent] = log
 
     override def resolve(
         input: TransactionInput
@@ -86,7 +96,7 @@ class CardanoBackendMock private (
     ): MockStateF[Either[CardanoBackend.Error, Boolean]] = for {
         state: MockState <- get
         isKnown = state.knownTxs.contains(txHash)
-        _ = logger.trace(s"isTxKnown: looking for tx ${txHash} in state.knownTxs ${state.knownTxs}")
+        _ <- log.traceWith(CardanoBackendEvent.IsTxKnownChecked(txHash, state.knownTxs))
     } yield Right(isKnown)
 
     override def lastContinuingTxs(
@@ -142,27 +152,34 @@ class CardanoBackendMock private (
         } yield Right(result)
     }
 
-    override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] = {
-        logger.debug(s"submitTx: ${tx.id}")
-        logger.trace(s"submitTx: ${HexUtil.encodeHexString(tx.toCbor)}")
-
+    override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] =
         for {
-            state <- get[MockState]
-
-            _ = logger.trace(s"utxos count: ${state.ledgerState.utxos.values.size}")
-            _ = logger.trace(
-              s"missing utxos: ${tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet}"
+            _ <- log.traceWith(CardanoBackendEvent.SubmitTxReceived(tx.id))
+            _ <- log.traceWith(
+              CardanoBackendEvent.SubmitTxCbor(HexUtil.encodeHexString(tx.toCbor))
             )
-            _ = logger.trace(s"tx utxos: ${state.ledgerState.utxos
-                    .filter((i, _) => tx.body.value.inputs.toSet.contains(i))}")
-
+            state <- get[MockState]
+            _ <- log.traceWith(
+              CardanoBackendEvent.SubmitTxUtxoSetSize(state.ledgerState.utxos.values.size)
+            )
+            _ <- log.traceWith(
+              CardanoBackendEvent.SubmitTxMissingInputs(
+                tx.body.value.inputs.toSet &~ state.ledgerState.utxos.keySet
+              )
+            )
+            _ <- log.traceWith(
+              CardanoBackendEvent.SubmitTxRelevantUtxos(
+                state.ledgerState.utxos.filter((i, _) => tx.body.value.inputs.toSet.contains(i))
+              )
+            )
             ret <-
                 // TODO: is this what we want to have?
                 // TODO: Maybe in some cases it would be nice to know that tx has been submitted more than once
                 if state.knownTxs.contains(tx.id)
                 then
-                    logger.debug(s"tx ${tx.id} is already known, do nothing")
-                    pure(Right(()))
+                    log.traceWith(CardanoBackendEvent.SubmitTxAlreadyKnown(tx.id)) >> pure(
+                      Right(())
+                    )
                 else
                     mutator.transit(
                       mkContext(state.currentSlot.slot),
@@ -181,7 +198,6 @@ class CardanoBackendMock private (
                             set[MockState](newState) >> pure(Right(()))
                     }
         } yield ret
-    }
 
     def fetchLatestParams: MockStateF[Either[Error, ProtocolParams]] = {
         // As long as paramters don't depend on the slot number it's fine
@@ -215,10 +231,16 @@ object CardanoBackendMock {
         mutator: Mutator = CardanoMutator,
         mkContext: Long => Context = Context.testMainnet
     ): IO[(CardanoBackend[IO], IO[Utxos])] = {
-        logger.info("Running Cardano backend mock in IO...")
-        logger.debug(s"initial utxo ids: ${initialState.ledgerState.utxos.map(_._1)}")
+        val ioLog: ContraTracer[IO, CardanoBackendEvent] =
+            Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
 
-        Ref.of[IO, MockState](initialState).map { stateRef =>
+        for {
+            _ <- ioLog.traceWith(CardanoBackendEvent.MockStarted)
+            _ <- ioLog.traceWith(
+              CardanoBackendEvent.MockInitialUtxos(initialState.ledgerState.utxos.keys)
+            )
+            stateRef <- Ref.of[IO, MockState](initialState)
+        } yield {
             val mock = new CardanoBackendMock(mutator, mkContext)
             // TODO: this is awkward, but this requires the mending of Scalus
             //  - Context is not a case class
@@ -232,12 +254,19 @@ object CardanoBackendMock {
                         // _ <- IO.println(s"transformer now=$now")
                         // _ <- IO.println(s"transformer slotConfig=$slotConfig")
                         currentSlot = QuantizedInstant.apply(slotConfig, now).toSlot
-                        ret <- stateRef
-                            .modify(s => (mock.setSlot(currentSlot) >> state).run(s).value)
+                        retAndLogs <- stateRef.modify { s =>
+                            val (newState, result) =
+                                (mock.setSlot(currentSlot) >> state).run(s).value
+                            (newState.copy(pendingLogs = Nil), (result, newState.pendingLogs))
+                        }
+                        (ret, pendingLogs) = retAndLogs
+                        _ <- pendingLogs.traverse_(ev => Slf4jTracer.sink.traceWith(ev))
                     } yield ret
                 }
 
             val backend: CardanoBackend[IO] = new CardanoBackend[IO] {
+                protected def tracer: ContraTracer[IO, CardanoBackendEvent] = ioLog
+
                 override def utxosAt(
                     address: ShelleyAddress
                 ): IO[Either[CardanoBackend.Error, Utxos]] =

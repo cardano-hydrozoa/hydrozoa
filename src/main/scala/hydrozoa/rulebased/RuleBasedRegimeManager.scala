@@ -16,6 +16,7 @@ import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{BackendStore, Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
+import hydrozoa.rulebased.ledger.l1.state.VoteState.secFromData
 import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData

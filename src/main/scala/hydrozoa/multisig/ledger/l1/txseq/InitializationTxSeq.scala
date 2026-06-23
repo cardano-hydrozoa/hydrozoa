@@ -20,16 +20,6 @@ object InitializationTxSeq {
 private object InitializationTxSeqOps {
     type Config = HeadConfig.Bootstrap.Section
 
-    private val logger = org.slf4j.LoggerFactory.getLogger("InitializationTxSeq")
-
-    private def time[A](label: String)(block: => A): A = {
-        val start = System.nanoTime()
-        val result = block
-        val elapsed = (System.nanoTime() - start) / 1_000_000.0
-        logger.trace(f"\t\t⏱️ $label: ${elapsed}%.2f ms")
-        result
-    }
-
     object Build {
         enum Error extends Throwable {
             case InitializationTxError(e: (SomeBuildErrorOnly, String))
@@ -127,7 +117,7 @@ private object InitializationTxSeqOps {
             val fallbackTx = transactionSequence._2
 
             for {
-                iTx <- time("InitializationTx.build") {
+                iTx <- {
                     InitializationTx
                         .Parse(config)(
                           blockCreationEndTime = blockCreationEndTime,
@@ -158,7 +148,7 @@ private object InitializationTxSeqOps {
                           )
                         )
 
-                expectedFallbackTx <- time("FallbackTx.build") {
+                expectedFallbackTx <- {
                     FallbackTx
                         .Build(
                           config.txTiming.newFallbackStartTime(blockCreationEndTime),

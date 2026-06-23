@@ -1,7 +1,7 @@
 package hydrozoa.integration.stage1
 
-import cats.effect.{Deferred, IO, IOLocal, Ref}
-import cats.syntax.all.catsSyntaxFlatMapOps
+import cats.effect.{Deferred, IO, Ref}
+import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
@@ -10,7 +10,7 @@ import hydrozoa.integration.stage1
 import hydrozoa.integration.stage1.AgentActor.CompleteBlock
 import hydrozoa.integration.stage1.Commands.*
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug, error, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.CardanoLiaison.Timeout
@@ -43,7 +43,7 @@ case class Stage1Sut(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     agent: AgentActor.Handle,
-    tracerLocal: IOLocal[Slf4jTracer],
+    log: ContraTracer[IO, Slf4jMsg],
     runId: String = "",
 )
 
@@ -150,19 +150,17 @@ object SutCommands:
 
     implicit given SutCommand[DelayCommand, Unit, Stage1Sut] with {
         override def run(cmd: DelayCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Slf4jTracer.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
+                _ <- sut.log.debug(s">> DelayCommand(delay=${cmd.delaySpec})")
                 now <- IO.realTimeInstant
-                _ <- Slf4jTracer.debug(s"\tCurrent time: ${now.toEpochMilli}")
+                _ <- sut.log.debug(s"\tCurrent time: ${now.toEpochMilli}")
                 _ <- sut.agent ! Timeout
             } yield ()
     }
 
     implicit given SutCommand[StartBlockCommand, Unit, Stage1Sut] with {
         override def run(cmd: StartBlockCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
-            Slf4jTracer.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
+            sut.log.debug(s">> StartBlockCommand(blockNumber=${cmd.blockNumber})") >>
                 (sut.agent ! StartBlock(
                   blockNum = cmd.blockNumber,
                   blockCreationStartTime = cmd.creationTime
@@ -171,23 +169,21 @@ object SutCommands:
 
     implicit given SutCommand[L2TxCommand, Unit, Stage1Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
-            Slf4jTracer.debug(">> LedgerEventCommand") >>
+            sut.log.debug(">> LedgerEventCommand") >>
                 (sut.agent ! cmd.request)
     }
 
     implicit given SutCommand[CompleteBlockCommand, BlockBrief, Stage1Sut] with {
         override def run(cmd: CompleteBlockCommand, sut: Stage1Sut): IO[BlockBrief] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Slf4jTracer.debug(
+                _ <- sut.log.debug(
                   s">> CompleteBlockCommand(blockNumber=${cmd.blockNumber}, " +
                       s"blockDuration=${cmd.blockDuration}, " +
                       s"blockCreationEndTime=${cmd.blockCreationEndTime}, " +
                       s"isFinal=${cmd.isFinal})"
                 )
                 now <- IO.realTimeInstant
-                _ <- Slf4jTracer.trace(
+                _ <- sut.log.trace(
                   s"SUTCommand[CompleteBlockCommand, (...)]: current time: ${now.toEpochMilli}"
                 )
                 headUtxos <- sut.cardanoBackend
@@ -216,8 +212,7 @@ object SutCommands:
 
     given SutCommand[RegisterDepositCommand, Unit, Stage1Sut] with {
         override def run(cmd: RegisterDepositCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
-            Slf4jTracer.debug(">> RegisterDepositCommand") >>
+            sut.log.debug(">> RegisterDepositCommand") >>
                 (sut.agent ! cmd.request)
     }
 
@@ -225,9 +220,8 @@ object SutCommands:
 
         // This uses only depositsForSubmission and ignores rejected deposits
         override def run(cmd: SubmitDepositsCommand, sut: Stage1Sut): IO[Unit] =
-            given IOLocal[Slf4jTracer] = sut.tracerLocal
             for {
-                _ <- Slf4jTracer.debug(
+                _ <- sut.log.debug(
                   s">> SubmitDepositCommand (${cmd.depositsForSubmission.map(_._1)})"
                 )
                 ret <- IO.traverse(cmd.depositsForSubmission)(cmd => {
@@ -239,7 +233,7 @@ object SutCommands:
 
                 submissionErrors = ret.filter(_._2.isLeft)
                 _ <- IO.whenA(submissionErrors.nonEmpty)(
-                  Slf4jTracer.error(
+                  sut.log.error(
                     "Submit deposit errors:" + submissionErrors
                         .map(a =>
                             s"\n\t- ${a._1._1},\n\terror:\n\t${a._2.left}" +

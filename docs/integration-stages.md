@@ -151,12 +151,10 @@ Per peer, stage 4 starts **seven real actors** wired together by `HeadMultisigRe
 - `RequestSequencer` — request ingress.
 - `CardanoLiaison` — L1 submission and polling.
 
-Two observer actors wrap consensus and cardano-liaison to capture intermediate state for the properties:
+Intermediate state is captured via `ContraTracer`. Specifically:
 
-- **`BlockBriefObserver`** (`Sut.scala:43`) — proxies `ConsensusActor.Handle`; records every `BlockBrief.Intermediate` (Minor/Major) the peer sees.
-- **`StackObserver`** (`Sut.scala:85`) — proxies `CardanoLiaison.Handle`; records every `Stack.HardConfirmed` the peer's slow cycle emits.
-
-The observers are injected via `Connections`, so the real actors don't know they're being watched. Both leader-produced and follower-reproduced events flow through these proxies.
+- A vector of `BlockBrief.Intermediate` is captured via tracing from the FastConsensusActor
+- A vector of `Stack.HardConfirmed` is captured via tracing from the SlowConsensusActor  
 
 ### Multi-Peer in One Actor System
 
@@ -305,7 +303,7 @@ A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does 
   - `stage1/Suite.scala` — stage 1 test class.
   - `stage1/Sut.scala` — `Stage1Sut` + `AgentActor` + command typeclass instances.
   - `stage4/Suite.scala` — stage 4 test class, properties (`propLiveness`, `propDepositTiming`, `propValidRatio`, `propStackCoverage`).
-  - `stage4/Sut.scala` — `Stage4Sut` + observer actors + command typeclass instances.
+  - `stage4/Sut.scala` — `Stage4Sut` + ContraTracer capture refs + command typeclass instances.
   - `stage4/EffectsLanded.scala` — per-block happy-or-fallback assertion + stats table.
 - `org/scalacheck/commands/ModelBasedSuite.scala` — shared framework.
 - `docs/testcontrol-driver.md` — how virtual time works in the SUT.

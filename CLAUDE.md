@@ -178,6 +178,13 @@ See [Comments](docs/style-guide.md#comments) for the full rule. In short:
 - **Property-based testing**: Using ScalaCheck for testing protocol invariants
 - **Benchmarks**: JMH-based performance testing in `benchmark/` subproject
 
+### ScalaCheck rules
+
+- **Never use `.sample` or `.sample.get`** on a `Gen[_]` in tests. It bypasses ScalaCheck's seeding
+  mechanism, breaking reproducibility (a failing seed cannot be replayed), and throws
+  `NoSuchElementException` if the generator returns `None`. Always drive generation through
+  `forAll`, `pick`, or another ScalaCheck-managed entry point.
+
 ## Transaction Builder Implementation
 
 ## Important Notes
