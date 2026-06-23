@@ -71,15 +71,15 @@ case class Stage4Sut(
   *   - [[Direct]] (default) — every peer's liaison gets the actual remote handle from the
   *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
   *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to localhost
-  *     on a distinct port, mounting `/head` for the head mesh and (on a hub) `/hub` for its coil
-  *     peers; each coil dials its hub's `/hub`. Cross-peer communication happens over real
-  *     WebSocket connections. Forces [[ModelBasedSuite#useTestControl]] = `false` since real sockets
-  *     don't speak virtual time. Ports start at [[basePort]] and increase by `peerNum`.
+  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to
+  *     `127.0.0.1` on an OS-assigned ephemeral port, mounting `/head` for the head mesh and (on a
+  *     hub) `/hub` for its coil peers; each coil dials its hub's `/hub`. Ports are discovered
+  *     post-bind so two WS-mode test instances in the same JVM never collide. Forces
+  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
   */
 enum TransportMode:
     case Direct
-    case WebSocket(basePort: Int = 31000)
+    case WebSocket
 
 // ===================================
 // SUT command instances (direct submission)

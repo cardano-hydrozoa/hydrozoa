@@ -14,16 +14,17 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.WsPeerTransport
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat, MrmTracers}
 import java.nio.file.Path
 import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
+import org.http4s.server.websocket.WebSocketBuilder2
 
 /** Hydrozoa application entry point.
   *
@@ -149,102 +150,242 @@ object Main
                     s"Invalid hydrozoaPort in node config: ${nodeConfig.hydrozoaPort}"
                   )
                 )
+            wsClient <- Resource.eval(JdkWSClient.simple[IO])
 
-            // Build the WS-backed head-mesh transport: open one shared dialer client, the
-            // WsPeerTransport instance, bind a NodeWsServer for its inbound route, and start the
-            // outbound dialers. The MRM's resource() owns this Resource's lifecycle and
-            // ignores the ActorContext (the WS variant doesn't need it to allocate).
-            ownHeadPeerId = nodeConfig.ownPeerId match {
-                case PeerId.Head(n) => nodeConfig.headPeerIds.find(_.peerNum == n).get
-                case PeerId.Coil(_) =>
-                    throw new IllegalStateException(
-                      "HeadMultisigRegimeManager runs only on head peers"
+            nodeRun <- nodeConfig.ownPeerId match {
+                case PeerId.Head(ownHeadNum) =>
+                    buildHeadNode(
+                      nodeConfig,
+                      backend,
+                      remoteL2Ledger,
+                      persistence,
+                      mrmTracer,
+                      bindHost,
+                      bindPort,
+                      wsClient,
+                      ownHeadNum,
+                    )
+                case PeerId.Coil(ownCoilNum) =>
+                    buildCoilNode(
+                      nodeConfig,
+                      backend,
+                      remoteL2Ledger,
+                      persistence,
+                      mrmTracer,
+                      wsClient,
+                      ownCoilNum,
                     )
             }
-            remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
-                .filterNot(_.peerNum == ownHeadPeerId.peerNum)
-                .toList
-                .flatMap { pid =>
-                    nodeConfig.headConfig.headPeers.headPeerData
-                        .lookup(pid.peerNum)
-                        .map(hpd => pid -> (hpd.webSocketAddress / "head"))
-                }
-                .toMap
-            pwtTracer = mrmTracer.contramap(HeadMultisigRegimeManagerEvent.PT.apply)
-            nwsTracer = mrmTracer.contramap(HeadMultisigRegimeManagerEvent.NWS.apply)
-            wsPeerTransport = {
-                given CardanoNetwork.Section = nodeConfig
-                for {
-                    wsClient <- Resource.eval(JdkWSClient.simple[IO])
-                    transport <- WsPeerTransport.resource(
-                      ownPeerId = ownHeadPeerId,
-                      remotes = remoteHeadUris,
-                      wsClient = wsClient,
-                      bindHost = bindHost,
-                      bindPort = bindPort,
-                      transportTracer = pwtTracer,
-                      serverTracer = nwsTracer,
-                    )
-                } yield (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) => transport
-            }
+        } yield (nodeConfig, system, nodeRun)
 
+        resource.use { case (nodeConfig, system, nodeRun) =>
+            nodeRun match {
+                case NodeRun.HeadNode(mrm) =>
+                    runHeadNode(nodeConfig, system, mrm, httpExtraTracer)
+                case NodeRun.CoilNode(mrm) =>
+                    runCoilNode(system, mrm)
+            }
+        }
+    }
+
+    /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,
+      * start dialers, and allocate the [[HeadMultisigRegimeManager]].
+      */
+    private def buildHeadNode(
+        nodeConfig: NodeConfig,
+        backend: CardanoBackend[IO],
+        remoteL2Ledger: RemoteL2Ledger,
+        persistence: Persistence[IO],
+        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        bindHost: Host,
+        bindPort: Port,
+        wsClient: org.http4s.client.websocket.WSClient[IO],
+        ownHeadNum: HeadPeerNumber,
+    ): Resource[IO, NodeRun.HeadNode] = {
+        given CardanoNetwork.Section = nodeConfig
+        val ownHeadPeerId = nodeConfig.headPeerIds.find(_.peerNum == ownHeadNum).get
+        val remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
+            .filterNot(_.peerNum == ownHeadNum)
+            .toList
+            .flatMap { pid =>
+                nodeConfig.headConfig.headPeers.headPeerData
+                    .lookup(pid.peerNum)
+                    .map(hpd => pid -> (hpd.webSocketAddress / "head"))
+            }
+            .toMap
+        val hubbedCoils = nodeConfig.hubbedCoilPeerNums(ownHeadNum)
+        val tracers = MrmTracers.fromRoot(mrmTracer)
+        for {
+            peerT <- Resource.eval(
+              WsPeerTransport.create(
+                ownHeadPeerId,
+                remoteHeadUris.keys.toList,
+                tracers.peerTransport
+              )
+            )
+            hubT: Option[HubWsTransport] <-
+                if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
+                else
+                    Resource
+                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .map(Some(_))
+            meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
+            hubRoutes =
+                hubT.toList.map(h => (wsb: WebSocketBuilder2[IO]) => h.routes(wsb))
+            _ <- NodeWsServer.resource(
+              bindHost,
+              bindPort,
+              meshRoute :: hubRoutes,
+              tracers.nodeWsServer
+            )
+            _ <- peerT.startDialers(wsClient, remoteHeadUris)
+            peerFactory: Resource[
+              IO,
+              ActorContext[
+                IO,
+                HeadMultisigRegimeManager.Request,
+                Any
+              ] => hydrozoa.multisig.consensus.transport.PeerTransport
+            ] =
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    peerT
+                )
+            hubFactory: Option[Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+            ]] = hubT.map { h =>
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    h: HubTransport
+                )
+            }
             mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
               remoteL2Ledger,
               persistence,
               mrmTracer,
-              wsPeerTransport,
+              peerFactory,
+              hubFactory,
             )
-        } yield (nodeConfig, system, mrm)
+        } yield NodeRun.HeadNode(mrm)
+    }
 
-        resource.use { case (nodeConfig, system, mrm) =>
-            for {
-                _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
-                _ <- log.info("Hydrozoa node started successfully")
+    /** Build the coil-node uplink dialer (no inbound server) and allocate the
+      * [[CoilMultisigRegimeManager]]. A coil peer runs no user-facing HTTP server.
+      */
+    private def buildCoilNode(
+        nodeConfig: NodeConfig,
+        backend: CardanoBackend[IO],
+        remoteL2Ledger: RemoteL2Ledger,
+        persistence: Persistence[IO],
+        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        wsClient: org.http4s.client.websocket.WSClient[IO],
+        ownCoilNum: CoilPeerNumber,
+    ): Resource[IO, NodeRun.CoilNode] = {
+        given CardanoNetwork.Section = nodeConfig
+        val hubNum = nodeConfig
+            .coilPeerHub(ownCoilNum)
+            .getOrElse(
+              throw new IllegalStateException(s"no hub configured for coil peer $ownCoilNum")
+            )
+        val hubUri = nodeConfig.headConfig.headPeers.headPeerData
+            .lookup(hubNum)
+            .map(hpd => hpd.webSocketAddress / "hub")
+            .getOrElse(
+              throw new IllegalStateException(
+                s"no webSocketAddress configured for hub head peer $hubNum"
+              )
+            )
+        val cpwtTracer =
+            Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
+        for {
+            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            _ <- t.startDialer(wsClient, hubUri)
+            coilFactory: Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+            ] =
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    t: CoilTransport
+                )
+            mrm <- CoilMultisigRegimeManager.resource(
+              nodeConfig,
+              backend,
+              remoteL2Ledger,
+              persistence,
+              mrmTracer,
+              coilFactory,
+            )
+        } yield NodeRun.CoilNode(mrm)
+    }
 
-                // Start HTTP server once RequestSequencer is available
-                _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                    val httpHost = Host
-                        .fromString(nodeConfig.httpHost)
-                        .getOrElse(
-                          throw new IllegalArgumentException(
-                            s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
-                          )
-                        )
-                    val httpPort = Port
-                        .fromString(nodeConfig.httpPort)
-                        .getOrElse(
-                          throw new IllegalArgumentException(
-                            s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
-                          )
-                        )
-                    val serverConfig = HydrozoaServer.Config(
-                      host = httpHost,
-                      port = httpPort,
-                      adminUsername = nodeConfig.adminUsername,
-                      adminPassword = nodeConfig.adminPassword
+    private def runHeadNode(
+        nodeConfig: NodeConfig,
+        system: ActorSystem[IO],
+        mrm: HeadMultisigRegimeManager,
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent] =
+            Monoid[ContraTracer[IO, HydrozoaHttpEvent]].empty,
+    ): IO[ExitCode] =
+        for {
+            _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
+            _ <- log.info("Hydrozoa node started successfully")
+
+            // Start HTTP server once RequestSequencer is available
+            _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                val httpHost = Host
+                    .fromString(nodeConfig.httpHost)
+                    .getOrElse(
+                      throw new IllegalArgumentException(
+                        s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
+                      )
                     )
-                    val httpTracer = Slf4jTracer.sink
-                        .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer
-                    log.info("Starting HTTP server...") *>
-                        HydrozoaServer
-                            .create(
-                              connections.requestSequencer.getOrElse(
-                                sys.error("RequestSequencer required on head peers")
-                              ),
-                              connections.blockWeaver,
-                              nodeConfig.headConfig,
-                              serverConfig,
-                              httpTracer,
-                            )
-                            .use(_ => IO.never)
-                            .start // Run in background
-                            .void
-                }
+                val httpPort = Port
+                    .fromString(nodeConfig.httpPort)
+                    .getOrElse(
+                      throw new IllegalArgumentException(
+                        s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
+                      )
+                    )
+                val serverConfig = HydrozoaServer.Config(
+                  host = httpHost,
+                  port = httpPort,
+                  adminUsername = nodeConfig.adminUsername,
+                  adminPassword = nodeConfig.adminPassword
+                )
+                val httpTracer = Slf4jTracer.sink
+                    .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer
+                log.info("Starting HTTP server...") *>
+                    HydrozoaServer
+                        .create(
+                          connections.requestSequencer.getOrElse(
+                            sys.error("RequestSequencer required on head peers")
+                          ),
+                          connections.blockWeaver,
+                          nodeConfig.headConfig,
+                          serverConfig,
+                          httpTracer,
+                        )
+                        .use(_ => IO.never)
+                        .start
+                        .void
+            }
 
-                _ <- system.waitForTermination
-            } yield ExitCode.Success
-        }
+            _ <- system.waitForTermination
+        } yield ExitCode.Success
+
+    private def runCoilNode(
+        system: ActorSystem[IO],
+        mrm: CoilMultisigRegimeManager,
+    ): IO[ExitCode] =
+        for {
+            _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
+            _ <- log.info("Hydrozoa coil node started successfully")
+            _ <- system.waitForTermination
+        } yield ExitCode.Success
+
+    private sealed trait NodeRun
+    private object NodeRun {
+        final case class HeadNode(mrm: HeadMultisigRegimeManager) extends NodeRun
+        final case class CoilNode(mrm: CoilMultisigRegimeManager) extends NodeRun
     }
 }

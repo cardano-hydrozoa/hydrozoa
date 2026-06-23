@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{BW, BWL, CAS, CL, ES, FCA, HWT, JL, NWS, PL, PT, SC, SCA, SCL, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{BlockWeaver, BlockWeaverLimiter, CardanoLiaison, CoilAckSequencer, EventSequencer, FastConsensusActor, HubWsTransport, JointLedger, NodeWsServer, PeerLiaison, PeerTransport, SlowConsensusActor, StackComposer, StackComposerLimiter, StartingActors, TerminatedActor, TerminatedDependency, WatchingActors}
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonEventFormat
 import hydrozoa.multisig.consensus.limiter.LimiterEventFormat
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -16,21 +16,21 @@ object HeadMultisigRegimeManagerEventFormat:
         val ev = LogEvent.From.forPeer("HeadMultisigRegimeManager", peerNum)
         import ev.*
         e match
-            case BW(bw)   => BlockWeaverEventFormat.humanFormat(peerNum)(bw)
-            case JL(jl)   => JointLedgerEventFormat.humanFormat(peerNum)(jl)
-            case FCA(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
-            case CL(cl)   => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
-            case SC(sc)   => StackComposerEventFormat.humanFormat(peerNum)(sc)
-            case SCA(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
-            case ES(es)   => EventSequencerEventFormat.humanFormat(peerNum)(es)
-            case PL(remotePeerId, pl) =>
+            case BlockWeaver(bw)         => BlockWeaverEventFormat.humanFormat(peerNum)(bw)
+            case JointLedger(jl)         => JointLedgerEventFormat.humanFormat(peerNum)(jl)
+            case FastConsensusActor(fca) => FastConsensusActorEventFormat.humanFormat(peerNum)(fca)
+            case CardanoLiaison(cl)      => CardanoLiaisonEventFormat.humanFormat(peerNum)(cl)
+            case StackComposer(sc)       => StackComposerEventFormat.humanFormat(peerNum)(sc)
+            case SlowConsensusActor(sca) => SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
+            case EventSequencer(es)      => EventSequencerEventFormat.humanFormat(peerNum)(es)
+            case PeerLiaison(remotePeerId, pl) =>
                 PeerLiaisonEventFormat.humanFormat(PeerId.Head(peerNum), remotePeerId)(pl)
-            case BWL(bwl)                  => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
-            case SCL(scl)                  => LimiterEventFormat.humanFormat("StackComposer")(scl)
-            case PT(pt)                    => PeerTransportEventFormat.humanFormat(peerNum)(pt)
-            case HWT(hwt)                  => HubWsTransportEventFormat.humanFormat(peerNum)(hwt)
-            case NWS(nws)                  => NodeWsServerEventFormat.humanFormat(peerNum)(nws)
-            case CAS(cas)                  => CoilAckSequencerEventFormat.humanFormat(peerNum)(cas)
+            case BlockWeaverLimiter(bwl)   => LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
+            case StackComposerLimiter(scl) => LimiterEventFormat.humanFormat("StackComposer")(scl)
+            case PeerTransport(pt)         => PeerTransportEventFormat.humanFormat(peerNum)(pt)
+            case HubWsTransport(hwt)       => HubWsTransportEventFormat.humanFormat(peerNum)(hwt)
+            case NodeWsServer(nws)         => NodeWsServerEventFormat.humanFormat(peerNum)(nws)
+            case CoilAckSequencer(cas)     => CoilAckSequencerEventFormat.humanFormat(peerNum)(cas)
             case StartingActors            => info("Starting multisig actors...")
             case WatchingActors            => info("Watching multisig actors...")
             case TerminatedActor(actor)    => warn(s"Terminated $actor actor")

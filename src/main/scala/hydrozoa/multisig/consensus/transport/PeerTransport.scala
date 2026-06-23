@@ -3,8 +3,6 @@ package hydrozoa.multisig.consensus.transport
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Host, Port}
-import com.suprnation.actor.ActorRef.ActorRef
 import fs2.Stream
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
@@ -53,7 +51,6 @@ final class WsPeerTransport private (
     val ownPeerId: HeadPeerId,
     private val outboxes: Map[HeadPeerId, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
-    private val remotes: Map[HeadPeerId, Uri],
     private val tracer: ContraTracer[IO, PeerTransportEvent],
 )(using CardanoNetwork.Section)
     extends PeerTransport {
@@ -178,9 +175,14 @@ final class WsPeerTransport private (
         }
 
     /** Launch a dialer fiber for each remote with peerNum greater than ours (lower dials higher).
-      * The fibers are torn down when the resource is released.
+      * The fibers are torn down when the resource is released. URIs are passed at dial-start time
+      * so the caller can bind on an OS-assigned ephemeral port and only build the URI map after
+      * every peer's server is bound.
       */
-    def startDialers(client: WSClient[IO]): Resource[IO, Unit] =
+    def startDialers(
+        client: WSClient[IO],
+        remotes: Map[HeadPeerId, Uri],
+    ): Resource[IO, Unit] =
         remotes.toList
             .filter { case (rid, _) => (rid.peerNum: Int) > (ownPeerId.peerNum: Int) }
             .traverse_ { case (rid, uri) =>
@@ -194,49 +196,26 @@ final class WsPeerTransport private (
 
 object WsPeerTransport {
 
-    /** Allocate the per-peer mesh transport: one outbox per remote + an empty inbound map. The
-      * caller mounts [[WsPeerTransport.routes]] on a [[NodeWsServer]] and calls
-      * [[WsPeerTransport.startDialers]] with a shared [[WSClient]].
+    /** Allocate the per-peer mesh transport: one outbox per remote + an empty inbound map. URIs
+      * aren't required here — they're passed to [[WsPeerTransport.startDialers]] later so the
+      * server can be bound on an OS-assigned port first.
       *
       * @param ownPeerId
       *   identity of this peer.
-      * @param remotes
-      *   remote peers to their WebSocket URI (used for dialing higher-numbered peers).
+      * @param remoteIds
+      *   identities of the other head peers; one outbox queue is allocated per id.
       * @param tracer
       *   sink for transport-level events.
       */
     def create(
         ownPeerId: HeadPeerId,
-        remotes: Map[HeadPeerId, Uri],
+        remoteIds: List[HeadPeerId],
         tracer: ContraTracer[IO, PeerTransportEvent],
     )(using CardanoNetwork.Section): IO[WsPeerTransport] =
         for {
-            outboxes <- remotes.keys.toList
+            outboxes <- remoteIds
                 .traverse(rid => Queue.unbounded[IO, String].map(rid -> _))
                 .map(_.toMap)
             inboundRef <- Ref[IO].of(Map.empty[HeadPeerId, PeerLiaisonHeadToHead.Handle])
-        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, remotes, tracer)
-
-    /** Allocate a runtime-ready WS transport: build the [[WsPeerTransport]], mount its `/head`
-      * route on a [[NodeWsServer]] bound at `bindHost:bindPort`, and start the outbound dialers
-      * against [[wsClient]]. The Resource owns all three lifetimes — dialers stop, server unbinds,
-      * transport drops when released.
-      *
-      * Callers (`Main`, stage4) just hand this Resource to
-      * [[hydrozoa.multisig.HeadMultisigRegimeManager.resource]] via the `peerTransport` factory.
-      */
-    def resource(
-        ownPeerId: HeadPeerId,
-        remotes: Map[HeadPeerId, Uri],
-        wsClient: WSClient[IO],
-        bindHost: Host,
-        bindPort: Port,
-        transportTracer: ContraTracer[IO, PeerTransportEvent],
-        serverTracer: ContraTracer[IO, NodeWsServerEvent],
-    )(using CardanoNetwork.Section): Resource[IO, WsPeerTransport] =
-        for {
-            transport <- Resource.eval(create(ownPeerId, remotes, transportTracer))
-            _ <- NodeWsServer.resource(bindHost, bindPort, List(transport.routes), serverTracer)
-            _ <- transport.startDialers(wsClient)
-        } yield transport
+        } yield new WsPeerTransport(ownPeerId, outboxes, inboundRef, tracer)
 }

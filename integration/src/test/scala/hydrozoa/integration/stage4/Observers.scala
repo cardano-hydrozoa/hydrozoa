@@ -33,7 +33,7 @@ private[stage4] object Observers {
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
             case HeadMultisigRegimeManagerEvent
-                    .SCA(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
+                    .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 for {
                     _           <- stacksMap(peerNum).update(_ :+ stack)
                     maybeTarget <- slowCoverageTarget.tryGet
@@ -60,6 +60,20 @@ private[stage4] object Observers {
             case _ => IO.unit
         }
 
+    /** Coil-side counterpart of [[captureStackHardConfirmed]]: appends each hard-confirmed stack
+      * to the per-coil Ref. No cross-peer barrier (followers participate in `slowCoverageSignal`
+      * only via the head set); `propCoilParticipation` reads `coilStacks` post-run.
+      */
+    def captureCoilStackHardConfirmed(
+        stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
+    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+            case HeadMultisigRegimeManagerEvent
+                    .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
+                stacksRef.update(_ :+ stack)
+            case _ => IO.unit
+        }
+
     /** Capture `JointLedgerEvent.BriefProduced` for the given peer: append to the per-peer
       * blockBriefs Ref, then (once [[fastSettlementTarget]] is populated) fire
       * [[fastSettlementSignal]] when every submitted RequestId has been observed in some brief.
@@ -71,7 +85,7 @@ private[stage4] object Observers {
         fastSettlementTarget: Deferred[IO, Set[RequestId]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent.JL(JointLedgerEvent.BriefProduced(b)) =>
+            case HeadMultisigRegimeManagerEvent.JointLedger(JointLedgerEvent.BriefProduced(b)) =>
                 for {
                     _           <- blockBriefsMap(peerNum).update(_ :+ b)
                     maybeTarget <- fastSettlementTarget.tryGet

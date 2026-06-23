@@ -21,7 +21,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaison
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{InProcessPeerTransport, NodeWsServerEventFormat, PeerTransport, PeerTransportEventFormat, WsPeerTransport}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, HubWsTransportEventFormat, InProcessHubCoilTransport, InProcessPeerTransport, NodeWsServer, NodeWsServerEventFormat, PeerTransport, PeerTransportEventFormat, WsPeerTransport}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -29,11 +29,13 @@ import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import org.http4s.Uri
+import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
+import org.http4s.server.websocket.WebSocketBuilder2
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
@@ -65,6 +67,7 @@ private case class PostSystemState(
     pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
     blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    coilStacksMap: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     fastSettlementSignal: Deferred[IO, Unit],
     slowCoverageSignal: Deferred[IO, Unit],
@@ -105,8 +108,8 @@ case class Stage4Suite(
       * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
       */
     override def useTestControl: Boolean = transportMode match {
-        case TransportMode.Direct       => true
-        case _: TransportMode.WebSocket => false
+        case TransportMode.Direct    => true
+        case TransportMode.WebSocket => false
     }
 
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
@@ -244,6 +247,18 @@ case class Stage4Suite(
                         Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
                     }
                     .map(_.toMap)
+                coilStacksMap <- coilConfigs
+                    .traverse { coilConfig =>
+                        val coilNum = coilConfig.ownPeerId match {
+                            case PeerId.Coil(n) => n
+                            case PeerId.Head(_) =>
+                                throw new IllegalStateException(
+                                  "coil node config carries a head peer id"
+                                )
+                        }
+                        Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(coilNum -> _)
+                    }
+                    .map(_.toMap)
                 submittedRequestIds   <- Ref[IO].of(Vector.empty[RequestId])
                 fastSettlementSignal <- IO.deferred[Unit]
                 slowCoverageSignal   <- IO.deferred[Unit]
@@ -254,6 +269,7 @@ case class Stage4Suite(
               pendingConnsMap = pendingConnsMap,
               blockBriefsMap = blockBriefsMap,
               stacksMap = stacksMap,
+              coilStacksMap = coilStacksMap,
               submittedRequestIds = submittedRequestIds,
               fastSettlementSignal = fastSettlementSignal,
               slowCoverageSignal = slowCoverageSignal,
@@ -275,6 +291,10 @@ case class Stage4Suite(
               IO,
               ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => PeerTransport
             ],
+            hubCoilTransport: Option[Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+            ]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
             fastSettlementSignal: Deferred[IO, Unit],
@@ -329,6 +349,7 @@ case class Stage4Suite(
                       persistence,
                       mrmTracer,
                       peerTransport,
+                      hubCoilTransport,
                     )
                     _ <- Resource.eval(system.actorOf(mrm, s"hmrm-$peerNum"))
                 } yield PeerMrm(mrm, backendStore)
@@ -339,8 +360,10 @@ case class Stage4Suite(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
             peerMrms: Map[HeadPeerNumber, PeerMrm],
+            coilMrms: Map[CoilPeerNumber, CoilMrm],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+            coilStacksMap: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
             submittedRequestIds: Ref[IO, Vector[RequestId]],
             fastSettlementSignal: Deferred[IO, Unit],
             slowCoverageSignal: Deferred[IO, Unit],
@@ -353,6 +376,11 @@ case class Stage4Suite(
                         peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
                     }
                     .map(_.toMap)
+                coilConnections <- coilMrms.toList
+                    .traverse { case (coilNum, coilMrm) =>
+                        coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
+                    }
+                    .map(_.toMap)
                 sutErrors <- Ref[IO].of(List.empty[String])
                 errorDrainer <- system.eventStream.take
                     .flatMap {
@@ -362,9 +390,16 @@ case class Stage4Suite(
                     }
                     .foreverM
                     .start
-                liaisonTickFibers <- peerConnections.toList.traverse { case (peerNum, conns) =>
+                headTickFibers <- peerConnections.toList.traverse { case (peerNum, conns) =>
                     val pollingPeriod = multiNodeConfig
                         .nodeConfigs(peerNum)
+                        .nodeOperationMultisigConfig
+                        .cardanoLiaisonPollingPeriod
+                    (IO.sleep(pollingPeriod) >>
+                        (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
+                }
+                coilTickFibers <- coilConnections.toList.traverse { case (coilNum, conns) =>
+                    val pollingPeriod = coilMrms(coilNum).config
                         .nodeOperationMultisigConfig
                         .cardanoLiaisonPollingPeriod
                     (IO.sleep(pollingPeriod) >>
@@ -382,10 +417,10 @@ case class Stage4Suite(
               },
               sutErrors = sutErrors,
               errorDrainer = errorDrainer,
-              liaisonTickFibers = liaisonTickFibers,
+              liaisonTickFibers = headTickFibers ++ coilTickFibers,
               blockBriefs = blockBriefsMap,
               stacks = stacksMap,
-              coilStacks = Map.empty,
+              coilStacks = coilStacksMap,
               backendStores = peerMrms.map { case (peerNum, peerMrm) =>
                   peerNum -> peerMrm.backendStore
               },
@@ -397,64 +432,184 @@ case class Stage4Suite(
               log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
 
-        require(
-          coilConfigs.isEmpty,
-          s"Stage4 sutResource: coil peers (${coilConfigs.size}) are not yet ported to the " +
-              "MRM-based wiring; see disabled coil properties in Stage4Properties."
+        case class CoilMrm(
+            mrm: CoilMultisigRegimeManager,
+            backendStore: BackendStore[IO],
+            config: NodeConfig,
         )
 
-        // Per-peer transport: in-process map lookup for Direct mode; real WsPeerTransport with a
-        // bound NodeWsServer + dialers for WebSocket mode. Both produce the same shape MRM
-        // expects (Resource yielding an ActorContext-keyed factory).
-        def peerTransportFor(
+        /** Concrete WS handle + the OS-assigned port the NodeWsServer bound to. Carried in
+          * [[HeadNetwork.ws]] so the outer for-comprehension can compute remote URIs from real
+          * bound ports (post-bind) and start every peer's dialers in a second pass.
+          */
+        case class WsBinding(
+            wsPeerTransport: WsPeerTransport,
+            boundPort: Int,
+        )
+
+        case class HeadNetwork(
+            peerTransport: PeerTransport,
+            hubTransport: Option[HubTransport],
+            ws: Option[WsBinding],
+        )
+
+        // Per-head-peer transports: head-mesh PeerTransport (always) plus, for hub head peers, the
+        // hub-side HubTransport for the hub↔coil link. WS mode mounts both routes on ONE shared
+        // NodeWsServer per peer (bound on port 0 — OS-assigned ephemeral — so two WS test instances
+        // never collide); Direct mode wires them to the shared in-process registries instead.
+        def headNetworkFor(
             peerNum: HeadPeerNumber,
             inProcessRegistry: InProcessPeerTransport.Registry,
-            wsClient: Option[org.http4s.client.websocket.WSClient[IO]],
-        ): Resource[
-          IO,
-          ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => PeerTransport
-        ] = {
+            hubCoilRegistry: Option[InProcessHubCoilTransport.Registry],
+        ): Resource[IO, HeadNetwork] = {
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             transportMode match {
                 case TransportMode.Direct =>
-                    Resource
-                        .eval(InProcessPeerTransport.create(ownHeadPeerId, inProcessRegistry))
-                        .map(t =>
-                            (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
-                                t: PeerTransport
+                    for {
+                        peerT <- Resource.eval(
+                          InProcessPeerTransport.create(ownHeadPeerId, inProcessRegistry)
                         )
-                case TransportMode.WebSocket(basePort) =>
+                        hubT <-
+                            if hubbedCoils.isEmpty then
+                                Resource.pure[IO, Option[HubTransport]](None)
+                            else
+                                hubCoilRegistry match {
+                                    case None =>
+                                        Resource.eval(
+                                          IO.raiseError(
+                                            new IllegalStateException(
+                                              s"head peer $peerNum hubs coil peers in Direct mode " +
+                                                  "but no hubCoilRegistry was allocated"
+                                            )
+                                          )
+                                        )
+                                    case Some(reg) =>
+                                        Resource
+                                            .eval(InProcessHubCoilTransport.Hub.create(reg))
+                                            .map(h => Some(h: HubTransport))
+                                }
+                    } yield HeadNetwork(peerT, hubT, None)
+                case TransportMode.WebSocket =>
                     given CardanoNetwork.Section = multiNodeConfig.headConfig
-                    val remotes: Map[HeadPeerId, Uri] = peers
-                        .filterNot(_ == peerNum)
-                        .map { rpn =>
-                            headPeerId(multiNodeConfig, rpn) -> Uri.unsafeFromString(
-                              s"ws://127.0.0.1:${basePort + (rpn: Int)}/head"
-                            )
-                        }
-                        .toMap
-                    WsPeerTransport
-                        .resource(
-                          ownPeerId = ownHeadPeerId,
-                          remotes = remotes,
-                          wsClient = wsClient.getOrElse(
-                            sys.error("WebSocket transport requires a shared JdkWSClient")
-                          ),
-                          bindHost = host"127.0.0.1",
-                          bindPort = Port.fromInt(basePort + (peerNum: Int)).get,
-                          transportTracer =
-                              Slf4jTracer.sink.contramap(
-                                PeerTransportEventFormat.humanFormat(peerNum)
-                              ),
-                          serverTracer =
-                              Slf4jTracer.sink.contramap(
-                                NodeWsServerEventFormat.humanFormat(peerNum)
-                              ),
+                    val remoteIds: List[HeadPeerId] =
+                        peers.filterNot(_ == peerNum).map(headPeerId(multiNodeConfig, _)).toList
+                    val ptTracer =
+                        Slf4jTracer.sink.contramap(PeerTransportEventFormat.humanFormat(peerNum))
+                    val nwsTracer =
+                        Slf4jTracer.sink.contramap(NodeWsServerEventFormat.humanFormat(peerNum))
+                    val hubTracer =
+                        Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
+                    val bindHost = host"127.0.0.1"
+                    for {
+                        peerT <- Resource.eval(
+                          WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
                         )
-                        .map(t =>
-                            (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
-                                t: PeerTransport
+                        hubTConcrete: Option[HubWsTransport] <-
+                            if hubbedCoils.isEmpty then
+                                Resource.pure[IO, Option[HubWsTransport]](None)
+                            else
+                                Resource
+                                    .eval(HubWsTransport.create(hubbedCoils, hubTracer))
+                                    .map(Some(_))
+                        meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
+                        hubRoutes = hubTConcrete.toList.map(h =>
+                            (wsb: WebSocketBuilder2[IO]) => h.routes(wsb)
                         )
+                        server <- NodeWsServer.resource(
+                          bindHost,
+                          Port.fromInt(0).get,
+                          meshRoute :: hubRoutes,
+                          nwsTracer,
+                        )
+                        boundPort = server.address.getPort
+                    } yield HeadNetwork(
+                      peerT,
+                      hubTConcrete.map(h => h: HubTransport),
+                      Some(WsBinding(peerT, boundPort)),
+                    )
+            }
+        }
+
+        // Per-coil-peer uplink transport toward its single hub. Direct mode uses the shared
+        // in-process hub-coil registry; WS mode dials the hub's `/hub` route at the hub's
+        // post-bind ephemeral port (passed in via `hubBoundPort`).
+        def coilUplinkFor(
+            coilNum: CoilPeerNumber,
+            hubCoilRegistry: InProcessHubCoilTransport.Registry,
+            wsClient: Option[WSClient[IO]],
+            hubBoundPort: Option[Int],
+        ): Resource[
+          IO,
+          ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+        ] = transportMode match {
+            case TransportMode.Direct =>
+                Resource
+                    .eval(InProcessHubCoilTransport.Coil.create(coilNum, hubCoilRegistry))
+                    .map(t =>
+                        (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                            t: CoilTransport
+                    )
+            case TransportMode.WebSocket =>
+                given CardanoNetwork.Section = multiNodeConfig.headConfig
+                val port = hubBoundPort.getOrElse(
+                  sys.error(s"coil $coilNum's hub has no bound port — head networks not built yet?")
+                )
+                val hubUri = Uri.unsafeFromString(s"ws://127.0.0.1:$port/hub")
+                val cpwtTracer =
+                    Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(coilNum))
+                val client = wsClient.getOrElse(
+                  sys.error("WebSocket transport requires a shared JdkWSClient")
+                )
+                for {
+                    t <- Resource.eval(CoilPeerWsTransport.create(coilNum, cpwtTracer))
+                    _ <- t.startDialer(client, hubUri)
+                } yield (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    t: CoilTransport
+        }
+
+        // ------ Per-coil-peer follower stack: full CoilMultisigRegimeManager + its own in-memory
+        // ------ backend + persistence + L2 ledger, with the SCA capture sink wired into the
+        // ------ MRM tracer so hard-confirmed stacks land in `coilStacksRef`.
+        def buildCoilMrm(
+            coilConfig: NodeConfig,
+            coilNum: CoilPeerNumber,
+            system: ActorSystem[IO],
+            cardanoBackend: CardanoBackend[IO],
+            coilTransport: Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+            ],
+            coilStacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
+        ): Resource[IO, CoilMrm] = {
+            // Reuse the head-typed event format with a synthetic peer number (matches the legacy
+            // labelling); a coil-specific format is a separate follow-up.
+            val labelNum = HeadPeerNumber(nPeers + coilNum.convert)
+            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+                Slf4jTracer.sink.contramap(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(labelNum)
+                )
+            val mrmTracer =
+                slf4jMrm |+| Observers.captureCoilStackHardConfirmed(coilStacksRef)
+            val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+
+            InMemoryBackendStore.open(persistenceTracer).flatMap { backendStore =>
+                for {
+                    persistence <- Resource.eval {
+                        given CardanoNetwork.Section = coilConfig
+                        Persistence.fromBackend(backendStore, persistenceTracer)
+                    }
+                    l2Ledger <- Resource.eval(EutxoL2Ledger(coilConfig))
+                    mrm <- CoilMultisigRegimeManager.resource(
+                      coilConfig,
+                      cardanoBackend,
+                      l2Ledger,
+                      persistence,
+                      mrmTracer,
+                      coilTransport,
+                    )
+                    _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
+                } yield CoilMrm(mrm, backendStore, coilConfig)
             }
         }
 
@@ -463,20 +618,81 @@ case class Stage4Suite(
             system <- ActorSystem[IO](label)
             pss    <- Resource.eval(postSystem)
             inProcessRegistry <- Resource.eval(InProcessPeerTransport.emptyRegistry)
+            // Allocated only when this scenario has coil peers; in Direct mode it backs the
+            // in-process hub↔coil routing, and in WS mode the field stays `None` (the hub/coil
+            // WS transports own their own routing). Heads with no hubbed coils pass `None`
+            // either way.
+            hubCoilRegistry <-
+                if coilConfigs.isEmpty then
+                    Resource.pure[IO, Option[InProcessHubCoilTransport.Registry]](None)
+                else
+                    Resource
+                        .eval(InProcessHubCoilTransport.emptyRegistry)
+                        .map(Some(_))
             // Shared WS client: allocated once for WebSocket mode, unused for Direct.
             wsClient <- transportMode match {
                 case TransportMode.Direct =>
-                    Resource.pure[IO, Option[org.http4s.client.websocket.WSClient[IO]]](None)
-                case _: TransportMode.WebSocket =>
+                    Resource.pure[IO, Option[WSClient[IO]]](None)
+                case TransportMode.WebSocket =>
                     Resource.eval(JdkWSClient.simple[IO]).map(Some(_))
+            }
+            // Pass 1: allocate every head peer's transports + bind their NodeWsServers (WS mode on
+            // port 0 ⇒ OS-assigned ephemeral). Each `HeadNetwork` carries the bound port; dialers
+            // are deferred to Pass 2 so URIs can be built from the real port map.
+            headNetworks <- peers.toList
+                .traverse { peerNum =>
+                    headNetworkFor(peerNum, inProcessRegistry, hubCoilRegistry)
+                        .map(peerNum -> _)
+                }
+                .map(_.toMap)
+            // Pass 2 (WS only): now that every peer's server is bound and we know its ephemeral
+            // port, build the `HeadPeerId -> Uri` map and start each peer's dialers against the
+            // ones with higher peerNum (lower dials higher; matches the production wiring).
+            _ <- transportMode match {
+                case TransportMode.Direct => Resource.pure[IO, Unit](())
+                case TransportMode.WebSocket =>
+                    val client = wsClient.getOrElse(
+                      sys.error("WebSocket transport requires a shared JdkWSClient")
+                    )
+                    val peerHeadUris: Map[HeadPeerId, Uri] = peers.map { p =>
+                        val port = headNetworks(p).ws
+                            .map(_.boundPort)
+                            .getOrElse(sys.error(s"peer $p has no WS binding in WS mode"))
+                        headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
+                          s"ws://127.0.0.1:$port/head"
+                        )
+                    }.toMap
+                    peers.toList.traverse_ { peerNum =>
+                        val ownId = headPeerId(multiNodeConfig, peerNum)
+                        val ws = headNetworks(peerNum).ws.get
+                        ws.wsPeerTransport.startDialers(client, peerHeadUris - ownId)
+                    }
             }
             peerMrms <- peers.toList
                 .traverse { peerNum =>
+                    val net = headNetworks(peerNum)
+                    val peerFactory: Resource[
+                      IO,
+                      ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => PeerTransport
+                    ] =
+                        Resource.pure(
+                          (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                              net.peerTransport
+                        )
+                    val hubFactory: Option[Resource[
+                      IO,
+                      ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+                    ]] = net.hubTransport.map { h =>
+                        Resource.pure(
+                          (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) => h
+                        )
+                    }
                     buildPeerMrm(
                       peerNum,
                       system,
                       pss.cardanoBackend,
-                      peerTransportFor(peerNum, inProcessRegistry, wsClient),
+                      peerFactory,
+                      hubFactory,
                       pss.blockBriefsMap,
                       pss.stacksMap,
                       pss.fastSettlementSignal,
@@ -486,13 +702,49 @@ case class Stage4Suite(
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
+            // Per-coil follower stack. The MRM gets its uplink transport via `coilUplinkFor`; in
+            // Direct mode this shares `hubCoilRegistry` with the hub head peer's `HubTransport`.
+            coilMrms <- coilConfigs
+                .traverse { coilConfig =>
+                    val coilNum = coilConfig.ownPeerId match {
+                        case PeerId.Coil(n) => n
+                        case PeerId.Head(_) =>
+                            throw new IllegalStateException(
+                              "coil node config carries a head peer id"
+                            )
+                    }
+                    val hubNum = coilConfig
+                        .coilPeerHub(coilNum)
+                        .getOrElse(
+                          throw new IllegalStateException(
+                            s"no hub configured for coil peer $coilNum"
+                          )
+                        )
+                    val registry = hubCoilRegistry.getOrElse(
+                      throw new IllegalStateException(
+                        "coilConfigs is non-empty but hubCoilRegistry was not allocated"
+                      )
+                    )
+                    val hubBoundPort = headNetworks(hubNum).ws.map(_.boundPort)
+                    buildCoilMrm(
+                      coilConfig,
+                      coilNum,
+                      system,
+                      pss.cardanoBackend,
+                      coilUplinkFor(coilNum, registry, wsClient, hubBoundPort),
+                      pss.coilStacksMap(coilNum),
+                    ).map(coilNum -> _)
+                }
+                .map(_.toMap)
             sut <- Resource.make(
               acquireSutFromMrms(
                 system,
                 pss.cardanoBackend,
                 peerMrms,
+                coilMrms,
                 pss.blockBriefsMap,
                 pss.stacksMap,
+                pss.coilStacksMap,
                 pss.submittedRequestIds,
                 pss.fastSettlementSignal,
                 pss.slowCoverageSignal,

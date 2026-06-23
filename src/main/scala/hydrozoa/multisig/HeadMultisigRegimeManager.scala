@@ -3,136 +3,67 @@ package hydrozoa.multisig
 import cats.*
 import cats.effect.{Deferred, IO, Resource}
 import cats.implicits.*
-import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorContext
 import com.suprnation.actor.ActorRef.NoSendActorRef
-import com.suprnation.actor.SupervisorStrategy.Escalate
-import com.suprnation.actor.{ActorContext, OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as MRMEvent
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, TerminatedActor, WatchingActors}
+import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
-import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
-import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent}
+import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.transport.{PeerTransport, RemotePeerProxy}
-import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent}
+import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
+import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
-import scala.concurrent.duration.DurationInt
 
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+    override protected val tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
     peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
-) extends Actor[IO, Request] {
-
-    /** Specialize the regime-wide tracer down to per-actor channels. The contramap pushes the
-      * producer's narrow event type up into [[HeadMultisigRegimeManagerEvent]] so it can reach the
-      * single sink composition the wiring layer assembled.
+    /** Hub-side coil transport, populated iff this peer hubs any coil peers; required when
+      * `config.hubbedCoilPeerNums(ownHeadNum)` is non-empty.
       */
-    private val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.BW.apply)
-    private val jlTracer: ContraTracer[IO, JointLedgerEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.JL.apply)
-    private val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.FCA.apply)
-    private val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.CL.apply)
-    private val scTracer: ContraTracer[IO, StackComposerEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.SC.apply)
-    private val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.SCA.apply)
-    private val esTracer: ContraTracer[IO, EventSequencerEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.ES.apply)
-    private def plTracer(remotePeerId: PeerId): ContraTracer[IO, PeerLiaisonEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.PL(remotePeerId, _))
-    private val bwlTracer: ContraTracer[IO, LimiterEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.BWL.apply)
-    private val sclTracer: ContraTracer[IO, LimiterEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.SCL.apply)
-    private val casTracer: ContraTracer[IO, CoilAckSequencerEvent] =
-        tracer.contramap(HeadMultisigRegimeManagerEvent.CAS.apply)
+    hubCoilTransport: Option[ActorContext[IO, Request, Any] => HubTransport],
+) extends MultisigRegimeManagerBase {
 
-    /** Deferred that will be completed with connections once actors are started */
-    val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
-
-    override def supervisorStrategy: SupervisionStrategy[IO] =
-        OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
-            case _: IllegalArgumentException =>
-                Escalate // Normally `Stop` but we can't handle stopped actors yet
-            case _: RuntimeException =>
-                Escalate // Normally `Restart` but our actors can't do that yet
-            case _: Exception => Escalate
-        }
-
-    override def preStart: IO[Unit] = {
-        context.self ! PreStart
-    }
-
-    override def receive: Receive[IO, Request] = PartialFunction.fromFunction(receiveTotal)
-
-    private def receiveTotal(req: Request): IO[Unit] = req match {
-        case PreStart => preStartLocal
-        case TerminatedChild(childType, _) =>
-            tracer.traceWith(TerminatedActor(childType))
-        case TerminatedDependency(dependencyType, _) =>
-            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
-        // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
-    }
-
-    private def watchChildren(pairs: (NoSendActorRef[IO], Actors)*): IO[Unit] =
-        pairs.toList.traverse_ { (ref, actor) => context.watch(ref, TerminatedChild(actor, ref)) }
-
-    def preStartLocal: IO[Unit] =
+    override protected def preStartLocal: IO[Unit] =
         for {
             _ <- tracer.traceWith(StartingActors)
 
             pendingConnections <- Deferred[IO, HeadMultisigRegimeManager.Connections]
 
-            blockWeaver <- context.actorOf(BlockWeaver(config, pendingConnections, bwTracer))
+            core <- spawnCoreActors(
+              config,
+              cardanoBackend,
+              l2Ledger,
+              persistence,
+              pendingConnections,
+            )
 
             // Throttles the FastConsensusActor → BlockWeaver soft-block-confirmation lane (see
             // hydrozoa.multisig.consensus.limiter.Limiter). Only the consensus actor's reference
             // to BlockWeaver is routed through this limiter; other senders (JointLedger,
             // PeerLiaisonHeadToHead, …) keep direct refs.
             blockWeaverLimiter <- context.actorOf(
-              Limiter[BlockWeaver.Request](blockWeaver, config, bwlTracer)
-            )
-
-            cardanoLiaison <-
-                context.actorOf(
-                  CardanoLiaison(config, cardanoBackend, pendingConnections, clTracer, persistence)
-                )
-
-            consensusActor <- context.actorOf(
-              FastConsensusActor(config, pendingConnections, fcaTracer, persistence)
+              Limiter[BlockWeaver.Request](core.blockWeaver, config, tracers.blockWeaverLimiter)
             )
 
             requestSequencer <- context.actorOf(
-              RequestSequencer(config, pendingConnections, esTracer, persistence)
-            )
-
-            jointLedger <- context.actorOf(
-              JointLedger(config, pendingConnections, l2Ledger, jlTracer, persistence)
-            )
-
-            stackComposer <- context.actorOf(
-              StackComposer(config, pendingConnections, scTracer, persistence)
+              RequestSequencer(config, pendingConnections, tracers.eventSequencer, persistence)
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.
             stackComposerLimiter <- context.actorOf(
-              Limiter[StackComposer.Request](stackComposer, config, sclTracer)
-            )
-
-            slowConsensusActor <- context.actorOf(
-              SlowConsensusActor(config, pendingConnections, scaTracer, persistence)
+              Limiter[StackComposer.Request](
+                core.stackComposer,
+                config,
+                tracers.stackComposerLimiter
+              )
             )
 
             // One peer liaison toward every other head peer (the head mesh). The liaisons project
@@ -147,7 +78,7 @@ trait HeadMultisigRegimeManager(
                             config,
                             pid,
                             pendingConnections,
-                            plTracer(PeerId.Head(pid.peerNum)),
+                            tracers.peerLiaison(PeerId.Head(pid.peerNum)),
                             persistence
                           )
                         )
@@ -188,7 +119,12 @@ trait HeadMultisigRegimeManager(
                 else
                     context
                         .actorOf(
-                          CoilAckSequencer(config, persistence, pendingConnections, casTracer)
+                          CoilAckSequencer(
+                            config,
+                            persistence,
+                            pendingConnections,
+                            tracers.coilAckSequencer
+                          )
                         )
                         .map(Some(_))
 
@@ -203,27 +139,58 @@ trait HeadMultisigRegimeManager(
                         config,
                         coilNum,
                         pendingConnections,
-                        plTracer(PeerId.Coil(coilNum)),
+                        tracers.peerLiaison(PeerId.Coil(coilNum)),
                         persistence
                       )
                     )
                 )
 
+            // Register each local hub→coil liaison on the hub transport for inbound dispatch, then
+            // spawn one RemoteCoilProxy per hubbed coil to drive outbound. Mirror of the head-mesh
+            // `remoteHeadProxies` wiring above. Errors loudly if a hub is missing its transport.
+            remoteCoilLiaisons <-
+                if hubbedCoilPeers.isEmpty then
+                    IO.pure(Map.empty[CoilPeerNumber, liaison.PeerLiaisonCoilToHub.Handle])
+                else
+                    hubCoilTransport match {
+                        case None =>
+                            IO.raiseError(
+                              new IllegalStateException(
+                                s"head $ownHeadNum hubs ${hubbedCoilPeers.size} coil peer(s) " +
+                                    "but no hubCoilTransport was provided"
+                              )
+                            )
+                        case Some(factory) =>
+                            val transport = factory(context)
+                            for {
+                                _ <- hubbedCoilPeers.zip(coilPeerLiaisons).traverse_ {
+                                    (coilNum, localLiaison) =>
+                                        transport.register(coilNum, localLiaison)
+                                }
+                                proxies <- hubbedCoilPeers.traverse { coilNum =>
+                                    context
+                                        .actorOf(RemoteCoilProxy(coilNum, transport))
+                                        .map(coilNum -> _)
+                                }
+                            } yield proxies.toMap
+                    }
+
             connections = HeadMultisigRegimeManager.Connections(
-              blockWeaver = blockWeaver,
+              blockWeaver = core.blockWeaver,
               blockWeaverLimiter = blockWeaverLimiter,
-              cardanoLiaison = cardanoLiaison,
-              consensusActor = consensusActor,
+              cardanoLiaison = core.cardanoLiaison,
+              consensusActor = core.consensusActor,
               requestSequencer = Some(requestSequencer),
-              jointLedger = jointLedger,
-              stackComposer = stackComposer,
+              jointLedger = core.jointLedger,
+              stackComposer = core.stackComposer,
               stackComposerLimiter = stackComposerLimiter,
-              slowConsensusActor = slowConsensusActor,
+              slowConsensusActor = core.slowConsensusActor,
               headPeerLiaisons = headPeerLiaisons,
               coilRelay = coilRelay,
               coilAckSequencer = coilAckSequencer,
               coilPeerLiaisons = coilPeerLiaisons,
               remoteHeadLiaisons = remoteHeadProxies,
+              remoteCoilLiaisons = remoteCoilLiaisons,
             )
 
             // R3 boot replay (§8 step 3): before opening the start barrier, re-feed the consensus
@@ -236,10 +203,10 @@ trait HeadMultisigRegimeManager(
               persistence,
               cardanoBackend,
               ReplayActor.Targets(
-                blockWeaver = blockWeaver,
-                fastConsensusActor = consensusActor,
-                slowConsensusActor = slowConsensusActor,
-                stackComposer = stackComposer,
+                blockWeaver = core.blockWeaver,
+                fastConsensusActor = core.consensusActor,
+                slowConsensusActor = core.slowConsensusActor,
+                stackComposer = core.stackComposer,
                 coilAckSequencer = coilAckSequencer
               ),
               own = PeerId.Head(ownHeadNum),
@@ -255,11 +222,11 @@ trait HeadMultisigRegimeManager(
             _ <- tracer.traceWith(WatchingActors)
 
             _ <- watchChildren(
-              blockWeaver -> Actors.BlockWeaver,
-              cardanoLiaison -> Actors.CardanoLiaison,
+              core.blockWeaver -> Actors.BlockWeaver,
+              core.cardanoLiaison -> Actors.CardanoLiaison,
               requestSequencer -> Actors.RequestSequencer,
-              stackComposer -> Actors.StackComposer,
-              slowConsensusActor -> Actors.SlowConsensus,
+              core.stackComposer -> Actors.StackComposer,
+              core.slowConsensusActor -> Actors.SlowConsensus,
             )
             _ <- (headPeerLiaisons.toList ++ coilPeerLiaisons)
                 .traverse_(r => watchChildren(r -> Actors.PeerLiaisonHeadToHead))
@@ -323,9 +290,13 @@ object HeadMultisigRegimeManager {
         persistence: Persistence[IO],
         tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
         peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
+        hubCoilTransport: Option[Resource[IO, ActorContext[IO, Request, Any] => HubTransport]] =
+            None,
     ): Resource[IO, HeadMultisigRegimeManager] =
-        peerTransport.flatMap { factory =>
-            Resource.eval(
+        for {
+            peerFactory <- peerTransport
+            hubFactory <- hubCoilTransport.sequence
+            mrm <- Resource.eval(
               IO(
                 new HeadMultisigRegimeManager(
                   config,
@@ -333,11 +304,12 @@ object HeadMultisigRegimeManager {
                   virtualLedger,
                   persistence,
                   tracer,
-                  factory,
+                  peerFactory,
+                  hubFactory,
                 ) {}
               )
             )
-        }
+        } yield mrm
 
     /** Multisig regime's protocol for actor requests and responses. See diagram:
       * [[https://app.excalidraw.com/s/9N3iw9j24UW/9eRJ7Dwu42X]]

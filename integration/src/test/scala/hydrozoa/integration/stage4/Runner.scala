@@ -139,17 +139,17 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p
             .withWorkers(1)
-            .withMinSuccessfulTests(100)
-            .withPropFilter(Some("Twenty-peers head works \\(quick\\)"))
 
     val _ = property("Two-peers head works") =
         Stage4Suite(label = "stage4-two-peers", nPeers = 2).property()
 
-    // TODO: re-enable once stage4's coil flow is ported off `PeerStack` onto MRM (see commits
-    // porting head peers; coil peers still need a follow-up). Coil-mixed scenarios stay disabled
-    // until then to keep the harness on one wiring path.
-    val _ = property("Two-heads-one-coil works (DISABLED, pending MRM port of coil flow)") =
-        Prop.passed
+    // Two head peers hubbing one coil peer (coilQuorum = 1). The Pc4 multi-head relay makes the
+    // coil peer a full participant: it follows every leader's blocks (relayed briefs + relayed
+    // user requests, de-muxed by author, with the follower BlockWeaver buffering early briefs)
+    // and co-signs every stack — a manual run hard-confirms ~11 stacks on BOTH head peers AND
+    // the coil peer.
+    val _ = property("Two-heads-one-coil works") =
+        Stage4Suite(label = "stage4-2h1c", nPeers = 2, nCoilPeers = 1).property()
 
     val _ = property("Three-peers head works") =
         Stage4Suite(label = "stage4-three-peers", nPeers = 3).property()
@@ -165,7 +165,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works WS") = Stage4Suite(
       label = "stage4-ws-two-peers",
       nPeers = 2,
-      transportMode = TransportMode.WebSocket(),
+      transportMode = TransportMode.WebSocket,
       backendMode = BackendMode.RocksDb()
     ).property()
 
@@ -173,9 +173,13 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works (extended)") =
         Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
 
-    val _ =
-        property("Two-heads-one-coil works (extended) (DISABLED, pending MRM port of coil flow)") =
-            Prop.passed
+    val _ = property("Two-heads-one-coil works (extended)") =
+        Stage4Suite(
+          label = "stage4-2h1c-extended",
+          nPeers = 2,
+          nCoilPeers = 1,
+          nCommands = 500,
+        ).property()
 
     val _ = property("Three-peers head works (extended)") =
         Stage4Suite(label = "stage4-three-peers-extended", nPeers = 3, nCommands = 500).property()
@@ -187,7 +191,7 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       label = "stage4-ws-two-peers-extended",
       nPeers = 2,
       nCommands = 500,
-      transportMode = TransportMode.WebSocket(),
+      transportMode = TransportMode.WebSocket,
       backendMode = BackendMode.RocksDb()
     ).property()
 
@@ -195,12 +199,20 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       label = "stage4-ws-ten-peers-extended",
       nPeers = 10,
       nCommands = 500,
-      transportMode = TransportMode.WebSocket(),
+      transportMode = TransportMode.WebSocket,
       backendMode = BackendMode.RocksDb()
     ).property()
 
-    val _ = property("Two-heads-one-coil works WS (DISABLED, pending MRM port of coil flow)") =
-        Prop.passed
+    // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
+    // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
+    // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end.
+    val _ = property("Two-heads-one-coil works WS") =
+        Stage4Suite(
+          label = "stage4-ws-2h1c",
+          nPeers = 2,
+          nCoilPeers = 1,
+          transportMode = TransportMode.WebSocket,
+        ).property()
 
 // ===================================
 // Diagnostic: termination check
