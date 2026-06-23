@@ -6,6 +6,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
@@ -13,11 +14,11 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.state.{StandaloneEvacuationCommitmentOnchain, TreasuryState, VoteState}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -40,6 +41,38 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 object DisputeActorTestHelpers {
     import MultiNodeConfig.*
 
+    /** Build a ballot-box UTxO at the dispute address directly from a [[HeadConfig]] (no test
+      * monad). The [[MultiNodeConfigTestM]] variant below just supplies the env's head config.
+      */
+    def mkBallotBoxUtxoPure(
+        headConfig: HeadConfig,
+        key: BigInt,
+        link: BigInt,
+        voteStatus: VoteStatus,
+        // Careful, these can't conflict!
+        txIn: TransactionInput,
+        nVoteTokens: BigInt = 1,
+    ): scalus.cardano.ledger.Utxo = {
+        val disputeResAddress = HydrozoaBlueprint.mkDisputeAddress(headConfig.network)
+        val ownVoteUtxoOutput = Babbage(
+          address = disputeResAddress,
+          value = Value.assets(
+            lovelace = Coin.ada(5),
+            assets = Map(
+              (
+                headConfig.headMultisigScript.policyId,
+                Map((headConfig.headTokenNames.voteTokenName, nVoteTokens.toLong))
+              )
+            )
+          ),
+          datumOption = Some(
+            Inline(toData(VoteDatum(key = key, link = link, voteStatus = voteStatus)))
+          ),
+          scriptRef = None
+        )
+        scalus.cardano.ledger.Utxo((txIn, ownVoteUtxoOutput))
+    }
+
     def mkBallotBoxUtxo(
         key: BigInt,
         link: BigInt,
@@ -48,27 +81,28 @@ object DisputeActorTestHelpers {
         txIn: TransactionInput,
         nVoteTokens: BigInt = 1,
     ): MultiNodeConfigTestM[scalus.cardano.ledger.Utxo] =
-        for {
-            env <- ask
-            disputeResAddress = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
-            ownVoteUtxoOutput = Babbage(
-              address = disputeResAddress,
-              value = Value.assets(
-                lovelace = Coin.ada(5),
-                assets = Map(
-                  (
-                    env.headConfig.headMultisigScript.policyId,
-                    Map((env.headConfig.headTokenNames.voteTokenName, nVoteTokens.toLong))
-                  )
-                )
-              ),
-              datumOption = Some(
-                Inline(toData(VoteState.VoteDatum(key = key, link = link, voteStatus = voteStatus)))
-              ),
-              scriptRef = None
-            )
-            ownVoteUtxo = (txIn, ownVoteUtxoOutput)
-        } yield scalus.cardano.ledger.Utxo(ownVoteUtxo)
+        asks(env => mkBallotBoxUtxoPure(env.headConfig, key, link, voteStatus, txIn, nVoteTokens))
+
+    /** Build an Unresolved rule-based treasury UTxO (no test monad). */
+    def mkRuleBasedTreasuryPure(
+        versionMajor: BigInt,
+        value: Value,
+        txIn: TransactionInput,
+        votingDeadline: PosixTime
+    ): RuleBasedTreasuryUtxo = {
+        val datum = Unresolved(
+          deadlineVoting = votingDeadline,
+          versionMajor = versionMajor,
+          // this is cribbed from the CommonGenerators.scala test
+          setupG2 = TrustedSetup
+              .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
+              .map(p2 => G2Element(p2).toCompressedByteString)
+        )
+        RuleBasedTreasuryUtxo(
+          utxoId = txIn,
+          treasuryOutput = RuleBasedTreasuryOutput(datum, value)
+        )
+    }
 
     def mkRuleBasedTreasury(
         versionMajor: BigInt,
@@ -76,26 +110,7 @@ object DisputeActorTestHelpers {
         txIn: TransactionInput,
         votingDeadline: PosixTime
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
-        for {
-            _ <- ask
-
-            datum = Unresolved(
-              deadlineVoting = votingDeadline,
-              versionMajor = versionMajor,
-              // this is cribbed from the CommonGenerators.scala test
-              setupG2 = TrustedSetup
-                  .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                  .map(p2 => G2Element(p2).toCompressedByteString)
-            )
-            treasuryUtxo = RuleBasedTreasuryUtxo(
-              utxoId = txIn,
-              treasuryOutput = RuleBasedTreasuryOutput(
-                datum,
-                value
-              )
-            )
-
-        } yield treasuryUtxo
+        pure(mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline))
 
     /** Given a pre-initialized TestM with a TestHeadConfig environment and an initial L2 UTxO set,
       * create a (pure) DisputeActor.
@@ -135,7 +150,7 @@ object DisputeActorTestHelpers {
                   .label("collateral utxo")
             )
 
-            initialCommitment: VoteState.KzgCommitment = initialEvacuationMap.kzgCommitment
+            initialCommitment: KzgCommitment = initialEvacuationMap.kzgCommitment
 
             now <- lift(realTimeQuantizedInstant(env.slotConfig))
             currentSlot = now.toSlot
