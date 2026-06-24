@@ -7,8 +7,8 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.l1.tx.Tx
-import hydrozoa.multisig.ledger.l1.tx.Tx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
@@ -25,7 +25,7 @@ final case class DeinitTx(
     override val tx: Transaction,
     override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DeinitTx] {
+) extends EnrichedTx[DeinitTx] {
     override def transactionFamily: String = "Deinit"
 }
 

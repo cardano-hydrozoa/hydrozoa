@@ -5,8 +5,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.Destination
 import monocle.{Focus, Lens}
@@ -35,7 +35,7 @@ object RefundTx {
         refundDestination: Destination,
         requestId: RequestId
     ) extends RefundTx,
-          Tx[PostDated] {
+          EnrichedTx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
 
@@ -90,7 +90,7 @@ private object RefundTxOps {
                           diffHandler = Change
                               .changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 0),
                           evaluator = config.plutusScriptEvaluatorForTxBuild,
-                          validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                          validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
                         )
                         .explainConst("balancing refund tx failed")
 

@@ -14,7 +14,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
-import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
@@ -130,7 +130,7 @@ case class TestPeers private (
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
 
-    def multisignTx[A <: Tx[A]](tx: A): A =
+    def multisignTx[A <: EnrichedTx[A]](tx: A): A =
         val witnesses = mkVKeyWitnesses(tx.tx)
         tx.addSignatures(Set.from(witnesses.toList)) match {
             case Valid(a) =>

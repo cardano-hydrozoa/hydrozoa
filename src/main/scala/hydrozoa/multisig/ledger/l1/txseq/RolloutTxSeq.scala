@@ -6,9 +6,9 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.BuilderResultSimple
 import hydrozoa.multisig.ledger.l1.tx.RolloutTx
 import hydrozoa.multisig.ledger.l1.tx.RolloutTx.{Build as SingleBuilder, PartialResult as SinglePartialResult}
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.BuilderResultSimple
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import scala.annotation.tailrec
 import scalus.cardano.ledger.Coin

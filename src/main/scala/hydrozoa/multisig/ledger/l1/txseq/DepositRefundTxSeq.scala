@@ -8,8 +8,8 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidit
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
-import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.SomeBuildErrorOnly
+import hydrozoa.multisig.ledger.l1.tx.{DepositTx, EnrichedTx, RefundTx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
@@ -209,7 +209,7 @@ private object DepositRefundTxSeqOps {
       * represented as a more restrictive type ([[GenesisObligation]]) that ensure L2 conformance
       */
     final case class Parse(config: Config)(
-        depositTxBytes: Tx.Serialized,
+        depositTxBytes: EnrichedTx.Serialized,
         l2Payload: ByteString,
         requestId: RequestId,
         requestValidityEndTime: RequestValidityEndTime

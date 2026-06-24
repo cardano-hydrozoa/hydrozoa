@@ -15,7 +15,7 @@ import scalus.cardano.ledger.Transaction
   * [[StandaloneEvacuationCommitment]] while unsigned,
   * [[StandaloneEvacuationCommitment.MultiSigned]] once hard-confirmed. The tx wrappers are
   * unchanged across signing phases — the multisig `VKeyWitness`es live inside each
-  * [[hydrozoa.multisig.ledger.l1.tx.Tx]] body — so only `S` differs between
+  * [[hydrozoa.multisig.ledger.l1.tx.EnrichedTx]] body — so only `S` differs between
   * `StackEffects.Unsigned.Regular` and `StackEffects.HardConfirmed.Regular`.
   */
 sealed trait PartitionEffects[+S]

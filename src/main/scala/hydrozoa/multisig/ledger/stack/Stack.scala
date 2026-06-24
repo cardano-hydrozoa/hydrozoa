@@ -57,7 +57,7 @@ object Stack:
       *   the partition-indexed effects with every head peer's signature aggregated in: tx bodies
       *   carry the multisig `VKeyWitness`es; each partition's standalone evac commitment is a
       *   [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers' header
-      *   signatures). Tx bodies are L1-submittable as is; the SEC is dispute-usable.
+      *   signatures). EnrichedTx bodies are L1-submittable as is; the SEC is dispute-usable.
       *
       * Also the signal sent by [[hydrozoa.multisig.consensus.SlowConsensusActor]] to
       * [[hydrozoa.multisig.consensus.StackComposer]] to unblock the next stack close. The

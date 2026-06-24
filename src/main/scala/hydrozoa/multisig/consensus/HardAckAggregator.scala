@@ -8,7 +8,7 @@ import hydrozoa.multisig.consensus.SlowConsensusActor.Cell
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.l1.tx.{RefundTx, Tx, TxSignature}
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, RefundTx, TxSignature}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StandaloneEvacuationCommitment}
 import scalus.cardano.ledger.{Transaction, TransactionHash, VKeyWitness}
 import scalus.crypto.ed25519.VerificationKey
@@ -217,7 +217,7 @@ final class HardAckAggregator() {
             )
     }
 
-    private def signOne[A <: Tx[A]](a: A, wmap: WitnessMap): IO[A] =
+    private def signOne[A <: EnrichedTx[A]](a: A, wmap: WitnessMap): IO[A] =
         wmap.get(a.tx.id).filter(_.nonEmpty) match {
             case None => IO.pure(a)
             case Some(ws) =>

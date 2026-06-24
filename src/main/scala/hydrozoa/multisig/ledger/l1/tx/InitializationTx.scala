@@ -9,10 +9,10 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx.InitializationTxOps.Parse.Error.MetadataParseError
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Initialization
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResultSimple, explainConst}
 import hydrozoa.multisig.ledger.l1.utxo.{Equity, MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import io.circe.*
 import monocle.*
@@ -45,7 +45,7 @@ final case class InitializationTx(
     seedUtxo: Utxo,
     additionalFundingUtxos: Utxos,
     changeUtxos: List[Output]
-) extends Tx[InitializationTx],
+) extends EnrichedTx[InitializationTx],
       HasResolvedUtxos,
       MultisigTreasuryUtxo.Produced,
       MultisigRegimeUtxo.Produced,
@@ -259,7 +259,7 @@ object InitializationTx {
                       config.cardanoProtocolParams,
                       diffHandler = diffHandler,
                       evaluator = config.plutusScriptEvaluatorForTxBuild,
-                      validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                      validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
                     )
             }
         }

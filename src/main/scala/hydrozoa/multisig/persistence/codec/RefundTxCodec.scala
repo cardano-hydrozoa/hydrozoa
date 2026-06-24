@@ -9,8 +9,8 @@ import hydrozoa.multisig.persistence.codec.DestinationCodec.given
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
 
-/** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest Tx wrapper (4 fields, no
-  * `MultisigTreasuryUtxo` chain).
+/** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest EnrichedTx wrapper (4
+  * fields, no `MultisigTreasuryUtxo` chain).
   *
   * Reuses:
   *   - `Transaction` CBOR-hex codec from `lib/cardano/scalus/codecs/json/Codecs` (hoisted in #13);

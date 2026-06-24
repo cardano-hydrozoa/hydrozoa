@@ -6,9 +6,9 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, RolloutUtxo}
 import io.circe.{Decoder, Encoder}
 
-/** Small persistence-layer codecs for the Utxo-wrapper types that several Tx-wrapper codecs share:
-  * [[RolloutUtxo]] (wraps `Utxo`), [[MultisigRegimeUtxo]] (wraps `TransactionInput`), and the
-  * opaque-`Int` `BlockVersion.Major`. Each is a one-liner so they live together rather than one
+/** Small persistence-layer codecs for the Utxo-wrapper types that several EnrichedTx-wrapper codecs
+  * share: [[RolloutUtxo]] (wraps `Utxo`), [[MultisigRegimeUtxo]] (wraps `TransactionInput`), and
+  * the opaque-`Int` `BlockVersion.Major`. Each is a one-liner so they live together rather than one
   * tiny file per type.
   */
 object UtxoWrapperCodecs:

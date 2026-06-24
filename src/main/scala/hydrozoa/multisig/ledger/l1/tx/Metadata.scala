@@ -2,7 +2,7 @@ package hydrozoa.multisig.ledger.l1.tx
 
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.tx.Tx.Type
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Type
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
 import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Hash32, Metadatum, ProtocolVersion, Transaction, Word64}
@@ -29,7 +29,7 @@ import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Hash32, Metadatum,
   *
   * { $CIP67HeadTag: { $TransactionTypeName: [ $cborChunk1, $cborChunk2, $cborChunk3, ...] } }
   */
-sealed trait Metadata(val txType: Tx.Type) {
+sealed trait Metadata(val txType: EnrichedTx.Type) {
     def asMap: Map[Metadatum, Metadatum] = Map.empty
 
     /** Create the auxiliary data for a specific transaction by cbor-encoding the desired metadata
@@ -56,7 +56,7 @@ sealed trait Metadata(val txType: Tx.Type) {
 
 object Metadata {
 
-    trait Parser[T](val txType: Tx.Type) {
+    trait Parser[T](val txType: EnrichedTx.Type) {
         def parseInner(innerMap: Metadatum.Map): Either[ParseError, T]
 
         final def parse(
@@ -92,7 +92,7 @@ object Metadata {
         depositIx: Int,
         depositFee: Coin,
         l2PayloadHash: Hash32,
-    ) extends Metadata(Tx.Type.Deposit) {
+    ) extends Metadata(EnrichedTx.Type.Deposit) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("depositIx") -> Metadatum.Int(depositIx),
@@ -102,7 +102,7 @@ object Metadata {
         )
     }
 
-    object Deposit extends Parser[Deposit](Tx.Type.Deposit) {
+    object Deposit extends Parser[Deposit](EnrichedTx.Type.Deposit) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Deposit] = {
             val innerMapEntries = innerMap.entries
             for {
@@ -154,16 +154,16 @@ object Metadata {
         }
     }
 
-    case class Fallback() extends Metadata(Tx.Type.Fallback)
+    case class Fallback() extends Metadata(EnrichedTx.Type.Fallback)
 
-    object Fallback extends Parser[Fallback](Tx.Type.Fallback) {
+    object Fallback extends Parser[Fallback](EnrichedTx.Type.Fallback) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Fallback] =
             Right(Fallback())
     }
 
-    case class Finalization() extends Metadata(Tx.Type.Finalization)
+    case class Finalization() extends Metadata(EnrichedTx.Type.Finalization)
 
-    object Finalization extends Parser[Finalization](Tx.Type.Finalization) {
+    object Finalization extends Parser[Finalization](EnrichedTx.Type.Finalization) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Finalization] =
             Right(Finalization())
     }
@@ -176,7 +176,7 @@ object Metadata {
         multisigRegimeIx: Int,
         // input index
         seedIx: Int
-    ) extends Metadata(Tx.Type.Initialization) {
+    ) extends Metadata(EnrichedTx.Type.Initialization) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("multisigTreasuryIx") -> Metadatum.Int(multisigTreasuryIx),
@@ -186,7 +186,7 @@ object Metadata {
         )
     }
 
-    object Initialization extends Parser[Initialization](Tx.Type.Initialization) {
+    object Initialization extends Parser[Initialization](EnrichedTx.Type.Initialization) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Initialization] = {
             val innerMapEntries = innerMap.entries
             for {
@@ -239,23 +239,23 @@ object Metadata {
         }
     }
 
-    case class Refund() extends Metadata(Tx.Type.Refund)
+    case class Refund() extends Metadata(EnrichedTx.Type.Refund)
 
-    object Refund extends Parser[Refund](Tx.Type.Refund) {
+    object Refund extends Parser[Refund](EnrichedTx.Type.Refund) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Refund] =
             Right(Refund())
     }
 
-    case class Rollout() extends Metadata(Tx.Type.Rollout)
+    case class Rollout() extends Metadata(EnrichedTx.Type.Rollout)
 
-    object Rollout extends Parser[Rollout](Tx.Type.Rollout) {
+    object Rollout extends Parser[Rollout](EnrichedTx.Type.Rollout) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Rollout] =
             Right(Rollout())
     }
 
-    case class Settlement() extends Metadata(Tx.Type.Settlement)
+    case class Settlement() extends Metadata(EnrichedTx.Type.Settlement)
 
-    object Settlement extends Parser[Settlement](Tx.Type.Settlement) {
+    object Settlement extends Parser[Settlement](EnrichedTx.Type.Settlement) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Settlement] =
             Right(Settlement())
     }
@@ -289,7 +289,7 @@ object Metadata {
     } yield hydrMap
 
     private def parseRoleMapFromHydrMap(
-        txType: Tx.Type,
+        txType: EnrichedTx.Type,
         hydrMap: Metadatum.Map
     ): Either[ParseError, Metadatum.Map] = for {
         roleEntry <- hydrMap.entries

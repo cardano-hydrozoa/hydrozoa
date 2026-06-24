@@ -5,10 +5,10 @@ import io.circe.{Decoder, Encoder}
 import scalus.cardano.ledger.Utxo
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
-/** Persistence-layer JSON codecs for shared *Scalus* / framework types that several Tx-wrapper
-  * codecs reference but that aren't part of CIP-116. Lives in the persistence/codec package because
-  * each instance is shaped for **on-disk storage round-trip**; if other consumers (wire, server,
-  * L2) need a different shape, they keep their own instance.
+/** Persistence-layer JSON codecs for shared *Scalus* / framework types that several
+  * EnrichedTx-wrapper codecs reference but that aren't part of CIP-116. Lives in the
+  * persistence/codec package because each instance is shaped for **on-disk storage round-trip**; if
+  * other consumers (wire, server, L2) need a different shape, they keep their own instance.
   *
   * The codecs here:
   *   - keep persistence isolated from the wire-codec set's quirks (e.g. wire codecs may carry extra

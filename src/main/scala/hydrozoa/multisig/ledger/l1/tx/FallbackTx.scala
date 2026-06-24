@@ -53,7 +53,7 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
-      Tx[FallbackTx] {
+      EnrichedTx[FallbackTx] {
     override def transactionFamily: String = "FallbackTx"
 }
 
@@ -80,7 +80,7 @@ private object FallbackTxOps {
             unbalanced <- build(Steps())
             finalized <- unbalanced.finalizeContext(
               diffHandler = Change.changeOutputDiffHandler(1),
-              validators = Tx.Validators.nonSigningNonValidityChecksValidators
+              validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
             )
             completed = Complete(finalized)
         } yield completed

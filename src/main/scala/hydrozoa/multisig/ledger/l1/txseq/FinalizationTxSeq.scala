@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1
 import hydrozoa.multisig.ledger.l1.tx
 import hydrozoa.multisig.ledger.l1.tx.*
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import scalus.cardano.txbuilder.SomeBuildError.{BalancingError, SomeRedeemerIndexingError, SomeStepError, ValidationError}
 import scalus.cardano.txbuilder.{SomeBuildError, TxBalancingError}

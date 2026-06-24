@@ -6,8 +6,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.{BuilderResultSimple, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResultSimple, explain, explainAppendConst, explainConst}
 import hydrozoa.multisig.ledger.l1.utxo.RolloutUtxo
 import monocle.{Focus, Lens}
 import scala.Function.const
@@ -19,7 +19,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Sen
 import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder, TransactionBuilderStep, TxBalancingError}
 import scalus.uplc.builtin.ByteString
 
-sealed trait RolloutTx extends Tx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
+sealed trait RolloutTx extends EnrichedTx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction
     def txLens: Lens[RolloutTx, Transaction]
     def payoutCount: Int
@@ -110,7 +110,7 @@ private object RolloutTxOps {
 
         object State {
             trait Section[T <: RolloutTx]
-                extends Tx.Builder.HasCtx,
+                extends EnrichedTx.Builder.HasCtx,
                   Payout.Obligation.Many.Remaining {
                 def state: State[T]
                 def fee: Coin
@@ -458,7 +458,7 @@ private object RolloutTxOps {
                       protocolParams = builder.config.cardanoInfo.protocolParams,
                       diffHandler = prebalancedLovelaceDiffHandler,
                       evaluator = builder.config.plutusScriptEvaluatorForTxBuild,
-                      validators = Tx.Validators.nonSigningValidators
+                      validators = EnrichedTx.Validators.nonSigningValidators
                     )
                     .explain(
                       const(
