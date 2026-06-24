@@ -19,8 +19,8 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
 import hydrozoa.multisig.ledger.stack.StackNumber
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence}
-import hydrozoa.multisig.{MultisigRegimeManager, NoopActor}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, NoopActor}
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 import test.{SeedPhrase, TestPeers, genMonad}
@@ -112,7 +112,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     private def baseConnections(
         system: ActorSystem[IO],
         slowConsensus: SlowConsensusActor.Handle,
-    ): IO[MultisigRegimeManager.Connections] =
+    ): IO[HeadMultisigRegimeManager.Connections] =
         for {
             blockWeaver <- noop[BlockWeaver.Request](system)
             cardanoLiaison <- noop[CardanoLiaison.Request](system)
@@ -120,12 +120,12 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
             requestSequencer <- noop[RequestSequencer.Request](system)
             jointLedger <- noop[JointLedger.Requests.Request](system)
             stackComposer <- noop[StackComposer.Request](system)
-        } yield MultisigRegimeManager.Connections(
+        } yield HeadMultisigRegimeManager.Connections(
           blockWeaver = blockWeaver,
           blockWeaverLimiter = blockWeaver,
           cardanoLiaison = cardanoLiaison,
           consensusActor = consensusActor,
-          requestSequencer = requestSequencer,
+          requestSequencer = Some(requestSequencer),
           jointLedger = jointLedger,
           stackComposer = stackComposer,
           stackComposerLimiter = stackComposer,
@@ -135,7 +135,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
     /** Per-coil actors + the Ref recording what its slow-consensus slot receives. */
     private final case class CoilParts(
         coilNum: CoilPeerNumber,
-        pending: Deferred[IO, MultisigRegimeManager.Connections],
+        pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
         coilSeen: Ref[IO, Vector[HardAck]],
         coilSlowConsensus: SlowConsensusActor.Handle,
         coilLiaison: PeerLiaisonCoilToHub.Handle,
@@ -152,16 +152,20 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         val (hubConfig, coilConfigs) = genConfigs(nCoil)
         given CardanoNetwork.Section = hubConfig
 
-        InMemoryBackendStore.open
+        val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        val casTracer = Slf4jTracer.sink.contramap(CoilAckSequencerEventFormat.humanFormat(hubNum))
+
+        InMemoryBackendStore
+            .open(persistenceTracer)
             .use { backend =>
-                Persistence.fromBackend(backend).flatMap { persistence =>
+                Persistence.fromBackend(backend, persistenceTracer).flatMap { persistence =>
                     ActorSystem[IO]("coil-liaison-test").use { system =>
                         for {
-                            headPending <- Deferred[IO, MultisigRegimeManager.Connections]
+                            headPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                             hubSeen <- Ref[IO].of(Vector.empty[HardAck])
                             hubSlowConsensus <- system.actorOf(new HardAckRecorder(hubSeen))
                             sequencer <- system.actorOf(
-                              CoilAckSequencer(hubConfig, headPending)
+                              CoilAckSequencer(hubConfig, persistence, headPending, casTracer)
                             )
                             coilRelay <- system.actorOf(CoilRelay(headPending))
 
@@ -174,7 +178,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                                         )
                                 }
                                 for {
-                                    pending <- Deferred[IO, MultisigRegimeManager.Connections]
+                                    pending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
                                     coilSeen <- Ref[IO].of(Vector.empty[HardAck])
                                     coilSlowConsensus <- system.actorOf(
                                       new HardAckRecorder(coilSeen)
@@ -320,4 +324,5 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
         Prop(hub.map(_.hardAckNum.convert) == expected) :| s"hub saw: $hub" &&
         Prop(perCoil.head.map(_.hardAckNum.convert) == expected) :| s"coil saw: ${perCoil.head}"
     }
+
 }

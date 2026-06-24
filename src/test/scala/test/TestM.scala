@@ -4,8 +4,7 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.effect.unsafe.IORuntime
-import cats.effect.unsafe.implicits.*
-import cats.syntax.all.*
+import cats.syntax.flatMap.*
 import org.scalacheck.PropertyM.{monadForPropM, monadicIO}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, Prop, PropertyM}
@@ -75,22 +74,19 @@ object TestM {
       *   The implicit IO runtime in which [[IO]] effects can be executed
       * @return
       */
-    def run[R, A](testM: TestM[R, A], initializer: PT[R])(using
+    /** Run a test against a resource-managed environment. The resource is acquired before each
+      * ScalaCheck trial and released after it completes, regardless of outcome. Construction of the
+      * [[Resource]] runs inside [[PropertyM]], so it can interleave [[Gen]] (e.g. `pick`).
+      * Bracketing is delegated to [[PropertyM.useResource]], which acquires under `IO.uncancelable`
+      * and guarantees release with the same semantics as `Resource.use`.
+      */
+    def run[R, A](testM: TestM[R, A], resource: PT[Resource[IO, R]])(using
         toProp: A => Prop,
         ioRuntime: IORuntime
-    ): Prop = {
-
-        monadicIO(
-          // This runs the initialization within the `PropertyM` first, in order to give the computation in `TestM`
-          // access to the fully-initialized environment
-          for {
-              env <- initializer
-              res <- {
-                  testM.unTestM.run(env)
-              }
-          } yield res
-        )
-    }
+    ): Prop = monadicIO(for {
+        r <- resource
+        res <- PropertyM.useResource(r)(env => testM.unTestM.run(env))
+    } yield res)
 
     // ===================================
     // Lifts
@@ -143,10 +139,10 @@ final class TestMFixedEnv[R](@annotation.unused dummy: Boolean = true) {
 
     def assert(condition: Boolean): TestM[R, Unit] = TestM.assert(condition)
 
-    def run[A](testM: TestM[R, A], initializer: PT[R])(using
+    def run[A](testM: TestM[R, A], resource: PT[Resource[IO, R]])(using
         toProp: A => Prop,
         ioRuntime: IORuntime
-    ): Prop = TestM.run[R, A](testM, initializer)
+    ): Prop = TestM.run[R, A](testM, resource)
 
     def lift[A](e: IO[A]): TestM[R, A] = TestM.lift(e)
 

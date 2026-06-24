@@ -9,6 +9,7 @@
         <appender-ref ref="STDOUT"/>
     </root>
     <logger name="BlockWeaver" level="warn"/>
+    <logger name="CardanoBackend" level="warn"/>
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="CardanoLiaisonTest" level="warn"/>
     <logger name="PeerLiaison" level="warn"/>
@@ -19,11 +20,19 @@
     <logger name="InitializationTx" level="warn"/>
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
-    <logger name="MultisigRegimeManager" level="warn"/>
+    <logger name="HeadMultisigRegimeManager" level="warn"/>
     <logger name="DisputeActor" level="warn"/>
     <logger name="EvacuationActor" level="warn"/>
     <logger name="Limiter" level="warn"/>
     <logger name="Persistence" level="warn"/>
+    <logger name="CoilPeerWsTransport" level="warn"/>
+    <logger name="HubWsTransport" level="warn"/>
+    <logger name="CoilAckSequencer" level="warn"/>
+    <logger name="HydrozoaHttp" level="warn"/>
+    <logger name="RemoteL2Ledger" level="warn"/>
+    <logger name="BlockHeader" level="warn"/>
+    <logger name="TxTiming" level="warn"/>
+    <logger name="DepositsMap" level="warn"/>
     <logger name="SettlementTxSeq" level="warn"/>
     <logger name="SettlementTx" level="warn"/>
     <logger name="Generators" level="warn"/>

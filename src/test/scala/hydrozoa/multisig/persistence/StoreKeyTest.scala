@@ -1,7 +1,7 @@
 package hydrozoa.multisig.persistence
 
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
@@ -13,16 +13,19 @@ class StoreKeyTest extends AnyFunSuite:
 
     test("every StoreKey type maps to its expected Cf") {
         val cases: List[(StoreKey, Cf)] = List(
-          LaneKey.Block(BlockNumber(0)) -> Cf.Block,
-          LaneKey.Stack(StackNumber(0)) -> Cf.Stack,
-          LaneKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck,
-          LaneKey.HardAck(HeadPeerNumber(0), HardAckNumber(0)) -> Cf.HardAck,
+          JournalKey.Block(BlockNumber(0)) -> Cf.Block,
+          JournalKey.Stack(StackNumber(0)) -> Cf.Stack,
+          JournalKey.SoftAck(HeadPeerNumber(0), SoftAckNumber(0)) -> Cf.SoftAck(HeadPeerNumber(0)),
+          JournalKey.HardAck(PeerId.Head(HeadPeerNumber(0)), HardAckNumber(0)) ->
+              Cf.HardAck(PeerId.Head(HeadPeerNumber(0))),
           StoreKey.BlockResult(BlockNumber(0)) -> Cf.BlockResult,
           StoreKey.SoftConfirmation(BlockNumber(0)) -> Cf.SoftConfirmation,
           StoreKey.HardConfirmation(StackNumber(0)) -> Cf.HardConfirmation,
           StoreKey.DepositMap -> Cf.DepositMap,
           StoreKey.Treasury -> Cf.Treasury,
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
+          StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
+          StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -35,7 +38,9 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.BlockResult(BlockNumber(7)),
           StoreKey.SoftConfirmation(BlockNumber(99)),
           StoreKey.HardConfirmation(StackNumber(123)),
-          StoreKey.EvacuationMap(BlockNumber(42))
+          StoreKey.EvacuationMap(BlockNumber(42)),
+          StoreKey.RequestHighWater(BlockNumber(5)),
+          StoreKey.L2CommandNumber(BlockNumber(11))
         )
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")
@@ -63,9 +68,9 @@ class StoreKeyTest extends AnyFunSuite:
         assert(java.util.Arrays.compareUnsigned(c, d) < 0)
     }
 
-    test("LaneKey is a StoreKey — accepted by APIs typed over StoreKey") {
-        // Mirror what WriteBatch / Persistence do — accept a LaneKey wherever a StoreKey is expected.
+    test("JournalKey is a StoreKey — accepted by APIs typed over StoreKey") {
+        // Mirror what WriteBatch / Persistence do — accept a JournalKey wherever a StoreKey is expected.
         def takesAnyStoreKey(k: StoreKey): Cf = k.cf
-        val _ = assert(takesAnyStoreKey(LaneKey.Block(BlockNumber(42))) == Cf.Block)
+        val _ = assert(takesAnyStoreKey(JournalKey.Block(BlockNumber(42))) == Cf.Block)
         assert(takesAnyStoreKey(StoreKey.DepositMap) == Cf.DepositMap)
     }

@@ -1,8 +1,8 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{IO, IOLocal}
+import cats.effect.IO
 import cats.syntax.all.*
-import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import org.scalacheck.Prop
@@ -312,8 +312,11 @@ object EffectsLanded {
     /** Emit the rendered table to the tracer at INFO level so it lands in the log file
       * alongside the rest of the harness output. Single trace event keeps the table contiguous.
       */
-    def traceEffectsTable(results: List[BlockResult])(using IOLocal[Slf4jTracer]): IO[Unit] =
-        Slf4jTracer.info(renderEffectsTable(results))
+    def traceEffectsTable(
+        results: List[BlockResult],
+        log: ContraTracer[IO, Slf4jMsg]
+    ): IO[Unit] =
+        log.info(renderEffectsTable(results))
 
     /** Build the property directly from observed stacks + backend. Vacuous (true) if the
       * observed stack list is empty — [[Stage4Suite.propStackCoverage]] catches that case, not
@@ -325,9 +328,10 @@ object EffectsLanded {
     def propEffectsLanded(
         stacks: Seq[Stack.HardConfirmed],
         backend: CardanoBackend[IO],
+        log: ContraTracer[IO, Slf4jMsg],
         attempts: Int = 10,
         sleep: FiniteDuration = 1.second,
-    )(using IOLocal[Slf4jTracer]): IO[Prop] = {
+    ): IO[Prop] = {
         val exps = expectations(stacks)
         if exps.isEmpty then IO.pure(Prop.passed)
         else
@@ -335,7 +339,7 @@ object EffectsLanded {
                 polled <- poll(backend, exps, attempts, sleep)
                 // A fallback is terminal: blocks after it are Moot, not failures.
                 results = mootAfterFallback(polled)
-                _ <- traceEffectsTable(results)
+                _ <- traceEffectsTable(results, log)
                 pending = results.filter(_.outcome == BlockOutcome.Pending)
                 diag = pending.map(r =>
                     s"${r.expectation.label}: " +

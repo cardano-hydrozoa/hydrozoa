@@ -2,22 +2,22 @@ package hydrozoa.multisig.ledger.remote
 
 import cats.Monad
 import cats.data.EitherT
-import cats.effect.{Async, IO, Ref, Temporal}
+import cats.effect.{Async, IO, Temporal}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
+import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.Codec
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
-import org.typelevel.log4cats.Logger
 import scala.concurrent.duration.*
 
 /** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
@@ -38,78 +38,43 @@ import scala.concurrent.duration.*
   */
 class RemoteL2Ledger private (
     wsUri: Uri,
-    connRef: Ref[IO, Option[WSConnectionHighLevel[IO]]],
     initialBackoff: FiniteDuration,
     maxBackoff: FiniteDuration,
-    config: RemoteL2Ledger.Config
+    config: RemoteL2Ledger.Config,
+    tracer: ContraTracer[IO, RemoteL2LedgerEvent]
 ) extends L2Ledger[IO] {
     import RemoteL2LedgerCodecs.given
-
-    private given logger: Logger[IO] = Logging.loggerIO("RemoteL2Ledger")
 
     override implicit def monadF: Monad[IO] = Async[IO]
 
     given CardanoNetwork.Section = config.cardanoNetwork
 
-    /** Send a request to the remote ledger and wait for the synchronous response */
-    /** Establish a new WebSocket connection
+    /** Execute an operation with automatic reconnection on failure.
       *
-      * Creates a new WebSocket connection and updates the connection reference. Note: This doesn't
-      * close the old connection - in a production environment you may want to track and close old
-      * connections.
-      */
-    private def connect(): IO[WSConnectionHighLevel[IO]] = {
-        for {
-            _ <- logger.info(s"Connecting to WebSocket at $wsUri")
-            wsClient <- JdkWSClient.simple[IO]
-            newConn <- wsClient.connectHighLevel(WSRequest(wsUri)).allocated.map(_._1)
-            _ <- connRef.set(Some(newConn))
-            _ <- logger.info(s"Successfully connected to $wsUri")
-        } yield newConn
-    }
-
-    /** Get or establish a connection */
-    private def getOrConnect(): IO[WSConnectionHighLevel[IO]] = {
-        connRef.get.flatMap {
-            case Some(conn) => IO.pure(conn)
-            case None       => connect()
-        }
-    }
-
-    /** Execute an operation with automatic reconnection on failure
-      *
-      * Retries infinitely with exponential backoff capped at maxBackoff.
-      *
-      * @param operation
-      *   The operation to execute
-      * @param attempt
-      *   Current attempt number (for exponential backoff)
-      * @return
-      *   Result of the operation
+      * Opens a fresh connection per attempt via [[Resource.use]], ensuring the connection is always
+      * closed regardless of outcome. Retries infinitely with exponential backoff capped at
+      * maxBackoff.
       */
     private def withReconnect[A](
         operation: WSConnectionHighLevel[IO] => IO[A],
         attempt: Int = 0
     ): IO[A] = {
-        getOrConnect().flatMap(operation).handleErrorWith { error =>
-            // Calculate backoff with maximum cap from config
+        val run = for {
+            _ <- tracer.traceWith(Connecting(wsUri))
+            wsClient <- JdkWSClient.simple[IO]
+            result <- wsClient.connectHighLevel(WSRequest(wsUri)).use { conn =>
+                tracer.traceWith(Connected(wsUri)) >> operation(conn)
+            }
+        } yield result
+
+        run.handleErrorWith { error =>
             val calculatedBackoffSeconds = initialBackoff.toSeconds * Math.pow(2, attempt).toLong
             val backoffDuration =
                 if calculatedBackoffSeconds.seconds > maxBackoff then maxBackoff
                 else calculatedBackoffSeconds.seconds
-
             for {
-                _ <- logger.warn(error)(
-                  s"Connection error (attempt ${attempt + 1}), reconnecting after $backoffDuration"
-                )
+                _ <- tracer.traceWith(ConnectionError(attempt, backoffDuration, error))
                 _ <- Temporal[IO].sleep(backoffDuration)
-                // Clear the old connection and try again
-                _ <- connRef.set(None)
-                _ <- connect().handleErrorWith { reconnectError =>
-                    logger.debug(reconnectError)("Reconnection attempt failed, will retry") *>
-                        IO.unit // Swallow the error, continue retrying
-                }
-                // Recursively retry - NO LIMIT
                 result <- withReconnect(operation, attempt + 1)
             } yield result
         }
@@ -128,7 +93,7 @@ class RemoteL2Ledger private (
                 for {
                     // Send request
                     message <- IO.pure(request.asJson.noSpaces)
-                    _ <- logger.debug(s"Sending request: $message")
+                    _ <- tracer.traceWith(Sending(message))
                     _ <- conn.send(WSFrame.Text(message))
 
                     // Wait for response (synchronous)
@@ -138,7 +103,7 @@ class RemoteL2Ledger private (
                         .compile
                         .lastOrError
 
-                    _ <- logger.debug(s"Received response: $responseText")
+                    _ <- tracer.traceWith(Received(responseText))
 
                     // Decode response
                     ret <- decode[Response](responseText) match {
@@ -193,6 +158,17 @@ class RemoteL2Ledger private (
     ): EitherT[IO, L2LedgerError, Unit] = {
         sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
+
+    /** Unsupported: the remote ledger owns its own persistence + recovery behind the WebSocket, so
+      * the host does not track or restore its commandNumber (R2b is the EUTXO reference ledger
+      * only).
+      */
+    override def currentCommandNumber: IO[L2CommandNumber] =
+        IO.raiseError(L2LedgerError("currentCommandNumber is not supported by RemoteL2Ledger"))
+
+    /** Unsupported — see [[currentCommandNumber]]. */
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.leftT(L2LedgerError("restoreTo is not supported by RemoteL2Ledger"))
 }
 
 object RemoteL2Ledger {
@@ -294,13 +270,11 @@ object RemoteL2Ledger {
       */
     def create(
         wsUri: String,
+        config: Config,
+        tracer: ContraTracer[IO, RemoteL2LedgerEvent],
         initialBackoff: FiniteDuration = 1.second,
         maxBackoff: FiniteDuration = 30.seconds,
-        config: Config
-    ): IO[RemoteL2Ledger] = {
-        for {
-            uri <- IO.fromEither(Uri.fromString(wsUri))
-            connRef <- Ref.of[IO, Option[WSConnectionHighLevel[IO]]](None)
-        } yield new RemoteL2Ledger(uri, connRef, initialBackoff, maxBackoff, config)
-    }
+    ): IO[RemoteL2Ledger] =
+        IO.fromEither(Uri.fromString(wsUri))
+            .map(uri => new RemoteL2Ledger(uri, initialBackoff, maxBackoff, config, tracer))
 }

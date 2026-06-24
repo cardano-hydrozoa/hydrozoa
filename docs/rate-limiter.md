@@ -40,7 +40,7 @@ periods (`softBlockMinPeriod`, `hardStackMinPeriod`, …). It is part of
 
 ## How it is wired today
 
-Two lanes are throttled, spawned in `MultisigRegimeManager` and exposed on `Connections` as
+Two lanes are throttled, spawned in `HeadMultisigRegimeManager` and exposed on `Connections` as
 `blockWeaverLimiter` / `stackComposerLimiter`:
 
 | Lane | Throttled message | `limiterTimestamp` | `minPeriod` |
@@ -58,7 +58,7 @@ name (present in all three `logback.xml`).
    `limiterTimestamp` (the wall-clock instant the work it represents finished) and `minPeriod`
    (reading a knob from `RateLimits.Section`).
 2. **Add the knob.** Add a `FiniteDuration` field + accessor to `RateLimits` for the new lane.
-3. **Spawn + wire.** In `MultisigRegimeManager.preStartLocal`, spawn
+3. **Spawn + wire.** In `HeadMultisigRegimeManager.preStartLocal`, spawn
    `Limiter[DownstreamMsg](downstream, config, tracerLocal)`, add its handle to `Connections`,
    and point the *upstream* actor's reference-to-downstream at that handle (leave other senders
    on the direct handle).

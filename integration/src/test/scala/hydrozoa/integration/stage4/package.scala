@@ -20,7 +20,7 @@ package hydrozoa.integration
   *   - One shared [[hydrozoa.multisig.backend.cardano.CardanoBackendMock]] for all peers (shared L1
   *     state).
   *   - Factory pattern: build all actors against a `Deferred[IO,
-  *     MultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
+  *     HeadMultisigRegimeManager.Connections]`, then complete each peer's deferred after all actors
   *     exist so the cross-peer `PeerLiaisonHeadToHead` graph can be wired.
   *   - A [[Sut.BlockBriefObserver]] proxy actor wraps each peer's `FastConsensusActor` to capture
   *     both leader-produced and follower-reproduced block briefs into per-peer
@@ -97,7 +97,7 @@ package hydrozoa.integration
   *   - '''Stage 1''' had a real Yaci DevKit clock and a model with no virtual clock; the
   *     unaccounted real time was the '''test-harness setup''' (Yaci spin-up, init tx, etc.)
   *     elapsing before the model thought the head had started. One-shot drift at the boundary of
-  *     the test. Fix: anchor `takeoffTime = now + 60s` in `genInitialState` and have `startupSut`
+  *     the test. Fix: anchor `takeoffTime = now + 60s` in `genInitialState` and have `sutResource`
   *     sleep until that anchor, so all setup fits inside a pre-takeoff window the model never
   *     observes.
   *   - '''Stage 4 without TestControl''' has unaccounted real time accumulate '''only when the SUT
@@ -107,7 +107,7 @@ package hydrozoa.integration
   *     rejections as the saturation signal. Future work (relaxed validity windows / padded
   *     inter-arrival floors) would buy more headroom for `WebSocket` mode.
   *
-  * '''Startup-time handling for both modes.''' `Stage4Suite.startupSut` advances the SUT clock to
+  * '''Startup-time handling for both modes.''' `Stage4Suite.sutResource` advances the SUT clock to
   * the head's start epoch '''before''' creating the actor system, but the way it does so depends on
   * `useTestControl`:
   *
@@ -117,7 +117,7 @@ package hydrozoa.integration
   *     deterministic 100-day-window distribution starting Jan 1 2026.
   *   - '''TestControl off''' (e.g. `WebSocket`): `genInitialState` computes
   *     `takeoffTime = Instant.now() + 60s` and pins the head's initial `BlockCreationEndTime` to
-  *     it; `startupSut` sleeps wall-clock time until `takeoffTime`, or aborts with a
+  *     it; `sutResource` sleeps wall-clock time until `takeoffTime`, or aborts with a
   *     `RuntimeException` if setup overran the 60s budget. Same shape as stage 1's `takeoffTime`
   *     anchor; the budget value matches stage 1 today and may need raising for the heavier 20-peer
   *     JVM warmup.
@@ -253,7 +253,7 @@ package hydrozoa.integration
   * TestControl because it (a) is gated on a hardcoded 1-second-virtual ping loop in `ActorCell`,
   * and (b) compares against `System.currentTimeMillis()` (real wall-clock) rather than the
   * `F`-effect clock — both disconnected from TestControl's virtual clock. As a workaround,
-  * `Stage4Suite.startupSut` starts one side fiber per peer that loops
+  * `Stage4Suite.sutResource` starts one side fiber per peer that loops
   * `IO.sleep(period) >> liaison ! Timeout`. `IO.sleep` IS virtual-clock-aware, so the configured
   * `cardanoLiaisonPollingPeriod` is honored against the simulated timeline. The fibers are stored
   * in [[Sut.Stage4Sut.liaisonTickFibers]] and cancelled in `shutdownSut` before `waitForIdle` and

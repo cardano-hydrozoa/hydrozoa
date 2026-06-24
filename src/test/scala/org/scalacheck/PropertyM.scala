@@ -431,6 +431,26 @@ object PropertyM:
         )
     }
 
+    /** Bracket a [[cats.effect.Resource]] around a [[PropertyM]] body. Acquires the resource inside
+      * [[cats.effect.IO.uncancelable]], polls the body so it remains cancelable, and guarantees
+      * release on success, failure, or cancellation — matching `Resource.use` semantics.
+      */
+    def useResource[R, A](r: cats.effect.Resource[cats.effect.IO, R])(
+        body: R => PropertyM[cats.effect.IO, A]
+    )(using toProp: A => Prop): PropertyM[cats.effect.IO, A] = PropertyM { k =>
+        Gen.gen { (p, s) =>
+            val io: cats.effect.IO[Prop] = cats.effect.IO.uncancelable { poll =>
+                r.allocated.flatMap { case (env, release) =>
+                    body(env).unPropertyM(k).doApply(p, s).retrieve match {
+                        case Some(bodyIo) => poll(bodyIo).guarantee(release)
+                        case None         => release.as(Prop.undecided)
+                    }
+                }
+            }
+            Gen.r(Some(io), s.next)
+        }
+    }
+
     // ===================================
     // run functions
     // ===================================

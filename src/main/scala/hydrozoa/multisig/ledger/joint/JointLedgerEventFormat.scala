@@ -1,8 +1,10 @@
 package hydrozoa.multisig.ledger.joint
 
+import hydrozoa.config.head.multisig.timing.TxTimingEventFormat
 import hydrozoa.lib.logging.LogEvent
-import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeaderEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent.*
+import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMapEventFormat
 
 /** Renderers from [[JointLedgerEvent]] to [[LogEvent]]. Lives separately from the event ADT so the
   * type itself stays pure data.
@@ -55,6 +57,11 @@ object JointLedgerEventFormat:
                   "requestId" -> rid.toString,
                   "blockNum" -> s"${bn: Int}"
                 )
+            case PassiveStateRecovered(bn) =>
+                info(
+                  s"recovered passive state from a non-empty store (block ${bn: Int})",
+                  "blockNum" -> s"${bn: Int}"
+                )
             case BlockStarted(bn, startTime) =>
                 info(
                   s"start block: $bn (blockCreationStartTime=$startTime)",
@@ -82,7 +89,8 @@ object JointLedgerEventFormat:
                       s"  Block brief: $brief",
                   "blockNum" -> s"${brief.blockNum: Int}"
                 )
-            case HeaderLog(level, msg, ctx) =>
-                LogEvent(level, msg, ev.ctx ++ ctx, routingKey = ev.routingKey)
+            case HeaderEvent(bhe)   => BlockHeaderEventFormat.humanFormat(bhe)
+            case TimingEvent(tme)   => TxTimingEventFormat.humanFormat(tme)
+            case DepositsEvent(dme) => DepositsMapEventFormat.humanFormat(dme)
         }
     }

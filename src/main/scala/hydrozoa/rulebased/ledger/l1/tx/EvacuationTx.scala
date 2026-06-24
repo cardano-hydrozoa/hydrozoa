@@ -4,7 +4,6 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
-import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
@@ -21,7 +20,6 @@ import monocle.*
 import scala.annotation.tailrec
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, InvalidTransactionSizeException}
-import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -185,17 +183,6 @@ private object EvacuationTxOps {
                 /////////////
                 // Steps
 
-                // Create the empty change utxo
-                sendChangeUtxo = Send(
-                  Babbage(
-                    address = config.evacuationWallet.exportVerificationKey
-                        .shelleyAddress(),
-                    value = Value.zero,
-                    datumOption = None,
-                    scriptRef = None
-                  )
-                )
-
                 residualTreasury = RuleBasedTreasuryOutput(
                   newTreasuryDatum,
                   residualValue
@@ -206,7 +193,7 @@ private object EvacuationTxOps {
                     config.referenceTreasury,
                     inputTreasuryUtxo.spendAttached(evacuationRedeemer),
                     collateralUtxo.add,
-                    sendChangeUtxo,
+                    collateralUtxo.send,
                     residualTreasury.send
                   )
                       ++

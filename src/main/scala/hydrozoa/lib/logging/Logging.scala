@@ -4,34 +4,18 @@ import cats.effect.IO
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 
-/** Structured logging for Hydrozoa backed by log4cats / SLF4J / Logback.
+/** Internal SLF4J / log4cats adapter used by [[Slf4jTracer.sink]] to produce the underlying SLF4J
+  * `Logger` instances. **Not for direct use.** Production code holds a `ContraTracer[F, X]` (either
+  * a typed `XYZEvent` ADT or the generic [[Slf4jMsg]]) and reaches SLF4J through
+  * [[Slf4jTracer.sink]] — see `docs/logging-tracing.md`.
   *
-  * The logger name controls the Logback logger hierarchy (e.g. `"hydrozoa.multisig.CardanoLiaison"`
-  * is filtered by `<logger name="hydrozoa" .../>` in logback.xml).
-  *
-  * Usage for pure code (non-IO):
-  * {{{
-  *   val logger = Logging.logger(getClass)
-  *   logger.info("message")
-  * }}}
-  *
-  * Usage for IO-based code (actors, effects):
-  * {{{
-  *   val logger = Logging.loggerIO("FastConsensusActor")
-  *   logger.info("actor started")   // IO[Unit]
-  * }}}
+  * The SLF4J logger name controls the Logback logger hierarchy (e.g.
+  * `"hydrozoa.multisig.CardanoLiaison"` is filtered by `<logger name="hydrozoa" .../>` in
+  * `logback.xml`).
   */
 object Logging {
 
-    /** Create a plain SLF4J logger for non-IO code. */
-    def logger(clazz: Class[?]): org.slf4j.Logger =
-        org.slf4j.LoggerFactory.getLogger(clazz)
-
-    /** Create a plain SLF4J logger for non-IO code. */
-    def logger(name: String): org.slf4j.Logger =
-        org.slf4j.LoggerFactory.getLogger(name)
-
-    /** Create a log4cats IO-based logger for actors and other IO code. */
+    /** log4cats SLF4J adapter used by [[Slf4jTracer.sink]]. */
     def loggerIO(name: String): Logger[IO] =
         Slf4jLogger.getLoggerFromName[IO](name)
 }

@@ -21,7 +21,7 @@ class ServerTest extends AnyFunSuite {
                 case Some(v) => Server.Served.Reply(New(g.batchNum, Some(v)))
                 case None    => Server.Served.Empty
         }
-        val server = new Server[Get, New](serve)(n => sent.update(_ :+ n))
+        val server = new Server[Get, New]("Test.Get", serve)(n => sent.update(_ :+ n))
 
         server.handleGet(Get(BatchNumber.zero, 5)).unsafeRunSync() // nothing yet -> stash
         val _ = assert(sent.get.unsafeRunSync().isEmpty)

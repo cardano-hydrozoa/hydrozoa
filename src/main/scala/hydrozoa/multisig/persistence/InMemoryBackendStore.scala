@@ -1,7 +1,8 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.{IO, Ref, Resource}
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.persistence.PersistenceEvent.{OpenInMemoryReady, OpenInMemoryStart}
 import scala.collection.immutable.TreeMap
 
 /** An in-memory [[BackendStore]] for tests. Mirrors the RocksDB contract (atomic batches across
@@ -13,8 +14,6 @@ import scala.collection.immutable.TreeMap
   */
 object InMemoryBackendStore:
 
-    private val logger = Logging.loggerIO("Persistence")
-
     private given byteVectorOrdering: Ordering[Vector[Byte]] =
         Ordering.Implicits.seqOrdering(
           Ordering.fromLessThan[Byte]((a, b) => (a & 0xff) < (b & 0xff))
@@ -22,31 +21,39 @@ object InMemoryBackendStore:
 
     /** Open a fresh in-memory store. Resource-managed for parity with the RocksDB factory; the
       * release is a no-op (no native handles to free).
+      *
+      * Unlike RocksDB, this backend is **CF-agnostic**: it does not pre-declare a CF set, treating
+      * any [[Cf]] as an empty keyspace until first written. So it needs no config-derived CF list
+      * (§7.1, the per-author split) — a CF the code touches simply springs into being.
       */
-    def open: Resource[IO, BackendStore[IO]] =
+    def open(tracer: ContraTracer[IO, PersistenceEvent]): Resource[IO, BackendStore[IO]] =
         Resource.eval(
           for
-              _ <- logger.info("opening in-memory backend")
-              state <- Ref.of[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]](
-                Cf.all.iterator
-                    .map(cf => cf -> TreeMap.empty[Vector[Byte], Array[Byte]])
-                    .toMap
-              )
-              _ <- logger.info(s"in-memory backend ready (CFs=${Cf.all.size})")
+              _ <- tracer.traceWith(OpenInMemoryStart)
+              state <- Ref.of[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]](Map.empty)
+              _ <- tracer.traceWith(OpenInMemoryReady(Cf.fixed.size))
           yield new Impl(state)
         )
+
+    private val emptyTree: TreeMap[Vector[Byte], Array[Byte]] =
+        TreeMap.empty[Vector[Byte], Array[Byte]]
 
     private final class Impl(state: Ref[IO, Map[Cf, TreeMap[Vector[Byte], Array[Byte]]]])
         extends BackendStore[IO]:
 
+        private def tree(
+            s: Map[Cf, TreeMap[Vector[Byte], Array[Byte]]],
+            cf: Cf
+        ): TreeMap[Vector[Byte], Array[Byte]] = s.getOrElse(cf, emptyTree)
+
         def get(cf: Cf, key: Array[Byte]): IO[Option[Array[Byte]]] =
-            state.get.map(_(cf).get(key.toVector))
+            state.get.map(s => tree(s, cf).get(key.toVector))
 
         def put(cf: Cf, key: Array[Byte], value: Array[Byte]): IO[Unit] =
-            state.update(s => s.updated(cf, s(cf).updated(key.toVector, value)))
+            state.update(s => s.updated(cf, tree(s, cf).updated(key.toVector, value)))
 
         def delete(cf: Cf, key: Array[Byte]): IO[Unit] =
-            state.update(s => s.updated(cf, s(cf).removed(key.toVector)))
+            state.update(s => s.updated(cf, tree(s, cf).removed(key.toVector)))
 
         def write(batch: RawWriteBatch): IO[Unit] =
             if batch.isEmpty then IO.unit
@@ -55,14 +62,15 @@ object InMemoryBackendStore:
                     batch.ops.foldLeft(s) { (acc, op) =>
                         op match
                             case RawWriteBatch.Op.Put(cf, k, v) =>
-                                acc.updated(cf, acc(cf).updated(k.toVector, v))
+                                acc.updated(cf, tree(acc, cf).updated(k.toVector, v))
                             case RawWriteBatch.Op.Delete(cf, k) =>
-                                acc.updated(cf, acc(cf).removed(k.toVector))
+                                acc.updated(cf, tree(acc, cf).removed(k.toVector))
                             case RawWriteBatch.Op.DeleteRange(cf, from, to) =>
                                 val fromV = from.toVector
                                 val toV = to.toVector
-                                val pruned = acc(cf).rangeUntil(toV).rangeFrom(fromV)
-                                acc.updated(cf, acc(cf) -- pruned.keys)
+                                val t = tree(acc, cf)
+                                val pruned = t.rangeUntil(toV).rangeFrom(fromV)
+                                acc.updated(cf, t -- pruned.keys)
                     }
                 )
 
@@ -74,7 +82,7 @@ object InMemoryBackendStore:
               for
                   s <- state.get
                   remaining <- Ref.of[IO, List[(Array[Byte], Array[Byte])]](
-                    s(cf)
+                    tree(s, cf)
                         .rangeFrom(fromInclusive.toVector)
                         .iterator
                         .map { case (k, v) =>
@@ -91,16 +99,4 @@ object InMemoryBackendStore:
             )
 
         def lastKey(cf: Cf): IO[Option[Array[Byte]]] =
-            state.get.map(_(cf).lastOption.map(_._1.toArray))
-
-        def lastKeyWithPrefix(cf: Cf, prefix: Array[Byte]): IO[Option[Array[Byte]]] =
-            state.get.map { s =>
-                val prefixV = prefix.toVector
-                s(cf).iterator
-                    .filter { case (k, _) =>
-                        k.length >= prefixV.length && k.take(prefixV.length) == prefixV
-                    }
-                    .map(_._1)
-                    .reduceOption((a, b) => if byteVectorOrdering.gt(a, b) then a else b)
-                    .map(_.toArray)
-            }
+            state.get.map(s => tree(s, cf).lastOption.map(_._1.toArray))

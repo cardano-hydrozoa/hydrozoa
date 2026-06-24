@@ -4,18 +4,18 @@ import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.implicits.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import com.comcast.ip4s.{host, port}
+import com.comcast.ip4s.{Host, Port, host, port}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
-import hydrozoa.lib.logging.{Logging, Slf4jTracer}
-import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
+import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger
-import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.server.HydrozoaServer
-import hydrozoa.multisig.{MultisigRegimeManager, MultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.server.{HydrozoaHttpEventFormat, HydrozoaServer}
+import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
 import io.github.cdimascio.dotenv.Dotenv
 import java.nio.file.Path
 import scalus.cardano.address.{Address, ShelleyAddress}
@@ -45,6 +45,8 @@ object Main extends IOApp {
         signingKey: SigningKey,
         minEquity: Coin,
         blockfrostApiKey: String,
+        hydrozoaHost: String,
+        hydrozoaPort: String,
         sugarRushHost: String,
         sugarRushPort: String,
         tokenRecoveryAddress: Option[ShelleyAddress],
@@ -54,7 +56,8 @@ object Main extends IOApp {
         val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
     }
 
-    private val logger = Logging.loggerIO("hydrozoa.app.Main")
+    private val log: ContraTracer[IO, Slf4jMsg] =
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Main"))
 
     // Load .env file (if present) at startup
     private lazy val dotenv: Dotenv = Dotenv.configure().ignoreIfMissing().load()
@@ -99,17 +102,17 @@ object Main extends IOApp {
     def loadEnv: IO[EnvConfig] =
         for {
             blockfrostKey <- getMandatoryEnvVar("BLOCKFROST_API_KEY")
-            _ <- logger.info(s"Loaded Blockfrost API key: ${blockfrostKey.take(8)}...")
+            _ <- log.info(s"Loaded Blockfrost API key: ${blockfrostKey.take(8)}...")
 
             vKeyHex <- getMandatoryEnvVar("CARDANO_VERIFICATION_KEY")
             vKeyBs <- parseHex(vKeyHex, 32, "CARDANO_VERIFICATION_KEY")
             vKey = VerificationKey.unsafeFromByteString(vKeyBs)
-            _ <- logger.info(s"Loaded verification key: ${vKeyHex.take(16)}...")
+            _ <- log.info(s"Loaded verification key: ${vKeyHex.take(16)}...")
 
             sKeyHex <- getMandatoryEnvVar("CARDANO_SIGNING_KEY")
             sKeyBs <- parseHex(sKeyHex, 32, "CARDANO_SIGNING_KEY")
             sKey = SigningKey.unsafeFromByteString(sKeyBs)
-            _ <- logger.info("Loaded signing key")
+            _ <- log.info("Loaded signing key")
 
             minEquityStr <- getMandatoryEnvVar("EQUITY")
             minEquity <- IO.fromEither(
@@ -121,6 +124,9 @@ object Main extends IOApp {
                   )
                   .map(Coin.apply)
             )
+
+            hydrozoaHost <- getOptionalEnvVar("HYDROZOA_HOST", "0.0.0.0")
+            hydrozoaPort <- getOptionalEnvVar("HYDROZOA_PORT", "9001")
 
             sugarRushHost <- getOptionalEnvVar("SUGAR_RUSH_HOST", "localhost")
             sugarRushPort <- getOptionalEnvVar("SUGAR_RUSH_PORT", "3001")
@@ -147,19 +153,21 @@ object Main extends IOApp {
                         }
             }
             _ <- tokenRecoveryAddressOpt.fold(IO.unit)(addr =>
-                logger.info(s"Token recovery address: ${addr.toBech32.get}")
+                log.info(s"Token recovery address: ${addr.toBech32.get}")
             )
 
             adminUsername <- getMandatoryEnvVar("ADMIN_USERNAME")
             adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
-            _ <- logger.info(s"Loaded admin credentials for user: $adminUsername")
+            _ <- log.info(s"Loaded admin credentials for user: $adminUsername")
 
-            _ <- logger.info(s"Minimum equity: $minEquity lovelace")
+            _ <- log.info(s"Minimum equity: $minEquity lovelace")
         } yield EnvConfig(
           verificationKey = vKey,
           signingKey = sKey,
           minEquity = minEquity,
           blockfrostApiKey = blockfrostKey,
+          hydrozoaHost = hydrozoaHost,
+          hydrozoaPort = hydrozoaPort,
           sugarRushHost = sugarRushHost,
           sugarRushPort = sugarRushPort,
           tokenRecoveryAddress = tokenRecoveryAddressOpt,
@@ -170,23 +178,26 @@ object Main extends IOApp {
     val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
     given CardanoNetwork.Section = cardanoNetwork
 
-    override def run(args: List[String]): IO[ExitCode] =
+    override def run(args: List[String]): IO[ExitCode] = {
         val setupIO = for {
-            _ <- logger.info("Starting Hydrozoa node...")
+            _ <- log.info("Starting Hydrozoa node...")
             env <- loadEnv
-            _ <- logger.info("Starting Cardano Blockfrost Backend...")
+            _ <- log.info("Starting Cardano Blockfrost Backend...")
             backend <- CardanoBackendBlockfrost(
               network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey
+              apiKey = env.blockfrostApiKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
             nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
               vKey = env.verificationKey,
               sKey = env.signingKey,
-              minEquity = env.minEquity
+              minEquity = env.minEquity,
+              hydrozoaHost = env.hydrozoaHost,
+              hydrozoaPort = env.hydrozoaPort,
             )
-            _ <- logger.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
-            _ <- logger.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
-            _ <- logger.info(
+            _ <- log.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
+            _ <- log.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
+            _ <- log.info(
               s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
             )
         } yield (env, backend, nodeConfig)
@@ -196,12 +207,15 @@ object Main extends IOApp {
             (env, backend, nodeConfig) = result
 
             _ <- Resource.eval(
-              logger.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
+              log.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
             )
+            remoteL2LedgerTracer = Slf4jTracer.sink
+                .contramap(RemoteL2LedgerEventFormat.humanFormat)
             remoteL2Ledger <- Resource.eval(
               RemoteL2Ledger.create(
                 wsUri = env.sugarRushUri,
-                config = cardanoNetwork
+                config = cardanoNetwork,
+                tracer = remoteL2LedgerTracer,
               )
             )
 
@@ -209,14 +223,23 @@ object Main extends IOApp {
             // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
             // BackendStore (byte-level primitive), then wrap it in the typed Persistence the
             // actor topology consumes.
+            persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             backendStore <- RocksDbBackendStore.open(
-              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb")
+              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+              Cf.mkAll(
+                headPeers = nodeConfig.headConfig.headPeerNums.toList,
+                coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
+                hubs = nodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
+              ),
+              persistenceTracer,
             )
-            persistence <- Resource.eval(Persistence.fromBackend(backendStore))
+            persistence <- Resource.eval(
+              Persistence.fromBackend(backendStore, persistenceTracer)
+            )
 
             // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
             system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
-              logger.info("Hydrozoa node shut down, running janitor...") *>
+              log.info("Hydrozoa node shut down, running janitor...") *>
                   Janitor.cleanUp(
                     backend = backend,
                     peerWallet = nodeConfig.ownWallet,
@@ -225,27 +248,39 @@ object Main extends IOApp {
                     tokenRecoveryAddress = env.tokenRecoveryAddress
                   )
             )
-        } yield (env, backend, nodeConfig, remoteL2Ledger, persistence, system)
 
-        resource.use { case (env, backend, nodeConfig, remoteL2Ledger, persistence, system) =>
             // Main runs a head node (Bootstrap builds the config via NodeConfig.mkHeadConfig),
             // so the peer index is this node's head peer number.
-            val mrmTracer =
-                Slf4jTracer.sink.contramap(
-                  MultisigRegimeManagerEventFormat.humanFormat(
-                    HeadPeerNumber(nodeConfig.ownPeerIndex)
-                  )
+            mrmTracer = Slf4jTracer.sink.contramap(
+              HeadMultisigRegimeManagerEventFormat.humanFormat(
+                HeadPeerNumber(nodeConfig.ownPeerIndex)
+              )
+            )
+            bindHost = Host
+                .fromString(env.hydrozoaHost)
+                .getOrElse(
+                  throw new IllegalArgumentException(s"Invalid HYDROZOA_HOST: ${env.hydrozoaHost}")
                 )
+            bindPort = Port
+                .fromString(env.hydrozoaPort)
+                .getOrElse(
+                  throw new IllegalArgumentException(s"Invalid HYDROZOA_PORT: ${env.hydrozoaPort}")
+                )
+            mrm <- HeadMultisigRegimeManager.resource(
+              nodeConfig,
+              backend,
+              remoteL2Ledger,
+              persistence,
+              mrmTracer,
+              bindHost,
+              bindPort,
+            )
+        } yield (env, nodeConfig, system, mrm)
+
+        resource.use { case (env, nodeConfig, system, mrm) =>
             for {
-                mrm <- MultisigRegimeManager.apply(
-                  nodeConfig,
-                  backend,
-                  remoteL2Ledger,
-                  persistence,
-                  mrmTracer
-                )
-                _ <- system.actorOf(mrm, "MultisigRegimeManager")
-                _ <- logger.info("Hydrozoa node started successfully")
+                _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
+                _ <- log.info("Hydrozoa node started successfully")
 
                 // Start HTTP server once RequestSequencer is available
                 _ <- mrm.connectionsDeferred.get.flatMap { connections =>
@@ -255,13 +290,18 @@ object Main extends IOApp {
                       adminUsername = env.adminUsername,
                       adminPassword = env.adminPassword
                     )
-                    logger.info("Starting HTTP server...") *>
+                    val httpTracer = Slf4jTracer.sink
+                        .contramap(HydrozoaHttpEventFormat.humanFormat)
+                    log.info("Starting HTTP server...") *>
                         HydrozoaServer
                             .create(
-                              connections.requestSequencer,
+                              connections.requestSequencer.getOrElse(
+                                sys.error("RequestSequencer required on head peers")
+                              ),
                               connections.blockWeaver,
                               nodeConfig.headConfig,
-                              serverConfig
+                              serverConfig,
+                              httpTracer,
                             )
                             .use(_ => IO.never)
                             .start // Run in background
@@ -271,4 +311,5 @@ object Main extends IOApp {
                 _ <- system.waitForTermination
             } yield ExitCode.Success
         }
+    }
 }

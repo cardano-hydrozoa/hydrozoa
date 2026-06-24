@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus.ack
 
-import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.block.{BlockHeader, BlockNumber}
 import io.circe.*
 
 type SoftAckNumber = SoftAckNumber.SoftAckNumber
@@ -38,4 +38,9 @@ object SoftAckNumber {
     extension (self: SoftAckNumber)
         def increment: SoftAckNumber = SoftAckNumber(self + 1)
         def decrement: SoftAckNumber = SoftAckNumber(self - 1)
+
+        /** The block this soft-ack is for: there is exactly one soft-ack per block, so a soft-ack
+          * number and its block number coincide (see [[SoftAck]]).
+          */
+        def blockNum: BlockNumber = BlockNumber(self)
 }

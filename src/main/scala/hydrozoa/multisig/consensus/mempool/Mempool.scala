@@ -1,6 +1,5 @@
 package hydrozoa.multisig.consensus.mempool
 
-import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.event.RequestId
 import scala.annotation.tailrec
@@ -18,8 +17,6 @@ final case class Mempool(
     requests: Map[RequestId, UserRequestWithId] = Map.empty,
     arrivalOrder: Vector[RequestId] = Vector.empty
 ) {
-
-    private val logger = Logging.logger("Mempool")
 
     def isEmpty: Boolean = requests.isEmpty
 
@@ -117,11 +114,10 @@ final case class Mempool(
             .map(requestId => {
                 requests.getOrElse(
                   requestId, {
-                      val msg =
-                          s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
-                              " is missing from the mempool's `requests` map."
-                      logger.error(msg)
-                      throw RuntimeException(msg)
+                      throw RuntimeException(
+                        s"Panic: the mempool's `arrivalOrder` vector has a request ID (${requestId.asI64}) that" +
+                            " is missing from the mempool's `requests` map."
+                      )
                   }
                 )
             })

@@ -2,38 +2,46 @@ package hydrozoa.multisig.consensus.liaison
 
 import cats.effect.{IO, Ref}
 import cats.implicits.*
+import hydrozoa.lib.logging.Logging
 import hydrozoa.multisig.consensus.liaison.Server.Served
 
 /** The serve half of one liaison link (§5.5 of `design/coil-network.md`) [doc-ref]: answer the
-  * remote's `GetMsgBatch` pulls from our outbox lanes. When a pull finds nothing new, the request
-  * is stashed and re-answered the moment fresh content is appended ([[afterAppend]]) — so a quiet
-  * link doesn't spin.
+  * remote's `*.Get` pulls (the concrete request is `Mesh.Get` on the head mesh, `Population.Get` on
+  * a hub→coil link, `OwnHardAck.Get` on a coil→hub link) from our outbox lanes. When a pull finds
+  * nothing new, the request is stashed and re-answered the moment fresh content is appended
+  * ([[afterAppend]]) — so a quiet link doesn't spin.
   *
   * Composition, not inheritance: a liaison actor *has* a `Server` (and a [[Puller]]), it does not
   * *extend* them. The two halves are independent — for the asymmetric hub↔coil link they carry
   * entirely different lane sets — and share only the actor's send path.
   *
   * @tparam G
-  *   the pull-request type (a `GetMsgBatch` of next-expected cursors).
+  *   the pull-request type (a `*.Get` of next-expected cursors).
   * @tparam N
-  *   the reply type (a `NewMsgBatch` of payload slices).
+  *   the reply type (a `*.New` of payload slices).
+  * @param label
+  *   the concrete request name for diagnostics (e.g. `"Mesh.Get"`).
   * @param serve
   *   build a reply for a request from the current outbox lanes (echoing its batch number), or
-  *   report [[Served.Empty]] / [[Served.OutOfBounds]].
+  *   report [[Served.Empty]] / [[Served.OutOfBounds]] (the latter naming the offending lane).
   * @param send
   *   send a reply to the counterpart liaison.
   */
 final class Server[G, N](
+    label: String,
     serve: G => IO[Served[N]]
 )(send: N => IO[Unit]) {
 
     private val sendImmediately = Ref.unsafe[IO, Option[G]](None)
+    private val logger = Logging.loggerIO("PeerLiaison")
 
     /** Answer a pull, or stash it if there is nothing new yet. */
     def handleGet(get: G): IO[Unit] =
         serve(get).flatMap {
-            case Served.OutOfBounds =>
-                IO.raiseError(new IllegalStateException("GetMsgBatch cursor out of bounds"))
+            case Served.OutOfBounds(detail) =>
+                // Log before raising (style guide): the exception alone surfaces no logger context.
+                val message = s"$label cursor out of bounds — $detail"
+                logger.error(message) >> IO.raiseError(new IllegalStateException(message))
             case Served.Empty      => sendImmediately.set(Some(get))
             case Served.Reply(msg) => send(msg)
         }
@@ -49,8 +57,10 @@ object Server {
       * a [[Server]] consumes.
       */
     enum Served[+N]:
-        /** The remote's cursor is ahead of anything we could have produced — protocol desync. */
-        case OutOfBounds
+        /** The remote's cursor is ahead of anything we could have produced — protocol desync.
+          * `detail` names the offending lane and its asked/bound indices.
+          */
+        case OutOfBounds(detail: String)
 
         /** No lane has anything new for this cursor; stash the request and answer when content
           * arrives (see [[Server.afterAppend]]).

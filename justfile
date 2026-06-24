@@ -91,6 +91,14 @@ integration-yaci:
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 
+# Like precommit, but cleans first — matches CI's fresh-target behaviour so
+# stale SemanticDB can't hide unused-import / lint failures.
+ci-check:
+  #!/usr/bin/env bash
+  trap 'just notify "ci-check"' EXIT
+  CI=true sbt "clean; fmtCheckAll; lintCheckAll"
+  just nixfmt-check
+
 prepush: precommit test integration-fast build-werror
   just notify "prepush"
 

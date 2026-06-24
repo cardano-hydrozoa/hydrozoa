@@ -9,7 +9,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.MultisigRegimeManager
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
@@ -56,7 +56,7 @@ object FastConsensusActor:
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,
         cardanoLiaison: CardanoLiaison.Handle,
-        requestSequencer: RequestSequencer.Handle,
+        requestSequencer: Option[RequestSequencer.Handle],
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
         jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
@@ -111,7 +111,7 @@ object FastConsensusActor:
 
     def apply(
         config: Config,
-        pendingConnections: MultisigRegimeManager.PendingConnections |
+        pendingConnections: HeadMultisigRegimeManager.PendingConnections |
             FastConsensusActor.Connections,
         tracer: ContraTracer[IO, FastConsensusActorEvent],
         persistence: Persistence[IO]
@@ -151,7 +151,8 @@ end FastConsensusActor
 
 class FastConsensusActor(
     config: FastConsensusActor.Config,
-    pendingConnections: MultisigRegimeManager.PendingConnections | FastConsensusActor.Connections,
+    pendingConnections: HeadMultisigRegimeManager.PendingConnections |
+        FastConsensusActor.Connections,
     stateRef: Ref[IO, FastConsensusActor.State],
     tracer: ContraTracer[IO, FastConsensusActorEvent],
     persistence: Persistence[IO]
@@ -175,7 +176,7 @@ class FastConsensusActor(
         )
 
     private def initializeConnections: IO[Unit] = pendingConnections match {
-        case x: MultisigRegimeManager.PendingConnections =>
+        case x: HeadMultisigRegimeManager.PendingConnections =>
             for {
                 _connections <- x.get
                 _ <- connections.set(

@@ -107,6 +107,21 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ProxyRequestError
     ): EitherT[F, L2LedgerError, Unit]
 
+    /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per
+      * successful state-mutating command (the "real" commands), so the consumer (JointLedger) can
+      * read it right after a commit and record which commandNumber that block corresponds to.
+      * Genesis is [[L2CommandNumber.zero]].
+      */
+    def currentCommandNumber: F[L2CommandNumber]
+
+    /** Reconstruct the committed L2 state as of `commandNumber`, from the ledger's own durable
+      * record (`(initial state, commandNumber)`; see `design/recovery-implementation-plan.md` R2b).
+      * After this the ledger's [[currentCommandNumber]] equals `commandNumber`. Used only on
+      * crash-recovery boot. Implementations that do not persist (e.g. a remote black box that owns
+      * its own recovery) may leave this unsupported.
+      */
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, L2LedgerError, Unit]
+
     /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
       * state, and run effects in the base monad [[F]].
       */

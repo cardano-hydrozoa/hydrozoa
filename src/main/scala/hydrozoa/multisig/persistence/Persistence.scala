@@ -2,7 +2,8 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.logging.Logging
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.persistence.PersistenceEvent.*
 import java.nio.ByteBuffer
 
 /** The **typed, actor-facing** persistence API.
@@ -21,9 +22,8 @@ import java.nio.ByteBuffer
   * (e.g. those involving `QuantizedInstant` or `Payout.Obligation`) pick it up implicitly so the
   * `Persistence` API itself stays config-free at the call site.
   *
-  * **Logging.** Every op (get / put / delete / write) is traced at INFO with explicit
-  * `routingKey = "Persistence"`, so log lines route to the `"Persistence"` logger in `logback.xml`
-  * regardless of the ambient actor's [[Slf4jTracer.routeLocal]].
+  * **Tracing.** Every op (get / put / delete / write) is emitted as a [[PersistenceEvent]] through
+  * the supplied [[ContraTracer]]. The default human format routes under `"Persistence"`.
   *
   * See `design/persistence-and-crash-recovery.md` §7.
   */
@@ -43,9 +43,22 @@ trait Persistence[F[_]]:
     def write(batch: WriteBatch): F[Unit]
 
     /** A fresh [[ArrivalStamp]] for an entry admitted *now*: `(this process's generation, current
-      * monotonic)`. Used to stamp lane values (§5.4) — own entries at creation, inbound at receipt.
+      * monotonic)`. Used to stamp journal values (§5.4) — own entries at creation, inbound at
+      * receipt.
       */
     def arrivalStamp: F[ArrivalStamp]
+
+    /** Like [[get]] but **fails** (`raiseError`) when the key is absent — for reads that must be
+      * present. Recovery uses it for entries that, in a non-empty store, are store corruption when
+      * missing (fail-safe, §5 / §7).
+      */
+    def getOrFail(key: StoreKey): F[key.Value]
+
+    /** The underlying byte-level [[BackendStore]] this instance wraps — an escape hatch for
+      * **byte-level / boot-time** work the typed API can't express (recovery range-scans via
+      * `cursor`, marker derivation; §5). Steady-state actor code never needs it.
+      */
+    def backend: BackendStore[F]
 
 object Persistence:
     /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
@@ -71,30 +84,37 @@ object Persistence:
       * invocation (`encodeValue` / `decodeValue` / `WriteBatch.toRaw`).
       */
     def fromBackend(
-        backend: BackendStore[IO]
+        store: BackendStore[IO],
+        tracer: ContraTracer[IO, PersistenceEvent]
     )(using CardanoNetwork.Section): IO[Persistence[IO]] =
-        val logger = Logging.loggerIO("Persistence")
-        for generation <- bumpGeneration(backend)
+        for generation <- bumpGeneration(store)
         yield new Persistence[IO]:
+            val backend: BackendStore[IO] = store
+
             def arrivalStamp: IO[ArrivalStamp] =
                 IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
 
             def get(key: StoreKey): IO[Option[key.Value]] =
                 backend
                     .get(key.cf, key.encode)
-                    .flatTap(bytesOpt =>
-                        logger.info(
-                          s"get $key -> ${if bytesOpt.isDefined then "hit" else "miss"}"
-                        )
-                    )
+                    .flatTap(bytesOpt => tracer.traceWith(Get(key, bytesOpt.isDefined)))
                     .map(_.map(key.decodeValue))
+
+            def getOrFail(key: StoreKey): IO[key.Value] =
+                get(key).flatMap {
+                    case Some(value) => IO.pure(value)
+                    case None =>
+                        IO.raiseError(
+                          new IllegalStateException(s"Persistence.getOrFail: no value at $key")
+                        )
+                }
 
             def put(key: StoreKey)(value: key.Value): IO[Unit] =
                 backend.put(key.cf, key.encode, key.encodeValue(value)) *>
-                    logger.info(s"put $key")
+                    tracer.traceWith(Put(key))
 
             def delete(key: StoreKey): IO[Unit] =
-                backend.delete(key.cf, key.encode) *> logger.info(s"delete $key")
+                backend.delete(key.cf, key.encode) *> tracer.traceWith(Delete(key))
 
             def write(batch: WriteBatch): IO[Unit] =
-                backend.write(batch.toRaw) *> logger.info(s"write batch (${batch.size} ops)")
+                backend.write(batch.toRaw) *> tracer.traceWith(Write(batch.size))
