@@ -150,7 +150,7 @@ object Janitor:
                     .fold(err => throw RuntimeException(err.toString), identity)
 
                 balanced = unbalanced
-                    .addExpectedSigners(config.headMultisigScript.requiredSigners)
+                    .addExpectedSigners(config.headMultisigScript.numSigners)
                     .balanceContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         _,

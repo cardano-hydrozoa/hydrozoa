@@ -103,7 +103,7 @@ private object DeinitTxOps {
                 // Head tokens are burned under the multisig native script; declare its signers as
                 // expected so the witness set is sized into the fee.
                 finalized <- context
-                    .addExpectedSigners(config.headMultisigScript.requiredSigners)
+                    .addExpectedSigners(config.headMultisigScript.numSigners)
                     .finalizeContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         0
