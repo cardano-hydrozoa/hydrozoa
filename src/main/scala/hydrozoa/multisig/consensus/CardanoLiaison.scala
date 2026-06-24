@@ -587,13 +587,13 @@ trait CardanoLiaison(
 
                                 // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
                                 //   more systematically
-                                lastFallback: Option[Transaction] = for {
+                                lastFallback: Option[FallbackTx] = for {
                                     maxKey <- state.fallbackEffects.keySet.maxOption
                                     fallbackTx = state.fallbackEffects(maxKey)
                                     if utxoIds.contains(
                                       fallbackTx.treasurySpent.utxoId
                                     ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
-                                } yield fallbackTx.tx
+                                } yield fallbackTx
 
                                 ret <- lastFallback match {
                                     case Some(fallback) =>
@@ -604,7 +604,7 @@ trait CardanoLiaison(
                                             then
                                                 Seq(
                                                   Action.InitializeHead(
-                                                    state.happyPathEffects.values.map(_.tx).toSeq
+                                                    state.happyPathEffects.values.toSeq
                                                   )
                                                 )
                                             else {
@@ -684,13 +684,13 @@ trait CardanoLiaison(
 
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
-                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
+                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
                                 for {
                                     _ <- tracer.traceWith(
-                                      CardanoLiaisonEvent.TxSubmitting(tx.id.toString)
+                                      CardanoLiaisonEvent.TxSubmitting(etx.tx.id.toString)
                                     )
-                                    ret <- cardanoBackend.submitTx(tx)
-                                } yield tx -> ret
+                                    ret <- cardanoBackend.submitTx(etx.tx)
+                                } yield (etx, ret)
                             )
                         else IO.pure(List.empty)
 
@@ -715,13 +715,13 @@ trait CardanoLiaison(
     object Action {
 
         /** Switching into the rule-based regime. */
-        final case class FallbackToRuleBased(tx: Transaction) extends DirectAction
+        final case class FallbackToRuleBased(tx: EnrichedTx[?]) extends DirectAction
 
         /** Pushing the existing state in the multisig regime forward. */
-        final case class PushForwardMultisig(txs: Seq[Transaction]) extends DirectAction
+        final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction
 
         /** Finalizing a rollout sequence. */
-        final case class Rollout(txs: Seq[Transaction]) extends DirectAction
+        final case class Rollout(txs: Seq[EnrichedTx[?]]) extends DirectAction
 
         /** Represents noop action that may occur when the current time falls into the silence
           * period - a gap between two competing transactions when the settlement/finalization tx
@@ -734,10 +734,10 @@ trait CardanoLiaison(
         ) extends DirectAction {}
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
-        final case class InitializeHead(txs: Seq[Transaction]) extends Action
+        final case class InitializeHead(txs: Seq[EnrichedTx[?]]) extends Action
     }
 
-    private def actionTxs(action: Action): Seq[Transaction] = action match {
+    private def actionTxs(action: Action): Seq[EnrichedTx[?]] = action match {
         case Action.FallbackToRuleBased(tx)    => Seq(tx)
         case Action.PushForwardMultisig(txs)   => txs
         case Action.Rollout(txs)               => txs
@@ -750,11 +750,11 @@ trait CardanoLiaison(
         private def msg: String =
             import Action.*
             action match {
-                case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.id})"
-                case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.id)}"
-                case Rollout(txs)                    => s"Rollout (${txs.map(_.id)}"
+                case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
+                case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)}"
+                case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)}"
                 case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
-                case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.id)}"
+                case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
             }
 
     private def mkDirectActions(
@@ -839,7 +839,7 @@ trait CardanoLiaison(
                                             .toSeq
                                             .map(_._2)
                                     // println(s"effectTxs.size=${effectTxs.size}")
-                                    Right(PushForwardMultisig(effectTxs.map(_.tx)))
+                                    Right(PushForwardMultisig(effectTxs))
                                 // (2)
                                 case _
                                     if currentTime >= happyPathTxTtl && currentTime < fallbackValidityStart =>
@@ -854,7 +854,7 @@ trait CardanoLiaison(
                                 case _ if currentTime >= fallbackValidityStart =>
                                     Right(
                                       FallbackToRuleBased(
-                                        mbCompetingFallbackEffect.get.tx
+                                        mbCompetingFallbackEffect.get
                                       )
                                     )
                                 // Should never happen, indicates an error in validity range calculation
@@ -882,7 +882,7 @@ trait CardanoLiaison(
                 val nextBackboneTx = versionMajor.increment -> 0
                 val effectTxs =
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
-                Right(Rollout(effectTxs.map(_.tx)))
+                Right(Rollout(effectTxs))
         }
     }
 
