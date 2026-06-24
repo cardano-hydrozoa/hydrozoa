@@ -26,6 +26,11 @@ object SlowConsensusActorEventFormat:
                   s"ignoring echo of own hard-ack for stack $sn",
                   "stackNum" -> s"${sn: Int}"
                 )
+            case SurplusHardAckIgnored(sn, peer) =>
+                debug(
+                  s"ignoring surplus hard-ack from $peer for stack $sn",
+                  "stackNum" -> s"${sn: Int}"
+                )
             case StackHardConfirmed(stack) =>
                 val sn = stack.brief.stackNum
                 info(s"stack $sn HARD-CONFIRMED", "stackNum" -> s"${sn: Int}")

@@ -41,6 +41,12 @@ object CardanoLiaisonEventFormat:
                 trace(s"target $targetId found, do nothing")
             case TargetUtxoStatus(targetId, false) =>
                 trace(s"no target $targetId found, submitting init action")
+            case InitWindowElapsed(currentTime, endTime) =>
+                warn(
+                  s"init tx validity window elapsed (currentTime=$currentTime >=" +
+                      s" initializationTxEndTime=$endTime); head can no longer be initialized on the" +
+                      " happy path — regenerate head-config or widen the init window"
+                )
             case FinalizationTxStatus(hash, isKnown) =>
                 trace(s"finalizationTx: hash=$hash known=$isKnown")
             case FinalizationTxQueryError(err) =>
