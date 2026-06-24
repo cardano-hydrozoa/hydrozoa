@@ -4,6 +4,7 @@ import cats.effect.{Deferred, Fiber, IO, Ref}
 import cats.syntax.all.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
+import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
@@ -14,6 +15,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.stack.Stack
 import hydrozoa.multisig.persistence.BackendStore
 import org.scalacheck.commands.SutCommand
+import scalus.cardano.ledger.TransactionHash
 
 // ===================================
 // Stage 4 SUT
@@ -63,6 +65,23 @@ case class Stage4Sut(
       * the SCA capture sink reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
+    /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
+      * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
+      */
+    effectsLanded: Ref[IO, Set[TransactionHash]],
+    /** Fires when the same condition `EffectsLanded.propEffectsLanded` checks is satisfied —
+      * i.e. every backbone expectation completed via happy path or competing fallback. Anchored
+      * on `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
+      * [[slowCoverageSignal]] which fires on consensus reach. The gap between the two is the
+      * `StackComposer` rate-limit delay; observing both lets us distinguish "stalled at
+      * consensus" from "stalled before enactment".
+      */
+    effectsLandedSignal: Deferred[IO, Unit],
+    /** Set by [[beforeFinalize]] (after slow drain) with the backbone expectations derived from
+      * the canonical hard-confirmed stacks. The TxSubmitting sink reads via `tryGet` and only
+      * fires [[effectsLandedSignal]] once this is populated.
+      */
+    effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
     log: ContraTracer[IO, Slf4jMsg],
 )
 

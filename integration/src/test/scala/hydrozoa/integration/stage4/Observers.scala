@@ -2,14 +2,16 @@ package hydrozoa.integration.stage4
 
 import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
+import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManagerEvent
-import hydrozoa.multisig.consensus.SlowConsensusActorEvent
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, SlowConsensusActorEvent}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 import hydrozoa.multisig.ledger.stack.Stack
+import scalus.cardano.ledger.TransactionHash
 
 /** Test-side [[ContraTracer]] observers that ride alongside an HMRM's slf4j sink (combined via the
   * `ContraTracer` monoid) so stage4 can populate per-peer Refs and fire shared cross-peer
@@ -71,6 +73,40 @@ private[stage4] object Observers {
             case HeadMultisigRegimeManagerEvent
                     .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 stacksRef.update(_ :+ stack)
+            case _ => IO.unit
+        }
+
+    /** Capture `CardanoLiaisonEvent.TxSubmitting` from any peer: append the tx hash to the
+      * shared cross-peer landed set, then (once [[effectsLandedTarget]] is populated by
+      * `beforeFinalize` with the backbone's [[BlockExpectation]]s) fire [[effectsLandedSignal]]
+      * the moment the same condition `propEffectsLanded` would accept is met.
+      *
+      * Wired on every head peer; the `Set` collapses identical hashes submitted in parallel.
+      * Coil peers don't submit L1 transactions, so they don't contribute here.
+      */
+    def captureTxSubmitting(
+        landedRef: Ref[IO, Set[TransactionHash]],
+        effectsLandedSignal: Deferred[IO, Unit],
+        effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+            case HeadMultisigRegimeManagerEvent
+                    .CardanoLiaison(CardanoLiaisonEvent.TxSubmitting(txId)) =>
+                for {
+                    _           <- landedRef.update(_ + txId)
+                    maybeTarget <- effectsLandedTarget.tryGet
+                    _ <- maybeTarget match {
+                        case None => IO.unit
+                        case Some(exps) =>
+                            for {
+                                landed <- landedRef.get
+                                _ <-
+                                    if EffectsLanded.isComplete(landed, exps) then
+                                        effectsLandedSignal.complete(()).void
+                                    else IO.unit
+                            } yield ()
+                    }
+                } yield ()
             case _ => IO.unit
         }
 

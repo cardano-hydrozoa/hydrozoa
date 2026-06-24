@@ -186,6 +186,35 @@ object EffectsLanded {
             } yield BlockResult(e, outcome, happyKnown, happyTotal, fallbackKnown)
         }
 
+    /** Pure-set version of [[evaluateOnce]] — same outcome assignment, but `landed` is a
+      * caller-supplied set of `TransactionHash`es instead of a backend round-trip. Used by the
+      * stage4 signal observer to decide "have all the effects we care about landed yet?" without
+      * polling the backend.
+      */
+    private def evaluateAgainst(
+        landed: Set[TransactionHash],
+        exps: List[BlockExpectation],
+    ): List[BlockResult] =
+        exps.map { e =>
+            val happyKnown = e.happyTxs.count(landed.contains)
+            val happyTotal = e.happyTxs.size
+            val fallbackKnown: Option[Boolean] = e.fallback.map(landed.contains)
+            val outcome =
+                if happyKnown == happyTotal then BlockOutcome.Happy
+                else if fallbackKnown.contains(true) then BlockOutcome.Fallback
+                else BlockOutcome.Pending
+            BlockResult(e, outcome, happyKnown, happyTotal, fallbackKnown)
+        }
+
+    /** Predicate mirroring [[propEffectsLanded]]'s acceptance condition: every *relevant*
+      * expectation (up to and including the first fallback) has either fully landed via happy
+      * path or via competing fallback. Drives the stage4 `effectsLandedSignal` so the harness
+      * unblocks the moment the same condition the property checks is satisfied.
+      */
+    def isComplete(landed: Set[TransactionHash], exps: List[BlockExpectation]): Boolean =
+        relevantPrefix(evaluateAgainst(landed, exps))
+            .forall(_.outcome != BlockOutcome.Pending)
+
     /** The block expectations that still matter for pass/fail: everything up to and including the
       * first observed fallback. A fallback is terminal (the head exits to the rule-based regime),
       * so blocks after it are irrelevant. With no fallback, all results are relevant.

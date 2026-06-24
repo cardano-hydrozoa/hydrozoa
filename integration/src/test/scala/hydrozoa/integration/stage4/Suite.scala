@@ -14,6 +14,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -41,7 +42,7 @@ import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
+import scalus.cardano.ledger.{CertState, TransactionHash, TransactionInput, Utxos}
 import test.{SeedPhrase, TestPeers, given}
 
 // ===================================
@@ -73,6 +74,9 @@ private case class PostSystemState(
     slowCoverageSignal: Deferred[IO, Unit],
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
     slowCoverageTarget: Deferred[IO, Set[Int]],
+    effectsLanded: Ref[IO, Set[TransactionHash]],
+    effectsLandedSignal: Deferred[IO, Unit],
+    effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
 )
 
 /** Selects the persistence backend for stage4 peers.
@@ -259,11 +263,14 @@ case class Stage4Suite(
                         Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(coilNum -> _)
                     }
                     .map(_.toMap)
-                submittedRequestIds   <- Ref[IO].of(Vector.empty[RequestId])
+                submittedRequestIds  <- Ref[IO].of(Vector.empty[RequestId])
                 fastSettlementSignal <- IO.deferred[Unit]
                 slowCoverageSignal   <- IO.deferred[Unit]
                 fastSettlementTarget <- IO.deferred[Set[RequestId]]
                 slowCoverageTarget   <- IO.deferred[Set[Int]]
+                effectsLanded        <- Ref[IO].of(Set.empty[TransactionHash])
+                effectsLandedSignal  <- IO.deferred[Unit]
+                effectsLandedTarget  <- IO.deferred[List[BlockExpectation]]
             } yield PostSystemState(
               cardanoBackend = cardanoBackend,
               pendingConnsMap = pendingConnsMap,
@@ -275,6 +282,9 @@ case class Stage4Suite(
               slowCoverageSignal = slowCoverageSignal,
               fastSettlementTarget = fastSettlementTarget,
               slowCoverageTarget = slowCoverageTarget,
+              effectsLanded = effectsLanded,
+              effectsLandedSignal = effectsLandedSignal,
+              effectsLandedTarget = effectsLandedTarget,
             )
         }
 
@@ -301,11 +311,15 @@ case class Stage4Suite(
             slowCoverageSignal: Deferred[IO, Unit],
             fastSettlementTarget: Deferred[IO, Set[RequestId]],
             slowCoverageTarget: Deferred[IO, Set[Int]],
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
         ): Resource[IO, PeerMrm] = {
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
 
-            // HMRM-level tracer = slf4j sink + per-peer capture observers (SCA stacks + JL briefs).
-            // Single source of truth feeds both the logger and the test's assertion refs.
+            // HMRM-level tracer = slf4j sink + per-peer capture observers (SCA stacks + JL briefs +
+            // CL TxSubmitting). Single source of truth feeds both the logger and the test's
+            // assertion refs.
             val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
@@ -323,6 +337,11 @@ case class Stage4Suite(
                       blockBriefsMap,
                       fastSettlementSignal,
                       fastSettlementTarget,
+                    ) |+|
+                    Observers.captureTxSubmitting(
+                      effectsLanded,
+                      effectsLandedSignal,
+                      effectsLandedTarget,
                     )
 
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
@@ -369,6 +388,9 @@ case class Stage4Suite(
             slowCoverageSignal: Deferred[IO, Unit],
             fastSettlementTarget: Deferred[IO, Set[RequestId]],
             slowCoverageTarget: Deferred[IO, Set[Int]],
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
         ): IO[Stage4Sut] =
             for {
                 peerConnections <- peerMrms.toList
@@ -429,6 +451,9 @@ case class Stage4Suite(
               slowCoverageSignal = slowCoverageSignal,
               fastSettlementTarget = fastSettlementTarget,
               slowCoverageTarget = slowCoverageTarget,
+              effectsLanded = effectsLanded,
+              effectsLandedSignal = effectsLandedSignal,
+              effectsLandedTarget = effectsLandedTarget,
               log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
 
@@ -699,6 +724,9 @@ case class Stage4Suite(
                       pss.slowCoverageSignal,
                       pss.fastSettlementTarget,
                       pss.slowCoverageTarget,
+                      pss.effectsLanded,
+                      pss.effectsLandedSignal,
+                      pss.effectsLandedTarget,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
@@ -750,6 +778,9 @@ case class Stage4Suite(
                 pss.slowCoverageSignal,
                 pss.fastSettlementTarget,
                 pss.slowCoverageTarget,
+                pss.effectsLanded,
+                pss.effectsLandedSignal,
+                pss.effectsLandedTarget,
               )
             )(sut =>
                 sut.liaisonTickFibers.traverse_(_.cancel) >>
@@ -808,6 +839,25 @@ case class Stage4Suite(
                                   }
             _ <- IO.whenA(allCovered)(sut.slowCoverageSignal.complete(()).void)
             _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
+            // Arm the effects-landed drain: now that the slow cycle has reached agreement on
+            // every block, derive the backbone expectations from the canonical peer's stacks and
+            // wait for the TxSubmitting sink to observe enough hashes to satisfy them. Gap
+            // between slow signal and this one = the StackComposer rate-limit delay.
+            canonicalStacksForTarget <- sut.stacks.toList
+                                            .traverse { case (p, ref) => ref.get.map(p -> _) }
+                                            .map { byPeer =>
+                                                val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
+                                                sorted.headOption.map(_._2).getOrElse(Vector.empty)
+                                            }
+            expectations = EffectsLanded.expectations(canonicalStacksForTarget)
+            _ <- sut.effectsLandedTarget.complete(expectations)
+            // One-time check: if every relevant expectation is already satisfied by the hashes
+            // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
+            landedNow <- sut.effectsLanded.get
+            _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
+                     sut.effectsLandedSignal.complete(()).void
+                 )
+            _ <- IO.whenA(expectations.nonEmpty)(sut.effectsLandedSignal.get)
             errors <- sut.sutErrors.get
             analysisProp <- analyzeBlockBriefs(lastState, sut)
             sortedPeers = sut.stacks.keys.toSeq.sortBy(p => p: Int)
@@ -1406,7 +1456,18 @@ object Stage4Suite:
               // currently produce mismatched block briefs at major-block consensus.
               generateNodeOperationMultisigConfig = hc =>
                   hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
-                    hc.maxCardanoLiaisonPollingPeriod / 2
+                    maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                    // Keep `softBlockMinPeriod` at the production default so block-production
+                    // cadence (and the model-command-batching that depends on it) is unchanged.
+                    // Only narrow `hardStackMinPeriod`: the 3-minute production value is what
+                    // starves CardanoLiaison of PushResults inside the WS test wall-clock budget
+                    // (see docs/rate-limiter.md). 2s preserves the throttle's batching intent
+                    // across blocks while fitting the WS budget.
+                    rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
+                      softBlockMinPeriod =
+                          hydrozoa.config.node.operation.multisig.RateLimits.default.softBlockMinPeriod,
+                      hardStackMinPeriod = 2.seconds
+                    )
                   )
             )
 

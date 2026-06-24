@@ -687,7 +687,7 @@ trait CardanoLiaison(
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
                                 for {
                                     _ <- tracer.traceWith(
-                                      CardanoLiaisonEvent.TxSubmitting(etx.tx.id.toString)
+                                      CardanoLiaisonEvent.TxSubmitting(etx.tx.id)
                                     )
                                     ret <- cardanoBackend.submitTx(etx.tx)
                                 } yield (etx, ret)

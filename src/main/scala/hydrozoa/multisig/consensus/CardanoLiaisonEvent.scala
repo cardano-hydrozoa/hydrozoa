@@ -1,6 +1,7 @@
 package hydrozoa.multisig.consensus
 
 import hydrozoa.multisig.ledger.stack.StackNumber
+import scalus.cardano.ledger.TransactionHash
 
 /** Typed events emitted by [[CardanoLiaison]]. Pure data; formatters in
   * [[CardanoLiaisonEventFormat]] decide how each variant is rendered to a particular sink.
@@ -58,6 +59,6 @@ object CardanoLiaisonEvent:
     final case class ActionsDispatched(msgs: List[String], hasFallback: Boolean)
         extends CardanoLiaisonEvent
 
-    final case class TxSubmitting(txId: String) extends CardanoLiaisonEvent
+    final case class TxSubmitting(txId: TransactionHash) extends CardanoLiaisonEvent
 
     final case class SubmissionErrors(count: Int) extends CardanoLiaisonEvent

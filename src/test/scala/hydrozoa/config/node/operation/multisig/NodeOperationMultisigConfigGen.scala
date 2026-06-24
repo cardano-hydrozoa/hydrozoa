@@ -12,7 +12,8 @@ import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
   * invariant, so callers should pass `headConfig.maxCardanoLiaisonPollingPeriod`.
   */
 def generateNodeOperationMultisigConfig(
-    maxPollingPeriod: FiniteDuration = 60.seconds
+    maxPollingPeriod: FiniteDuration = 60.seconds,
+    rateLimits: RateLimits = RateLimits.default
 ): Gen[NodeOperationMultisigConfig] =
     for {
         maxRequestsPerBatch <- Gen.choose(1, 100)
@@ -21,5 +22,5 @@ def generateNodeOperationMultisigConfig(
       cardanoLiaisonPollingPeriod = millis.millis,
       peerLiaisonMaxRequestsPerBatch = PositiveInt(maxRequestsPerBatch).get,
       peerLiaisonResendInterval = 5.seconds,
-      rateLimits = RateLimits.default
+      rateLimits = rateLimits
     )
