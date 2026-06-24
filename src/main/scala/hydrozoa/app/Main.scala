@@ -136,20 +136,6 @@ object Main
                 HeadPeerNumber(nodeConfig.ownPeerIndex)
               )
             )
-            bindHost = Host
-                .fromString(nodeConfig.hydrozoaHost)
-                .getOrElse(
-                  throw new IllegalArgumentException(
-                    s"Invalid hydrozoaHost in node config: ${nodeConfig.hydrozoaHost}"
-                  )
-                )
-            bindPort = Port
-                .fromString(nodeConfig.hydrozoaPort)
-                .getOrElse(
-                  throw new IllegalArgumentException(
-                    s"Invalid hydrozoaPort in node config: ${nodeConfig.hydrozoaPort}"
-                  )
-                )
             wsClient <- Resource.eval(JdkWSClient.simple[IO])
 
             nodeRun <- nodeConfig.ownPeerId match {
@@ -160,8 +146,6 @@ object Main
                       remoteL2Ledger,
                       persistence,
                       mrmTracer,
-                      bindHost,
-                      bindPort,
                       wsClient,
                       ownHeadNum,
                     )
@@ -197,13 +181,36 @@ object Main
         remoteL2Ledger: RemoteL2Ledger,
         persistence: Persistence[IO],
         mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
-        bindHost: Host,
-        bindPort: Port,
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownHeadNum: HeadPeerNumber,
     ): Resource[IO, NodeRun.HeadNode] = {
         given CardanoNetwork.Section = nodeConfig
         val ownHeadPeerId = nodeConfig.headPeerIds.find(_.peerNum == ownHeadNum).get
+        // The inter-peer transport server binds where the shared head config advertises this peer,
+        // so bind address == the address other peers dial (single source of truth). The user-facing
+        // HTTP server uses the private httpHost/httpPort instead.
+        val ownWsAddress = nodeConfig.headConfig.headPeers.headPeerData
+            .lookup(ownHeadNum)
+            .map(_.webSocketAddress)
+            .getOrElse(
+              throw new IllegalStateException(
+                s"no webSocketAddress configured for own head peer $ownHeadNum"
+              )
+            )
+        val bindHost = ownWsAddress.host
+            .flatMap(h => Host.fromString(h.value))
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"own head peer $ownHeadNum webSocketAddress has no valid host: $ownWsAddress"
+              )
+            )
+        val bindPort = ownWsAddress.port
+            .flatMap(Port.fromInt)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"own head peer $ownHeadNum webSocketAddress has no valid port: $ownWsAddress"
+              )
+            )
         val remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
             .filterNot(_.peerNum == ownHeadNum)
             .toList

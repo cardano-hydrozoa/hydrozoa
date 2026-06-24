@@ -75,8 +75,6 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                   ownCoilWallet = w,
                   nodeOperationEvacuationConfig = hubPrivate.nodeOperationEvacuationConfig,
                   nodeOperationMultisigConfig = hubPrivate.nodeOperationMultisigConfig,
-                  hydrozoaHost = "localhost",
-                  hydrozoaPort = "4973",
                   blockfrostApiKey = "not-a-real-key",
                   sugarRushUri = "ws://localhost:3001/ws",
                   adminUsername = "admin",
