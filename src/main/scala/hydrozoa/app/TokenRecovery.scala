@@ -7,6 +7,7 @@ import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.head.network.StandardCardanoNetwork
+import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, error, info}
@@ -54,7 +55,7 @@ object TokenRecovery
     ): IO[ExitCode] = (for {
         _ <- log.info("Starting token recovery from peer wallet...")
 
-        loaded <- Bootstrap.loadNodeConfig(headConfigPath, privateConfigPath)
+        loaded <- NodeConfig.load(headConfigPath, privateConfigPath)
         (nodeConfig, backend) = loaded
 
         recoveryAddress <- IO

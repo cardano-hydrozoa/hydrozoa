@@ -17,6 +17,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
+import java.nio.file.{Files, Path}
 
 final case class NodeConfig private (
     override val headConfig: HeadConfig,
@@ -152,6 +153,30 @@ object NodeConfig {
           httpPort,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
+
+    /** Read both config files and decode the resulting [[NodeConfig]] together with the Blockfrost
+      * backend the decoder constructs. Shared by every CLI that needs to act as a configured peer
+      * ([[hydrozoa.app.Main]], [[hydrozoa.app.Migrate]], [[hydrozoa.app.TokenRecovery]]).
+      *
+      * @param backendOverride
+      *   if `Some`, used in place of the Blockfrost backend the decoder would otherwise build from
+      *   the private config's API key. Tests pass a mock; CLIs leave it `None`.
+      */
+    def load(
+        headConfigPath: Path,
+        privateConfigPath: Path,
+        backendOverride: Option[CardanoBackend[IO]] = None,
+    ): IO[(NodeConfig, CardanoBackend[IO])] =
+        for {
+            headStr <- IO.blocking(Files.readString(headConfigPath))
+            privateStr <- IO.blocking(Files.readString(privateConfigPath))
+            loaded <- NodeConfig
+                .fromJson(headStr, privateStr, backendOverride)
+                .foldF(
+                  err => IO.raiseError(new RuntimeException(s"Failed to load NodeConfig: $err")),
+                  IO.pure
+                )
+        } yield loaded
 
     trait Section extends NodePrivateConfig.Section, HeadConfig.Section {
         def nodeConfig: NodeConfig

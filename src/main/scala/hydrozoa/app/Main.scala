@@ -82,7 +82,7 @@ object Main
             _ <- log.info("Starting Hydrozoa node...")
             _ <- log.info(s"Loading head config from $headConfigPath")
             _ <- log.info(s"Loading peer private config from $privateConfigPath")
-            loaded <- Bootstrap.loadNodeConfig(
+            loaded <- NodeConfig.load(
               headConfigPath,
               privateConfigPath,
               backendOverride

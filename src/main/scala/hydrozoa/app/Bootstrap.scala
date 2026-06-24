@@ -75,30 +75,6 @@ object Bootstrap:
             (vKey, sKey)
         }
 
-    /** Read both config files and decode the resulting [[NodeConfig]] together with the Blockfrost
-      * backend the decoder constructs. Shared by every CLI that needs to act as a configured peer
-      * ([[Main]], [[Migrate]], [[TokenRecovery]]).
-      *
-      * @param backendOverride
-      *   if `Some`, used in place of the Blockfrost backend the decoder would otherwise build from
-      *   the private config's API key. Tests pass a mock; CLIs leave it `None`.
-      */
-    def loadNodeConfig(
-        headConfigPath: Path,
-        privateConfigPath: Path,
-        backendOverride: Option[CardanoBackend[IO]] = None,
-    ): IO[(NodeConfig, CardanoBackend[IO])] =
-        for {
-            headStr <- IO.blocking(Files.readString(headConfigPath))
-            privateStr <- IO.blocking(Files.readString(privateConfigPath))
-            loaded <- NodeConfig
-                .fromJson(headStr, privateStr, backendOverride)
-                .foldF(
-                  err => IO.raiseError(new RuntimeException(s"Failed to load NodeConfig: $err")),
-                  IO.pure
-                )
-        } yield loaded
-
     /** The static head+coil membership the build step turns into a shared [[HeadConfig]]: each head
       * peer's verification key + WebSocket address, each coil peer's verification key + hub head
       * peer, and the coil quorum. Authored once (from [[GenerateKeyPair]] output) and shared with
@@ -474,7 +450,7 @@ object Migrate
         for {
             _ <- log.info(s"Starting migration to $destinationBech32")
 
-            loaded <- Bootstrap.loadNodeConfig(headConfigPath, privateConfigPath)
+            loaded <- NodeConfig.load(headConfigPath, privateConfigPath)
             (nodeConfig, backend) = loaded
 
             destination <- IO
