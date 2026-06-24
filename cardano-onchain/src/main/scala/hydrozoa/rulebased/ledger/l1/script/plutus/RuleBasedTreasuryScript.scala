@@ -112,6 +112,8 @@ object RuleBasedTreasuryValidator extends Validator {
         "version in treasuryInput and treasuryOutput must match"
     private inline val EvacuateSetupG2ShouldBePreserved =
         "setupG2 in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateTreasuryWrongAddress =
+        "Treasury output must remain at the treasury script address"
 
     // Deinit redeemer
     private inline val DeinitRequiresResolvedTreasury =
@@ -281,6 +283,15 @@ object RuleBasedTreasuryValidator extends Validator {
                 //   - the tail be evacuatees
                 val List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
+
+                // The continuing treasury output must stay at the treasury script address. The
+                // checks below only constrain its beacon, datum and total value — not where it
+                // goes; without this an Evacuate could redirect the beacon and the entire treasury
+                // value to an arbitrary address (cf. the Resolve branch, which pins the address).
+                require(
+                  treasuryOutput.address === treasuryInput.address,
+                  EvacuateTreasuryWrongAddress
+                )
 
                 require(
                   treasuryOutput.value.toSortedMap
