@@ -712,6 +712,15 @@ trait CardanoLiaison(
     sealed trait Action
     sealed trait DirectAction extends Action
 
+    // TODO: narrow these element types beyond `EnrichedTx[?]` — the construction sites already
+    // carry concrete subtypes:
+    //   - FallbackToRuleBased.tx        => FallbackTx
+    //   - PushForwardMultisig.txs       => Seq[SettlementTx | FinalizationTx | RolloutTx]
+    //   - Rollout.txs                   => Seq[RolloutTx]
+    //   - InitializeHead.txs            => Seq[HappyPathEffect]
+    // Tightening these makes the `.tx` strip at the construction sites a compile error rather
+    // than a code-review catch (the "throwing away useful information too early" pattern that
+    // motivated this refactor). HappyPathEffect would need to be promoted out of the trait body.
     object Action {
 
         /** Switching into the rule-based regime. */
