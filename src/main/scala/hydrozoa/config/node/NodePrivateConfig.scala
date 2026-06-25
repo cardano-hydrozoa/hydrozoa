@@ -12,8 +12,6 @@ final case class NodePrivateConfig(
     override val ownPeerPrivate: OwnPeerPrivate,
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
-    override val hydrozoaHost: String,
-    override val hydrozoaPort: String,
     override val blockfrostApiKey: String,
     override val sugarRushUri: String,
     override val adminUsername: String,
@@ -38,10 +36,6 @@ object NodePrivateConfig {
 
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
             nodePrivateConfig.nodeOperationMultisigConfig
-
-        def hydrozoaHost: String = nodePrivateConfig.hydrozoaHost
-
-        def hydrozoaPort: String = nodePrivateConfig.hydrozoaPort
 
         def blockfrostApiKey: String = nodePrivateConfig.blockfrostApiKey
 

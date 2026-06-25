@@ -26,6 +26,10 @@ target/
 #scratches
 .scratch
 
+# Generated shared head config and per-node persistence (produced at runtime)
+/head-config.json
+/.hydrozoa-data/
+
 # Local scratch / notes (not for commit)
 .scratch/
 

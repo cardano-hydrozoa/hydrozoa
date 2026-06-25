@@ -41,6 +41,12 @@ object CardanoLiaisonEventFormat:
                 trace(s"target $targetId found, do nothing")
             case TargetUtxoStatus(targetId, false) =>
                 trace(s"no target $targetId found, submitting init action")
+            case InitWindowElapsed(currentTime, endTime) =>
+                warn(
+                  s"init tx validity window elapsed (currentTime=$currentTime >=" +
+                      s" initializationTxEndTime=$endTime); head can no longer be initialized on the" +
+                      " happy path — regenerate head-config or widen the init window"
+                )
             case FinalizationTxStatus(hash, isKnown) =>
                 trace(s"finalizationTx: hash=$hash known=$isKnown")
             case FinalizationTxQueryError(err) =>
@@ -48,6 +54,8 @@ object CardanoLiaisonEventFormat:
             case ActionsDispatched(msgs, hasFallback) =>
                 val text = "Liaison's actions:" + msgs.map(m => s"\n\t- $m").mkString
                 if hasFallback then warn(text) else info(text)
+            case FallbackToRuleBasedDispatched(txId) =>
+                warn(s"FallbackToRuleBased dispatched: $txId — head entering rule-based regime")
             case TxSubmitting(txId) =>
                 trace(s"Submitting tx hash: $txId")
             case SubmissionErrors(count) =>

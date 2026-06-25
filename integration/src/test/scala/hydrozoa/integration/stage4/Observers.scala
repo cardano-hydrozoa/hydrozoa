@@ -110,6 +110,24 @@ private[stage4] object Observers {
             case _ => IO.unit
         }
 
+    /** Capture `CardanoLiaisonEvent.FallbackToRuleBasedDispatched` from any peer: complete
+      * [[fallbackEnteredSignal]] with the fallback tx hash the first time any peer's CL
+      * successfully submits a `FallbackToRuleBased` action. Drives the `beforeFinalize` race
+      * that short-circuits scenarios drifting outside the modeled happy-path regime.
+      *
+      * Idempotent: subsequent fallback dispatches (other peers, retries) try-complete the same
+      * deferred and are no-ops.
+      */
+    def captureFallbackEntered(
+        fallbackEnteredSignal: Deferred[IO, TransactionHash],
+    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+            case HeadMultisigRegimeManagerEvent
+                    .CardanoLiaison(CardanoLiaisonEvent.FallbackToRuleBasedDispatched(txId)) =>
+                fallbackEnteredSignal.complete(txId).void
+            case _ => IO.unit
+        }
+
     /** Capture `JointLedgerEvent.BriefProduced` for the given peer: append to the per-peer
       * blockBriefs Ref, then (once [[fastSettlementTarget]] is populated) fire
       * [[fastSettlementSignal]] when every submitted RequestId has been observed in some brief.

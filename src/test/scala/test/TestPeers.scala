@@ -96,7 +96,10 @@ case class TestPeers private (
     // TODO: What do we want here?
     def webSocketAddressFor(peer: TestPeerName): Uri = {
         _require(peer)
-        Uri.unsafeFromString(s"ws://localhost/${peer.name}")
+        // Port 0 → the OS assigns a free ephemeral port when a head node binds its mesh server from
+        // this advertised address (the bind source after the merge). Tests that dial reconstruct
+        // URIs from the actually-bound port, so the placeholder port here is never dialed.
+        Uri.unsafeFromString(s"ws://localhost:0/${peer.name}")
     }
 
     def verificationKeyFor(peerNumber: HeadPeerNumber): VerificationKey =

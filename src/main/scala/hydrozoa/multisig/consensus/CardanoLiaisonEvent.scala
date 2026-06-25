@@ -49,6 +49,15 @@ object CardanoLiaisonEvent:
 
     final case class TargetUtxoStatus(targetId: String, found: Boolean) extends CardanoLiaisonEvent
 
+    /** The hard-confirmed init tx could not be submitted because its (config-baked) validity window
+      * has already elapsed (`currentTime >= initializationTxEndTime`): the head can no longer be
+      * initialized on the happy path. Usually means too much wall-clock passed between head-config
+      * generation (which anchors the window) and stack-0 hard-confirmation — e.g. a long
+      * restart/debug cycle.
+      */
+    final case class InitWindowElapsed(currentTime: String, endTime: String)
+        extends CardanoLiaisonEvent
+
     final case class FinalizationTxStatus(hash: String, isKnown: String) extends CardanoLiaisonEvent
 
     final case class FinalizationTxQueryError(err: String) extends CardanoLiaisonEvent
@@ -57,6 +66,14 @@ object CardanoLiaisonEvent:
       * silence-period noop (logged at warn level).
       */
     final case class ActionsDispatched(msgs: List[String], hasFallback: Boolean)
+        extends CardanoLiaisonEvent
+
+    /** A `FallbackToRuleBased` action has been selected for submission: the head is flipping into
+      * rule-based fallback. Distinct from `ActionsDispatched.hasFallback`, which also covers
+      * `SilencePeriodNoop`. Tests can observe this to short-circuit scenarios that drift outside
+      * the modeled happy-path regime.
+      */
+    final case class FallbackToRuleBasedDispatched(txId: TransactionHash)
         extends CardanoLiaisonEvent
 
     final case class TxSubmitting(txId: TransactionHash) extends CardanoLiaisonEvent

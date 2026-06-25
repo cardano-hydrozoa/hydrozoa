@@ -19,10 +19,10 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 
 /** End-to-end sanity check: generates a 1-peer sample config in memory, writes it to a temp dir
-  * (with `hydrozoaPort`/`httpPort` patched to "0" so the OS picks free ephemeral ports), and runs
-  * [[Main.runNode]] against the on-disk files. A mock
-  * [[hydrozoa.multisig.backend.cardano.CardanoBackend]] is pre-seeded with the head's script-ref
-  * UTxOs so config decoding doesn't try to hit Blockfrost.
+  * (the head peer's mesh `webSocketAddress` carries port 0 from the test fixture, and `httpPort` is
+  * patched to "0", so the OS picks free ephemeral ports), and runs [[Main.runNode]] against the
+  * on-disk files. A mock [[hydrozoa.multisig.backend.cardano.CardanoBackend]] is pre-seeded with
+  * the head's script-ref UTxOs so config decoding doesn't try to hit Blockfrost.
   *
   * The test passes when the HTTP server binds — [[HydrozoaHttpEvent.ServerStarted]] is the deepest
   * milestone we can reach without real network IO. It implies that all earlier startup steps
@@ -49,11 +49,12 @@ class MainSmokeTest extends AnyFunSuite:
             .generate(testPeersSpec(spec))()
             .pureApply(Gen.Parameters.default, org.scalacheck.rng.Seed(spec.generationSeed))
 
-        // Override both bind ports to "0" (OS-assigned ephemeral) so the test doesn't collide
-        // with whatever's holding the generator's default ports.
+        // Both the inter-peer mesh server (which binds where the head config advertises this peer —
+        // the test fixture uses port 0) and the HTTP admin server (httpPort) bind OS-ephemeral
+        // ports, so the test doesn't collide with whatever holds the generator's defaults.
         val peerPrivate = mnc
             .nodePrivateConfigs(HeadPeerNumber(0))
-            .copy(hydrozoaPort = "0", httpPort = "0")
+            .copy(httpPort = "0")
 
         val printer = Printer.spaces2.copy(dropNullValues = true)
 

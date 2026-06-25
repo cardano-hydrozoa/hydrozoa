@@ -26,11 +26,13 @@ case class Stage4PeerHandle(
     requestSequencer: RequestSequencer.Handle,
 )
 
-case class Stage4Sut(
+/** Immutable, set-once resources of a running stage4 SUT. Allocated during `sutResource`,
+  * referenced from anywhere thereafter — no field on this case class ever changes.
+  */
+case class Stage4SutStatic(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     peers: Map[HeadPeerNumber, Stage4PeerHandle],
-    sutErrors: Ref[IO, List[String]],
     errorDrainer: Fiber[IO, Throwable, Nothing],
     // Per-peer fibers that periodically poke each `CardanoLiaison` with
     // `CardanoLiaison.Timeout`. Replaces the broken `setReceiveTimeout`-based polling
@@ -40,6 +42,19 @@ case class Stage4Sut(
     // sends `Timeout` directly to the liaison's mailbox, which triggers a normal `runEffects`
     // (poll L1 + push `PollResults` to BlockWeaver).
     liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
+    /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
+      * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
+      */
+    backendStores: Map[HeadPeerNumber, BackendStore[IO]],
+    log: ContraTracer[IO, Slf4jMsg],
+)
+
+/** Mutable state of a running stage4 SUT. `Ref`s are updated by capture observers (and a few
+  * SUT command-side accumulators); `Deferred`s are completed exactly once during shutdown
+  * coordination in `beforeFinalize`.
+  */
+case class Stage4SutMutable(
+    sutErrors: Ref[IO, List[String]],
     blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     // Per-peer hard-confirmed stacks captured by the SCA ContraTracer sink (the slow cycle's
     // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
@@ -49,10 +64,6 @@ case class Stage4Sut(
     // (same mechanism as `stacks` on the head side). Empty for a pure-head run. Used to assert
     // the coil peer participates in the slow cycle.
     coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-    /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
-      * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
-      */
-    backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     fastSettlementSignal: Deferred[IO, Unit],
     slowCoverageSignal: Deferred[IO, Unit],
@@ -82,7 +93,15 @@ case class Stage4Sut(
       * fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
-    log: ContraTracer[IO, Slf4jMsg],
+    /** Fires on the first successful `FallbackToRuleBased` dispatch; `beforeFinalize` races it
+      * against the happy-path drain. See the package docstring for the contract.
+      */
+    fallbackEnteredSignal: Deferred[IO, TransactionHash],
+)
+
+case class Stage4Sut(
+    static: Stage4SutStatic,
+    mutable: Stage4SutMutable,
 )
 
 /** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
@@ -119,9 +138,9 @@ object Stage4SutCommands:
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
-                _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
+                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
@@ -131,10 +150,10 @@ object Stage4SutCommands:
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- sut.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
-                _ <- sut.submittedRequestIds.update(_ :+ cmd.request.requestId)
-                _ <- sut.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
+                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
+                _ <- sut.static.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
             } yield ValidityFlag.Valid
         }
     }

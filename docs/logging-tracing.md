@@ -192,7 +192,7 @@ for the `Slf4jMsg` extension methods (`log.info(...)` etc., which are declared
 
 ## Logger-like logging without a typed event ADT: `Slf4jMsg`
 
-App entry points (`hydrozoa.app.Main`, `Bootstrap`, `Janitor`, `Migrate`, `TokenRecovery`),
+App entry points (`hydrozoa.app.Main`, `Bootstrap`, `Migrate`),
 test scaffolding (suite/sut classes, `ModelBasedSuite`), and infrastructure callers that don't
 merit a typed event ADT hold a `ContraTracer[F, Slf4jMsg]` — a generic sum of
 `Trace/Debug/Info/Warn/Error` lines, paired with extension methods so callers write
