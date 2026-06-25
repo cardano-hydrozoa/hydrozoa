@@ -112,6 +112,10 @@ object RuleBasedTreasuryValidator extends Validator {
         "version in treasuryInput and treasuryOutput must match"
     private inline val EvacuateSetupG2ShouldBePreserved =
         "setupG2 in treasuryInput and treasuryOutput must match"
+    private inline val EvacuateTreasuryWrongAddress =
+        "Treasury output must remain at the treasury script address"
+    private inline val EvacuateMustMakeProgress =
+        "Evacuate must evacuate at least one utxo"
 
     // Deinit redeemer
     private inline val DeinitRequiresResolvedTreasury =
@@ -282,6 +286,15 @@ object RuleBasedTreasuryValidator extends Validator {
                 val List.Cons(_, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
 
+                // The continuing treasury output must stay at the treasury script address. The
+                // checks below only constrain its beacon, datum and total value — not where it
+                // goes; without this an Evacuate could redirect the beacon and the entire treasury
+                // value to an arbitrary address (cf. the Resolve branch, which pins the address).
+                require(
+                  treasuryOutput.address === treasuryInput.address,
+                  EvacuateTreasuryWrongAddress
+                )
+
                 require(
                   treasuryOutput.value.toSortedMap
                       .get(headMp)
@@ -292,6 +305,12 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 // Evacuatees
+                // An Evacuate must make progress (remove at least one utxo). A zero-evacuatee tx
+                // would be a permissionless no-op that just re-creates the treasury, enabling a
+                // UTxO-contention DoS against legitimate evacuations; forbidding it means the only
+                // way to spend the treasury is to actually pay out a committed evacuee.
+                require(!evacuationKeys.isEmpty, EvacuateMustMakeProgress)
+
                 // The number of evacuations should match the number of utxos ids in the redeemer
                 require(
                   evacuationOutputs.size == evacuationKeys.size,

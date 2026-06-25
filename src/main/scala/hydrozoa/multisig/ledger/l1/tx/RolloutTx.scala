@@ -168,7 +168,7 @@ private object RolloutTxOps {
             } yield
                 // The rollout is spent under the multisig native script; declare its signers as
                 // expected so the witness set is sized into the fee. Propagates to all derived contexts.
-                ctx.addExpectedSigners(config.headMultisigScript.requiredSigners)
+                ctx.addExpectedSigners(config.headMultisigScript.numSigners)
 
             /////////////////////////////////////////////////////////
             // Base steps

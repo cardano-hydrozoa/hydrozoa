@@ -21,25 +21,17 @@ case class HeadMultisigScript(private val script0: Script.Native) {
         )
     val policyId: PolicyId = script.scriptHash
 
-    /** Expected signers for fee / witness-set sizing: every head peer plus exactly `coilQuorum`
-      * coil placeholders (the leading coil leaves of the `MOf` branch). The actual coil signer
-      * subset is chosen at aggregation; only the COUNT (`nHeadPeers + coilQuorum`) feeds fee
-      * estimation, so any `coilQuorum` placeholders suffice here.
-      *
-      * NOTE: because this is a [[Set]], the traversal order WILL NOT be the same as
-      * [[headPeers.headPeerVKeys]].
+    /** Number of signatures the head multisig contributes to a witness set: every head peer plus
+      * `coilQuorum` coil signers. Only this COUNT matters for fee / witness-set sizing — the real
+      * coil signer subset is chosen at aggregation — so callers size the witness set with this
+      * count, not a concrete signer set.
       */
-    val requiredSigners: Set[AddrKeyHash] = {
+    val numSigners: Int = {
         val all = script.script.asInstanceOf[Timelock.AllOf].scripts
-        val headKeyHashes = all.collect { case s: Signature => s.keyHash }
-        val coilKeyHashes = all.collectFirst { case m: MOf => m }.toList.flatMap { m =>
-            m.scripts.collect { case s: Signature => s.keyHash }.take(m.m)
-        }
-        (headKeyHashes ++ coilKeyHashes).toSet
+        val nHeadSigners = all.collect { case s: Signature => s }.size
+        val coilQuorum = all.collectFirst { case m: MOf => m.m }.getOrElse(0)
+        nHeadSigners + coilQuorum
     }
-    val numSigners: Int = requiredSigners.toSeq.size
-
-    def checkSigners(signers: Set[AddrKeyHash]): Boolean = signers == requiredSigners
 
     // use when the multisig witness utxo id not available
     val witnessValue: NativeScriptWitness = NativeScriptWitness(
