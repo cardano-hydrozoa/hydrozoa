@@ -7,15 +7,15 @@ import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatumOnchain}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
-import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import scalus.*
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.onchain.plutus.prelude.*
 import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G2.scale
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G2
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G2.scale
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v2.TxOut
 import scalus.cardano.onchain.plutus.v3.{Validator, *}
@@ -283,7 +283,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 //   - The change utxo is position zero
                 //   - the treasury utxo in position one
                 //   - the tail be evacuatees
-                val List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)) =
+                val List.Cons(_, List.Cons(treasuryOutput, evacuationOutputs)) =
                     tx.outputs: @unchecked
 
                 // The continuing treasury output must stay at the treasury script address. The
@@ -404,7 +404,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // Treasury should be resolved
                 val (headMp, utxosActive) = treasuryDatum match
                     case d: ResolvedOnchain   => (d.headMp, d.evacuationActive)
-                    case d: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
+                    case _: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
                 val treasuryInput = tx.inputs

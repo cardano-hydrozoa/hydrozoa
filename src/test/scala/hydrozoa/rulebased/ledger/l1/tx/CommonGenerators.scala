@@ -15,7 +15,8 @@ import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
-import org.scalacheck.{Arbitrary, Gen}
+import org.scalacheck.Gen
+import scala.annotation.unused
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -70,7 +71,7 @@ object CommonGenerators {
     def genTreasuryUnresolvedDatum(
         versionMajor: BigInt
     )(using
-        config: hydrozoa.config.head.HeadConfig.Section
+        @unused config: hydrozoa.config.head.HeadConfig.Section
     ): Gen[Unresolved] =
         for {
             deadlineVoting <- Gen
@@ -97,7 +98,7 @@ object CommonGenerators {
             nonBeaconValue <- genNonBecaonValue
             // Treasury is always the first output of the fallback tx
             txId = TransactionInput(fallbackTxId, 0)
-            scriptAddr = HydrozoaBlueprint.mkTreasuryAddress(config.network)
+            _ = HydrozoaBlueprint.mkTreasuryAddress(config.network)
 
             beaconTokenAssetName = AssetName(config.headTokenNames.treasuryTokenName.bytes)
             beaconToken = Value.asset(config.headMultisigScript.policyId, beaconTokenAssetName, 1)

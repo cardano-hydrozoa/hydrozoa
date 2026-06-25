@@ -1,6 +1,5 @@
 package hydrozoa.config
 
-import cats.*
 import cats.data.*
 import org.scalacheck.Arbitrary
 import scalus.cardano.address.ShelleyAddress

@@ -7,7 +7,6 @@ import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
-import io.circe.generic.semiauto
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}

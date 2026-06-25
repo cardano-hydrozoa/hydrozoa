@@ -4,6 +4,7 @@ import cats.*
 import cats.arrow.*
 import cats.data.*
 import cats.syntax.all.*
+import scala.annotation.unused
 
 //-- | Formal representation of a tracer arrow as a Kleisli arrow over some
 //    -- monad, but tagged so that we know whether it has any effects which will emit
@@ -19,7 +20,7 @@ import cats.syntax.all.*
 
 sealed trait TracerA[M[_], A, B]
 
-private def const[A, B](a: A)(b: => B): A = a
+private def const[A, B](a: A)(@unused b: => B): A = a
 
 extension [M[_], A](t: TracerA[M, A, Unit])
 
@@ -31,8 +32,8 @@ extension [M[_], A](t: TracerA[M, A, Unit])
     def runTracerA(using monadM: Monad[M]): Kleisli[M, A, Unit] = {
         def arrConst = Kleisli(x => monadM.pure(const(())(x)))
         t match {
-            case TracerA.Emitting(emits, _noEmits) => emits >>> arrConst
-            case TracerA.Squelching(_)             => arrConst
+            case TracerA.Emitting(emits, _) => emits >>> arrConst
+            case TracerA.Squelching(_)      => arrConst
 
         }
     }

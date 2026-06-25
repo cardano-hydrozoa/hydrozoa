@@ -10,7 +10,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.given
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
 import scala.io.Source
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G1
 import scalus.cardano.onchain.plutus.prelude.{List, Option}
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v1.{Address, Credential, Value}

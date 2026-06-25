@@ -4,8 +4,9 @@ import cats.data.NonEmptyList
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import scalus.*
-import scalus.cardano.onchain.plutus.prelude.{===, Eq}
+import scalus.cardano.onchain.plutus.prelude.Eq
 import scalus.cardano.onchain.plutus.v3.{PubKeyHash, TokenName}
+import scalus.compiler.Compile
 import scalus.uplc.builtin.Builtins.serialiseData
 import scalus.uplc.builtin.Data.{FromData, ToData, toData}
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
@@ -57,6 +58,11 @@ object VoteState:
         voteStatus: VoteStatus
     )
 
+    // Explicit givens (rather than `derives` clauses on the types) so the derived instances are
+    // direct members of this `@Compile` object and their SIR is emitted for on-chain use
+    // (`inlineDatumOfType[VoteDatum]`, `voteStatus ===` in the rule-based validators). A
+    // clause-derived instance lands in the type's companion, whose SIR the on-chain linker cannot
+    // resolve (fails at script-build time, not Scala compile time).
     given FromData[VoteDatum] = FromData.derived
     given ToData[VoteDatum] = ToData.derived
 
@@ -81,22 +87,7 @@ object VoteState:
 
     given FromData[VoteStatus] = FromData.derived
     given ToData[VoteStatus] = ToData.derived
-
-    given Eq[VoteStatus] = (a: VoteStatus, b: VoteStatus) =>
-        a match
-            case VoteStatus.AwaitingVote(peerA) =>
-                b match
-                    case VoteStatus.AwaitingVote(peerB) => peerA === peerB
-                    case _                              => false
-            case VoteStatus.Voted(commitmentA, versionMinorA) =>
-                b match
-                    case VoteStatus.Voted(commitmentB, versionMinorB) =>
-                        commitmentA === commitmentB && versionMinorA === versionMinorB
-                    case _ => false
-            case VoteStatus.Abstain =>
-                b match
-                    case VoteStatus.Abstain => true
-                    case _                  => false
+    given Eq[VoteStatus] = Eq.derived
 
     type Key = BigInt
 

@@ -4,8 +4,8 @@ import cats.effect.IO
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerWallet
@@ -77,7 +77,7 @@ object Janitor:
                 nonHeadTokensValue = Value(Coin.zero, MultiAsset(nonHeadTokensAssets))
 
                 // NB: for a multisig head it's always true
-                hasMultisigRefScript = true
+                _ = true
                 // hasMultisigRefScript = headUtxos.exists((_, o) =>
                 //    o.scriptRef.contains(ScriptRef(config.headMultisigScript._1))
                 // )
@@ -150,6 +150,7 @@ object Janitor:
                     .fold(err => throw RuntimeException(err.toString), identity)
 
                 balanced = unbalanced
+                    .addExpectedSigners(config.headMultisigScript.numSigners)
                     .balanceContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         _,

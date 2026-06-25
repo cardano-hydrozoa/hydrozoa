@@ -39,7 +39,6 @@ class CardanoBackendMock private (
     private val mutator: Mutator,
     private val mkContext: Long => Context
 ) extends CardanoBackend[MockStateF] {
-    import CardanoBackend.*
     import State.*
 
     private val log: ContraTracer[MockStateF, CardanoBackendEvent] =

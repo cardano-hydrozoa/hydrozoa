@@ -2,7 +2,6 @@ package hydrozoa.app
 
 import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.implicits.*
-import com.bloxbean.cardano.client.util.HexUtil
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
 import com.comcast.ip4s.{Host, Port, host, port}
 import com.suprnation.actor.ActorSystem

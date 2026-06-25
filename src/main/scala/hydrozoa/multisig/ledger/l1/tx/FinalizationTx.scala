@@ -5,6 +5,7 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FinalizationTxEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Finalization
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
@@ -196,9 +197,13 @@ private object FinalizationTxOps {
                 _ <- Either
                     .cond(checkEquityContainsAdaOnly, (), ResidualTreasuryContainsTokens)
                     .explainConst("L2 liabilities don't cover all L1 non-ADA assets")
-                ctx <- TransactionBuilder
+                ctx0 <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("definite steps failed")
+                // Treasury / regime utxos are spent under the multisig native script; declare its
+                // signers as expected so the witness set is sized into the fee. Propagates to all
+                // derived contexts.
+                ctx = ctx0.addExpectedSigners(config.headMultisigScript.numSigners)
                 addedPessimisticRollout <- BasePessimistic
                     .mbApplySendRollout(ctx)
                     .explainConst("sending the rollout tx failed in base pessimistic")

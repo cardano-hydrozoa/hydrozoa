@@ -49,6 +49,7 @@ import test.{SeedPhrase, TestPeers, given}
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
+import scala.annotation.nowarn
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 
 // ===================================
@@ -311,6 +312,7 @@ case class Stage4Suite(
 
         // ------ Per-peer actor stack. Brackets `openPeerBackend` (RocksDB on disk); the rest
         // ------ is plain IO around it.
+        @nowarn("msg=unused explicit parameter")
         def buildPeerStack(
             peerNum: HeadPeerNumber,
             system: ActorSystem[IO],
@@ -1721,7 +1723,7 @@ object Stage4Suite:
               .map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
-              generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
+              generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
                   Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
               )
             )

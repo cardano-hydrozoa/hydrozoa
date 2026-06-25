@@ -1,9 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2.tx
 
 import cats.data.NonEmptyList
-import cats.syntax.all.*
 import hydrozoa.*
-import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import io.bullet.borer.derivation.MapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder, Writer}
@@ -12,7 +10,7 @@ import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, S
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.Script.Native
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Blake2b_256, Hash, KeepRaw, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Value}
+import scalus.cardano.ledger.{Hash, KeepRaw, Script, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
 import scalus.uplc.builtin.{ByteString, Data, platform}
 
@@ -105,7 +103,6 @@ object GenesisObligation {
         case NonBabbageL2Output(shelley: TransactionOutput.Shelley)
 
     // TODO: Shall we use dedicated types instead?
-    import DepositRefundTxSeq.Parse.Error.*
 
     def fromTransactionOutput(to: TransactionOutput): Either[Error, GenesisObligation] = {
         import Error.*

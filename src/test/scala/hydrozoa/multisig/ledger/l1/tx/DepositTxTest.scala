@@ -13,7 +13,7 @@ import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
-import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
+import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
@@ -29,13 +29,13 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
     val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
     for {
-        headAddress <- Gen.const(config.headMultisigAddress)
+        _ <- Gen.const(config.headMultisigAddress)
 
         genData = Gen.frequency(
           (99, genByteStringData.map(data => Some(data))),
           (1, None)
         )
-        depositData <- genData
+        _ <- genData
         refundData <- genData
 
         requestValidityEndTime <- Gen
@@ -46,7 +46,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 )
             )
 
-        l2Addr <- genPubkeyAddress()(using config)
+        _ <- genPubkeyAddress()(using config)
         refundAddr <- genPubkeyAddress()(using config)
 
         instructions =
@@ -56,7 +56,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
               validityStart = config.txTiming.refundValidityStart(requestValidityEndTime)
             )
 
-        txId <- arbitrary[TransactionInput]
+        _ <- arbitrary[TransactionInput]
 
         depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
 
@@ -97,7 +97,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
                 utxo.focus(_.output).andThen(valueLens).modify(_ + additionalValue)
             )
 
-        refundAddr <- genPubkeyAddress()(using config)
+        _ <- genPubkeyAddress()(using config)
 
     } yield DepositTx.Build(
       utxosFunding = fundingUtxos,
@@ -131,10 +131,10 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                 val expectedX = MD.Deposit(idx, fee, hash)
 
                 MD.Deposit.parse(aux) match {
-                    case Right(headId, x) if x.isInstanceOf[MD.Deposit] =>
+                    case Right(_, x) if x.isInstanceOf[MD.Deposit] =>
                         "Metadata is as expected" |: (x == expectedX)
                     case Right(_) => "Metadata is MD.deposit" |: Prop(false)
-                    case Left(e)  => "Metadata parsing returns Right" |: Prop(false)
+                    case Left(_)  => "Metadata parsing returns Right" |: Prop(false)
                 }
             )
         }

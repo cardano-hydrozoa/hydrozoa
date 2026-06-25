@@ -128,9 +128,9 @@ object BlockWeaverTestHelpers {
                 IO { events.updateAndGet(_ :+ e) }
             case s: StartBlock =>
                 IO { startBlockNums.updateAndGet(_ :+ s.blockNum) }
-            case c: CompleteBlockRegular =>
+            case _: CompleteBlockRegular =>
                 IO.pure(())
-            case f: CompleteBlockFinal =>
+            case _: CompleteBlockFinal =>
                 IO.pure(())
         }
 }

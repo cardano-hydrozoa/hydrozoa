@@ -18,6 +18,7 @@ import scalus.cardano.onchain.plutus.prelude.Option.{None, Some}
 import scalus.cardano.onchain.plutus.prelude.{!==, ===, List, Option, SortedMap, fail, log, require}
 import scalus.cardano.onchain.plutus.v1.Value.+
 import scalus.cardano.onchain.plutus.v3.*
+import scalus.compiler.Compile
 import scalus.uplc.PlutusV3
 import scalus.uplc.builtin.Builtins.{serialiseData, verifyEd25519Signature}
 import scalus.uplc.builtin.Data.toData
@@ -171,7 +172,7 @@ object DisputeResolutionValidator extends Validator {
 
                 // Let (headMp, disputeId) be the minting policy and asset name of the only non-ADA
                 // tokens in voteInput.
-                val (headMp, disputeId, voteTokenAmount) = voteInput.value.onlyNonAdaAsset
+                val (headMp, disputeId, _) = voteInput.value.onlyNonAdaAsset
 
                 // Bound the transaction to a single ballot box by token identity (a txid filter
                 // misses co-spent boxes once ratcheting diverges a box's source tx from fallback).
@@ -633,9 +634,9 @@ object DisputeResolutionValidator extends Validator {
                     case Abstain => a
                     case _       => b
                 }
-            case Voted(_commitmentA, versionMinorA) =>
+            case Voted(_, versionMinorA) =>
                 b match {
-                    case Voted(_commitmentB, versionMinorB) =>
+                    case Voted(_, versionMinorB) =>
                         if versionMinorA > versionMinorB then a else b
                     case _ => a
                 }

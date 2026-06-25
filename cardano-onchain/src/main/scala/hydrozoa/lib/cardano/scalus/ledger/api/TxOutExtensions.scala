@@ -5,6 +5,7 @@ import scalus.*
 import scalus.cardano.ledger.TransactionOutput
 import scalus.cardano.onchain.plutus.v2.OutputDatum.OutputDatum
 import scalus.cardano.onchain.plutus.v3.TxOut
+import scalus.compiler.Compile
 import scalus.uplc.builtin.{Data, FromData}
 
 @Compile

@@ -6,6 +6,7 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.persistence.codec.HydrozoaLocalCodecs.{datumDecoder, datumEncoder, equityDecoder, equityEncoder}
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, Encoder}
+import scala.annotation.unused
 
 /** Persistence-layer JSON codec for [[MultisigTreasuryUtxo]] — the slow-side treasury snapshot
   * stored in the `Treasury` CF at every own hard-ack stack-close.
@@ -17,9 +18,9 @@ import io.circe.{Decoder, Encoder}
 object TreasuryCodec:
 
     given multisigTreasuryUtxoEncoder(using
-        CardanoNetwork.Section
+        @unused ev: CardanoNetwork.Section
     ): Encoder[MultisigTreasuryUtxo] = deriveEncoder[MultisigTreasuryUtxo]
 
     given multisigTreasuryUtxoDecoder(using
-        CardanoNetwork.Section
+        @unused ev: CardanoNetwork.Section
     ): Decoder[MultisigTreasuryUtxo] = deriveDecoder[MultisigTreasuryUtxo]

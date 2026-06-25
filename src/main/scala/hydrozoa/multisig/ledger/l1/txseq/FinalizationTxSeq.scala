@@ -49,11 +49,11 @@ private object FinalizationTxSeqOps {
                 case FinalizationError((err, msg)) =>
                     s"Finalization tx error: ${if msg.nonEmpty then s" - $msg" else ""}." + "\n" +
                         (err match {
-                            case SomeStepError(e, ctx) =>
+                            case SomeStepError(e, _) =>
                                 s"Transaction builder step error:\n\t${e.explain}"
-                            case SomeRedeemerIndexingError(e, ctx) =>
+                            case SomeRedeemerIndexingError(e, _) =>
                                 "Transaction builder redeemer indexing error."
-                            case BalancingError(e, ctx) =>
+                            case BalancingError(e, _) =>
                                 "Transaction builder balancing error:\n\t" + (e match {
                                     case TxBalancingError.EvaluationFailed(c) =>
                                         s"Plutus evaluation failed. Cause: ${c.toString}"
@@ -78,7 +78,7 @@ private object FinalizationTxSeqOps {
                                             s"Required collateral (lovelace): ${requiredCollateral.toString}" + "\n\t\t" +
                                             s"Min collateral return (lovelace): ${minAdaForReturn.toString}"
                                 })
-                            case ValidationError(e, ctx) =>
+                            case ValidationError(e, _) =>
                                 s"Validation error: ${e.toString}"
                             case FinalizationTx.Error.TreasuryIncorrectAddress =>
                                 "Head treasury is at an incorrect address."
@@ -90,11 +90,11 @@ private object FinalizationTxSeqOps {
                             if msg.nonEmpty then s" - $msg" else ""
                         }." + "\n" +
                         (err match {
-                            case SomeStepError(e, ctx) =>
+                            case SomeStepError(e, _) =>
                                 s"Transaction builder step error:\n\t${e.explain}"
-                            case SomeRedeemerIndexingError(e, ctx) =>
+                            case SomeRedeemerIndexingError(e, _) =>
                                 "Transaction builder redeemer indexing error."
-                            case BalancingError(e, ctx) =>
+                            case BalancingError(e, _) =>
                                 "Transaction builder balancing error:\n\t" + (e match {
                                     case TxBalancingError.EvaluationFailed(c) =>
                                         s"Plutus evaluation failed. Cause: ${c.toString}"
@@ -119,7 +119,7 @@ private object FinalizationTxSeqOps {
                                             s"Required collateral (lovelace): ${requiredCollateral.toString}" + "\n\t\t" +
                                             s"Min collateral return (lovelace): ${minAdaForReturn.toString}"
                                 })
-                            case ValidationError(e, ctx) =>
+                            case ValidationError(e, _) =>
                                 s"Validation error: ${e.toString}"
                             case _: Void =>
                                 "RolloutSeqError: Void, which is impossible."

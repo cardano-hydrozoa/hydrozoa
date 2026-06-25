@@ -4,7 +4,7 @@ import hydrozoa.lib.cardano.scalus.Scalar as ScalusScalar
 import java.math.BigInteger
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.prelude.List as SList
-import scalus.cardano.onchain.plutus.prelude.crypto.bls12_381.G1
+import scalus.cardano.onchain.plutus.prelude.bls12_381.G1
 import scalus.cardano.onchain.plutus.v3.TxInInfo
 import scalus.uplc.builtin.Builtins.{blake2b_224, serialiseData}
 import scalus.uplc.builtin.ByteString

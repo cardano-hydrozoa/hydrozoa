@@ -14,7 +14,6 @@ import monocle.syntax.all.*
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{Utxo as _, *}
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.hex
 import spire.compat.integral
 import spire.math.Rational

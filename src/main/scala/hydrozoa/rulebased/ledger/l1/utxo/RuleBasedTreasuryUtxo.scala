@@ -16,7 +16,6 @@ import scalus.cardano.txbuilder.Datum.DatumInlined
 import scalus.cardano.txbuilder.ScriptSource.PlutusScriptAttached
 import scalus.cardano.txbuilder.ThreeArgumentPlutusScriptWitness
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Mint, ReferenceOutput, Send, Spend}
-import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.{fromData, toData}
 
 final case class RuleBasedTreasuryUtxo(
@@ -44,8 +43,7 @@ final case class RuleBasedTreasuryUtxo(
       ThreeArgumentPlutusScriptWitness(
         PlutusScriptAttached,
         redeemer.toData,
-        DatumInlined,
-        Set.empty
+        DatumInlined
       )
     )
 }
@@ -166,7 +164,7 @@ object RuleBasedTreasuryOutput {
                 case Failure(e) => Left(TreasuryDatumDeserializationError(output, Right(e)))
             }
 
-            address <- output.address match {
+            _ <- output.address match {
                 case sa: ShelleyAddress if sa == config.ruleBasedTreasuryAddress => Right(sa)
                 case _ => Left(TreasuryAtWrongAddress(output))
             }

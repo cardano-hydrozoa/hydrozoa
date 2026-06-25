@@ -1,7 +1,6 @@
 package hydrozoa.lib.cardano.scalus
 
 import cats.effect.*
-import cats.effect.IO.*
 import hydrozoa.config.head.network.CardanoNetwork
 import io.circe.*
 import io.circe.syntax.*

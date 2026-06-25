@@ -11,7 +11,6 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, RefundTx, Tx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import monocle.syntax.all.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, Utxo, Value}
 import scalus.uplc.builtin.{ByteString, Data}
@@ -238,7 +237,7 @@ private object DepositRefundTxSeqOps {
                   config.slotConfig
                 )
 
-                depositFee = depositValue - l2Value
+                _ = depositValue - l2Value
 
                 refundTx <- RefundTx.Build
                     .PostDated(config)(depositUtxo, refundInstructions, requestId)

@@ -1,13 +1,12 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
@@ -29,8 +28,8 @@ import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
+import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.fromData
-import scalus.uplc.builtin.{ByteString, Data}
 
 final case class VoteTx(
     ballotBoxSpent: BallotBox[VoteStatus.AwaitingVote],
@@ -61,7 +60,7 @@ private object VoteTxOps {
 
             override def getMessage: String = this match {
                 case i: Error.InvalidVoteDatum     => s"Invalid vote datum: $i.msg"
-                case v: Error.VoteAlreadyCast.type => "Vote has already been cast"
+                case _: Error.VoteAlreadyCast.type => "Vote has already been cast"
                 case b: Error.BuildError =>
                     s"Build error encountered in vote tx. ${b.wrapped.toString}"
                 case t: TreasuryParseError => t.wrapped.getMessage
@@ -166,6 +165,7 @@ private object VoteTxOps {
                 // _ = println(HexUtil.encodeHexString(context.transaction.toCbor))
 
                 finalized <- context
+                    .addRequiredSigners(uncastBallotBox.votingSigners)
                     .finalizeContext(
                       diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
                       validators = nonSigningValidators

@@ -4,6 +4,7 @@ import cats.data.NonEmptyVector
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.{WrappedCoin, prebalancedLovelaceDiffHandler}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
@@ -164,7 +165,10 @@ private object RolloutTxOps {
                 ctx <- TransactionBuilder
                     .build(config.network, definiteSteps)
                     .explainConst("adding base pessimistic failed")
-            } yield ctx
+            } yield
+                // The rollout is spent under the multisig native script; declare its signers as
+                // expected so the witness set is sized into the fee. Propagates to all derived contexts.
+                ctx.addExpectedSigners(config.headMultisigScript.numSigners)
 
             /////////////////////////////////////////////////////////
             // Base steps
@@ -375,7 +379,7 @@ private object RolloutTxOps {
                     case Left(
                           SomeBuildError.BalancingError(
                             TxBalancingError.Failed(WrappedCoin(Coin(diff))),
-                            _errorCtx
+                            _
                           )
                         ) =>
                         trialFinishLoop(builder, ctx, trialValue - Value(Coin(diff)))

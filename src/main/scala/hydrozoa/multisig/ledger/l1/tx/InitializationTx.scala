@@ -7,7 +7,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, InitializationTxEndTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import hydrozoa.multisig.ledger.l1.tx.InitializationTx.InitializationTxOps.Parse.Error.MetadataParseError
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
@@ -70,8 +70,6 @@ object InitializationTx {
 
         final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
 
-            import Build.*
-
             lazy val result: BuilderResultSimple[InitializationTx] = for {
                 _ <- Either
                     .cond(
@@ -98,7 +96,9 @@ object InitializationTx {
 
                 finalized <- {
                     TxBuilder
-                        .finalizeContext(unbalanced)
+                        .finalizeContext(
+                          unbalanced.addExpectedSigners(config.headMultisigScript.numSigners)
+                        )
                         .explainConst("Initialization tx failed to finalize")
                 }
 
@@ -306,7 +306,7 @@ object InitializationTx {
                 // Metadata parsing
                 // ===================================
                 mdParseResult <- MD.Initialization.parse(tx).left.map(MetadataParseError(_))
-                (head, md) = mdParseResult
+                (_, md) = mdParseResult
 
                 // ===================================
                 // Data Extraction
@@ -391,7 +391,7 @@ object InitializationTx {
                           )
                         )
                     case Some(1L) => Right(())
-                    case Some(wrongCount) =>
+                    case Some(_) =>
                         Left(
                           InvalidTransactionError(
                             "Multiple tokens matching the head token asset" +
@@ -497,13 +497,13 @@ object InitializationTx {
                 _ <- mintInner.get(config.headTokenNames.treasuryTokenName) match {
                     case None     => Left(InvalidTransactionError("head token not minted"))
                     case Some(1L) => Right(())
-                    case Some(wrongNumber) =>
+                    case Some(_) =>
                         Left(InvalidTransactionError("multiple head tokens minted"))
                 }
                 _ <- mintInner.get(config.headTokenNames.multisigRegimeTokenName) match {
                     case None     => Left(InvalidTransactionError("MR token not minted"))
                     case Some(1L) => Right(())
-                    case Some(wrongNumber) =>
+                    case Some(_) =>
                         Left(InvalidTransactionError("multiple MR tokens minted"))
                 }
 
@@ -519,7 +519,7 @@ object InitializationTx {
                   equity = equity
                 )
 
-                multisigRegimeWitness = Utxo(
+                _ = Utxo(
                   TransactionInput(tx.id, md.multisigRegimeIx),
                   actualMultisigRegimeOutput
                 )

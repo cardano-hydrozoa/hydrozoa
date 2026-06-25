@@ -7,6 +7,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
+import scala.annotation.unused
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scala.util.Try
@@ -221,7 +222,7 @@ object TxTiming {
 
     def checkRequestValidityInterval(
         blockCreationStartTime: BlockCreationStartTime,
-        requestValidityStartTime: RequestValidityStartTime,
+        @unused requestValidityStartTime: RequestValidityStartTime,
         requestValidityEndTime: RequestValidityEndTime
     ): Boolean =
         //        requestValidityStartTime.convert <= blockCreationStartTime.convert &&

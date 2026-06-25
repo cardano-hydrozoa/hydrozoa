@@ -1,7 +1,6 @@
 package hydrozoa.lib.math
 
 import cats.data.NonEmptyList
-import spire.implicits.toRational
 import spire.math.{Rational, SafeLong}
 
 object Distribution {
@@ -61,8 +60,6 @@ object Distribution {
           *   the amount of fungible items to distribute
           */
         def distribute[I](amount: SafeLong): NonEmptyList[SafeLong] = {
-            val amountRational: Rational = amount.toRational
-
             def calcQuotaFloored(w: Rational): SafeLong = amount * w.numerator / w.denominator
 
             val quotasFloored = weights.map(calcQuotaFloored)

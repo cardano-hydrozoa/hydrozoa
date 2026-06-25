@@ -4,6 +4,7 @@ import hydrozoa.config.head.initialization.{InitialBlock, InitializationParamete
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
@@ -13,7 +14,6 @@ import monocle.{Focus, Lens}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.txbuilder.*
-import scalus.cardano.txbuilder.SomeBuildError.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityStartSlot}
 
@@ -85,6 +85,7 @@ private object RefundTxOps {
                     // _ = println(HexUtil.encodeHexString(ctx.transaction.toCbor))
 
                     finalized <- ctx
+                        .addExpectedSigners(config.headMultisigScript.numSigners)
                         .finalizeContext(
                           config.cardanoProtocolParams,
                           diffHandler = Change

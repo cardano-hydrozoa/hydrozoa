@@ -1,7 +1,6 @@
 package hydrozoa.multisig.persistence
 
 import cats.effect.IO
-import cats.syntax.functor.*
 import cats.syntax.parallel.*
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
