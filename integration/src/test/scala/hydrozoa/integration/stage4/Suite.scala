@@ -1484,8 +1484,6 @@ object Stage4Suite:
                       ownCoilWallet = w,
                       nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      hydrozoaHost = "localhost",
-                      hydrozoaPort = "4973",
                       blockfrostApiKey = "not-a-real-key",
                       sugarRushUri = "ws://localhost:3001/ws",
                       adminUsername = "admin",
