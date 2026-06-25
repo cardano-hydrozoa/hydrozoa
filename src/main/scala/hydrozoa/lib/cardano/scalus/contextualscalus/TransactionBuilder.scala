@@ -5,6 +5,7 @@ import scalus.cardano.ledger.rules.STS.Validator
 import scalus.cardano.ledger.{AddrKeyHash, EvaluatorMode, PlutusScriptEvaluator, TaggedSortedSet}
 import scalus.cardano.txbuilder as scalusTx
 import scalus.cardano.txbuilder.{DiffHandler, SomeBuildError}
+import scalus.uplc.builtin.ByteString
 
 /** Like [[scalus.cardano.txbuilder]], but specialized to hydrozoa
   */
@@ -30,17 +31,24 @@ object TransactionBuilder {
             scalusTx.TransactionBuilder.Context.empty(config.network)
         }
 
-        /** Register verification-key hashes the transaction is expected to be signed by, for
-          * witness-set fee sizing only. Scalus sizes dummy signatures from `expectedSigners`, so
-          * native-multisig spends — whose witnesses no longer carry signers — must declare their
-          * signers here before [[finalizeContext]]. This does not add the keys to the transaction
-          * body's `requiredSigners` (matching how scalus handled native-script
-          * `additionalSigners`).
+        /** Reserve witness-set / fee space for `count` expected signatures whose individual key
+          * hashes don't matter for sizing. Scalus sizes dummy signatures from
+          * `expectedSigners.size`, so a native-multisig spend — whose witness carries no signers,
+          * and whose real signer subset is chosen at aggregation — declares only its signer COUNT
+          * here before [[finalizeContext]]. This inserts `count` distinct synthetic placeholder
+          * hashes and does not add anything to the transaction body's `requiredSigners`.
           */
-        def addExpectedSigners(
-            signers: Set[AddrKeyHash]
-        ): scalusTx.TransactionBuilder.Context =
-            context.copy(expectedSigners = context.expectedSigners ++ signers)
+        def addExpectedSigners(count: Int): scalusTx.TransactionBuilder.Context = {
+            val placeholders: Set[AddrKeyHash] = (0 until count).map { i =>
+                val bytes = new Array[Byte](28)
+                bytes(0) = (i >>> 24).toByte
+                bytes(1) = (i >>> 16).toByte
+                bytes(2) = (i >>> 8).toByte
+                bytes(3) = i.toByte
+                AddrKeyHash(ByteString.fromArray(bytes))
+            }.toSet
+            context.copy(expectedSigners = context.expectedSigners ++ placeholders)
+        }
 
         /** Add verification-key hashes to BOTH the transaction body's `requiredSigners` (so they
           * appear in `txInfo.signatories` on-chain) and `expectedSigners` (witness-set fee sizing).
