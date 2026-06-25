@@ -97,7 +97,7 @@ object InitializationTx {
                 finalized <- {
                     TxBuilder
                         .finalizeContext(
-                          unbalanced.addExpectedSigners(config.headMultisigScript.requiredSigners)
+                          unbalanced.addExpectedSigners(config.headMultisigScript.numSigners)
                         )
                         .explainConst("Initialization tx failed to finalize")
                 }
