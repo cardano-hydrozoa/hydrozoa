@@ -26,10 +26,15 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
   * one field to make it illegal and re-signs:
   *
   *   - E1 vote on another peer's reserved box → VoteMustBeSignedByPeer
-  *   - E2 vote past deadlineVoting → VoteTimeValidityCheck
+  *   - E2 vote past deadlineVoting (finite-but-too-late upper bound) → VoteTimeValidityCheck
+  *   - E3 vote with an OPEN validity interval (no upper bound) → VoteTimeValidityCheck (the
+  *     distinct non-finite `case _ => fail` path; you can't dodge the deadline with an unbounded
+  *     range)
+  *   - E4 re-vote a box that is already Voted (terminal-state re-entry) → the builder's
+  *     VoteAlreadyCast (refused before a transaction is even formed)
   *
-  * Each assertion checks the rejection is a *script* failure mentioning the validator's own
-  * message, so a reject cannot pass for an incidental ledger reason.
+  * Each script-level assertion checks the rejection is a *script* failure mentioning the
+  * validator's own message, so a reject cannot pass for an incidental ledger reason.
   */
 object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
 
@@ -45,6 +50,12 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
     /** Push the tx's validity upper bound to `slot` (to model a vote past the deadline). */
     private def withValidityEnd(tx: Transaction, slot: Long): Transaction =
         tx.copy(body = KeepRaw(tx.body.value.copy(ttl = Some(slot))))
+
+    /** Remove the tx's validity upper bound entirely (an open/unbounded interval — to model
+      * crafting the validity range so no finite `to` can be checked against the deadline).
+      */
+    private def withoutValidityEnd(tx: Transaction): Transaction =
+        tx.copy(body = KeepRaw(tx.body.value.copy(ttl = None)))
 
     /** True iff the tx was rejected by Plutus script evaluation with a message mentioning `needle`
       * — i.e. the validator (not an incidental ledger rule) caught the attack.
@@ -179,6 +190,39 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
         _ <- assertWith(
           msg = s"E2: vote past deadlineVoting must be rejected by the validator, got $e2Result",
           condition = rejectedByValidator(e2Result, "deadlineVoting")
+        )
+
+        // E3: craft an OPEN validity interval (no upper bound). The validator needs a finite upper
+        // bound to compare against deadlineVoting, so an unbounded `to` hits the `case _ => fail`
+        // path — you cannot dodge the deadline check with an open validity range.
+        e3Tx = ownWallet.signTx(withoutValidityEnd(ownVoteTx.tx))
+        e3Result = CardanoMutator.transit(context, state, e3Tx)
+        _ <- assertWith(
+          msg =
+              s"E3: a vote with an open (unbounded) validity range must be rejected, got $e3Result",
+          condition = rejectedByValidator(e3Result, "deadlineVoting")
+        )
+
+        // E4: re-vote a box that is already Voted (terminal-state re-entry). The builder's
+        // parseAndVote sees a non-AwaitingVote status and refuses with VoteAlreadyCast before a
+        // transaction is even formed.
+        votedUtxo <- mkBallotBoxUtxo(
+          3,
+          4,
+          VoteStatus.Voted(evacMap.kzgCommitment, versionMinor),
+          TransactionInput(fallbackTxId, env.headConfig.nHeadPeers + 3)
+        )
+        votedBox <- failLeft(
+          BallotBox
+              .parse(votedUtxo)(using config)
+              .map(_.asInstanceOf[BallotBox[VoteStatus.AwaitingVote]])
+        )
+        _ <- assertWith(
+          msg = "E4: re-voting an already-Voted box must be refused (VoteAlreadyCast)",
+          condition = buildVote(votedBox) match {
+              case Left(VoteTx.Build.Error.VoteAlreadyCast) => true
+              case _                                        => false
+          }
         )
     } yield true
 
