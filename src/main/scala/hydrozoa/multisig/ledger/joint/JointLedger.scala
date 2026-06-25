@@ -807,13 +807,6 @@ final case class JointLedger(
                 .get(StoreKey.RequestHighWater(BlockNumber((blockNum: Int) - 1)))
                 .map(_.getOrElse(Map.empty))
 
-    // TODO: classify the mismatch instead of emitting a generic "consensus is broken" panic.
-    //   One specific subcase worth singling out is "a deposit absorbed by the leader was not
-    //   found onchain by this peer": the leader's brief lists `depositsAbsorbed` containing a
-    //   request whose deposit utxo is missing from this peer's pollResults — i.e. the peer
-    //   would have classified that deposit as `NotInPollResults` (refunded) and produced a
-    //   different block. This typically reflects a polling cadence violating the
-    //   `cardanoLiaisonPollingPeriodSafetyFactor` invariant on `TxTiming`.
     private def panicOnMismatchWithExpectedBrief(
         expectedBrief: Option[BlockBrief],
         actualBrief: BlockBrief
@@ -821,10 +814,51 @@ final case class JointLedger(
         IO.unlessA(expectedBrief.fold(true)(_ == actualBrief))(
           panic(
             "Reference block brief didn't match actual block brief; consensus is broken.\n" +
+                expectedBrief.fold("")(e => s"mismatch:${briefMismatchSummary(e, actualBrief)}\n") +
                 s"actual block brief: $actualBrief\n" +
                 s"expected block brief: $expectedBrief"
           ) >> context.self.stop
         )
+
+    /** Field-level diff of the leader's `expected` brief against this peer's `actual` one, so an
+      * intermittent consensus-divergence panic names WHICH part flipped instead of dumping two
+      * opaque briefs. The common cause is a deposit landing in a different compartment on the two
+      * peers (`depositsAbsorbed` vs `depositsRefunded`) because their `pollResults`/block-window
+      * timing differed — e.g. a deposit absorbed by the leader but `NotInPollResults` here, which
+      * reflects a polling cadence violating the `cardanoLiaisonPollingPeriodSafetyFactor` margin on
+      * `TxTiming`.
+      */
+    private def briefMismatchSummary(expected: BlockBrief, actual: BlockBrief): String = {
+        def setDiff[A](name: String, e: List[A], a: List[A]): Option[String] =
+            val (es, as) = (e.toSet, a.toSet)
+            Option.when(es != as)(
+              s"$name: only-expected=${(es -- as).toList}, only-actual=${(as -- es).toList}"
+            )
+        List(
+          Option.when(expected.getClass != actual.getClass)(
+            s"block type: expected=${expected.getClass.getSimpleName} actual=${actual.getClass.getSimpleName}"
+          ),
+          Option.when(expected.blockNum != actual.blockNum)(
+            s"blockNum: expected=${expected.blockNum} actual=${actual.blockNum}"
+          ),
+          Option.when(expected.blockVersion != actual.blockVersion)(
+            s"blockVersion: expected=${expected.blockVersion} actual=${actual.blockVersion}"
+          ),
+          Option.when(expected.startTime != actual.startTime)(
+            s"startTime: expected=${expected.startTime} actual=${actual.startTime}"
+          ),
+          Option.when(expected.endTime != actual.endTime)(
+            s"endTime: expected=${expected.endTime} actual=${actual.endTime}"
+          ),
+          setDiff("depositsAbsorbed", expected.depositsAbsorbed, actual.depositsAbsorbed),
+          setDiff("depositsRefunded", expected.depositsRefunded, actual.depositsRefunded),
+          Option.when(expected.events != actual.events)(
+            s"events: expected=${expected.events} actual=${actual.events}"
+          )
+        ).flatten match
+            case Nil   => " (accessor fields equal; differs in header internals)"
+            case lines => lines.mkString("\n  - ", "\n  - ", "")
+    }
 
     // Sends a panic to the multisig regime manager, indicating that the node cannot proceed any more
     // TODO: Implement better, it should be typed and the multisig regime manager should be able to pattern match
