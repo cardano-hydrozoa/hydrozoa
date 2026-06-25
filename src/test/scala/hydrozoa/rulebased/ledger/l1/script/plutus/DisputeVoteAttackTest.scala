@@ -12,13 +12,14 @@ import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import hydrozoa.rulebased.ledger.l1.utxo.BallotBox
 import org.scalacheck.{Arbitrary, Gen, Properties, Test}
+import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
 
-/** Negative tests for [[DisputeResolutionValidator]]: two malformed votes the validator must
-  * reject.
+/** Negative tests for [[DisputeResolutionValidator]]: malformed votes the validator (or the
+  * builder) must reject.
   *
   * Each is a single transaction, so there is no need for an emulator or the `Scenario` monad — we
   * run the tx straight through [[CardanoMutator]] (the ledger rule that executes the Plutus script)
@@ -32,6 +33,10 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
   *     range)
   *   - E4 re-vote a box that is already Voted (terminal-state re-entry) → the builder's
   *     VoteAlreadyCast (refused before a transaction is even formed)
+  *   - E5 swap ONLY the staking part of the continuing vote output's address (same payment script,
+  *     the attacker's stake key) → VoteVoteOutputExists. The on-chain `Eq[Address]` ANDs the
+  *     payment AND staking credential, so the address is checked in full — a redirect that keeps
+  *     the payment part but captures staking rights on the locked utxo is still rejected.
   *
   * Each script-level assertion checks the rejection is a *script* failure mentioning the
   * validator's own message, so a reject cannot pass for an incidental ledger reason.
@@ -56,6 +61,40 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
       */
     private def withoutValidityEnd(tx: Transaction): Transaction =
         tx.copy(body = KeepRaw(tx.body.value.copy(ttl = None)))
+
+    /** Swap ONLY the staking (delegation) part of the continuing vote output's address: keep its
+      * value and payment script, but attach the attacker's own stake key. The honest vote output
+      * has no delegation part (Null), so attaching one grows the output by ~28 bytes — pay that
+      * extra size out of the attacker's own change output (index 0, the collateral return) and bump
+      * the fee, so the *script* rejects the staking mismatch rather than a phase-1 fee check.
+      * Models capturing staking rights/rewards on the locked ballot-box utxo without touching its
+      * payment credential.
+      */
+    private def withSwappedStakingPart(
+        tx: Transaction,
+        voteValue: Value,
+        stake: AddrKeyHash,
+        feeBump: Coin
+    ): Transaction = {
+        val body = tx.body.value
+        val delegation = ShelleyDelegationPart.Key(StakeKeyHash.fromByteString(stake))
+        val newOutputs = body.outputs.zipWithIndex.map { case (sized, idx) =>
+            val out = sized.value
+            out.address match {
+                case sh: ShelleyAddress if out.value == voteValue =>
+                    val withStake = sh.copy(delegation = delegation)
+                    Sized(out match {
+                        case b: TransactionOutput.Babbage => b.copy(address = withStake)
+                        case s: TransactionOutput.Shelley => s.copy(address = withStake)
+                    })
+                case _ if idx == 0 => Sized(out.withValue(out.value - Value(feeBump)))
+                case _             => sized
+            }
+        }
+        tx.copy(body =
+            KeepRaw(body.copy(outputs = newOutputs, fee = Coin(body.fee.value + feeBump.value)))
+        )
+    }
 
     /** True iff the tx was rejected by Plutus script evaluation with a message mentioning `needle`
       * — i.e. the validator (not an incidental ledger rule) caught the attack.
@@ -223,6 +262,21 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
               case Left(VoteTx.Build.Error.VoteAlreadyCast) => true
               case _                                        => false
           }
+        )
+
+        // E5: swap ONLY the staking part of the continuing vote output's address (same payment
+        // script, attacker's stake key). The on-chain Eq[Address] ANDs payment AND staking
+        // credential, so this subtle redirect — payment matches, staking differs — must still be
+        // caught by the continuing-output check rather than slip through.
+        e5Tx = ownWallet.signTx(
+          withSwappedStakingPart(ownVoteTx.tx, ownVoteUtxo.output.value, ownKeyHash, Coin(5000))
+        )
+        e5Result = CardanoMutator.transit(context, state, e5Tx)
+        _ <- assertWith(
+          msg =
+              s"E5: a staking-credential-only swap on the vote output must be rejected, got $e5Result",
+          condition =
+              rejectedByValidator(e5Result, "one continuing vote output with the same value")
         )
     } yield true
 
