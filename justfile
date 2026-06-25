@@ -53,11 +53,6 @@ keygen:
   trap 'just notify "keygen"' EXIT
   sbt "runMain hydrozoa.app.GenerateKeyPair"
 
-token-recovery:
-  #!/usr/bin/env bash
-  trap 'just notify "token-recovery"' EXIT
-  sbt "runMain hydrozoa.app.TokenRecovery"
-
 export:
   #!/usr/bin/env bash
   trap 'just notify "export"' EXIT
