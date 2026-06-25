@@ -54,6 +54,8 @@ object CardanoLiaisonEventFormat:
             case ActionsDispatched(msgs, hasFallback) =>
                 val text = "Liaison's actions:" + msgs.map(m => s"\n\t- $m").mkString
                 if hasFallback then warn(text) else info(text)
+            case FallbackToRuleBasedDispatched(txId) =>
+                warn(s"FallbackToRuleBased dispatched: $txId — head entering rule-based regime")
             case TxSubmitting(txId) =>
                 trace(s"Submitting tx hash: $txId")
             case SubmissionErrors(count) =>

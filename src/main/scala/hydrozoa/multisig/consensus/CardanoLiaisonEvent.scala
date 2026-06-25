@@ -68,6 +68,14 @@ object CardanoLiaisonEvent:
     final case class ActionsDispatched(msgs: List[String], hasFallback: Boolean)
         extends CardanoLiaisonEvent
 
+    /** A `FallbackToRuleBased` action has been selected for submission: the head is flipping into
+      * rule-based fallback. Distinct from `ActionsDispatched.hasFallback`, which also covers
+      * `SilencePeriodNoop`. Tests can observe this to short-circuit scenarios that drift outside
+      * the modeled happy-path regime.
+      */
+    final case class FallbackToRuleBasedDispatched(txId: TransactionHash)
+        extends CardanoLiaisonEvent
+
     final case class TxSubmitting(txId: TransactionHash) extends CardanoLiaisonEvent
 
     final case class SubmissionErrors(count: Int) extends CardanoLiaisonEvent

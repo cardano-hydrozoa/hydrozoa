@@ -82,6 +82,13 @@ case class Stage4Sut(
       * fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+    /** Fires (with the offending fallback tx hash) the first time any peer's CardanoLiaison
+      * successfully submits a `FallbackToRuleBased`. [[beforeFinalize]] races this against the
+      * fast/slow/effects waits and short-circuits the scenario with `Prop.exception` — the
+      * happy-path properties don't model the rule-based regime (see `package` doc), so reaching
+      * it means the generator/timing drifted outside the contract.
+      */
+    fallbackEnteredSignal: Deferred[IO, TransactionHash],
     log: ContraTracer[IO, Slf4jMsg],
 )
 

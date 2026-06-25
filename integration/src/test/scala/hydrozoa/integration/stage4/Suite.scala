@@ -77,6 +77,7 @@ private case class PostSystemState(
     effectsLanded: Ref[IO, Set[TransactionHash]],
     effectsLandedSignal: Deferred[IO, Unit],
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+    fallbackEnteredSignal: Deferred[IO, TransactionHash],
 )
 
 /** Selects the persistence backend for stage4 peers.
@@ -271,6 +272,7 @@ case class Stage4Suite(
                 effectsLanded        <- Ref[IO].of(Set.empty[TransactionHash])
                 effectsLandedSignal  <- IO.deferred[Unit]
                 effectsLandedTarget  <- IO.deferred[List[BlockExpectation]]
+                fallbackEnteredSignal <- IO.deferred[TransactionHash]
             } yield PostSystemState(
               cardanoBackend = cardanoBackend,
               pendingConnsMap = pendingConnsMap,
@@ -285,6 +287,7 @@ case class Stage4Suite(
               effectsLanded = effectsLanded,
               effectsLandedSignal = effectsLandedSignal,
               effectsLandedTarget = effectsLandedTarget,
+              fallbackEnteredSignal = fallbackEnteredSignal,
             )
         }
 
@@ -314,6 +317,7 @@ case class Stage4Suite(
             effectsLanded: Ref[IO, Set[TransactionHash]],
             effectsLandedSignal: Deferred[IO, Unit],
             effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
         ): Resource[IO, PeerMrm] = {
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
 
@@ -342,7 +346,8 @@ case class Stage4Suite(
                       effectsLanded,
                       effectsLandedSignal,
                       effectsLandedTarget,
-                    )
+                    ) |+|
+                    Observers.captureFallbackEntered(fallbackEnteredSignal)
 
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
@@ -391,6 +396,7 @@ case class Stage4Suite(
             effectsLanded: Ref[IO, Set[TransactionHash]],
             effectsLandedSignal: Deferred[IO, Unit],
             effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
         ): IO[Stage4Sut] =
             for {
                 peerConnections <- peerMrms.toList
@@ -454,6 +460,7 @@ case class Stage4Suite(
               effectsLanded = effectsLanded,
               effectsLandedSignal = effectsLandedSignal,
               effectsLandedTarget = effectsLandedTarget,
+              fallbackEnteredSignal = fallbackEnteredSignal,
               log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
             )
 
@@ -727,6 +734,7 @@ case class Stage4Suite(
                       pss.effectsLanded,
                       pss.effectsLandedSignal,
                       pss.effectsLandedTarget,
+                      pss.fallbackEnteredSignal,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
@@ -781,6 +789,7 @@ case class Stage4Suite(
                 pss.effectsLanded,
                 pss.effectsLandedSignal,
                 pss.effectsLandedTarget,
+                pss.fallbackEnteredSignal,
               )
             )(sut =>
                 sut.liaisonTickFibers.traverse_(_.cancel) >>
@@ -799,8 +808,13 @@ case class Stage4Suite(
     ): HeadPeerId =
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
-    override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
-        for
+    override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+        // Race the happy-path drain against the fallback-entered signal. If any peer's CL
+        // successfully submits a `FallbackToRuleBased`, abandon the analysis and fail with
+        // a clear message — the properties below (liveness / coverage / effects-landed) don't
+        // model rule-based; waiting on them after fallback would spin the CL polling loop
+        // until the outer test timeout, accumulating the InitWindowElapsed warn flood.
+        val happyPathProp: IO[Prop] = for
             _ <- log.warn("beforeFinalize")
             submitted <- sut.submittedRequestIds.get
             // Arm the fast-cycle drain: publish the final submitted set so the JL capture sink
@@ -870,6 +884,18 @@ case class Stage4Suite(
             if errors.nonEmpty then
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else props
+
+        IO.race(sut.fallbackEnteredSignal.get, happyPathProp).map {
+            case Left(txId) =>
+                Prop.exception(
+                  RuntimeException(
+                    s"scenario entered rule-based fallback (txId=$txId) — outside the modeled" +
+                        " happy-path regime; widen stage4 timings or cap the inter-arrival tail"
+                  )
+                )
+            case Right(prop) => prop
+        }
+    }
 
     private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
         for

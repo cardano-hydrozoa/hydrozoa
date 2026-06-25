@@ -726,6 +726,10 @@ trait CardanoLiaison(
                         )
                     }
 
+                    fallbackTxId = actionsToSubmit.collectFirst {
+                        case Action.FallbackToRuleBased(tx) => tx.tx.id
+                    }
+
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
@@ -743,6 +747,22 @@ trait CardanoLiaison(
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
+
+                    // Post-submission: fire FallbackToRuleBasedDispatched only after the fallback
+                    // tx was accepted by the backend. "Dispatched" denotes confirmed submission, not
+                    // intent — pre-effect intent is logged earlier as ActionsDispatched.
+                    _ <- fallbackTxId match {
+                        case None => IO.unit
+                        case Some(id) =>
+                            val submittedOk = submitRet.exists { case (etx, ret) =>
+                                etx.tx.id == id && ret.isRight
+                            }
+                            IO.whenA(submittedOk)(
+                              tracer.traceWith(
+                                CardanoLiaisonEvent.FallbackToRuleBasedDispatched(id)
+                              )
+                            )
+                    }
 
                 } yield ()
         }
