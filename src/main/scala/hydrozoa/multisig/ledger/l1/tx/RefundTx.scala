@@ -85,7 +85,7 @@ private object RefundTxOps {
                     // _ = println(HexUtil.encodeHexString(ctx.transaction.toCbor))
 
                     finalized <- ctx
-                        .addExpectedSigners(config.headMultisigScript.requiredSigners)
+                        .addExpectedSigners(config.headMultisigScript.numSigners)
                         .finalizeContext(
                           config.cardanoProtocolParams,
                           diffHandler = Change

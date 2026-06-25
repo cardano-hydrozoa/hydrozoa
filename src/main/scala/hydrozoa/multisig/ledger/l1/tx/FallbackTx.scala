@@ -77,7 +77,7 @@ private object FallbackTxOps {
         lazy val result: Either[SomeBuildError, FallbackTx] = for {
             unbalanced <- build(Steps())
             finalized <- unbalanced
-                .addExpectedSigners(config.headMultisigScript.requiredSigners)
+                .addExpectedSigners(config.headMultisigScript.numSigners)
                 .finalizeContext(
                   diffHandler = Change.changeOutputDiffHandler(1),
                   validators = Tx.Validators.nonSigningNonValidityChecksValidators
