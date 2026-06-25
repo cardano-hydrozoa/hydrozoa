@@ -212,7 +212,7 @@ private object SettlementTxOps {
                 // Treasury / deposits are spent under the multisig native script; declare its
                 // signers as expected so the witness set is sized into the fee. Propagates to all
                 // derived contexts.
-                ctx = ctx0.addExpectedSigners(config.headMultisigScript.requiredSigners)
+                ctx = ctx0.addExpectedSigners(config.headMultisigScript.numSigners)
                 addedPessimisticRollout <- BasePessimistic
                     .mbApplySendRollout(ctx)
                     .explainConst("sending the rollout tx failed in base pessimistic")

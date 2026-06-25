@@ -135,8 +135,6 @@ object DisputeResolutionValidator extends Validator {
     // Abstain redeemer
     private inline val AbstainOnlyOneVoteUtxoIsSpent =
         "Only one vote utxo can be spent"
-    private inline val AbstainVoteInputNotFound =
-        "Spent input matching ownRef not found"
     private inline val AbstainOnlyFromAwaitingVote =
         "Abstain is only valid from AwaitingVote"
     private inline val AbstainMustBeSignedByPeer =
@@ -169,13 +167,24 @@ object DisputeResolutionValidator extends Validator {
             case DisputeRedeemer.Vote(voteRedeemer) =>
                 log("Vote")
 
-                // There must not be any other spent input matching voteOutref on transaction hash
-                val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
-                    case List.Cons(voteOutref, tail) =>
-                        require(tail.isEmpty, VoteOnlyOneVoteUtxoIsSpent)
-                        voteOutref
-                    // Unreachable
-                    case _ => fail()
+                // Identify the spent ballot box by ownRef.
+                val voteInput = tx.inputs.find(_.outRef === ownRef).get.resolved
+
+                // Let (headMp, disputeId) be the minting policy and asset name of the only non-ADA
+                // tokens in voteInput.
+                val (headMp, disputeId, _) = voteInput.value.onlyNonAdaAsset
+
+                // Bound the transaction to a single ballot box by token identity (a txid filter
+                // misses co-spent boxes once ratcheting diverges a box's source tx from fallback).
+                require(
+                  tx.inputs
+                      .filter(i =>
+                          (i.outRef !== ownRef)
+                              && i.resolved.value.containsCurrencySymbol(headMp)
+                      )
+                      .isEmpty,
+                  VoteOnlyOneVoteUtxoIsSpent
+                )
 
                 voteDatum.voteStatus match {
                     case AwaitingVote(pkh) =>
@@ -196,11 +205,6 @@ object DisputeResolutionValidator extends Validator {
                           VoteRatchetNotMonotonic
                         )
                 }
-
-                // Let(headMp, disputeId) be the minting policy and asset name of the only non-ADA
-                // tokens in voteInput.
-                val voteInput = voteOutref.resolved
-                val (headMp, disputeId, _) = voteInput.value.onlyNonAdaAsset
 
                 // Verify the treasury reference input
                 // Find a reference input that holds a CIP-67-HYDR-prefixed token under the same
@@ -575,12 +579,19 @@ object DisputeResolutionValidator extends Validator {
             case DisputeRedeemer.Abstain =>
                 log("Abstain")
 
-                // 1. Exactly one input spent at this address (this utxo).
-                val voteOutref = tx.inputs.filter(_.outRef.id === ownRef.id) match
-                    case List.Cons(o, tail) =>
-                        require(tail.isEmpty, AbstainOnlyOneVoteUtxoIsSpent)
-                        o
-                    case List.Nil => fail(AbstainVoteInputNotFound)
+                // 1. Identify the spent ballot box by ownRef, and bound the tx to a single ballot
+                //    box by token identity: no other spent input may carry the head's policy.
+                val voteInput = tx.inputs.find(_.outRef === ownRef).get.resolved
+                val (headMp, _, _) = voteInput.value.onlyNonAdaAsset
+                require(
+                  tx.inputs
+                      .filter(i =>
+                          (i.outRef !== ownRef)
+                              && i.resolved.value.containsCurrencySymbol(headMp)
+                      )
+                      .isEmpty,
+                  AbstainOnlyOneVoteUtxoIsSpent
+                )
 
                 // 2. Input status must be AwaitingVote(peer).
                 val votePeer = voteDatum.voteStatus match {
@@ -593,7 +604,6 @@ object DisputeResolutionValidator extends Validator {
 
                 // 4. Continuing output: same address + value (vote token + ada preserved),
                 //    datum flipped to Abstain with key/link unchanged, no reference script.
-                val voteInput = voteOutref.resolved
                 val voteOutput = tx.outputs.find(o => o.value === voteInput.value) match
                     case Some(o) => o
                     case None    => fail(AbstainVoteOutputExists)
