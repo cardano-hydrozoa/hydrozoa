@@ -330,8 +330,7 @@ object Main
         nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: HeadMultisigRegimeManager,
-        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent] =
-            Monoid[ContraTracer[IO, HydrozoaHttpEvent]].empty,
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
             _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
