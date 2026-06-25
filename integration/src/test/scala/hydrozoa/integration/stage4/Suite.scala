@@ -899,8 +899,9 @@ case class Stage4Suite(
             // Snapshot every observer-written Ref ONCE here, after all drain signals have fired,
             // and reuse this single frozen view for the whole analysis. Re-reading these Refs
             // separately (here and again inside analyzeBlockBriefs) races the observer fibers
-            // under WS (real clock, no TestControl tick-drain), comparing quantities derived from
-            // inconsistent snapshots — the source of the intermittent WS failure.
+            // under WS (real clock, no TestControl tick-drain): cross-peer quantities could then
+            // be derived from inconsistent snapshots. Freezing once removes that window by
+            // construction.
             briefsByPeer <- sut.mutable.blockBriefs.toList
                                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                                 .map(_.toMap)
@@ -985,15 +986,17 @@ case class Stage4Suite(
 
             _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
 
-            // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
-            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these. Checks the
-            // stacks frozen when the effects-landed target was armed — consistent with the signal.
+            // Checks the stacks frozen when the effects-landed target was armed — consistent with
+            // the signal. Under virtual time (Direct) the backend resolves instantly, so one
+            // attempt suffices. Under WS (real clock) `effectsLandedSignal` confirms only that the
+            // TxSubmitting sink *observed* each hash; the backend's `isTxKnown` can still lag that
+            // observation by a submission round-trip, so poll to absorb the gap.
             effectsLandedProp <- EffectsLanded.propEffectsLanded(
               canonicalStacksForEffects,
               sut.static.cardanoBackend,
               log,
-              attempts = 1,
-              sleep = 0.seconds,
+              attempts = if useTestControl then 1 else 20,
+              sleep = if useTestControl then 0.seconds else 1.second,
             )
 
             targetBlockNums <- sut.mutable.slowCoverageTarget.get
@@ -1526,15 +1529,16 @@ object Stage4Suite:
               generateNodeOperationMultisigConfig = hc =>
                   hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
                     maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
-                    // Keep `softBlockMinPeriod` at the production default so block-production
-                    // cadence (and the model-command-batching that depends on it) is unchanged.
-                    // Only narrow `hardStackMinPeriod`: the 3-minute production value is what
-                    // starves CardanoLiaison of PushResults inside the WS test wall-clock budget
-                    // (see docs/rate-limiter.md). 2s preserves the throttle's batching intent
-                    // across blocks while fitting the WS budget.
+                    // Narrow both periods to fit the WS test wall-clock budget (see
+                    // docs/rate-limiter.md). The 20s production `softBlockMinPeriod` paces every
+                    // soft-confirmed block on the real clock under WS, stretching each scenario to
+                    // tens of minutes and delaying settlement submission past the effects-landed
+                    // poll budget; 5s keeps block production (and the model command-batching that
+                    // tracks it) brisk while preserving the throttle's cross-block batching intent.
+                    // `hardStackMinPeriod`'s 3-minute production value would likewise starve
+                    // CardanoLiaison of PushResults within the budget; 2s preserves batching too.
                     rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                      softBlockMinPeriod =
-                          hydrozoa.config.node.operation.multisig.RateLimits.default.softBlockMinPeriod,
+                      softBlockMinPeriod = 5.seconds,
                       hardStackMinPeriod = 2.seconds
                     )
                   )
