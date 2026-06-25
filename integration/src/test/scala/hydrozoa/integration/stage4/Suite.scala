@@ -434,34 +434,38 @@ case class Stage4Suite(
                         (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
                 }
             } yield Stage4Sut(
-              system = system,
-              cardanoBackend = cardanoBackend,
-              peers = peerConnections.map { case (peerNum, conns) =>
-                  peerNum -> Stage4PeerHandle(
-                    conns.requestSequencer.getOrElse(
-                      sys.error(s"head peer $peerNum missing RequestSequencer")
+              static = Stage4SutStatic(
+                system = system,
+                cardanoBackend = cardanoBackend,
+                peers = peerConnections.map { case (peerNum, conns) =>
+                    peerNum -> Stage4PeerHandle(
+                      conns.requestSequencer.getOrElse(
+                        sys.error(s"head peer $peerNum missing RequestSequencer")
+                      )
                     )
-                  )
-              },
-              sutErrors = sutErrors,
-              errorDrainer = errorDrainer,
-              liaisonTickFibers = headTickFibers ++ coilTickFibers,
-              blockBriefs = blockBriefsMap,
-              stacks = stacksMap,
-              coilStacks = coilStacksMap,
-              backendStores = peerMrms.map { case (peerNum, peerMrm) =>
-                  peerNum -> peerMrm.backendStore
-              },
-              submittedRequestIds = submittedRequestIds,
-              fastSettlementSignal = fastSettlementSignal,
-              slowCoverageSignal = slowCoverageSignal,
-              fastSettlementTarget = fastSettlementTarget,
-              slowCoverageTarget = slowCoverageTarget,
-              effectsLanded = effectsLanded,
-              effectsLandedSignal = effectsLandedSignal,
-              effectsLandedTarget = effectsLandedTarget,
-              fallbackEnteredSignal = fallbackEnteredSignal,
-              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
+                },
+                errorDrainer = errorDrainer,
+                liaisonTickFibers = headTickFibers ++ coilTickFibers,
+                backendStores = peerMrms.map { case (peerNum, peerMrm) =>
+                    peerNum -> peerMrm.backendStore
+                },
+                log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
+              ),
+              mutable = Stage4SutMutable(
+                sutErrors = sutErrors,
+                blockBriefs = blockBriefsMap,
+                stacks = stacksMap,
+                coilStacks = coilStacksMap,
+                submittedRequestIds = submittedRequestIds,
+                fastSettlementSignal = fastSettlementSignal,
+                slowCoverageSignal = slowCoverageSignal,
+                fastSettlementTarget = fastSettlementTarget,
+                slowCoverageTarget = slowCoverageTarget,
+                effectsLanded = effectsLanded,
+                effectsLandedSignal = effectsLandedSignal,
+                effectsLandedTarget = effectsLandedTarget,
+                fallbackEnteredSignal = fallbackEnteredSignal,
+              ),
             )
 
         case class CoilMrm(
@@ -811,9 +815,9 @@ case class Stage4Suite(
                 pss.fallbackEnteredSignal,
               )
             )(sut =>
-                sut.liaisonTickFibers.traverse_(_.cancel) >>
+                sut.static.liaisonTickFibers.traverse_(_.cancel) >>
                     IO.sleep(100.millis) >>
-                    sut.errorDrainer.cancel
+                    sut.static.errorDrainer.cancel
             )
         } yield sut
     }
@@ -835,32 +839,32 @@ case class Stage4Suite(
         // until the outer test timeout, accumulating the InitWindowElapsed warn flood.
         val happyPathProp: IO[Prop] = for
             _ <- log.warn("beforeFinalize")
-            submitted <- sut.submittedRequestIds.get
+            submitted <- sut.mutable.submittedRequestIds.get
             // Arm the fast-cycle drain: publish the final submitted set so the JL capture sink
             // knows the target. The sink fires fastSettlementSignal only after this is set,
             // preventing mid-run firing against a partial submittedRequestIds snapshot.
-            _ <- sut.fastSettlementTarget.complete(submitted.toSet)
+            _ <- sut.mutable.fastSettlementTarget.complete(submitted.toSet)
             // One-time coverage check: if all IDs already landed before we armed the target,
             // fire the signal ourselves (no new brief will arrive to trigger the sink).
-            allBriefs <- sut.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
+            allBriefs <- sut.mutable.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
             seen       = allBriefs
                              .flatMap(br =>
                                  br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
                              )
                              .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
-                     sut.fastSettlementSignal.complete(()).void
+                     sut.mutable.fastSettlementSignal.complete(()).void
                  )
-            _ <- IO.whenA(submitted.nonEmpty)(sut.fastSettlementSignal.get)
+            _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.get)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
-            blockNums <- sut.blockBriefs.values.toList
+            blockNums <- sut.mutable.blockBriefs.values.toList
                              .traverse(_.get)
                              .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
-            _ <- sut.slowCoverageTarget.complete(blockNums)
+            _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
             // One-time coverage check across ALL peers — matching the sink condition so a spurious
             // signal fire can't race ahead of any peer's stacksMap update.
-            allPeersStacks <- sut.stacks.values.toList.traverse(_.get)
+            allPeersStacks <- sut.mutable.stacks.values.toList.traverse(_.get)
             allCovered      = blockNums.isEmpty ||
                                   allPeersStacks.forall { peerStacks =>
                                       blockNums.forall { bn =>
@@ -870,31 +874,31 @@ case class Stage4Suite(
                                           }
                                       }
                                   }
-            _ <- IO.whenA(allCovered)(sut.slowCoverageSignal.complete(()).void)
-            _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
+            _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()).void)
+            _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.get)
             // Arm the effects-landed drain: now that the slow cycle has reached agreement on
             // every block, derive the backbone expectations from the canonical peer's stacks and
             // wait for the TxSubmitting sink to observe enough hashes to satisfy them. Gap
             // between slow signal and this one = the StackComposer rate-limit delay.
-            canonicalStacksForTarget <- sut.stacks.toList
+            canonicalStacksForTarget <- sut.mutable.stacks.toList
                                             .traverse { case (p, ref) => ref.get.map(p -> _) }
                                             .map { byPeer =>
                                                 val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
                                                 sorted.headOption.map(_._2).getOrElse(Vector.empty)
                                             }
             expectations = EffectsLanded.expectations(canonicalStacksForTarget)
-            _ <- sut.effectsLandedTarget.complete(expectations)
+            _ <- sut.mutable.effectsLandedTarget.complete(expectations)
             // One-time check: if every relevant expectation is already satisfied by the hashes
             // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
-            landedNow <- sut.effectsLanded.get
+            landedNow <- sut.mutable.effectsLanded.get
             _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
-                     sut.effectsLandedSignal.complete(()).void
+                     sut.mutable.effectsLandedSignal.complete(()).void
                  )
-            _ <- IO.whenA(expectations.nonEmpty)(sut.effectsLandedSignal.get)
-            errors <- sut.sutErrors.get
+            _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.get)
+            errors <- sut.mutable.sutErrors.get
             analysisProp <- analyzeBlockBriefs(lastState, sut)
-            sortedPeers = sut.stacks.keys.toSeq.sortBy(p => p: Int)
-            stacksByPeer <- sut.stacks.toList
+            sortedPeers = sut.mutable.stacks.keys.toSeq.sortBy(p => p: Int)
+            stacksByPeer <- sut.mutable.stacks.toList
                                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                                 .map(_.toMap)
             persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
@@ -904,7 +908,7 @@ case class Stage4Suite(
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else props
 
-        IO.race(sut.fallbackEnteredSignal.get, happyPathProp).map {
+        IO.race(sut.mutable.fallbackEnteredSignal.get, happyPathProp).map {
             case Left(txId) =>
                 Prop.exception(
                   RuntimeException(
@@ -918,16 +922,16 @@ case class Stage4Suite(
 
     private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
         for
-            briefsByPeer <- sut.blockBriefs.toList
+            briefsByPeer <- sut.mutable.blockBriefs.toList
                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                 .map(_.toMap)
 
             sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
             nPeers = sortedPeers.length
             canonicalBriefs = briefsByPeer(sortedPeers.head)
-            submittedIds <- sut.submittedRequestIds.get
+            submittedIds <- sut.mutable.submittedRequestIds.get
 
-            stacksByPeer <- sut.stacks.toList
+            stacksByPeer <- sut.mutable.stacks.toList
                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                 .map(_.toMap)
             canonicalStacks = stacksByPeer(sortedPeers.head)
@@ -938,7 +942,7 @@ case class Stage4Suite(
                       .mkString(", ")
             )
 
-            coilStacksByCoil <- sut.coilStacks.toList
+            coilStacksByCoil <- sut.mutable.coilStacks.toList
                 .traverse { case (c, ref) => ref.get.map(c -> _) }
                 .map(_.toMap)
             _ <- IO.whenA(coilStacksByCoil.nonEmpty)(
@@ -966,13 +970,13 @@ case class Stage4Suite(
             // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
             effectsLandedProp <- EffectsLanded.propEffectsLanded(
               canonicalStacks,
-              sut.cardanoBackend,
+              sut.static.cardanoBackend,
               log,
               attempts = 1,
               sleep = 0.seconds,
             )
 
-            targetBlockNums <- sut.slowCoverageTarget.get
+            targetBlockNums <- sut.mutable.slowCoverageTarget.get
 
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
@@ -1025,7 +1029,7 @@ case class Stage4Suite(
     ): IO[Prop] = {
         sortedPeers
             .traverse { peerNum =>
-                val backend = sut.backendStores(peerNum)
+                val backend = sut.static.backendStores(peerNum)
                 val captured = stacksByPeer.getOrElse(peerNum, Vector.empty)
                 val expectedStacks = captured.size
                 // Only the blocks that back an on-chain KZG commitment get an `EvacuationMap`
