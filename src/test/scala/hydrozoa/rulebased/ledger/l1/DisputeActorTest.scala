@@ -49,7 +49,14 @@ object DisputeActorTestHelpers {
         txIn: TransactionInput,
         nVoteTokens: BigInt = 1,
     ): scalus.cardano.ledger.Utxo =
-        DisputeTestFixtures.mkBallotBoxUtxoPure(headConfig, key, link, voteStatus, txIn, nVoteTokens)
+        DisputeTestFixtures.mkBallotBoxUtxoPure(
+          headConfig,
+          key,
+          link,
+          voteStatus,
+          txIn,
+          nVoteTokens
+        )
 
     def mkBallotBoxUtxo(
         key: BigInt,
