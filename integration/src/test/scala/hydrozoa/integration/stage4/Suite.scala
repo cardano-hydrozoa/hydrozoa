@@ -896,11 +896,34 @@ case class Stage4Suite(
                  )
             _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.get)
             errors <- sut.mutable.sutErrors.get
-            analysisProp <- analyzeBlockBriefs(lastState, sut)
-            sortedPeers = sut.mutable.stacks.keys.toSeq.sortBy(p => p: Int)
+            // Snapshot every observer-written Ref ONCE here, after all drain signals have fired,
+            // and reuse this single frozen view for the whole analysis. Re-reading these Refs
+            // separately (here and again inside analyzeBlockBriefs) races the observer fibers
+            // under WS (real clock, no TestControl tick-drain), comparing quantities derived from
+            // inconsistent snapshots — the source of the intermittent WS failure.
+            briefsByPeer <- sut.mutable.blockBriefs.toList
+                                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                                .map(_.toMap)
             stacksByPeer <- sut.mutable.stacks.toList
                                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                                 .map(_.toMap)
+            coilStacksByCoil <- sut.mutable.coilStacks.toList
+                                    .traverse { case (c, ref) => ref.get.map(c -> _) }
+                                    .map(_.toMap)
+            submittedIds <- sut.mutable.submittedRequestIds.get
+            sortedPeers = stacksByPeer.keys.toSeq.sortBy(p => p: Int)
+            // propEffectsLanded must check exactly what effectsLandedSignal confirmed landed, so it
+            // uses the stacks frozen when effectsLandedTarget was armed (above), not the post-signal
+            // snapshot — which could include a trailing stack whose txs have not landed yet.
+            analysisProp <- analyzeBlockBriefs(
+                              lastState,
+                              sut,
+                              briefsByPeer,
+                              stacksByPeer,
+                              coilStacksByCoil,
+                              submittedIds,
+                              canonicalStacksForTarget,
+                            )
             persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
             props = analysisProp && persistenceProp
         yield
@@ -920,21 +943,20 @@ case class Stage4Suite(
         }
     }
 
-    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+    private def analyzeBlockBriefs(
+        lastState: ModelState,
+        sut: Stage4Sut,
+        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        coilStacksByCoil: Map[CoilPeerNumber, Vector[Stack.HardConfirmed]],
+        submittedIds: Vector[RequestId],
+        canonicalStacksForEffects: Vector[Stack.HardConfirmed],
+    ): IO[Prop] = {
+        val sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
+        val nPeers = sortedPeers.length
+        val canonicalBriefs = briefsByPeer(sortedPeers.head)
+        val canonicalStacks = stacksByPeer(sortedPeers.head)
         for
-            briefsByPeer <- sut.mutable.blockBriefs.toList
-                .traverse { case (p, ref) => ref.get.map(p -> _) }
-                .map(_.toMap)
-
-            sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
-            nPeers = sortedPeers.length
-            canonicalBriefs = briefsByPeer(sortedPeers.head)
-            submittedIds <- sut.mutable.submittedRequestIds.get
-
-            stacksByPeer <- sut.mutable.stacks.toList
-                .traverse { case (p, ref) => ref.get.map(p -> _) }
-                .map(_.toMap)
-            canonicalStacks = stacksByPeer(sortedPeers.head)
             _ <- log.info(
               "hard-confirmed stacks per peer: " +
                   sortedPeers
@@ -942,9 +964,6 @@ case class Stage4Suite(
                       .mkString(", ")
             )
 
-            coilStacksByCoil <- sut.mutable.coilStacks.toList
-                .traverse { case (c, ref) => ref.get.map(c -> _) }
-                .map(_.toMap)
             _ <- IO.whenA(coilStacksByCoil.nonEmpty)(
               log.info(
                 "coil hard-confirmed stacks: " +
@@ -967,9 +986,10 @@ case class Stage4Suite(
             _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
 
             // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
-            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
+            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these. Checks the
+            // stacks frozen when the effects-landed target was armed — consistent with the signal.
             effectsLandedProp <- EffectsLanded.propEffectsLanded(
-              canonicalStacks,
+              canonicalStacksForEffects,
               sut.static.cardanoBackend,
               log,
               attempts = 1,
