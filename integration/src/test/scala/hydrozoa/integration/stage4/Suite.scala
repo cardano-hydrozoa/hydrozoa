@@ -613,6 +613,10 @@ case class Stage4Suite(
               ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
             ],
             coilStacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
         ): Resource[IO, CoilMrm] = {
             // Reuse the head-typed event format with a synthetic peer number (matches the legacy
             // labelling); a coil-specific format is a separate follow-up.
@@ -621,8 +625,19 @@ case class Stage4Suite(
                 Slf4jTracer.sink.contramap(
                   HeadMultisigRegimeManagerEventFormat.humanFormat(labelNum)
                 )
+            // Coil also runs a CardanoLiaison and can submit backbone txs to L1 (e.g. the init tx
+            // in some races), so the TxSubmitting + FallbackToRuleBased capture observers must be
+            // wired to its tracer too — otherwise the test's landed set and fallback signal miss
+            // coil-side submissions.
             val mrmTracer =
-                slf4jMrm |+| Observers.captureCoilStackHardConfirmed(coilStacksRef)
+                slf4jMrm |+|
+                    Observers.captureCoilStackHardConfirmed(coilStacksRef) |+|
+                    Observers.captureTxSubmitting(
+                      effectsLanded,
+                      effectsLandedSignal,
+                      effectsLandedTarget,
+                    ) |+|
+                    Observers.captureFallbackEntered(fallbackEnteredSignal)
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
 
             InMemoryBackendStore.open(persistenceTracer).flatMap { backendStore =>
@@ -769,6 +784,10 @@ case class Stage4Suite(
                       pss.cardanoBackend,
                       coilUplinkFor(coilNum, registry, wsClient, hubBoundPort),
                       pss.coilStacksMap(coilNum),
+                      pss.effectsLanded,
+                      pss.effectsLandedSignal,
+                      pss.effectsLandedTarget,
+                      pss.fallbackEnteredSignal,
                     ).map(coilNum -> _)
                 }
                 .map(_.toMap)
