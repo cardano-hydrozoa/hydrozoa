@@ -12,16 +12,12 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
-import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
 import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
@@ -31,8 +27,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
 import scalus.cardano.onchain.plutus.v3.PosixTime
-import scalus.uplc.builtin.Data.{fromData, toData}
-import scalus.uplc.builtin.bls12_381.G2Element
+import scalus.uplc.builtin.Data.fromData
 import test.Generators.Hydrozoa.{genEvacuationMap, genPositiveValue}
 
 // Note: If the vote status is unresolved, the dispute resolution script will fail unless the tx hash matches
@@ -43,6 +38,7 @@ object DisputeActorTestHelpers {
 
     /** Build a ballot-box UTxO at the dispute address directly from a [[HeadConfig]] (no test
       * monad). The [[MultiNodeConfigTestM]] variant below just supplies the env's head config.
+      * Delegates to the shared [[DisputeTestFixtures]] constructor.
       */
     def mkBallotBoxUtxoPure(
         headConfig: HeadConfig,
@@ -52,26 +48,8 @@ object DisputeActorTestHelpers {
         // Careful, these can't conflict!
         txIn: TransactionInput,
         nVoteTokens: BigInt = 1,
-    ): scalus.cardano.ledger.Utxo = {
-        val disputeResAddress = HydrozoaBlueprint.mkDisputeAddress(headConfig.network)
-        val ownVoteUtxoOutput = Babbage(
-          address = disputeResAddress,
-          value = Value.assets(
-            lovelace = Coin.ada(5),
-            assets = Map(
-              (
-                headConfig.headMultisigScript.policyId,
-                Map((headConfig.headTokenNames.voteTokenName, nVoteTokens.toLong))
-              )
-            )
-          ),
-          datumOption = Some(
-            Inline(toData(VoteDatum(key = key, link = link, voteStatus = voteStatus)))
-          ),
-          scriptRef = None
-        )
-        scalus.cardano.ledger.Utxo((txIn, ownVoteUtxoOutput))
-    }
+    ): scalus.cardano.ledger.Utxo =
+        DisputeTestFixtures.mkBallotBoxUtxoPure(headConfig, key, link, voteStatus, txIn, nVoteTokens)
 
     def mkBallotBoxUtxo(
         key: BigInt,
@@ -83,26 +61,16 @@ object DisputeActorTestHelpers {
     ): MultiNodeConfigTestM[scalus.cardano.ledger.Utxo] =
         asks(env => mkBallotBoxUtxoPure(env.headConfig, key, link, voteStatus, txIn, nVoteTokens))
 
-    /** Build an Unresolved rule-based treasury UTxO (no test monad). */
+    /** Build an Unresolved rule-based treasury UTxO (no test monad). Delegates to the shared
+      * [[DisputeTestFixtures]] constructor.
+      */
     def mkRuleBasedTreasuryPure(
         versionMajor: BigInt,
         value: Value,
         txIn: TransactionInput,
         votingDeadline: PosixTime
-    ): RuleBasedTreasuryUtxo = {
-        val datum = Unresolved(
-          deadlineVoting = votingDeadline,
-          versionMajor = versionMajor,
-          // this is cribbed from the CommonGenerators.scala test
-          setupG2 = TrustedSetup
-              .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-              .map(p2 => G2Element(p2).toCompressedByteString)
-        )
-        RuleBasedTreasuryUtxo(
-          utxoId = txIn,
-          treasuryOutput = RuleBasedTreasuryOutput(datum, value)
-        )
-    }
+    ): RuleBasedTreasuryUtxo =
+        DisputeTestFixtures.mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline)
 
     def mkRuleBasedTreasury(
         versionMajor: BigInt,
