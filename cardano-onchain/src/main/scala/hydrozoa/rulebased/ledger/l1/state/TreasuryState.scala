@@ -1,7 +1,7 @@
 package hydrozoa.rulebased.ledger.l1.state
 
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
-import scalus.Compile
+import scalus.compiler.Compile
 import scalus.cardano.onchain.plutus.prelude.List
 import scalus.cardano.onchain.plutus.v3.*
 import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}

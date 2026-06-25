@@ -1,26 +1,24 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.finalizeContext
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningNonValidityChecksValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
-import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.{Utxo as _, *}
+import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
-import scalus.cardano.txbuilder.{SomeBuildError, TransactionBuilder}
 
 final case class TallyTx(
     continuingBallotBox: BallotBox[VoteStatus],
@@ -127,12 +125,6 @@ object TallyTxOps {
             val continuingRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Continuing)
             val removedRedeemer = DisputeRedeemer.Tally(TallyRedeemer.Removed)
 
-//            // TODO: The AddCollateral step should really add the signer to expected signers automatically,
-//            //  but we don't have that yet. So I'll add it on the vote utxo instead.
-//            val collateralSigner = ExpectedSigner(
-//              collateralUtxo.collateralOutput.addrKeyHash
-//            )
-
             // The dispute script always requires the voting deadline to have elapsed before any
             // tally — the key=0 ballot box stays ratchet-able in the Open phase until the
             // deadline, so per-input shortcuts can't speed up the global tally. We bump the
@@ -156,7 +148,10 @@ object TallyTxOps {
                       )
                     )
 
+                // Both ballot-box spends (and the collateral) are signed by the own wallet; the
+                // dispute validator checks `tx.signatories`, so it must be a required signer.
                 finalized <- context
+                    .addRequiredSigners(continuingBallotBox.spendSigners)
                     .finalizeContext(
                       diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
                       validators = nonSigningNonValidityChecksValidators

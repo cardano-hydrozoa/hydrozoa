@@ -613,7 +613,7 @@ object BlockWeaver {
 
                 override def act(config: Config): IO[Some[NextReactiveState]] = for {
                     _ <- logStateTransition
-                    now <- realTimeQuantizedInstant(config.slotConfig)
+                    _ <- realTimeQuantizedInstant(config.slotConfig)
                     requests <- extractRequestsInOrder
                     isBlockStarted <-
                         if requests.isEmpty

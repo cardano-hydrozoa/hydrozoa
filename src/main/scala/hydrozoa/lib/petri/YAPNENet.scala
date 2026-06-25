@@ -195,7 +195,7 @@ object YapneNet {
                       "points" -> arc.points.toList.asJson,
                       "label" -> arc.label.asJson
                     )
-                case rd: YapneReadArc =>
+                case _: YapneReadArc =>
                     Json.obj(
                       "id" -> arcId.asJson,
                       "source" -> arc.arcPlaceId.asJson,

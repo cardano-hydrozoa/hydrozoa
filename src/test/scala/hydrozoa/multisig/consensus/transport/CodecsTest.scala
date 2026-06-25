@@ -293,7 +293,6 @@ class CodecsTest extends AnyFunSuite {
             rid.asJson
         }
         val ledgerShape = {
-            import hydrozoa.multisig.ledger.event.RequestId.given
             rid.asJson
         }
         val _ = assert(transportShape == canonical, s"transport: $transportShape")

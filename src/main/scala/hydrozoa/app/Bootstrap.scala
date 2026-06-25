@@ -37,7 +37,6 @@ import io.circe.syntax.*
 import io.circe.{Decoder, parser}
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
-import monocle.Focus.focus
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import org.http4s.Uri
@@ -46,7 +45,7 @@ import scalus.cardano.address.Address
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
-import scalus.cardano.txbuilder.{Change, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 

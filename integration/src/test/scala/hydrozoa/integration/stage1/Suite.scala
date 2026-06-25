@@ -340,7 +340,7 @@ case class Suite(
               generateHeadParams = generateHeadParams,
               generateInitializationParameters = InitParamsType.TopDown(
                 InitializationParametersGenTopDown.GenWithDeps(
-                  generateGenesisUtxosL1 = ReaderT((tp: TestPeers) =>
+                  generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
                       Gen.const(testPeerToUtxos.map((k, v) => k.headPeerNumber -> v))
                   )
                 )
@@ -371,16 +371,16 @@ case class Suite(
 
             _ <- run(log.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}"))
 
-            operationalMultisigConfig <- pick(
-                                           generateNodeOperationMultisigConfig(
-                                             config.headConfig.maxCardanoLiaisonPollingPeriod
-                                           )
-                                         )
-            operationalEvacuationConfig <- pick(
-                                             generateNodeOperationEvacuationConfig(
-                                               testPeers.walletFor(Alice)
-                                             )
-                                           )
+            _ <- pick(
+                   generateNodeOperationMultisigConfig(
+                     config.headConfig.maxCardanoLiaisonPollingPeriod
+                   )
+                 )
+            _ <- pick(
+                   generateNodeOperationEvacuationConfig(
+                     testPeers.walletFor(Alice)
+                   )
+                 )
         } yield Model
             .State(
               multiNodeConfig = config,

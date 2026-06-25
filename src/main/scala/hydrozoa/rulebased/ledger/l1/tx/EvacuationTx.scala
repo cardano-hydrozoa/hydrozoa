@@ -1,6 +1,5 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig

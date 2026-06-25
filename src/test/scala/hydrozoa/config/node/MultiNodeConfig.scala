@@ -29,7 +29,7 @@ import test.{GenWithTestPeers, TestM, TestMFixedEnv, TestPeers, TestPeersSpec, g
 case class MultiNodeConfig private (
     nodePrivateConfigs: Map[HeadPeerNumber, NodePrivateConfig],
     override val headConfig: HeadConfig,
-    coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet] = List.empty,
+    coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet],
 ) extends HeadConfig.Section {
     lazy val nodeConfigs: Map[HeadPeerNumber, NodeConfig] =
         nodePrivateConfigs.map((n, pc) =>

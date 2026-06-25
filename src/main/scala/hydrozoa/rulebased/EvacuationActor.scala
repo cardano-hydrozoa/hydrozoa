@@ -129,7 +129,7 @@ case class EvacuationActor(
                         // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
                         case 1 => EitherT.fromEither[IO](Right(List.empty[EvacuateRedeemer]))
                         // Treasury resolved, some withdrawals processed. We need to parse redeemers to determine active utxo set.
-                        case n =>
+                        case _ =>
                             // The last transaction reported will be the dispute resolution tx (oldest).
                             // The preceding entries will be withdrawal transactions, up until the point that the deinit transaction
                             // occurs.

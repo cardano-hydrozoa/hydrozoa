@@ -5,18 +5,16 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import io.circe.*
-import io.circe.generic.semiauto.*
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
@@ -78,10 +76,12 @@ private object FallbackTxOps {
 
         lazy val result: Either[SomeBuildError, FallbackTx] = for {
             unbalanced <- build(Steps())
-            finalized <- unbalanced.finalizeContext(
-              diffHandler = Change.changeOutputDiffHandler(1),
-              validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
-            )
+            finalized <- unbalanced
+                .addExpectedSigners(config.headMultisigScript.numSigners)
+                .finalizeContext(
+                  diffHandler = Change.changeOutputDiffHandler(1),
+                  validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
+                )
             completed = Complete(finalized)
         } yield completed
 

@@ -1,6 +1,5 @@
 package hydrozoa.config.head.multisig.timing
 
-import cats.*
 import cats.data.*
 import org.scalacheck.Gen
 import test.GenWithTestPeers

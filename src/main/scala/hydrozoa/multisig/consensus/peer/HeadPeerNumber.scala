@@ -27,7 +27,7 @@ object HeadPeerNumber {
 
             for {
                 i <- KeyDecoder.decodeKeyInt(s)
-                pi <- NonNegativeInt(i)
+                _ <- NonNegativeInt(i)
             } yield i
 
         }

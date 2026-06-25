@@ -266,8 +266,6 @@ object Deposits {
     private type AppendDepositM[From <: DepositStatus, To <: DepositStatus] =
         Queue[From] => cats.data.State[Model.State, Queue[To]]
 
-    import DepositStatus.*
-
     /** A utility helper to update the full queue (preserving ordering), append to a new queue, and
       * remove from the old queue
       *

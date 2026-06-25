@@ -1,6 +1,5 @@
 package hydrozoa.config.head.rulebased.dispute
 
-import cats.*
 import cats.data.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import org.scalacheck.Gen

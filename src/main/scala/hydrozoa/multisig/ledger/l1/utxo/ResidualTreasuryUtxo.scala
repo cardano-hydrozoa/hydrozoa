@@ -1,6 +1,5 @@
 package hydrozoa.multisig.ledger.l1.utxo
 
-import scalus.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, TransactionInput, TransactionOutput, Utxo, Value}
 

@@ -887,7 +887,7 @@ trait CardanoLiaison(
                                         quantizedInstant
                                     }
                                 // TODO: this should never happen
-                                case tx: InitializationTx =>
+                                case _: InitializationTx =>
                                     Left(UnexpectedInitializationEffect(backboneEffectId))
                                 case _: RolloutTx => Left(UnexpectedRolloutEffect(backboneEffectId))
                             }
@@ -949,7 +949,7 @@ trait CardanoLiaison(
                 }
 
             // Rollout tx
-            case rolloutTx @ (versionMajor, _notZero) =>
+            case rolloutTx @ (versionMajor, _) =>
                 // println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
 
                 val nextBackboneTx = versionMajor.increment -> 0

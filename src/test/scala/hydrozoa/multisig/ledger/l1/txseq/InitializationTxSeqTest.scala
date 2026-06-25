@@ -5,7 +5,7 @@ import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.tx.{InitializationTx, Metadata as MD}
+import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum
 import io.bullet.borer.Cbor
 import org.scalacheck.Prop.propBoolean

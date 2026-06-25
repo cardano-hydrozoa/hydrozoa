@@ -2,7 +2,6 @@ package hydrozoa.app
 
 import cats.effect.unsafe.implicits.global
 import cats.effect.{Deferred, IO}
-import hydrozoa.config.GenerateSampleConfig
 import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.head.HeadConfig.headConfigEncoder
 import hydrozoa.config.node.MultiNodeConfig

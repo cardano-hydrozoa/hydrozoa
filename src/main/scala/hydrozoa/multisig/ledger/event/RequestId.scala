@@ -4,7 +4,6 @@ import cats.implicits.catsSyntaxOrder
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
 import io.circe.*
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import scala.annotation.targetName
 

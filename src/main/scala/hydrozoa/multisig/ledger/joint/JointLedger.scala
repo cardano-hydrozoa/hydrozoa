@@ -21,7 +21,7 @@ import hydrozoa.multisig.consensus.ack.SoftAck
 import hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer, UserRequestWithId, pollresults}
+import hydrozoa.multisig.consensus.{CoilRelay, FastConsensusActor, StackComposer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.{Invalid, Valid}
@@ -1032,7 +1032,7 @@ object JointLedger {
           * store corruption (fail-safe throw).
           */
         private def doneAt(persistence: Persistence[IO], blockNum: BlockNumber)(using
-            CardanoNetwork.Section
+            @scala.annotation.unused section: CardanoNetwork.Section
         ): IO[Done] =
             for {
                 brief <- persistence.getOrFail(JournalKey.Block(blockNum))

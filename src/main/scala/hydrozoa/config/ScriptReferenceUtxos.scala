@@ -2,7 +2,6 @@ package hydrozoa.config
 
 import cats.*
 import cats.data.*
-import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos.Error.UnresolvableScriptUtxo
 import hydrozoa.config.head.network.CardanoNetwork

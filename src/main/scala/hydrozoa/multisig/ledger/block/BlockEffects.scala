@@ -4,6 +4,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import io.circe.*
 import io.circe.generic.semiauto.*
+import scala.annotation.unused
 
 /** Effects for the **initial** block only — the unsigned init + fallback txs the head will sign via
   * the slow consensus's stack-0 hard-ack flow at startup.
@@ -28,6 +29,6 @@ object BlockEffects {
         // Encoder only — InitializationTx / FallbackTx have CBOR-hex encoders but no decoders
         // (they require semantic reconstruction from a raw `Transaction` plus bootstrap context,
         // done in `HeadConfig.headConfigDecoder`).
-        given (using CardanoNetwork.Section): Encoder[Initial] = deriveEncoder[Initial]
+        given (using @unused ev: CardanoNetwork.Section): Encoder[Initial] = deriveEncoder[Initial]
     }
 }

@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l2
 
 // see: https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events
 
-import cats.syntax.all.*
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
@@ -123,7 +122,6 @@ object L2LedgerCommand {
 
     object ApplyDepositDecisions {
         given Codec[L2LedgerCommand.ApplyDepositDecisions] = {
-            import BlockNumber.given
             import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
             io.circe.generic.semiauto.deriveCodec
         }

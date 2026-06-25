@@ -31,6 +31,7 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.Lens
 import monocle.syntax.all.focus
 import org.scalacheck.commands.ModelCommand
+import scala.annotation.nowarn
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scala.util.chaining.*
@@ -326,7 +327,7 @@ object Model:
             for
                 state <- StateT.get[M, State]
                 brief <- state.blockCycle match {
-                    case BlockCycle.InProgress(blockNumber, _creationTime, prevVersion, accumulator) =>
+                    case BlockCycle.InProgress(_, _, prevVersion, accumulator) =>
                         val events: List[(RequestId, ValidityFlag)] =
                             accumulator.map((le, _, flag) => le.requestId -> flag)
                         for
@@ -335,9 +336,7 @@ object Model:
                                                        s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
                                                      )
                                                    )
-                            regOrReject         <- registerOrReject[M](events)
-                            registeredThisBlock  = regOrReject._1
-                            rejectedThisBlock    = regOrReject._2
+                            _                   <- registerOrReject[M](events)
                             absorbedThisBlock   <- absorb[M](cmd.blockCreationEndTime)
                             refundedThisBlock   <- refund[M](cmd.isFinal, cmd.blockCreationEndTime)
                             blockBrief          <- mkBlockBrief[M](
@@ -417,6 +416,7 @@ object Model:
             rejected <- liftS(DepositStatus.Rejected.reject(depositsToRegisterOrReject._2))
         } yield (registered, rejected)
 
+        @nowarn("msg=unused explicit parameter")
         def absorb[M[_]: Applicative](
             blockCreationEndTime: BlockCreationEndTime
         ): StateT[M, State, Queue[Absorbed]] =

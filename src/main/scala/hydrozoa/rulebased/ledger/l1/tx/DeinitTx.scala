@@ -1,23 +1,21 @@
 package hydrozoa.rulebased.ledger.l1.tx
 
-import cats.implicits.*
 import hydrozoa.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
-import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryUtxo, *}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
 import monocle.*
 import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.{SomeBuildError, *}
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.ByteString.hex
 
 final case class DeinitTx(
@@ -102,7 +100,10 @@ private object DeinitTxOps {
                   ) ++ treasuryUtxo.treasuryOutput.burnHeadTokens
                 )
 
+                // Head tokens are burned under the multisig native script; declare its signers as
+                // expected so the witness set is sized into the fee.
                 finalized <- context
+                    .addExpectedSigners(config.headMultisigScript.numSigners)
                     .finalizeContext(
                       diffHandler = Change.changeOutputDiffHandler(
                         0

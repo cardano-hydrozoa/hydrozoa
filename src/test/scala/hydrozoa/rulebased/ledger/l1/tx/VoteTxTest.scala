@@ -9,7 +9,6 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
@@ -50,9 +49,9 @@ def genBallotBox(
     for {
         outputIx <- Gen.choose(1, config.nHeadPeers.toInt)
         txId = TransactionInput(fallbackTxId, outputIx)
-        scriptAddr = HydrozoaBlueprint.mkDisputeAddress(config.network)
+        _ = HydrozoaBlueprint.mkDisputeAddress(config.network)
 
-        voteTokenAssetName = config.headTokenNames.voteTokenName
+        _ = config.headTokenNames.voteTokenName
 
         ballotBoxOutput = BallotBoxOutput(
           key = voteDatum.key,
@@ -78,7 +77,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
 
         // This is 4 bytes shorter to accommodate CIP-67 prefixes
         // NB: we use the same token name _suffix_ for all head tokens so far, which is not the case in reality
-        headTokenSuffix <- genByteStringOfN(28)
+        _ <- genByteStringOfN(28)
 
         treasuryUtxo <- genRuleBasedTreasuryUtxo(
           fallbackTxId = fallbackTxId,
@@ -112,7 +111,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
         )
 
         // Create builder context (not needed for Recipe anymore)
-        allUtxos = Map(
+        _ = Map(
           voteUtxo.toUtxo.input -> voteUtxo.toUtxo.output,
           treasuryUtxo.toUtxo.toTuple._1 -> treasuryUtxo.toUtxo.toTuple._2,
           collateralUtxo._1 -> collateralUtxo._2

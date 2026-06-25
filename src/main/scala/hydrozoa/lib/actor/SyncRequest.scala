@@ -75,7 +75,7 @@ import scala.Any as ScalaAny
   * }
   *   }}}
   */
-trait SyncRequest[F[+_]: Concurrent, Request, Response] {
+trait SyncRequest[F[+_], Request, Response] {
     type Sync <: SyncRequest.Envelope[F, Request, Response]
     type Respondent = ActorRef[F, Sync]
     type Send = (actorRef: Respondent) => F[Response]

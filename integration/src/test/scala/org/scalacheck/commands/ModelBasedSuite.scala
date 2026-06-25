@@ -8,6 +8,7 @@ import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, error, info, warn}
 import org.scalacheck.{Gen, Prop, PropertyM}
+import scala.annotation.nowarn
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 
 // ===================================
@@ -39,6 +40,7 @@ trait ModelCommand[Cmd, Result, State] {
     /** Virtual-time delay to advance *before* this command's run is executed. Defaults to
       * [[Duration.Zero]] (no delay).
       */
+    @nowarn("msg=unused explicit parameter")
     def delay(cmd: Cmd): FiniteDuration = Duration.Zero
 }
 
@@ -70,6 +72,7 @@ trait CommandProp[Cmd, Result, State] {
                     onFailureCheck(cmd, expectedResult, stateBefore, stateAfter, e)
         }
 
+    @nowarn("msg=unused explicit parameter")
     def onSuccessCheck(
         cmd: Cmd,
         expectedResult: Result,
@@ -78,6 +81,7 @@ trait CommandProp[Cmd, Result, State] {
         result: Result
     ): Prop = Prop.passed
 
+    @nowarn("msg=unused explicit parameter")
     def onFailureCheck(
         cmd: Cmd,
         expectedResult: Result,
@@ -274,6 +278,7 @@ trait ModelBasedSuite {
       * suites can override to print extra diagnostics (e.g. a per-peer command table) and may call
       * `super.onTestCaseGenerated(...)` to keep the default log alongside their own.
       */
+    @nowarn("msg=unused explicit parameter")
     def onTestCaseGenerated(initialState: State, commands: List[AnyCommand[State, Sut]]): IO[Unit] =
         log.info(s"Sequential Commands:\n${prettyCmdsRes(commands, commands.size)}\n")
 
@@ -312,6 +317,7 @@ trait ModelBasedSuite {
       * The default implementation returns `Prop.proved`; suites that put all cleanup in the
       * [[sutResource]] finalizer do not need to override this.
       */
+    @nowarn("msg=unused explicit parameter")
     def beforeFinalize(lastState: State, sut: Sut): IO[Prop] = IO.pure(Prop.proved)
 
     // ===================================
@@ -448,7 +454,7 @@ trait ModelBasedSuite {
             if useTestControl
             then runCommandsWithTestControl(testCase, sutResource)
             else runCommandsPlain(testCase, sutResource)
-        (_sut, prop, s, lastCmd, _) = result
+        (_, prop, s, lastCmd, _) = result
         r = prop.apply(Gen.Parameters.default)
         _ <- if r.failure then
                  log.warn(
@@ -636,7 +642,7 @@ trait ModelBasedSuite {
                     // 4. Otherwise, run per-command iteration.
                     // Note that the outer doesn't need the command object.
                     // It just needs to iterate the right number of times.
-                    testCase.commands.foldLeft(IO.unit) { (acc, _u) =>
+                    testCase.commands.foldLeft(IO.unit) { (acc, _) =>
                         acc >> tc.results.flatMap {
                             case Some(_) => IO.unit // already finished, skip remaining
                             case None =>
