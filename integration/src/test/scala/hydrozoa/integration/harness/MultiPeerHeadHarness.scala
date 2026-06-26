@@ -143,36 +143,44 @@ object MultiPeerHeadHarness:
         val log: ContraTracer[IO, Slf4jMsg] =
             Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Harness"))
 
-        val preSystem: IO[Unit] = for
-            _ <- IO.whenA(useTC)(
-                     IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
-                 )
-            _ <- takeoffTime match
-                case None => IO.unit
-                case Some(t) =>
-                    IO.realTimeInstant.flatMap { now =>
-                        if now.isAfter(t) then
-                            IO.raiseError(
-                              RuntimeException(
-                                "Harness preSystem: initialization took too long " +
-                                    s"(takeoff: $t, now: $now)"
-                              )
-                            )
-                        else
-                            val sleepMs = t.toEpochMilli - now.toEpochMilli
-                            val tickMs  = 5_000L
-                            val ticks   = sleepMs / tickMs
-                            val remMs   = sleepMs % tickMs
-                            log.info(s"WS mode: sleeping ${sleepMs / 1000}s until takeoff") >>
-                                (0L until ticks).toList.traverse_ { i =>
-                                    IO.sleep(tickMs.millis) >>
-                                        log.info(
-                                          s"WS takeoff in ${(sleepMs - (i + 1) * tickMs) / 1000}s"
-                                        )
-                                } >>
-                                IO.sleep(remMs.millis)
-                    }
-        yield ()
+        // Under TestControl, jump the virtual clock from 0 to the head's start epoch BEFORE any
+        // actor exists — once actors are started their ping loops compete with tickOne, so the
+        // sleep must come first. No-op when TestControl is off (the configured start epoch is
+        // potentially years in the future).
+        val testControlPresleep: IO[Unit] =
+            IO.whenA(useTC)(IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS)))
+
+        // Under WS (real-clock) runs, wait until the wall clock reaches `takeoffTime` so the
+        // model clock and the SUT wall clock coincide at command 1. Abort if setup overran the
+        // budget — better a loud failure than a test that starts with already-violated timing.
+        // Same shape as stage 1. No-op when `takeoffTime` is `None` (TestControl runs).
+        val websocketTakeoff: IO[Unit] = takeoffTime match
+            case None => IO.unit
+            case Some(t) =>
+                IO.realTimeInstant.flatMap { now =>
+                    if now.isAfter(t) then
+                        IO.raiseError(
+                          RuntimeException(
+                            "Harness preSystem: initialization took too long " +
+                                s"(takeoff: $t, now: $now)"
+                          )
+                        )
+                    else
+                        val sleepMs = t.toEpochMilli - now.toEpochMilli
+                        val tickMs  = 5_000L
+                        val ticks   = sleepMs / tickMs
+                        val remMs   = sleepMs % tickMs
+                        log.info(s"WS mode: sleeping ${sleepMs / 1000}s until takeoff") >>
+                            (0L until ticks).toList.traverse_ { i =>
+                                IO.sleep(tickMs.millis) >>
+                                    log.info(
+                                      s"WS takeoff in ${(sleepMs - (i + 1) * tickMs) / 1000}s"
+                                    )
+                            } >>
+                            IO.sleep(remMs.millis)
+                }
+
+        val preSystem: IO[Unit] = testControlPresleep >> websocketTakeoff
 
         val mkCardanoBackend: IO[CardanoBackend[IO]] =
             val genesisUtxos: Utxos = preinitPeerUtxosL1.values.reduce(_ ++ _)
