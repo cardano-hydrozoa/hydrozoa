@@ -109,13 +109,13 @@ case class Stage4Suite(
                                 )
                             )
             submittedRequestIds   <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
+            effectsLanded         <- Resource.eval(Ref[IO].of(Set.empty[TransactionHash]))
 
             // Signals
             fastSettlementSignal  <- Resource.eval(IO.deferred[Unit])
             slowCoverageSignal    <- Resource.eval(IO.deferred[Unit])
             fastSettlementTarget  <- Resource.eval(IO.deferred[Set[RequestId]])
             slowCoverageTarget    <- Resource.eval(IO.deferred[Set[Int]])
-            effectsLanded         <- Resource.eval(Ref[IO].of(Set.empty[TransactionHash]))
             effectsLandedSignal   <- Resource.eval(IO.deferred[Unit])
             effectsLandedTarget   <- Resource.eval(IO.deferred[List[BlockExpectation]])
             fallbackEnteredSignal <- Resource.eval(IO.deferred[TransactionHash])
