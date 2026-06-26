@@ -1,0 +1,15 @@
+[
+  { "type": "ObserveBlock", "id": "b0", "creation": { "startMs": 1700000000000, "endMs": 1700000001000 }, "kind": "Initial" },
+  { "type": "ObserveSpineEffect", "id": "init-0", "kind": "Init", "blockId": "b0",
+    "validity": { "startMs": 1700000001000, "endMs": 1700131200000 } },
+  { "type": "ObserveFallback", "id": "fallback-0", "pairedEffectId": "init-0", "startMs": 1700131500000 },
+  { "type": "AdvanceClock", "toMs": 1700000030000 },
+  { "type": "ObserveDepositRequest", "id": "d1", "endMs": 1700000300000 },
+  { "type": "ObserveDepositOnChain", "id": "d1" },
+  { "type": "ObserveBlock", "id": "b1", "creation": { "startMs": 1700060000000, "endMs": 1700060001000 }, "kind": "Major" },
+  { "type": "ObserveDepositAbsorbed", "id": "d1", "by": "b1" },
+  { "type": "ObserveSpineEffect", "id": "settle-1", "kind": "Settlement", "blockId": "b1",
+    "validity": { "startMs": 1700060001000, "endMs": 1700191500000 } },
+  { "type": "ObserveFallback", "id": "fallback-1", "pairedEffectId": "settle-1", "startMs": 1700191800000 },
+  { "type": "HypothesizeDeposit", "id": "d2-draft", "endMs": 1700070000000 }
+]
