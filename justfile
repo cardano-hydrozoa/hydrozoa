@@ -46,7 +46,53 @@ test:
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt Test/compile integration/Test/compile
+  CI=true sbt Test/compile integration/Test/compile timingViz/Test/compile
+
+# One-command demo of the timing-rules visualizer. Starts the Scala backend on :8765, loads
+# the sample command sequence, and brings up the Vite dev server on :5173. Ctrl-C tears
+# everything down.
+timing-viz-demo:
+  #!/usr/bin/env bash
+  set -e
+  pids=()
+  cleanup() {
+    echo ""
+    echo "Stopping demo..."
+    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+  }
+  trap cleanup EXIT INT TERM
+
+  echo "==> Installing frontend deps (if needed)..."
+  (cd timing-viz/frontend && npm install --silent)
+
+  echo "==> Starting backend on :8765..."
+  sbt "timingViz/runMain hydrozoa.timingviz.Server" > /tmp/timing-viz-server.log 2>&1 &
+  pids+=($!)
+
+  echo -n "==> Waiting for backend..."
+  until curl -s http://localhost:8765/frame > /dev/null 2>&1; do
+    sleep 1
+    echo -n "."
+  done
+  echo " up."
+
+  echo "==> Loading sample commands..."
+  curl -s -X POST http://localhost:8765/replay \
+       -H 'Content-Type: application/json' \
+       -d @timing-viz/examples/commands.json > /dev/null
+
+  echo "==> Starting frontend dev server on :5173..."
+  (cd timing-viz/frontend && npm run dev) &
+  pids+=($!)
+
+  echo ""
+  echo "  Demo running."
+  echo "    Frontend:  http://localhost:5173"
+  echo "    Backend:   http://localhost:8765/frame"
+  echo "    Logs:      /tmp/timing-viz-server.log"
+  echo "  Ctrl-C to stop."
+  wait
 
 keygen:
   #!/usr/bin/env bash

@@ -102,6 +102,11 @@ Working design and reference docs live in `docs/`:
 - [`logging-tracing.md`](docs/logging-tracing.md) — contextual logging and Tracer design.
 - [`Codecs.md`](docs/Codecs.md) — codec conventions (WIP notes).
 
+**Visualization**
+- [`timing-viz/README.md`](timing-viz/README.md) — live + replay visualizer for the timing
+  rules. Pure-Scala state machine + http4s WS server + React/d3 frontend; driven by JSON
+  commands, programmatic API, or a `ContraTracer` bridge from a running node.
+
 ## Development Environment
 
 ### Using Nix
