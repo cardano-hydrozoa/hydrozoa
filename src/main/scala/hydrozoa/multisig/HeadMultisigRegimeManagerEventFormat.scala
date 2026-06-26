@@ -31,7 +31,7 @@ object HeadMultisigRegimeManagerEventFormat:
                 StackComposerEventFormat.humanFormat(peerNum)(sc)
             case CommonChildEvent.SlowConsensusActor(sca) =>
                 SlowConsensusActorEventFormat.humanFormat(peerNum)(sca)
-            case CommonChildEvent.EventSequencer(es) =>
+            case HeadOnlyChildEvent.EventSequencer(es) =>
                 EventSequencerEventFormat.humanFormat(peerNum)(es)
             case CommonChildEvent.PeerLiaison(remotePeerId, pl) =>
                 PeerLiaisonEventFormat.humanFormat(PeerId.Head(peerNum), remotePeerId)(pl)

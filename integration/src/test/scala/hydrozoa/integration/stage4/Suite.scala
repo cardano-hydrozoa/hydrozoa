@@ -123,6 +123,7 @@ case class Stage4Suite(
             // Hooks
             hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
                       peerTracer = peerNum =>
+                          import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as HEvent
                           val captureStacks = Observers.captureStackHardConfirmed(
                             peerNum,
                             captures,
@@ -135,24 +136,33 @@ case class Stage4Suite(
                             fastSettlementSignal,
                             fastSettlementTarget,
                           )
-                          val captureTxs = Observers.captureTxSubmitting(
-                            effectsLanded,
-                            effectsLandedSignal,
-                            effectsLandedTarget,
-                          )
+                          val captureTxs = Observers
+                              .captureTxSubmitting(
+                                effectsLanded,
+                                effectsLandedSignal,
+                                effectsLandedTarget,
+                              )
+                              .contramap(identity[HEvent])
                           val captureFallback =
-                              Observers.captureFallbackEntered(fallbackEnteredSignal)
+                              Observers
+                                  .captureFallbackEntered(fallbackEnteredSignal)
+                                  .contramap(identity[HEvent])
                           captureStacks |+| captureBriefs |+| captureTxs |+| captureFallback,
                       coilTracer = coilNum =>
-                          val captureCoilStacks =
-                              Observers.captureCoilStackHardConfirmed(coilCaptures(coilNum).stacks)
-                          val captureTxs = Observers.captureTxSubmitting(
-                            effectsLanded,
-                            effectsLandedSignal,
-                            effectsLandedTarget,
-                          )
-                          val captureFallback =
-                              Observers.captureFallbackEntered(fallbackEnteredSignal)
+                          import hydrozoa.multisig.CoilMultisigRegimeManagerEvent as CEvent
+                          val captureCoilStacks = Observers
+                              .captureCoilStackHardConfirmed(coilCaptures(coilNum).stacks)
+                              .contramap(identity[CEvent])
+                          val captureTxs = Observers
+                              .captureTxSubmitting(
+                                effectsLanded,
+                                effectsLandedSignal,
+                                effectsLandedTarget,
+                              )
+                              .contramap(identity[CEvent])
+                          val captureFallback = Observers
+                              .captureFallbackEntered(fallbackEnteredSignal)
+                              .contramap(identity[CEvent])
                           captureCoilStacks |+| captureTxs |+| captureFallback,
                       peerHandle = (peerNum, conns) =>
                           IO.pure(

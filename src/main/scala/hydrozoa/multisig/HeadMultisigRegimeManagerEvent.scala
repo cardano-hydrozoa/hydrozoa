@@ -14,22 +14,29 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEvent
   * [[RegimeManagerEvent]] that apply to a head peer running the multisig regime:
   *
   *   - [[LifecycleEvent]] — bring-up + supervision
-  *   - [[CommonChildEvent]] — every-cell core children (BW/JL/FCA/CL/SC/SCA/ES + peer liaison)
-  *   - [[HeadOnlyChildEvent]] — head-mesh transport, NodeWsServer, hub transports
+  *   - [[CommonChildEvent]] — every-cell core children (BW/JL/FCA/CL/SC/SCA + peer liaison)
+  *   - [[HeadOnlyChildEvent]] — RequestSequencer, head-mesh transport, NodeWsServer, hub transports
   *   - [[MultisigOnlyChildEvent]] — fast/slow rate limiters
-  *
-  * One `ContraTracer[IO, HeadMultisigRegimeManagerEvent]` at the MRM level is `contramap`-ped down
-  * to per-actor tracers (`JL`, `FCA`, `CL`, `SC`, `SCA`) inside [[HeadMultisigRegimeManager]]. The
-  * wiring layer (`Main` / harness) only has to compose **one** tracer for the whole regime.
   */
 type HeadMultisigRegimeManagerEvent =
     LifecycleEvent | CommonChildEvent | HeadOnlyChildEvent | MultisigOnlyChildEvent
 
-/** Per-producer projections of one MRM-level [[ContraTracer]], in carrier form. One contramap per
-  * variant of [[HeadMultisigRegimeManagerEvent]] that carries a typed sub-event (`PL` is keyed by
-  * its remote-peer identity since each liaison gets its own contextualized sink). Build via
-  * [[MrmTracers.fromRoot]]; subclasses of [[MultisigRegimeManagerBase]] hold one of these and pass
-  * the per-actor channel into each producer constructor.
+/** Per-producer tracers shared by every regime+role — what
+  * [[MultisigRegimeManagerBase .spawnCoreActors]] needs. Subclasses' cell-specific tracer carriers
+  * (HMRM's [[MrmTracers]], CMRM's [[CoilMrmTracers]]) implement this so the base trait sees a
+  * uniform surface.
+  */
+trait HasCoreTracers:
+    def blockWeaver: ContraTracer[IO, BlockWeaverEvent]
+    def cardanoLiaison: ContraTracer[IO, CardanoLiaisonEvent]
+    def fastConsensusActor: ContraTracer[IO, FastConsensusActorEvent]
+    def jointLedger: ContraTracer[IO, JointLedgerEvent]
+    def stackComposer: ContraTracer[IO, StackComposerEvent]
+    def slowConsensusActor: ContraTracer[IO, SlowConsensusActorEvent]
+    def peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent]
+
+/** Per-producer projections for the (head, multisig) cell. Holds the core set ([[HasCoreTracers]])
+  * plus the head-only + multisig-only producer channels.
   */
 final case class MrmTracers(
     blockWeaver: ContraTracer[IO, BlockWeaverEvent],
@@ -46,7 +53,7 @@ final case class MrmTracers(
     hubWsTransport: ContraTracer[IO, HubWsTransportEvent],
     nodeWsServer: ContraTracer[IO, NodeWsServerEvent],
     peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent],
-)
+) extends HasCoreTracers
 
 object MrmTracers:
 
@@ -62,7 +69,7 @@ object MrmTracers:
           cardanoLiaison = tracer.contramap(CommonChildEvent.CardanoLiaison.apply),
           stackComposer = tracer.contramap(CommonChildEvent.StackComposer.apply),
           slowConsensusActor = tracer.contramap(CommonChildEvent.SlowConsensusActor.apply),
-          eventSequencer = tracer.contramap(CommonChildEvent.EventSequencer.apply),
+          eventSequencer = tracer.contramap(HeadOnlyChildEvent.EventSequencer.apply),
           blockWeaverLimiter = tracer.contramap(MultisigOnlyChildEvent.BlockWeaverLimiter.apply),
           stackComposerLimiter =
               tracer.contramap(MultisigOnlyChildEvent.StackComposerLimiter.apply),

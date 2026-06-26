@@ -29,7 +29,9 @@ trait HeadMultisigRegimeManager(
       * `config.hubbedCoilPeerNums(ownHeadNum)` is non-empty.
       */
     hubCoilTransport: Option[ActorContext[IO, Request, Any] => HubTransport],
-) extends MultisigRegimeManagerBase {
+) extends MultisigRegimeManagerBase[HeadMultisigRegimeManagerEvent] {
+
+    override protected lazy val tracers: MrmTracers = MrmTracers.fromRoot(tracer)
 
     override protected def preStartLocal: IO[Unit] =
         for {

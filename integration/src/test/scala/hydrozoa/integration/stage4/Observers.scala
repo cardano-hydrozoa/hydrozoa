@@ -4,7 +4,7 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.{CommonChildEvent, HeadMultisigRegimeManagerEvent}
+import hydrozoa.multisig.{CommonChildEvent, HeadMultisigRegimeManagerEvent, RegimeManagerEvent}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, SlowConsensusActorEvent}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
@@ -66,8 +66,8 @@ private[stage4] object Observers {
       */
     def captureCoilStackHardConfirmed(
         stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
-    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
-        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+    ): ContraTracer[IO, RegimeManagerEvent] =
+        ContraTracer.emit[IO, RegimeManagerEvent] {
             case CommonChildEvent.SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 stacksRef.update(_ :+ stack)
             case _ => IO.unit
@@ -85,8 +85,8 @@ private[stage4] object Observers {
         landedRef: Ref[IO, Set[TransactionHash]],
         effectsLandedSignal: Deferred[IO, Unit],
         effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
-    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
-        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+    ): ContraTracer[IO, RegimeManagerEvent] =
+        ContraTracer.emit[IO, RegimeManagerEvent] {
             case CommonChildEvent.CardanoLiaison(CardanoLiaisonEvent.TxSubmitting(txId)) =>
                 for {
                     _           <- landedRef.update(_ + txId)
@@ -116,8 +116,8 @@ private[stage4] object Observers {
       */
     def captureFallbackEntered(
         fallbackEnteredSignal: Deferred[IO, TransactionHash],
-    ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
-        ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
+    ): ContraTracer[IO, RegimeManagerEvent] =
+        ContraTracer.emit[IO, RegimeManagerEvent] {
             case CommonChildEvent.CardanoLiaison(CardanoLiaisonEvent.FallbackToRuleBasedDispatched(txId)) =>
                 fallbackEnteredSignal.complete(txId).void
             case _ => IO.unit

@@ -46,7 +46,6 @@ object CommonChildEvent:
     final case class FastConsensusActor(event: FastConsensusActorEvent) extends CommonChildEvent
     final case class StackComposer(event: StackComposerEvent) extends CommonChildEvent
     final case class SlowConsensusActor(event: SlowConsensusActorEvent) extends CommonChildEvent
-    final case class EventSequencer(event: EventSequencerEvent) extends CommonChildEvent
 
     /** Peer-to-peer liaison; tagged by remote peer (head or coil). Same case carries both head-mesh
       * liaisons on a head peer and the single coil-to-hub uplink on a coil.
@@ -59,6 +58,11 @@ sealed trait HeadOnlyChildEvent extends RegimeManagerEvent
 object HeadOnlyChildEvent:
     final case class PeerTransport(event: PeerTransportEvent) extends HeadOnlyChildEvent
     final case class NodeWsServer(event: NodeWsServerEvent) extends HeadOnlyChildEvent
+
+    /** Wraps `RequestSequencer`'s event stream — the actor accepts user requests, which only head
+      * peers do.
+      */
+    final case class EventSequencer(event: EventSequencerEvent) extends HeadOnlyChildEvent
 
     /** Only present on a hub head peer. */
     final case class HubWsTransport(event: HubWsTransportEvent) extends HeadOnlyChildEvent

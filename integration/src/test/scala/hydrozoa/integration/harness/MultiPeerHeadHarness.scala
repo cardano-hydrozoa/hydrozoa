@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -65,10 +65,7 @@ object MultiPeerHeadHarness:
       */
     case class Hooks[H, C](
         peerTracer: HeadPeerNumber => ContraTracer[IO, HeadMultisigRegimeManagerEvent],
-        // TODO: introduce a distinct `CoilMultisigRegimeManagerEvent` upstream and switch this
-        //       type to it. Today `CoilMultisigRegimeManager` reuses `HeadMultisigRegimeManagerEvent`
-        //       (see `CoilMultisigRegimeManager.scala:33`), so the harness has no choice.
-        coilTracer: CoilPeerNumber => ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        coilTracer: CoilPeerNumber => ContraTracer[IO, CoilMultisigRegimeManagerEvent],
         peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
         coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
     )
@@ -666,17 +663,16 @@ object MultiPeerHeadHarness:
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             uplink: Transport.ContextFn[CoilTransport],
-            callerTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
         ): Resource[IO, Coil] =
             val nHeadPeers = multiNodeConfig.nHeadPeers
-            // TODO: drop this synthetic `HeadPeerNumber` offset once a coil-specific event format
-            //       exists (paired with a distinct `CoilMultisigRegimeManagerEvent`). For now
-            //       it's the only way to keep coil log lines distinguishable from head ones in
-            //       the same run.
+            // Synthetic `HeadPeerNumber` label so coil log lines stay distinguishable from head
+            // ones in the same run; passes through `CoilMultisigRegimeManagerEventFormat` which
+            // still delegates to the head per-actor formatters (per the TODO inside that object).
             val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
-            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, CoilMultisigRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
-                  HeadMultisigRegimeManagerEventFormat.humanFormat(labelNum)
+                  CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
                 )
             val mrmTracer         = slf4jMrm |+| callerTracer
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
