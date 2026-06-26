@@ -94,6 +94,9 @@ object MultiPeerHeadHarness:
       */
     case class Hooks[H, C](
         peerTracer: HeadPeerNumber => ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        // TODO: introduce a distinct `CoilMultisigRegimeManagerEvent` upstream and switch this
+        //       type to it. Today `CoilMultisigRegimeManager` reuses `HeadMultisigRegimeManagerEvent`
+        //       (see `CoilMultisigRegimeManager.scala:33`), so the harness has no choice.
         coilTracer: CoilPeerNumber => ContraTracer[IO, HeadMultisigRegimeManagerEvent],
         peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
         coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
@@ -583,6 +586,10 @@ object MultiPeerHeadHarness:
         callerTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
     ): Resource[IO, CoilMrm] =
         val nHeadPeers = multiNodeConfig.nHeadPeers
+        // TODO: drop this synthetic `HeadPeerNumber` offset once a coil-specific event format
+        //       exists (paired with a distinct `CoilMultisigRegimeManagerEvent`). For now it's
+        //       the only way to keep coil log lines distinguishable from head ones in the same
+        //       run.
         val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
         val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
             Slf4jTracer.sink.contramap(
