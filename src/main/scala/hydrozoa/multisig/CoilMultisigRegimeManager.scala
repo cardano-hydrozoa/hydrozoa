@@ -5,7 +5,7 @@ import com.suprnation.actor.ActorContext
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, WatchingActors}
+import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId

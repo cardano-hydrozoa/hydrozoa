@@ -4,7 +4,7 @@ import cats.effect.{Deferred, IO, Ref}
 import cats.syntax.all.*
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent
+import hydrozoa.multisig.{CommonChildEvent, HeadMultisigRegimeManagerEvent}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, SlowConsensusActorEvent}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
@@ -33,8 +33,7 @@ private[stage4] object Observers {
         slowCoverageTarget: Deferred[IO, Set[Int]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent
-                    .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
+            case CommonChildEvent.SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 for {
                     _           <- captures(peerNum).stacks.update(_ :+ stack)
                     maybeTarget <- slowCoverageTarget.tryGet
@@ -69,8 +68,7 @@ private[stage4] object Observers {
         stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent
-                    .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
+            case CommonChildEvent.SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 stacksRef.update(_ :+ stack)
             case _ => IO.unit
         }
@@ -89,8 +87,7 @@ private[stage4] object Observers {
         effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent
-                    .CardanoLiaison(CardanoLiaisonEvent.TxSubmitting(txId)) =>
+            case CommonChildEvent.CardanoLiaison(CardanoLiaisonEvent.TxSubmitting(txId)) =>
                 for {
                     _           <- landedRef.update(_ + txId)
                     maybeTarget <- effectsLandedTarget.tryGet
@@ -121,8 +118,7 @@ private[stage4] object Observers {
         fallbackEnteredSignal: Deferred[IO, TransactionHash],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent
-                    .CardanoLiaison(CardanoLiaisonEvent.FallbackToRuleBasedDispatched(txId)) =>
+            case CommonChildEvent.CardanoLiaison(CardanoLiaisonEvent.FallbackToRuleBasedDispatched(txId)) =>
                 fallbackEnteredSignal.complete(txId).void
             case _ => IO.unit
         }
@@ -138,7 +134,7 @@ private[stage4] object Observers {
         fastSettlementTarget: Deferred[IO, Set[RequestId]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
-            case HeadMultisigRegimeManagerEvent.JointLedger(JointLedgerEvent.BriefProduced(b)) =>
+            case CommonChildEvent.JointLedger(JointLedgerEvent.BriefProduced(b)) =>
                 for {
                     _           <- captures(peerNum).blockBriefs.update(_ :+ b)
                     maybeTarget <- fastSettlementTarget.tryGet

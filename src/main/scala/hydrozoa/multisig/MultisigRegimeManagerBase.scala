@@ -10,8 +10,6 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as MRMEvent
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.TerminatedActor
 import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
@@ -64,9 +62,9 @@ trait MultisigRegimeManagerBase extends Actor[IO, Request] {
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case PreStart => preStartLocal
         case TerminatedChild(childType, _) =>
-            tracer.traceWith(TerminatedActor(childType))
+            tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
-            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
+            tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
