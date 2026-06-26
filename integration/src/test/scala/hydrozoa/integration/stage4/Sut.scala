@@ -1,6 +1,7 @@
 package hydrozoa.integration.stage4
 
 import cats.effect.{Deferred, IO, Ref}
+import cats.implicits.*
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
@@ -43,17 +44,48 @@ case class Stage4SutStatic(
   * SUT command-side accumulators); `Deferred`s are completed exactly once during shutdown
   * coordination in `beforeFinalize`.
   */
+/** Per-head-peer mutable Refs populated by the [[Observers]] capture sinks. `blockBriefs` holds
+  * every `BlockBrief.Intermediate` JL emits on the fast side; `stacks` holds every
+  * `Stack.HardConfirmed` SCA emits on the slow side. Bundled here so the SUT carries one
+  * `Map[HeadPeerNumber, PerPeerCaptures]` instead of two parallel maps.
+  */
+case class PerPeerCaptures(
+    blockBriefs: Ref[IO, Vector[BlockBrief.Intermediate]],
+    stacks: Ref[IO, Vector[Stack.HardConfirmed]],
+)
+
+object PerPeerCaptures:
+    def make: IO[PerPeerCaptures] =
+        for
+            briefs <- Ref[IO].of(Vector.empty[BlockBrief.Intermediate])
+            stacks <- Ref[IO].of(Vector.empty[Stack.HardConfirmed])
+        yield PerPeerCaptures(briefs, stacks)
+
+    def makeMap(peers: Seq[HeadPeerNumber]): IO[Map[HeadPeerNumber, PerPeerCaptures]] =
+        peers.toList.traverse(p => make.map(p -> _)).map(_.toMap)
+
+/** Per-coil-peer mutable Refs populated by the [[Observers]] coil-side capture sinks. Today only
+  * the hard-confirmed stacks stream is captured; bundled here so a future coil-side signal (e.g.
+  * coil `TxSubmitting`) lands alongside it without churning the `Stage4SutMutable` field set.
+  */
+case class PerCoilCaptures(
+    stacks: Ref[IO, Vector[Stack.HardConfirmed]],
+)
+
+object PerCoilCaptures:
+    def make: IO[PerCoilCaptures] =
+        Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(PerCoilCaptures(_))
+
+    def makeMap(coils: Seq[CoilPeerNumber]): IO[Map[CoilPeerNumber, PerCoilCaptures]] =
+        coils.toList.traverse(c => make.map(c -> _)).map(_.toMap)
+
 case class Stage4SutMutable(
     sutErrors: Ref[IO, List[String]],
-    blockBriefs: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
-    // Per-peer hard-confirmed stacks captured by the SCA ContraTracer sink (the slow cycle's
-    // terminal artifact), parallel to `blockBriefs` on the fast side. Used by
-    // `analyzeBlockBriefs` to assert the slow side covered every observed block.
-    stacks: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    captures: Map[HeadPeerNumber, PerPeerCaptures],
     // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA ContraTracer sink
     // (same mechanism as `stacks` on the head side). Empty for a pure-head run. Used to assert
     // the coil peer participates in the slow cycle.
-    coilStacks: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    coilCaptures: Map[CoilPeerNumber, PerCoilCaptures],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     fastSettlementSignal: Deferred[IO, Unit],
     slowCoverageSignal: Deferred[IO, Unit],

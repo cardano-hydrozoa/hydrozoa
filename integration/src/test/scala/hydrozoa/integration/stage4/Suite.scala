@@ -101,36 +101,16 @@ case class Stage4Suite(
         val startEpochMs    = state.currentModelTime.getEpochSecond * 1000L
 
         for
-            blockBriefsMap <- Resource.eval(
-                                  peers.toList
-                                      .traverse(p =>
-                                          Ref[IO]
-                                              .of(Vector.empty[BlockBrief.Intermediate])
-                                              .map(p -> _)
-                                      )
-                                      .map(_.toMap)
-                              )
-            stacksMap <- Resource.eval(
-                             peers.toList
-                                 .traverse(p =>
-                                     Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(p -> _)
-                                 )
-                                 .map(_.toMap)
-                         )
-            coilStacksMap <- Resource.eval(
-                                 coilConfigs
-                                     .traverse { cc =>
-                                         val cn = cc.ownPeerId match
-                                             case PeerId.Coil(n) => n
-                                             case PeerId.Head(_) =>
-                                                 throw new IllegalStateException(
-                                                   "coil node config carries a head peer id"
-                                                 )
-                                         Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(cn -> _)
-                                     }
-                                     .map(_.toMap)
-                             )
+            // Captures
+            captures <- Resource.eval(PerPeerCaptures.makeMap(peers))
+            coilCaptures <- Resource.eval(
+                                PerCoilCaptures.makeMap(
+                                  coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
+                                )
+                            )
             submittedRequestIds   <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
+
+            // Signals
             fastSettlementSignal  <- Resource.eval(IO.deferred[Unit])
             slowCoverageSignal    <- Resource.eval(IO.deferred[Unit])
             fastSettlementTarget  <- Resource.eval(IO.deferred[Set[RequestId]])
@@ -139,34 +119,41 @@ case class Stage4Suite(
             effectsLandedSignal   <- Resource.eval(IO.deferred[Unit])
             effectsLandedTarget   <- Resource.eval(IO.deferred[List[BlockExpectation]])
             fallbackEnteredSignal <- Resource.eval(IO.deferred[TransactionHash])
+
+            // Hooks
             hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
                       peerTracer = peerNum =>
-                          Observers.captureStackHardConfirmed(
+                          val captureStacks = Observers.captureStackHardConfirmed(
                             peerNum,
-                            stacksMap,
+                            captures,
                             slowCoverageSignal,
                             slowCoverageTarget,
-                          ) |+|
-                              Observers.captureBriefProduced(
-                                peerNum,
-                                blockBriefsMap,
-                                fastSettlementSignal,
-                                fastSettlementTarget,
-                              ) |+|
-                              Observers.captureTxSubmitting(
-                                effectsLanded,
-                                effectsLandedSignal,
-                                effectsLandedTarget,
-                              ) |+|
-                              Observers.captureFallbackEntered(fallbackEnteredSignal),
+                          )
+                          val captureBriefs = Observers.captureBriefProduced(
+                            peerNum,
+                            captures,
+                            fastSettlementSignal,
+                            fastSettlementTarget,
+                          )
+                          val captureTxs = Observers.captureTxSubmitting(
+                            effectsLanded,
+                            effectsLandedSignal,
+                            effectsLandedTarget,
+                          )
+                          val captureFallback =
+                              Observers.captureFallbackEntered(fallbackEnteredSignal)
+                          captureStacks |+| captureBriefs |+| captureTxs |+| captureFallback,
                       coilTracer = coilNum =>
-                          Observers.captureCoilStackHardConfirmed(coilStacksMap(coilNum)) |+|
-                              Observers.captureTxSubmitting(
-                                effectsLanded,
-                                effectsLandedSignal,
-                                effectsLandedTarget,
-                              ) |+|
-                              Observers.captureFallbackEntered(fallbackEnteredSignal),
+                          val captureCoilStacks =
+                              Observers.captureCoilStackHardConfirmed(coilCaptures(coilNum).stacks)
+                          val captureTxs = Observers.captureTxSubmitting(
+                            effectsLanded,
+                            effectsLandedSignal,
+                            effectsLandedTarget,
+                          )
+                          val captureFallback =
+                              Observers.captureFallbackEntered(fallbackEnteredSignal)
+                          captureCoilStacks |+| captureTxs |+| captureFallback,
                       peerHandle = (peerNum, conns) =>
                           IO.pure(
                             Stage4PeerHandle(
@@ -199,9 +186,8 @@ case class Stage4Suite(
           ),
           mutable = Stage4SutMutable(
             sutErrors = harness.sutErrors,
-            blockBriefs = blockBriefsMap,
-            stacks = stacksMap,
-            coilStacks = coilStacksMap,
+            captures = captures,
+            coilCaptures = coilCaptures,
             submittedRequestIds = submittedRequestIds,
             fastSettlementSignal = fastSettlementSignal,
             slowCoverageSignal = slowCoverageSignal,
@@ -230,7 +216,9 @@ case class Stage4Suite(
             _ <- sut.mutable.fastSettlementTarget.complete(submitted.toSet)
             // One-time coverage check: if all IDs already landed before we armed the target,
             // fire the signal ourselves (no new brief will arrive to trigger the sink).
-            allBriefs <- sut.mutable.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
+            allBriefs <- sut.mutable.captures.values.toList
+                             .traverse(_.blockBriefs.get)
+                             .map(_.flatten)
             seen       = allBriefs
                              .flatMap(br =>
                                  br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
@@ -242,13 +230,13 @@ case class Stage4Suite(
             _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.get)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
-            blockNums <- sut.mutable.blockBriefs.values.toList
-                             .traverse(_.get)
+            blockNums <- sut.mutable.captures.values.toList
+                             .traverse(_.blockBriefs.get)
                              .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
             _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
             // One-time coverage check across ALL peers — matching the sink condition so a spurious
-            // signal fire can't race ahead of any peer's stacksMap update.
-            allPeersStacks <- sut.mutable.stacks.values.toList.traverse(_.get)
+            // signal fire can't race ahead of any peer's stacks update.
+            allPeersStacks <- sut.mutable.captures.values.toList.traverse(_.stacks.get)
             allCovered      = blockNums.isEmpty ||
                                   allPeersStacks.forall { peerStacks =>
                                       blockNums.forall { bn =>
@@ -264,8 +252,8 @@ case class Stage4Suite(
             // every block, derive the backbone expectations from the canonical peer's stacks and
             // wait for the TxSubmitting sink to observe enough hashes to satisfy them. Gap
             // between slow signal and this one = the StackComposer rate-limit delay.
-            canonicalStacksForTarget <- sut.mutable.stacks.toList
-                                            .traverse { case (p, ref) => ref.get.map(p -> _) }
+            canonicalStacksForTarget <- sut.mutable.captures.toList
+                                            .traverse { case (p, c) => c.stacks.get.map(p -> _) }
                                             .map { byPeer =>
                                                 val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
                                                 sorted.headOption.map(_._2).getOrElse(Vector.empty)
@@ -286,14 +274,14 @@ case class Stage4Suite(
             // under WS (real clock, no TestControl tick-drain): cross-peer quantities could then
             // be derived from inconsistent snapshots. Freezing once removes that window by
             // construction.
-            briefsByPeer <- sut.mutable.blockBriefs.toList
-                                .traverse { case (p, ref) => ref.get.map(p -> _) }
+            briefsByPeer <- sut.mutable.captures.toList
+                                .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
                                 .map(_.toMap)
-            stacksByPeer <- sut.mutable.stacks.toList
-                                .traverse { case (p, ref) => ref.get.map(p -> _) }
+            stacksByPeer <- sut.mutable.captures.toList
+                                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
                                 .map(_.toMap)
-            coilStacksByCoil <- sut.mutable.coilStacks.toList
-                                    .traverse { case (c, ref) => ref.get.map(c -> _) }
+            coilStacksByCoil <- sut.mutable.coilCaptures.toList
+                                    .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
                                     .map(_.toMap)
             submittedIds <- sut.mutable.submittedRequestIds.get
             sortedPeers = stacksByPeer.keys.toSeq.sortBy(p => p: Int)
@@ -359,7 +347,7 @@ case class Stage4Suite(
               )
             )
 
-            _ <- traceBlockTable(
+            _ <- PrettyPrinters.traceBlockTable(
               canonicalBriefs,
               sortedPeers,
               briefsByPeer,
@@ -368,7 +356,7 @@ case class Stage4Suite(
               lastState,
             )
 
-            _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
+            _ <- PrettyPrinters.traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
 
             // Checks the stacks frozen when the effects-landed target was armed — consistent with
             // the signal. Under virtual time (Direct) the backend resolves instantly, so one
@@ -676,7 +664,12 @@ case class Stage4Suite(
             s"hard-confirmed stack: ${uncovered.toSeq.sorted.mkString(", ")}")
     }
 
-    private def traceBlockTable(
+    /** Trace-side ASCII tables used by [[analyzeBlockBriefs]] to render the captured fast-cycle
+      * brief stream and slow-cycle stack stream. Pure formatting on frozen snapshots; closes over
+      * the suite's `log` tracer so emit lines for free.
+      */
+    private object PrettyPrinters:
+      def traceBlockTable(
         canonicalBriefs: Vector[BlockBrief.Intermediate],
         sortedPeers: Seq[HeadPeerNumber],
         briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
@@ -741,13 +734,13 @@ case class Stage4Suite(
         log.info(text)
     }
 
-    /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on the
-      * canonical peer, showing the stack number, covered block range, partition spine (Min/Maj/Fin
-      * kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
-      * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`. Followed
-      * by a per-peer stack-count line for cross-peer convergence at a glance.
-      */
-    private def traceStackTable(
+      /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on
+        * the canonical peer, showing the stack number, covered block range, partition spine
+        * (Min/Maj/Fin kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
+        * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`.
+        * Followed by a per-peer stack-count line for cross-peer convergence at a glance.
+        */
+      def traceStackTable(
         canonicalStacks: Vector[Stack.HardConfirmed],
         sortedPeers: Seq[HeadPeerNumber],
         stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],

@@ -7,7 +7,6 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManagerEvent
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, SlowConsensusActorEvent}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 import hydrozoa.multisig.ledger.stack.Stack
@@ -29,7 +28,7 @@ private[stage4] object Observers {
       */
     def captureStackHardConfirmed(
         peerNum: HeadPeerNumber,
-        stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+        captures: Map[HeadPeerNumber, PerPeerCaptures],
         slowCoverageSignal: Deferred[IO, Unit],
         slowCoverageTarget: Deferred[IO, Set[Int]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
@@ -37,13 +36,13 @@ private[stage4] object Observers {
             case HeadMultisigRegimeManagerEvent
                     .SlowConsensusActor(SlowConsensusActorEvent.StackHardConfirmed(stack)) =>
                 for {
-                    _           <- stacksMap(peerNum).update(_ :+ stack)
+                    _           <- captures(peerNum).stacks.update(_ :+ stack)
                     maybeTarget <- slowCoverageTarget.tryGet
                     _ <- maybeTarget match {
                         case None => IO.unit
                         case Some(targetNums) =>
                             for {
-                                allPeersStacks <- stacksMap.values.toList.traverse(_.get)
+                                allPeersStacks <- captures.values.toList.traverse(_.stacks.get)
                                 allCovered = targetNums.isEmpty ||
                                     allPeersStacks.forall { peerStacks =>
                                         targetNums.forall { bn =>
@@ -134,20 +133,20 @@ private[stage4] object Observers {
       */
     def captureBriefProduced(
         peerNum: HeadPeerNumber,
-        blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
+        captures: Map[HeadPeerNumber, PerPeerCaptures],
         fastSettlementSignal: Deferred[IO, Unit],
         fastSettlementTarget: Deferred[IO, Set[RequestId]],
     ): ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
         ContraTracer.emit[IO, HeadMultisigRegimeManagerEvent] {
             case HeadMultisigRegimeManagerEvent.JointLedger(JointLedgerEvent.BriefProduced(b)) =>
                 for {
-                    _           <- blockBriefsMap(peerNum).update(_ :+ b)
+                    _           <- captures(peerNum).blockBriefs.update(_ :+ b)
                     maybeTarget <- fastSettlementTarget.tryGet
                     _ <- maybeTarget match {
                         case None => IO.unit
                         case Some(submitted) =>
                             for {
-                                briefs <- blockBriefsMap(peerNum).get
+                                briefs <- captures(peerNum).blockBriefs.get
                                 seen = briefs
                                     .flatMap(br =>
                                         br.events.map(_._1) ++
