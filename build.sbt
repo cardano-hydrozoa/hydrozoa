@@ -165,10 +165,10 @@ addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVers
 //addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
 //addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
 //addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
-addCommandAlias("fmtAll", ";core/scalafmtAll")
-addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ")
-addCommandAlias("lintAll", ";core/scalafixAll ")
-addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;")
+addCommandAlias("fmtAll", ";core/scalafmtAll ;timingViz/scalafmtAll")
+addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;timingViz/scalafmtCheckAll")
+addCommandAlias("lintAll", ";core/scalafixAll ;timingViz/scalafixAll")
+addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;timingViz/scalafixAll --check")
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
@@ -180,6 +180,20 @@ inThisBuild(
     semanticdbVersion := scalafixSemanticdb.revision
   )
 )
+
+// Timing-rules visualizer subproject. Pure Scala state machine over a TxTiming-based world,
+// driven by a command ADT. The WS server / browser frontend will be added in follow-up commits.
+lazy val timingViz: Project = (project in file("timing-viz"))
+    .dependsOn(core % "compile->compile;test->test")
+    .settings(
+      name := "hydrozoa-timing-viz",
+      publish / skip := true,
+      libraryDependencies ++= Seq(
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+        "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test
+      )
+    )
 
 // Benchmark subproject
 lazy val benchmark: Project = (project in file("benchmark"))
