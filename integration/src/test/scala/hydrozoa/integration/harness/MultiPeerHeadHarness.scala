@@ -59,13 +59,22 @@ object MultiPeerHeadHarness:
         startEpochMs: Long,
     )
 
-    /** Test-side wiring injected into each MRM. The harness combines `peerTracer(p)` /
-      * `coilTracer(c)` with its own slf4j sink via the `ContraTracer` monoid; `peerHandle` /
-      * `coilHandle` run once each MRM's `connectionsDeferred` resolves.
+    /** Roll-up of every event emitted by the regime managers the harness owns. The harness
+      * `contramap`s its per-peer / per-coil MRM tracer sinks through this — one sink at the harness
+      * boundary feeds head and coil sides alike. Pattern-match on the wrapper for routing, then on
+      * the underlying [[RegimeManagerEvent]] category for the actor.
+      */
+    enum Event:
+        case Head(peerNum: HeadPeerNumber, event: HeadMultisigRegimeManagerEvent)
+        case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
+
+    /** Test-side wiring injected into each MRM. One [[Event]]-typed tracer captures every
+      * regime-manager event the harness owns; the harness combines it with its own slf4j sinks via
+      * the `ContraTracer` monoid. `peerHandle` / `coilHandle` run once each MRM's
+      * `connectionsDeferred` resolves.
       */
     case class Hooks[H, C](
-        peerTracer: HeadPeerNumber => ContraTracer[IO, HeadMultisigRegimeManagerEvent],
-        coilTracer: CoilPeerNumber => ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+        tracer: ContraTracer[IO, Event],
         peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
         coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
     )
@@ -135,7 +144,7 @@ object MultiPeerHeadHarness:
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
-                                      hooks.peerTracer(peerNum),
+                                      hooks.tracer.contramap(Event.Head(peerNum, _)),
                                     )
                                     .map(peerNum -> _)
                             )
@@ -151,7 +160,7 @@ object MultiPeerHeadHarness:
                                       cardanoBackend,
                                       multiNodeConfig,
                                       transports.coilUplinks(coilNum),
-                                      hooks.coilTracer(coilNum),
+                                      hooks.tracer.contramap(Event.Coil(coilNum, _)),
                                     )
                                     .map(coilNum -> _)
                             }
