@@ -1,0 +1,233 @@
+:root {
+    color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #1a1b26;
+    color: #c0caf5;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+}
+
+.loading {
+    padding: 32px;
+}
+
+.app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+header {
+    padding: 12px 24px;
+    border-bottom: 1px solid #2a2e42;
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.meta {
+    font-size: 12px;
+    color: #a9b1d6;
+}
+
+.pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+}
+
+.pill-open {
+    background: #2ac3de;
+    color: #1a1b26;
+}
+
+.pill-connecting {
+    background: #e0af68;
+    color: #1a1b26;
+}
+
+.pill-closed {
+    background: #f7768e;
+    color: #1a1b26;
+}
+
+main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+.timeline-pane {
+    flex: 1;
+    padding: 16px;
+    overflow: auto;
+    background: #16161e;
+}
+
+.timeline {
+    background: #1a1b26;
+    border-radius: 4px;
+}
+
+aside {
+    width: 360px;
+    border-left: 1px solid #2a2e42;
+    overflow-y: auto;
+    background: #1a1b26;
+}
+
+.side-panel,
+.controls,
+.panel {
+    padding: 16px;
+}
+
+.side-panel h3,
+.panel h4 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    text-transform: uppercase;
+    color: #7aa2f7;
+    letter-spacing: 0.05em;
+}
+
+.side-panel h4 {
+    margin: 16px 0 8px 0;
+    font-size: 12px;
+    color: #7aa2f7;
+}
+
+.row {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.row .label {
+    width: 70px;
+    color: #7681a0;
+}
+
+.row .value code {
+    background: #1f2335;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.item-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 12px 0;
+}
+
+.item-list li {
+    padding: 6px 0;
+    border-top: 1px solid #2a2e42;
+    font-size: 12px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px;
+}
+
+.item-kind {
+    color: #bb9af7;
+}
+
+.item-range {
+    color: #7681a0;
+    font-family: monospace;
+    font-size: 10px;
+}
+
+.item-label {
+    color: #a9b1d6;
+}
+
+button {
+    background: #2a2e42;
+    border: 1px solid #3b3b58;
+    color: #c0caf5;
+    padding: 4px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+button:hover {
+    background: #3b3b58;
+}
+
+input {
+    background: #1f2335;
+    border: 1px solid #2a2e42;
+    color: #c0caf5;
+    padding: 4px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.param-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+
+.param-row label {
+    width: 130px;
+    color: #a9b1d6;
+}
+
+.param-row input[type="number"] {
+    width: 120px;
+}
+
+.param-row .muted {
+    color: #7681a0;
+    font-size: 11px;
+}
+
+.hypo-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hypo-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 11px;
+    flex-wrap: wrap;
+}
+
+.hypo-row strong {
+    width: 60px;
+}
+
+.hypo-row input {
+    flex: 1;
+    min-width: 80px;
+}
+
+.muted {
+    color: #7681a0;
+    font-size: 12px;
+}
