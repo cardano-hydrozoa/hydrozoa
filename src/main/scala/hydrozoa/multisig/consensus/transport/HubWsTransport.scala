@@ -15,6 +15,20 @@ import org.http4s.dsl.io.*
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 
+/** The hub side of a hub↔coil link, in the abstract. Concrete impls: [[HubWsTransport]] (real WS)
+  * and [[InProcessHubCoilTransport.Hub]] (test harness).
+  */
+trait HubTransport {
+
+    /** Wire a local [[PeerLiaisonHubToCoil]] handle as the inbound dispatch target for the given
+      * coil peer. Must be called before that coil's link starts receiving traffic.
+      */
+    def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit]
+
+    /** Enqueue a hub→coil batch for delivery to [[coil]]. */
+    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilToHubRequest): IO[Unit]
+}
+
 /** The hub side of the hub→coil WS links: contributes the `/hub` route to the hub's shared
   * [[NodeWsServer]] and serves every coil peer the hub hubs. The hub runs no dialer — each coil
   * dials in and identifies itself with [[CoilFrame.Hello]]; the hub binds that socket to the coil's
@@ -28,16 +42,16 @@ final class HubWsTransport private (
     private val outboxes: Map[CoilPeerNumber, Queue[IO, String]],
     private val inboundRef: Ref[IO, Map[CoilPeerNumber, PeerLiaisonHubToCoil.Handle]],
     private val tracer: ContraTracer[IO, HubWsTransportEvent],
-)(using CardanoNetwork.Section) {
+)(using CardanoNetwork.Section)
+    extends HubTransport {
 
-    /** Wire a local PeerLiaisonHubToCoil handle as the inbound dispatch target for the given coil
-      * peer. Must be called before that coil's link starts receiving traffic.
-      */
-    def register(coil: CoilPeerNumber, localLiaison: PeerLiaisonHubToCoil.Handle): IO[Unit] =
+    override def register(
+        coil: CoilPeerNumber,
+        localLiaison: PeerLiaisonHubToCoil.Handle
+    ): IO[Unit] =
         inboundRef.update(_.updated(coil, localLiaison))
 
-    /** Enqueue a hub→coil batch for delivery to [[coil]]. */
-    def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilToHubRequest): IO[Unit] =
+    override def send(coil: CoilPeerNumber, request: LiaisonProtocol.CoilToHubRequest): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) =>
                 val line = CoilFrame.encode(CoilFrame.Msg(wire))

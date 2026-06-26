@@ -13,9 +13,8 @@ import io.circe.syntax.*
 import org.scalacheck.Prop
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.commands.{CommandLabel, CommandProp}
-import scalus.cardano.ledger.Transaction
-
 import scala.collection.immutable.Queue
+import scalus.cardano.ledger.Transaction
 
 object Commands:
 

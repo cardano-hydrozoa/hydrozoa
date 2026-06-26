@@ -1,27 +1,25 @@
 package hydrozoa.integration.stage4
 
+import cats.MonadThrow
+import cats.data.StateT
+import cats.syntax.all.*
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
-import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
-import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import io.bullet.borer.Cbor
-import cats.MonadThrow
-import cats.data.StateT
-import cats.syntax.all.*
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug}
 import org.scalacheck.commands.ModelCommand
-import scalus.cardano.ledger.{TransactionInput, Utxos}
-import scalus.uplc.builtin.ByteString
-
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
+import scalus.cardano.ledger.{TransactionInput, Utxos}
+import scalus.uplc.builtin.ByteString
 
 object Model {
 

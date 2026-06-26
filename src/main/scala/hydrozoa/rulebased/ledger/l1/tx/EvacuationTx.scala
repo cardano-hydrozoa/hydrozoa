@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, f
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.Tx
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
@@ -31,7 +31,7 @@ final case class EvacuationTx(
     override val tx: Transaction,
     override val txLens: Lens[EvacuationTx, Transaction] = Focus[EvacuationTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[EvacuationTx] {
+) extends EnrichedTx[EvacuationTx] {
     override def transactionFamily: String = "EvacuationTx"
 }
 
@@ -211,7 +211,7 @@ private object EvacuationTxOps {
                     .finalizeContext(
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoInfo.protocolParams, 0),
-                      validators = Tx.Validators.nonSigningValidators
+                      validators = EnrichedTx.Validators.nonSigningValidators
                     )
                     .explainConst(
                       "Finalizing evacuation tx failed. Failed context txid :" +

@@ -4,7 +4,7 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.SomeBuildErrorOnly
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{Metadata as _, *}
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.*

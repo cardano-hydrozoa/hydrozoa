@@ -15,7 +15,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddr
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
-import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.rulebased.DisputeActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.DisputeActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.DisputeActor.Requests.HandleDisputeRes
@@ -84,7 +84,7 @@ final case class DisputeActor(
       * only in `label`, the lazy build result, and the per-tx-family error wrapper — this helper
       * collapses the shared pattern.
       */
-    private def buildAndSubmit[T <: Tx[T], E <: Throwable](
+    private def buildAndSubmit[T <: EnrichedTx[T], E <: Throwable](
         label: String,
         result: => Either[E, T],
         wrapError: E => Throwable,
@@ -99,8 +99,8 @@ final case class DisputeActor(
             _ <- signAndSubmitTx[T](tx)
         } yield ()
 
-    private def signAndSubmitTx[TxType <: Tx[TxType]](
-        tx: Tx[TxType],
+    private def signAndSubmitTx[TxType <: EnrichedTx[TxType]](
+        tx: EnrichedTx[TxType],
     ): EitherT[IO, DisputeActor.Error.RecoverableErrors, Unit] = {
         for {
             _ <- EitherT.right(

@@ -19,17 +19,16 @@ import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
-import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
+import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import scalus.cardano.ledger.*
 import test.TestPeersSpec
-
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /*
 CURRENT STATUS:
@@ -49,7 +48,7 @@ CURRENT STATUS:
 object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     given ppIDU: (InitialDisputeUtxos => Pretty) = _ =>
-        Pretty(_ => s"InitialDisputeUtxos (too long to print)")
+        Pretty(_ => "InitialDisputeUtxos (too long to print)")
 
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
@@ -281,7 +280,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
             _ <- assertWith(
               classification.classified == expectedBuckets,
-              s"Histogram mismatch:\n" +
+              "Histogram mismatch:\n" +
                   s"  expected: ${expectedBuckets.toList.map((k, v) => (k.toString, v)).sorted.mkString("\n")}\n" +
                   s"  actual:   $classification"
             )

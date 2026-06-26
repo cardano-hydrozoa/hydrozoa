@@ -13,6 +13,20 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSFrame, WSRequest}
 import scala.concurrent.duration.*
 
+/** The coil side of a hub↔coil link, in the abstract. Concrete impls: [[CoilPeerWsTransport]] (real
+  * WS) and [[InProcessHubCoilTransport.Coil]] (test harness).
+  */
+trait CoilTransport {
+
+    /** Wire the local [[PeerLiaisonCoilToHub]] as the inbound dispatch target. Must be called
+      * before the link starts receiving traffic.
+      */
+    def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit]
+
+    /** Enqueue a coil→hub batch for delivery to the hub. */
+    def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit]
+}
+
 /** The coil side of the hub→coil WS link: a coil peer runs no server, it dials its single hub's
   * `/hub` endpoint and keeps the link alive with reconnect-on-drop. It identifies itself with
   * [[CoilFrame.Hello]] so the hub binds the socket to this coil's [[CoilPeerNumber]].
@@ -23,20 +37,16 @@ import scala.concurrent.duration.*
   */
 final class CoilPeerWsTransport private (
     private val ownCoilNum: CoilPeerNumber,
-    private val hubUri: Uri,
     private val outbox: Queue[IO, String],
     private val inboundRef: Ref[IO, Option[PeerLiaisonCoilToHub.Handle]],
     private val tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
-)(using CardanoNetwork.Section) {
+)(using CardanoNetwork.Section)
+    extends CoilTransport {
 
-    /** Wire the local PeerLiaisonCoilToHub as the inbound dispatch target. Must be called before
-      * the link starts receiving traffic.
-      */
-    def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
+    override def register(localLiaison: PeerLiaisonCoilToHub.Handle): IO[Unit] =
         inboundRef.set(Some(localLiaison))
 
-    /** Enqueue a coil→hub batch for delivery to the hub. */
-    def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
+    override def send(request: LiaisonProtocol.HubToCoilRequest): IO[Unit] =
         CoilFrame.fromWire(request) match {
             case Some(wire) => outbox.offer(CoilFrame.encode(CoilFrame.Msg(wire)))
             case None       => tracer.traceWith(DroppingNonWireRequest(request.toString))
@@ -60,7 +70,7 @@ final class CoilPeerWsTransport private (
             case Left(err)                     => tracer.traceWith(DecodeError(err))
         }
 
-    private def dialerLoop(client: WSClient[IO]): IO[Nothing] = {
+    private def dialerLoop(client: WSClient[IO], hubUri: Uri): IO[Nothing] = {
         val request = WSRequest(hubUri)
 
         def once: IO[Unit] =
@@ -77,20 +87,21 @@ final class CoilPeerWsTransport private (
         (attempt >> IO.sleep(1.second)).foreverM
     }
 
-    /** Launch the hub dialer fiber; torn down when the resource is released. */
-    def startDialer(client: WSClient[IO]): Resource[IO, Unit] =
-        Resource.make(dialerLoop(client).start)(_.cancel).void
+    /** Launch the hub dialer fiber; torn down when the resource is released. The hub URI is passed
+      * at dial-start time so the caller can discover the hub's OS-assigned port after binding.
+      */
+    def startDialer(client: WSClient[IO], hubUri: Uri): Resource[IO, Unit] =
+        Resource.make(dialerLoop(client, hubUri).start)(_.cancel).void
 }
 
 object CoilPeerWsTransport {
 
     def create(
         ownCoilNum: CoilPeerNumber,
-        hubUri: Uri,
         tracer: ContraTracer[IO, CoilPeerWsTransportEvent],
     )(using CardanoNetwork.Section): IO[CoilPeerWsTransport] =
         for {
             outbox <- Queue.unbounded[IO, String]
             inboundRef <- Ref[IO].of(Option.empty[PeerLiaisonCoilToHub.Handle])
-        } yield new CoilPeerWsTransport(ownCoilNum, hubUri, outbox, inboundRef, tracer)
+        } yield new CoilPeerWsTransport(ownCoilNum, outbox, inboundRef, tracer)
 }

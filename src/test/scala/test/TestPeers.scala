@@ -13,7 +13,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.WalletModule
 import hydrozoa.multisig.consensus.peer.{HeadPeerId, HeadPeerNumber, PeerWallet}
-import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import org.http4s.Uri
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Test.Parameters
@@ -95,7 +95,10 @@ case class TestPeers private (
     // TODO: What do we want here?
     def webSocketAddressFor(peer: TestPeerName): Uri = {
         _require(peer)
-        Uri.unsafeFromString(s"ws://localhost/${peer.name}")
+        // Port 0 → the OS assigns a free ephemeral port when a head node binds its mesh server from
+        // this advertised address (the bind source after the merge). Tests that dial reconstruct
+        // URIs from the actually-bound port, so the placeholder port here is never dialed.
+        Uri.unsafeFromString(s"ws://localhost:0/${peer.name}")
     }
 
     def verificationKeyFor(peerNumber: HeadPeerNumber): VerificationKey =
@@ -129,7 +132,7 @@ case class TestPeers private (
     def multisignTx(tx: Transaction): Transaction =
         tx.attachVKeyWitnesses(mkVKeyWitnesses(tx).toList)
 
-    def multisignTx[A <: Tx[A]](tx: A): A =
+    def multisignTx[A <: EnrichedTx[A]](tx: A): A =
         val witnesses = mkVKeyWitnesses(tx.tx)
         tx.addSignatures(Set.from(witnesses.toList)) match {
             case Valid(a) =>

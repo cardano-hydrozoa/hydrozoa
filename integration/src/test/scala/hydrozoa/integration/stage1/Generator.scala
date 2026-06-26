@@ -1,6 +1,9 @@
 package hydrozoa.integration.stage1
 
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.syntax.contravariant.*
+import cats.syntax.flatMap.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -19,6 +22,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.cardano.scalus.given_Choose_QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
@@ -27,13 +31,12 @@ import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
-import cats.effect.IO
-import cats.syntax.contravariant.*
-import cats.syntax.flatMap.*
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
-import org.scalacheck.{Gen, PropertyM}
+import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
+import org.scalacheck.{Gen, PropertyM}
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -41,10 +44,6 @@ import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, Transa
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.ByteString
-
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scala.math.Ordering.Implicits.infixOrderingOps
 
 // ===================================
 // Per-command generators

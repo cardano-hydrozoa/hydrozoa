@@ -99,6 +99,8 @@ lazy val core: Project = (project in file("."))
         // scodec for hex encoding
         "org.scodec" %% "scodec-bits" % "1.2.1",
         "io.github.cdimascio" % "dotenv-java" % "3.0.0",
+        // decline-effect — CLI args for Main
+        "com.monovore" %% "decline-effect" % "2.6.2",
         // RocksDB (persistence layer)
         "org.rocksdb" % "rocksdbjni" % "9.7.3",
       ),
@@ -110,7 +112,8 @@ lazy val core: Project = (project in file("."))
         "org.typelevel" %% "cats-effect-testkit" % "3.6.3" % Test,
         "org.scalus" %% "scalus-testkit" % scalusVersion % Test,
         "dev.optics" %% "monocle-core" % "3.3.0" % Test,
-        "dev.optics" %% "monocle-macro" % "3.3.0" % Test
+        "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
+        "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
       // Fork JVM to properly pass system properties
       run / fork := true,

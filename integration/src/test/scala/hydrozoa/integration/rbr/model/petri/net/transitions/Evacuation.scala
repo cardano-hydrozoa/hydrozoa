@@ -1,9 +1,9 @@
 package hydrozoa.integration.rbr.model.petri.net.transitions
 
+import hydrozoa.integration.rbr.model.petri.net.*
+import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.integration.rbr.model.petri.net.Transitions.RBRTransitionId
 import hydrozoa.integration.rbr.model.petri.net.Transitions.RBRTransitionId.EvacuationId
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
-import hydrozoa.integration.rbr.model.petri.net.*
 import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import hydrozoa.lib.petri.MapNet
 import hydrozoa.lib.petri.net.components.{Arc, Transition}

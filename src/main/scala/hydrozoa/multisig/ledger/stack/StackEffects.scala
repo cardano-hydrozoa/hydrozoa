@@ -68,8 +68,8 @@ object StackEffects:
       * signature. L1-submittable (txs) / dispute-usable (evac commitment) as is.
       *
       * The tx wrapper types are unchanged from [[Unsigned]] — the multisig `VKeyWitness`es live
-      * inside each [[hydrozoa.multisig.ledger.l1.tx.Tx]] body. Only the evac member differs in
-      * type: an [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers'
+      * inside each [[hydrozoa.multisig.ledger.l1.tx.EnrichedTx]] body. Only the evac member differs
+      * in type: an [[StandaloneEvacuationCommitment.MultiSigned]] (the dormant record + all peers'
       * header signatures) rather than the bare record.
       */
     sealed trait HardConfirmed extends StackEffects

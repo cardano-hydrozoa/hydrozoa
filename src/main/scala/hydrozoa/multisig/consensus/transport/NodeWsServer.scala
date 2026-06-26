@@ -13,7 +13,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import scala.concurrent.duration.Duration
 
 /** The single WebSocket server a peer binds, shared by every WS link the peer runs. A pure head
-  * peer mounts only the head-mesh route ([[PeerWsTransport.routes]]); a hub head peer mounts that
+  * peer mounts only the head-mesh route ([[WsPeerTransport.routes]]); a hub head peer mounts that
   * **plus** the hub→coil route ([[HubWsTransport.routes]]) on the same port; a coil peer runs no
   * server at all (it only dials its hub).
   *

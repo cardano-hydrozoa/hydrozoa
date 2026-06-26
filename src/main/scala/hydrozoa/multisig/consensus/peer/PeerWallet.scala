@@ -6,7 +6,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.lib.cardano.scalus.txbuilder.Transaction.attachVKeyWitnesses
 import hydrozoa.lib.cardano.wallet.*
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.l1.tx.{Tx, TxSignature}
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxSignature}
 import io.circe.*
 import io.circe.syntax.*
 import scala.language.implicitConversions
@@ -49,7 +49,7 @@ final class PeerWallet(
     def signTx(txUnsigned: Transaction): Transaction =
         txUnsigned.attachVKeyWitnesses(List(mkVKeyWitness(txUnsigned)))
 
-    def signTx[A <: Tx[A]](txUnsigned: A): A =
+    def signTx[A <: EnrichedTx[A]](txUnsigned: A): A =
         txUnsigned.addSignatures(Set(mkVKeyWitness(txUnsigned.tx))) match {
             case Valid(tx) => tx
             // This should only happen if the public key and private key don't match

@@ -4,7 +4,7 @@ package hydrozoa.multisig.ledger.l2
 
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
@@ -179,7 +179,7 @@ object L2LedgerCommand {
 
     final case class ProxyBlockConfirmation(
         blockNumber: BlockNumber,
-        refundTxs: Vector[(RequestId, Tx.Serialized)]
+        refundTxs: Vector[(RequestId, EnrichedTx.Serialized)]
     ) extends L2LedgerCommand.Proxy
 
     object ProxyRequestError {

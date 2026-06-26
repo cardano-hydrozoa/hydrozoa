@@ -7,8 +7,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.addExpectedSigners
 import hydrozoa.multisig.ledger.block.BlockVersion
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Finalization
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
@@ -20,7 +20,7 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.cardano.txbuilder.TxBalancingError.InsufficientFunds
 
 sealed trait FinalizationTx
-    extends Tx[FinalizationTx],
+    extends EnrichedTx[FinalizationTx],
       BlockVersion.Major.Produced,
       MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
@@ -89,7 +89,7 @@ object FinalizationTx {
 }
 
 private object FinalizationTxOps {
-    sealed trait Result[T <: FinalizationTx] extends Tx.AugmentedResult[T]
+    sealed trait Result[T <: FinalizationTx] extends EnrichedTx.AugmentedResult[T]
 
     object Result {
         type NoRollouts = Result[FinalizationTx.NoRollouts]
@@ -187,7 +187,7 @@ private object FinalizationTxOps {
         } yield completed
 
         final case class State(override val ctx: TransactionBuilder.Context)
-            extends Tx.Builder.HasCtx
+            extends EnrichedTx.Builder.HasCtx
 
         private object BasePessimistic {
             def apply(): TxBuilderResult[State] = for {
@@ -540,7 +540,7 @@ private object FinalizationTxOps {
                   config.cardanoProtocolParams,
                   diffHandler = diffHandler,
                   evaluator = config.plutusScriptEvaluatorForTxBuild,
-                  validators = Tx.Validators.nonSigningValidators
+                  validators = EnrichedTx.Validators.nonSigningValidators
                 )
         }
 

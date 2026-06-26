@@ -3,89 +3,51 @@ package hydrozoa.integration.stage4
 import cats.data.ReaderT
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
-import com.suprnation.actor.ActorSystem
+import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.event.Error as ActorError
+import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
-import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.{Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
-import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.HeadMultisigRegimeManager
+import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.CardanoLiaison
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
-import hydrozoa.multisig.consensus.transport.{HubWsTransport, CoilPeerWsTransport, NodeWsServer, PeerWsTransport, NodeWsServerEventFormat, RemoteCoilProxy, RemoteHubProxy, RemotePeerProxy, PeerWsTransportEventFormat}
-import hydrozoa.multisig.consensus.limiter.{Limiter, LimiterEvent, LimiterEventFormat}
-import hydrozoa.multisig.consensus.{BlockWeaver, BlockWeaverEvent, BlockWeaverEventFormat, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, CoilAckSequencer, CoilRelay, EventSequencerEvent, EventSequencerEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, SlowConsensusActor, SlowConsensusActorEvent, SlowConsensusActorEventFormat, StackComposer, StackComposerEvent, StackComposerEventFormat}
-import hydrozoa.multisig.consensus.CoilAckSequencerEventFormat
-import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransportEventFormat, HubWsTransportEventFormat}
-import hydrozoa.multisig.consensus.liaison.{LiaisonProtocol, PeerLiaisonCoilToHub, PeerLiaisonEvent, PeerLiaisonEventFormat, PeerLiaisonHeadToHead, PeerLiaisonHubToCoil}
-import org.http4s.Uri
-import org.http4s.jdkhttpclient.JdkWSClient
-import org.http4s.server.websocket.WebSocketBuilder2
-import com.comcast.ip4s.{Host, Port, host}
-import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, HubWsTransportEventFormat, InProcessHubCoilTransport, InProcessPeerTransport, NodeWsServer, NodeWsServerEventFormat, PeerTransport, PeerTransportEventFormat, WsPeerTransport}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEvent, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
-import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
-import org.scalacheck.{Gen, Prop, PropertyM}
-import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.rules.{Context, UtxoEnv}
-import scalus.cardano.ledger.{CertState, TransactionInput, Utxos}
-import test.{SeedPhrase, TestPeers, given}
-
+import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
-import scala.annotation.nowarn
+import org.http4s.Uri
+import org.http4s.client.websocket.WSClient
+import org.http4s.jdkhttpclient.JdkWSClient
+import org.http4s.server.websocket.WebSocketBuilder2
+import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
+import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
+import scalus.cardano.address.ShelleyAddress
+import scalus.cardano.ledger.rules.{Context, UtxoEnv}
+import scalus.cardano.ledger.{CertState, TransactionHash, TransactionInput, Utxos}
+import test.{SeedPhrase, TestPeers, given}
 
 // ===================================
 // Stage 4 suite
 // ===================================
-
-/** All actors + observation refs for one coil peer follower, assembled in `sutResource` (gated on
-  * `nCoilPeers > 0`). `headLiaison` is the hub-side `PeerLiaisonHubToCoil`; `coilLiaison` is the
-  * coil-side `PeerLiaisonCoilToHub`. `stacksRef` collects the hard-confirmed stacks captured by the
-  * follower's SlowConsensusActor tracer sink.
-  */
-private case class CoilWiring(
-    coilNum: CoilPeerNumber,
-    config: NodeConfig,
-    pending: Deferred[IO, HeadMultisigRegimeManager.Connections],
-    stack: PeerStack,
-    stacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
-    coilLiaison: PeerLiaisonCoilToHub.Handle,
-    headLiaison: PeerLiaisonHubToCoil.Handle,
-)
-
-/** The WS network for one SUT: the head-mesh remote handles per peer, plus (when coils run over WS)
-  * the coil transports and the proxy handles that stand in for the remote hub/coil liaisons. In
-  * Direct mode the coil fields are empty and the coil links are wired in-process.
-  *
-  *   - `remoteHeadByPeer(A)(B)` is the handle A's mesh liaison toward B sends through.
-  *   - `remoteCoilProxies(c)` is the hub's handle toward coil `c` (a `RemoteCoilProxy`).
-  *   - `remoteHubProxies(c)` is coil `c`'s handle toward the hub (a `RemoteHubProxy`).
-  */
-private case class WsNetwork(
-    remoteHeadByPeer: Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]],
-    coilHubTransport: Option[HubWsTransport],
-    coilUplinks: Map[CoilPeerNumber, CoilPeerWsTransport],
-    remoteCoilProxies: Map[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle],
-    remoteHubProxies: Map[CoilPeerNumber, LiaisonProtocol.HubToCoilHandle],
-)
 
 /** Shared state assembled in `sutResource` between starting the `ActorSystem` and building the
   * per-peer actor stacks: the mock L1 backend, the per-peer `Deferred`/`Ref` plumbing, and the
@@ -106,11 +68,16 @@ private case class PostSystemState(
     pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
     blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
     stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
+    coilStacksMap: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
     fastSettlementSignal: Deferred[IO, Unit],
     slowCoverageSignal: Deferred[IO, Unit],
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
     slowCoverageTarget: Deferred[IO, Set[Int]],
+    effectsLanded: Ref[IO, Set[TransactionHash]],
+    effectsLandedSignal: Deferred[IO, Unit],
+    effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+    fallbackEnteredSignal: Deferred[IO, TransactionHash],
 )
 
 /** Selects the persistence backend for stage4 peers.
@@ -146,8 +113,8 @@ case class Stage4Suite(
       * that owns the WS connection. Direct mode keeps virtual time; WS mode runs on the real clock.
       */
     override def useTestControl: Boolean = transportMode match {
-        case TransportMode.Direct       => true
-        case _: TransportMode.WebSocket => false
+        case TransportMode.Direct    => true
+        case TransportMode.WebSocket => false
     }
 
     override def scenarioGen: ScenarioGen[ModelState, Stage4Sut] = Stage4ScenarioGen
@@ -191,13 +158,6 @@ case class Stage4Suite(
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val coilConfigs = state.params.coilNodeConfigs
 
-        // Every coil is hubbed by head 0 in stage4.
-        val hubNum = HeadPeerNumber(0)
-        val wsMode = transportMode match {
-            case _: TransportMode.WebSocket => true
-            case TransportMode.Direct       => false
-        }
-
         // Advance simulated clock to the head's start epoch BEFORE creating the ActorSystem.
         // With TestControl, IO.sleep advances the virtual clock only while no actor fibers
         // exist; once actors are started their ping loops compete with tickOne, so the sleep
@@ -232,7 +192,7 @@ case class Stage4Suite(
                         if now.isAfter(t) then
                             IO.raiseError(
                               RuntimeException(
-                                s"Stage4 sutResource: initialization took too long " +
+                                "Stage4 sutResource: initialization took too long " +
                                     s"(takeoff: $t, now: $now)"
                               )
                             )
@@ -292,126 +252,105 @@ case class Stage4Suite(
                         Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(peerNum -> _)
                     }
                     .map(_.toMap)
-                submittedRequestIds   <- Ref[IO].of(Vector.empty[RequestId])
+                coilStacksMap <- coilConfigs
+                    .traverse { coilConfig =>
+                        val coilNum = coilConfig.ownPeerId match {
+                            case PeerId.Coil(n) => n
+                            case PeerId.Head(_) =>
+                                throw new IllegalStateException(
+                                  "coil node config carries a head peer id"
+                                )
+                        }
+                        Ref[IO].of(Vector.empty[Stack.HardConfirmed]).map(coilNum -> _)
+                    }
+                    .map(_.toMap)
+                submittedRequestIds  <- Ref[IO].of(Vector.empty[RequestId])
                 fastSettlementSignal <- IO.deferred[Unit]
                 slowCoverageSignal   <- IO.deferred[Unit]
                 fastSettlementTarget <- IO.deferred[Set[RequestId]]
                 slowCoverageTarget   <- IO.deferred[Set[Int]]
+                effectsLanded        <- Ref[IO].of(Set.empty[TransactionHash])
+                effectsLandedSignal  <- IO.deferred[Unit]
+                effectsLandedTarget  <- IO.deferred[List[BlockExpectation]]
+                fallbackEnteredSignal <- IO.deferred[TransactionHash]
             } yield PostSystemState(
               cardanoBackend = cardanoBackend,
               pendingConnsMap = pendingConnsMap,
               blockBriefsMap = blockBriefsMap,
               stacksMap = stacksMap,
+              coilStacksMap = coilStacksMap,
               submittedRequestIds = submittedRequestIds,
               fastSettlementSignal = fastSettlementSignal,
               slowCoverageSignal = slowCoverageSignal,
               fastSettlementTarget = fastSettlementTarget,
               slowCoverageTarget = slowCoverageTarget,
+              effectsLanded = effectsLanded,
+              effectsLandedSignal = effectsLandedSignal,
+              effectsLandedTarget = effectsLandedTarget,
+              fallbackEnteredSignal = fallbackEnteredSignal,
             )
         }
 
-        // ------ Per-peer actor stack. Brackets `openPeerBackend` (RocksDB on disk); the rest
-        // ------ is plain IO around it.
-        @nowarn("msg=unused explicit parameter")
-        def buildPeerStack(
+        case class PeerMrm(
+            mrm: HeadMultisigRegimeManager,
+            backendStore: BackendStore[IO],
+        )
+
+        def buildPeerMrm(
             peerNum: HeadPeerNumber,
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
+            peerTransport: Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => PeerTransport
+            ],
+            hubCoilTransport: Option[Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+            ]],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-            submittedRequestIds: Ref[IO, Vector[RequestId]],
             fastSettlementSignal: Deferred[IO, Unit],
             slowCoverageSignal: Deferred[IO, Unit],
             fastSettlementTarget: Deferred[IO, Set[RequestId]],
             slowCoverageTarget: Deferred[IO, Set[Int]],
-        ): Resource[IO, PeerStack] = {
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
+        ): Resource[IO, PeerMrm] = {
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-            val pending = pendingConnsMap(peerNum)
-            val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
-                Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNum))
-            val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(peerNum))
-            val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(peerNum))
-            val scTracer: ContraTracer[IO, StackComposerEvent] =
-                Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(peerNum))
 
+            // HMRM-level tracer = slf4j sink + per-peer capture observers (SCA stacks + JL briefs +
+            // CL TxSubmitting). Single source of truth feeds both the logger and the test's
+            // assertion refs.
+            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+                Slf4jTracer.sink.contramap(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
+                )
+            val mrmTracer =
+                slf4jMrm |+|
+                    Observers.captureStackHardConfirmed(
+                      peerNum,
+                      stacksMap,
+                      slowCoverageSignal,
+                      slowCoverageTarget,
+                    ) |+|
+                    Observers.captureBriefProduced(
+                      peerNum,
+                      blockBriefsMap,
+                      fastSettlementSignal,
+                      fastSettlementTarget,
+                    ) |+|
+                    Observers.captureTxSubmitting(
+                      effectsLanded,
+                      effectsLandedSignal,
+                      effectsLandedTarget,
+                    ) |+|
+                    Observers.captureFallbackEntered(fallbackEnteredSignal)
 
-            val captureScaSink: ContraTracer[IO, SlowConsensusActorEvent] =
-                ContraTracer.emit[IO, SlowConsensusActorEvent] {
-                    case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
-                        for
-                            _           <- stacksMap(peerNum).update(_ :+ stack)
-                            maybeTarget <- slowCoverageTarget.tryGet
-                            _ <- maybeTarget match
-                                     case None => IO.unit
-                                     case Some(targetNums) =>
-                                         for
-                                             // Check ALL peers so the signal only fires once every
-                                             // peer's stacksMap is current — ensuring analyzePersistence
-                                             // sees consistent captured stacks across all peers.
-                                             allPeersStacks <- stacksMap.values.toList.traverse(_.get)
-                                             allCovered = targetNums.isEmpty ||
-                                                 allPeersStacks.forall { peerStacks =>
-                                                     targetNums.forall { bn =>
-                                                         peerStacks.exists { s =>
-                                                             (s.brief.firstBlockNum: Int) <= bn &&
-                                                             bn <= (s.brief.lastBlockNum: Int)
-                                                         }
-                                                     }
-                                                 }
-                                             _ <- if allCovered then slowCoverageSignal.complete(()).void
-                                                  else IO.unit
-                                         yield ()
-                        yield ()
-                    case _ => IO.unit
-                }
-            val scaTracer: ContraTracer[IO, SlowConsensusActorEvent] =
-                captureScaSink
-                    |+| Slf4jTracer.sink.contramap(
-                      SlowConsensusActorEventFormat.humanFormat(peerNum)
-                    )
-            // Capture sink: accumulates briefs and fires fastSettlementSignal once all IDs in
-            // the target set (populated by beforeFinalize) appear across the collected briefs.
-            // The target guard prevents mid-run firing against a partial submittedRequestIds.
-            val captureSink: ContraTracer[IO, JointLedgerEvent] =
-                ContraTracer.emit[IO, JointLedgerEvent] {
-                    case JointLedgerEvent.BriefProduced(b) =>
-                        for
-                            _           <- blockBriefsMap(peerNum).update(_ :+ b)
-                            maybeTarget <- fastSettlementTarget.tryGet
-                            _ <- maybeTarget match
-                                     case None => IO.unit
-                                     case Some(submitted) =>
-                                         for
-                                             briefs <- blockBriefsMap(peerNum).get
-                                             seen    = briefs
-                                                           .flatMap(br =>
-                                                               br.events.map(_._1) ++
-                                                               br.depositsAbsorbed ++
-                                                               br.depositsRefunded
-                                                           )
-                                                           .toSet
-                                             _ <- if submitted.forall(seen.contains)
-                                                  then fastSettlementSignal.complete(()).void
-                                                  else IO.unit
-                                         yield ()
-                        yield ()
-                    case _ => IO.unit
-                }
-            // SLF4J sink: all JL events get a human-readable line so test runs are debuggable.
-            val textSink: ContraTracer[IO, JointLedgerEvent] =
-                Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(peerNum))
-            val jlTracer: ContraTracer[IO, JointLedgerEvent] = captureSink |+| textSink
-            val esTracer: ContraTracer[IO, EventSequencerEvent] =
-                Slf4jTracer.sink.contramap(EventSequencerEventFormat.humanFormat(peerNum))
-            // Per-peer persistence backend — InMemory by default; RocksDb when the
-            // suite is constructed with `BackendMode.RocksDb(root)`. Built first so
-            // every producer (RequestSequencer/JL/FCA/SC/SCA/PeerLiaison) shares the
-            // one per-peer store; `analyzePersistence` reads it back.
-            val persistenceTracer: ContraTracer[IO, PersistenceEvent] =
-                Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+            val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+
             openPeerBackend(
               peerNum,
               Cf.mkAll(
@@ -420,428 +359,56 @@ case class Stage4Suite(
                 hubs = multiNodeConfig.headConfig.coilPeers.hubHeadPeerNumbers
               ),
               persistenceTracer
-            ).evalMap { backendStore =>
-                for
-                    persistence <- {
+            ).flatMap { backendStore =>
+                for {
+                    persistence <- Resource.eval {
                         given CardanoNetwork.Section = nodeConfig
                         Persistence.fromBackend(backendStore, persistenceTracer)
                     }
-                    blockWeaver <- system.actorOf(BlockWeaver(nodeConfig, pending, bwTracer))
-                    cardanoLiaison <- system.actorOf(
-                      CardanoLiaison(nodeConfig, cardanoBackend, pending, clTracer, persistence)
+                    l2Ledger <- Resource.eval(EutxoL2Ledger(nodeConfig))
+                    mrm <- HeadMultisigRegimeManager.resource(
+                      nodeConfig,
+                      cardanoBackend,
+                      l2Ledger,
+                      persistence,
+                      mrmTracer,
+                      peerTransport,
+                      hubCoilTransport,
                     )
-                    requestSequencer <- system.actorOf(
-                      RequestSequencer(nodeConfig, pending, esTracer, persistence)
-                    )
-                    l2Ledger <- EutxoL2Ledger(nodeConfig)
-                    jointLedger <- system.actorOf(
-                      JointLedger(nodeConfig, pending, l2Ledger, jlTracer, persistence)
-                    )
-                    consensusActor <- system.actorOf(
-                      FastConsensusActor(nodeConfig, pending, fcaTracer, persistence)
-                    )
-                    stackComposer <- system.actorOf(
-                      StackComposer(nodeConfig, pending, scTracer, persistence)
-                    )
-                    slowConsensusActor <- system.actorOf(
-                      SlowConsensusActor(nodeConfig, pending, scaTracer, persistence)
-                    )
-                yield PeerStack(
-                  blockWeaver,
-                  cardanoLiaison,
-                  Some(requestSequencer),
-                  jointLedger,
-                  consensusActor,
-                  stackComposer,
-                  slowConsensusActor,
-                  backendStore,
-                  persistence
-                )
+                    _ <- Resource.eval(system.actorOf(mrm, s"hmrm-$peerNum"))
+                } yield PeerMrm(mrm, backendStore)
             }
         }
 
-        // ------ Post-stack, pre-transport IO: local peer liaisons. ------
-        def postStack(
-            system: ActorSystem[IO],
-            peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
-        ): IO[Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]]] = {
-            for {
-                // Create one local PeerLiaisonHeadToHead per (local, remote) pair.
-                // peerLiaisonMap(A)(B.id) = the liaison at A directed to B.
-                peerLiaisonMap <- peers
-                    .traverse { peerNum =>
-                        val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-                        val pending = pendingConnsMap(peerNum)
-                        // Reuse this peer's persistence (same store + arrival-stamp generation) for
-                        // its PeerLiaisons' CR8 inbound writes — do NOT build a second one (that
-                        // would double-bump the generation).
-                        val persistence = peerStackMap(peerNum).persistence
-                        peers
-                            .filterNot(_ == peerNum)
-                            .traverse { remotePeerNum =>
-                                val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
-                                val plTracer: ContraTracer[IO, PeerLiaisonEvent] =
-                                    Slf4jTracer.sink.contramap(
-                                      PeerLiaisonEventFormat
-                                          .humanFormat(
-                                            PeerId.Head(peerNum),
-                                            PeerId.Head(remotePeerNum)
-                                          )
-                                    )
-                                system
-                                    .actorOf(
-                                      PeerLiaisonHeadToHead(
-                                        nodeConfig,
-                                        remotePeerId,
-                                        pending,
-                                        plTracer,
-                                        persistence
-                                      )
-                                    )
-                                    .map(remotePeerId -> _)
-                            }
-                            .map(liaisons => peerNum -> liaisons.toMap)
-                    }
-                    .map(_.toMap)
-            } yield peerLiaisonMap
-        }
-
-        // ------ Build the per-peer remote-liaison map. In Direct mode this is the actual
-        // ------ PeerLiaisonHeadToHead handle from the other peer's actor stack. In WebSocket
-        // ------ mode it's a RemotePeerProxy that forwards messages over the local
-        // ------ PeerWsTransport. ws.remoteHeadByPeer(A)(B) = the handle that A's
-        // ------ PeerLiaisonHeadToHead(A->B) uses to reach B's PeerLiaisonHeadToHead(B->A).
-        // ------ WS transports (head mesh and coil links) are released when the Resource is
-        // ------ finalized.
-        def transportSetup(
-            system: ActorSystem[IO],
-            peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
-        ): Resource[IO, WsNetwork] =
-            transportMode match {
-                case TransportMode.Direct =>
-                    val remoteHeadByPeer
-                        : Map[HeadPeerNumber, Map[HeadPeerNumber, PeerLiaisonHeadToHead.Handle]] =
-                        peers.map { peerNum =>
-                            val ownPeerId = headPeerId(multiNodeConfig, peerNum)
-                            peerNum -> peers
-                                .filterNot(_ == peerNum)
-                                .map { remotePeerNum =>
-                                    remotePeerNum -> peerLiaisonMap(remotePeerNum)(ownPeerId)
-                                }
-                                .toMap
-                        }.toMap
-                    Resource.pure(
-                      WsNetwork(remoteHeadByPeer, None, Map.empty, Map.empty, Map.empty)
-                    )
-                case TransportMode.WebSocket(basePort) =>
-                    given CardanoNetwork.Section = multiNodeConfig.headConfig
-                    setupWebSocketNetwork(
-                      multiNodeConfig,
-                      peers,
-                      basePort,
-                      system,
-                      peerLiaisonMap,
-                      coilConfigs,
-                      hubNum,
-                    )
-            }
-
-        // ------ Coil peer followers (gated; empty for a pure-head run). Each coil peer is
-        // ------ hubbed by head 0: build its full follower actor stack + its single
-        // ------ PeerLiaisonCoilToHub, plus the hub-side PeerLiaisonHubToCoil and (once) the
-        // ------ CoilAckSequencer + CoilRelay. In WS mode the coil links run over the shared
-        // ------ per-peer server (registered here); in Direct mode they are wired in-process.
-        def buildCoilWirings(
+        def acquireSutFromMrms(
             system: ActorSystem[IO],
             cardanoBackend: CardanoBackend[IO],
-            peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
-            ws: WsNetwork,
-        ): Resource[IO, (Option[CoilAckSequencer.Handle], Option[CoilRelay.Handle], List[CoilWiring])] = {
-            val hubConfig = multiNodeConfig.nodeConfigs(hubNum)
-            val hubPending = pendingConnsMap(hubNum)
-            for {
-                coilHandles <- Resource.eval(for {
-                    coilAckSequencer <-
-                        if coilConfigs.isEmpty then IO.none[CoilAckSequencer.Handle]
-                        else
-                            val casTracer = Slf4jTracer.sink
-                                .contramap(CoilAckSequencerEventFormat.humanFormat(hubNum))
-                            system
-                                .actorOf(
-                                  CoilAckSequencer(
-                                    hubConfig,
-                                    peerStackMap(hubNum).persistence,
-                                    hubPending,
-                                    casTracer
-                                  )
-                                )
-                                .map(Some(_))
-                    coilRelay <-
-                        if coilConfigs.isEmpty then IO.none[CoilRelay.Handle]
-                        else system.actorOf(CoilRelay(hubPending)).map(Some(_))
-                } yield (coilAckSequencer, coilRelay))
-                (coilAckSequencer, coilRelay) = coilHandles
-
-                coilWirings <- coilConfigs.traverse { coilConfig =>
-                    val coilNum = coilConfig.ownPeerId match {
-                        case PeerId.Coil(n) => n
-                        case PeerId.Head(_) =>
-                            throw new IllegalStateException(
-                              "coil node config carries a head peer id"
-                            )
-                    }
-                    // The format renderers label events by peer number; coil peer i logs as
-                    // nPeers + i, matching its test-wallet index in `genInitialState`.
-                    val labelNum = HeadPeerNumber(nPeers + coilNum.convert)
-                    val bwTracer: ContraTracer[IO, BlockWeaverEvent] =
-                        Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(labelNum))
-                    val clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                        Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(labelNum))
-                    val jlTracer: ContraTracer[IO, JointLedgerEvent] =
-                        Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(labelNum))
-                    val fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                        Slf4jTracer.sink.contramap(
-                          FastConsensusActorEventFormat.humanFormat(labelNum)
-                        )
-                    val scTracer: ContraTracer[IO, StackComposerEvent] =
-                        Slf4jTracer.sink.contramap(StackComposerEventFormat.humanFormat(labelNum))
-                    val coilPlTracer: ContraTracer[IO, PeerLiaisonEvent] =
-                        Slf4jTracer.sink.contramap(
-                          PeerLiaisonEventFormat
-                              .humanFormat(PeerId.Coil(coilNum), PeerId.Head(hubNum))
-                        )
-                    val hubPlTracer: ContraTracer[IO, PeerLiaisonEvent] =
-                        Slf4jTracer.sink.contramap(
-                          PeerLiaisonEventFormat
-                              .humanFormat(PeerId.Head(hubNum), PeerId.Coil(coilNum))
-                        )
-                    val coilPersistenceTracer = Slf4jTracer.sink
-                        .contramap(PersistenceEventFormat.humanFormat)
-                    // The coil peer gets its own per-peer store (in-memory for the test).
-                    InMemoryBackendStore.open(coilPersistenceTracer).flatMap { coilBackendStore =>
-                        Resource.eval(for {
-                            coilPending <- Deferred[IO, HeadMultisigRegimeManager.Connections]
-                            coilPersistence <- {
-                                given CardanoNetwork.Section = coilConfig
-                                Persistence.fromBackend(coilBackendStore, coilPersistenceTracer)
-                            }
-                            // Capture sink mirroring `buildPeerStack`'s SCA sink: the follower's
-                            // hard-confirmed stacks land in the per-coil Ref consumed by
-                            // `propCoilParticipation`.
-                            stacksRef <- Ref[IO].of(Vector.empty[Stack.HardConfirmed])
-                            captureScaSink = ContraTracer.emit[IO, SlowConsensusActorEvent] {
-                                case SlowConsensusActorEvent.StackHardConfirmed(stack) =>
-                                    stacksRef.update(_ :+ stack)
-                                case _ => IO.unit
-                            }
-                            scaTracer = captureScaSink |+| Slf4jTracer.sink.contramap(
-                              SlowConsensusActorEventFormat.humanFormat(labelNum)
-                            )
-                            blockWeaver <- system.actorOf(
-                              BlockWeaver(coilConfig, coilPending, bwTracer)
-                            )
-                            cardanoLiaison <- system.actorOf(
-                              CardanoLiaison(
-                                coilConfig,
-                                cardanoBackend,
-                                coilPending,
-                                clTracer,
-                                coilPersistence
-                              )
-                            )
-                            l2Ledger <- EutxoL2Ledger(coilConfig)
-                            jointLedger <- system.actorOf(
-                              JointLedger(
-                                coilConfig,
-                                coilPending,
-                                l2Ledger,
-                                jlTracer,
-                                coilPersistence
-                              )
-                            )
-                            consensusActor <- system.actorOf(
-                              FastConsensusActor(
-                                coilConfig,
-                                coilPending,
-                                fcaTracer,
-                                coilPersistence
-                              )
-                            )
-                            stackComposer <- system.actorOf(
-                              StackComposer(coilConfig, coilPending, scTracer, coilPersistence)
-                            )
-                            slowConsensusActor <- system.actorOf(
-                              SlowConsensusActor(
-                                coilConfig,
-                                coilPending,
-                                scaTracer,
-                                coilPersistence
-                              )
-                            )
-                            coilLiaison <- system.actorOf(
-                              PeerLiaisonCoilToHub(
-                                coilConfig,
-                                coilPending,
-                                coilPlTracer,
-                                coilPersistence
-                              )
-                            )
-                            headLiaison <- system.actorOf(
-                              PeerLiaisonHubToCoil(
-                                hubConfig,
-                                coilNum,
-                                hubPending,
-                                hubPlTracer,
-                                peerStackMap(hubNum).persistence
-                              )
-                            )
-                        } yield CoilWiring(
-                          coilNum = coilNum,
-                          config = coilConfig,
-                          pending = coilPending,
-                          stack = PeerStack(
-                            blockWeaver,
-                            cardanoLiaison,
-                            None,
-                            jointLedger,
-                            consensusActor,
-                            stackComposer,
-                            slowConsensusActor,
-                            coilBackendStore,
-                            coilPersistence
-                          ),
-                          stacksRef = stacksRef,
-                          coilLiaison = coilLiaison,
-                          headLiaison = headLiaison
-                        ))
-                    }
-                }
-
-                // In WS mode, register each coil peer's now-spawned liaisons as the inbound
-                // dispatch targets on the coil transports (the hub→coil server and the coil's
-                // uplink dialer).
-                _ <- Resource.eval(IO.whenA(wsMode)(coilWirings.traverse_ { c =>
-                    ws.coilHubTransport.traverse_(_.register(c.coilNum, c.headLiaison)) >>
-                        ws.coilUplinks.get(c.coilNum).traverse_(_.register(c.coilLiaison))
-                }))
-            } yield (coilAckSequencer, coilRelay, coilWirings)
-        }
-
-        // ------ Post-transport IO: wire each peer's Connections (head and coil), start the
-        // ------ error drainer and per-peer CardanoLiaison-tick fibers, then assemble the
-        // ------ Stage4Sut.
-        def acquireSut(
-            system: ActorSystem[IO],
-            cardanoBackend: CardanoBackend[IO],
-            peerStackMap: Map[HeadPeerNumber, PeerStack],
-            pendingConnsMap: Map[HeadPeerNumber, Deferred[IO, HeadMultisigRegimeManager.Connections]],
+            peerMrms: Map[HeadPeerNumber, PeerMrm],
+            coilMrms: Map[CoilPeerNumber, CoilMrm],
             blockBriefsMap: Map[HeadPeerNumber, Ref[IO, Vector[BlockBrief.Intermediate]]],
             stacksMap: Map[HeadPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
-            peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
-            ws: WsNetwork,
-            coilAckSequencer: Option[CoilAckSequencer.Handle],
-            coilRelay: Option[CoilRelay.Handle],
-            coilWirings: List[CoilWiring],
+            coilStacksMap: Map[CoilPeerNumber, Ref[IO, Vector[Stack.HardConfirmed]]],
             submittedRequestIds: Ref[IO, Vector[RequestId]],
             fastSettlementSignal: Deferred[IO, Unit],
             slowCoverageSignal: Deferred[IO, Unit],
             fastSettlementTarget: Deferred[IO, Set[RequestId]],
             slowCoverageTarget: Deferred[IO, Set[Int]],
-        ): IO[Stage4Sut] = {
-            // Coil-ward additions merged into the hub head peer's Connections (below). The hub's
-            // view of each coil peer's liaison is the in-process handle in Direct mode, or a
-            // `RemoteCoilProxy` (over the shared server) in WS mode.
-            val hubExtraLiaisons = coilWirings.map(_.headLiaison)
-            val hubRemoteCoil =
-                if wsMode then ws.remoteCoilProxies
-                else coilWirings.map(c => c.coilNum -> c.coilLiaison).toMap
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
+        ): IO[Stage4Sut] =
             for {
-                // Complete each peer's deferred with its full wiring.
-                _ <- peers.traverse { peerNum =>
-                    val stack = peerStackMap(peerNum)
-                    val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-                    val localLiaisons = peerLiaisonMap(peerNum).values.toList
-                    // The hub head peer additionally fans the population stream to its coil-ward
-                    // liaisons (kept separate from the head mesh) and owns the relay sequencers.
-                    val isHub = peerNum == hubNum
-                    val hubCoilLiaisons = if isHub then hubExtraLiaisons else Nil
-                    // Per-peer rate limiters wrapping BlockWeaver and StackComposer. With the
-                    // default RateLimits config (zero periods) these are no-ops; non-zero
-                    // periods enable throttling for the corresponding lane.
-                    val bwlTracer: ContraTracer[IO, LimiterEvent] =
-                        Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("BlockWeaver"))
-                    val sclTracer: ContraTracer[IO, LimiterEvent] =
-                        Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("StackComposer"))
-                    for {
-                        blockWeaverLimiter <- system.actorOf(
-                          Limiter[BlockWeaver.Request](stack.blockWeaver, nodeConfig, bwlTracer)
-                        )
-                        stackComposerLimiter <- system.actorOf(
-                          Limiter[StackComposer.Request](stack.stackComposer, nodeConfig, sclTracer)
-                        )
-                        _ <- pendingConnsMap(peerNum)
-                            .complete(
-                              HeadMultisigRegimeManager.Connections(
-                                blockWeaver = stack.blockWeaver,
-                                blockWeaverLimiter = blockWeaverLimiter,
-                                cardanoLiaison = stack.cardanoLiaison,
-                                consensusActor = stack.consensusActor,
-                                requestSequencer = stack.requestSequencer,
-                                jointLedger = stack.jointLedger,
-                                stackComposer = stack.stackComposer,
-                                stackComposerLimiter = stackComposerLimiter,
-                                slowConsensusActor = stack.slowConsensusActor,
-                                headPeerLiaisons = localLiaisons,
-                                remoteHeadLiaisons = ws.remoteHeadByPeer(peerNum),
-                                remoteCoilLiaisons = if isHub then hubRemoteCoil else Map.empty,
-                                coilPeerLiaisons = hubCoilLiaisons,
-                                coilAckSequencer = if isHub then coilAckSequencer else None,
-                                coilRelay = if isHub then coilRelay else None,
-                              )
-                            )
-                            .void
-                    } yield ()
-                }
-
-                // Complete each coil peer's deferred with its follower wiring: its single liaison
-                // toward the hub and the hub-side liaison as its only remote. Hard-confirmed stacks
-                // are captured by the SlowConsensusActor tracer sink wired in `buildCoilWirings`.
-                _ <- coilWirings.traverse_ { c =>
-                    val bwlTracer: ContraTracer[IO, LimiterEvent] =
-                        Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("BlockWeaver"))
-                    val sclTracer: ContraTracer[IO, LimiterEvent] =
-                        Slf4jTracer.sink.contramap(LimiterEventFormat.humanFormat("StackComposer"))
-                    for {
-                        blockWeaverLimiter <- system.actorOf(
-                          Limiter[BlockWeaver.Request](c.stack.blockWeaver, c.config, bwlTracer)
-                        )
-                        stackComposerLimiter <- system.actorOf(
-                          Limiter[StackComposer.Request](c.stack.stackComposer, c.config, sclTracer)
-                        )
-                        _ <- c.pending
-                            .complete(
-                              HeadMultisigRegimeManager.Connections(
-                                blockWeaver = c.stack.blockWeaver,
-                                blockWeaverLimiter = blockWeaverLimiter,
-                                cardanoLiaison = c.stack.cardanoLiaison,
-                                consensusActor = c.stack.consensusActor,
-                                jointLedger = c.stack.jointLedger,
-                                stackComposer = c.stack.stackComposer,
-                                stackComposerLimiter = stackComposerLimiter,
-                                slowConsensusActor = c.stack.slowConsensusActor,
-                                coilUplink = Some(c.coilLiaison),
-                                // The coil's view of its hub liaison: in-process in Direct mode, a
-                                // `RemoteHubProxy` (over the coil's uplink) in WS mode.
-                                remoteHubLiaison = Some(
-                                  if wsMode then ws.remoteHubProxies(c.coilNum) else c.headLiaison
-                                ),
-                              )
-                            )
-                            .void
-                    } yield ()
-                }
+                peerConnections <- peerMrms.toList
+                    .traverse { case (peerNum, peerMrm) =>
+                        peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
+                    }
+                    .map(_.toMap)
+                coilConnections <- coilMrms.toList
+                    .traverse { case (coilNum, coilMrm) =>
+                        coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
+                    }
+                    .map(_.toMap)
                 sutErrors <- Ref[IO].of(List.empty[String])
                 errorDrainer <- system.eventStream.take
                     .flatMap {
@@ -851,110 +418,406 @@ case class Stage4Suite(
                     }
                     .foreverM
                     .start
-                // Side-fiber per peer that periodically pokes its CardanoLiaison with
-                // `Timeout`. cats-actors' `setReceiveTimeout` is unusable under TestControl
-                // (1s-virtual-ping + wall-clock check), so we drive polling externally to
-                // honor `cardanoLiaisonPollingPeriod` in virtual time. `Temporal.sleep` is
-                // virtual-clock-aware, so each tick fires after `period` of virtual time and
-                // every peer's CardanoLiaison.runEffects runs at the configured cadence.
-                liaisonTickFibers <- peers.traverse { peerNum =>
+                headTickFibers <- peerConnections.toList.traverse { case (peerNum, conns) =>
                     val pollingPeriod = multiNodeConfig
                         .nodeConfigs(peerNum)
                         .nodeOperationMultisigConfig
                         .cardanoLiaisonPollingPeriod
-                    val liaison = peerStackMap(peerNum).cardanoLiaison
-                    (IO.sleep(pollingPeriod) >> (liaison ! CardanoLiaison.Timeout)).foreverM.start
+                    (IO.sleep(pollingPeriod) >>
+                        (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
                 }
-                // Same polling tick for each coil peer's CardanoLiaison.
-                coilTickFibers <- coilWirings.traverse { c =>
-                    val pollingPeriod =
-                        c.config.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod
-                    (IO.sleep(
-                      pollingPeriod
-                    ) >> (c.stack.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
+                coilTickFibers <- coilConnections.toList.traverse { case (coilNum, conns) =>
+                    val pollingPeriod = coilMrms(coilNum).config
+                        .nodeOperationMultisigConfig
+                        .cardanoLiaisonPollingPeriod
+                    (IO.sleep(pollingPeriod) >>
+                        (conns.cardanoLiaison ! CardanoLiaison.Timeout)).foreverM.start
                 }
             } yield Stage4Sut(
-              system = system,
-              cardanoBackend = cardanoBackend,
-              peers = peerStackMap.map { case (peerNum, stack) =>
-                  peerNum -> Stage4PeerHandle(
-                    requestSequencer = stack.requestSequencer.getOrElse(
-                      sys.error(s"head peer $peerNum missing RequestSequencer")
+              static = Stage4SutStatic(
+                system = system,
+                cardanoBackend = cardanoBackend,
+                peers = peerConnections.map { case (peerNum, conns) =>
+                    peerNum -> Stage4PeerHandle(
+                      conns.requestSequencer.getOrElse(
+                        sys.error(s"head peer $peerNum missing RequestSequencer")
+                      )
                     )
-                  )
-              },
-              sutErrors = sutErrors,
-              errorDrainer = errorDrainer,
-              liaisonTickFibers = liaisonTickFibers.toList ++ coilTickFibers,
-              blockBriefs = blockBriefsMap,
-              stacks = stacksMap,
-              coilStacks = coilWirings.map(c => c.coilNum -> c.stacksRef).toMap,
-              backendStores = peerStackMap.map { case (peerNum, stack) =>
-                  peerNum -> stack.backendStore
-              },
-              submittedRequestIds = submittedRequestIds,
-              fastSettlementSignal = fastSettlementSignal,
-              slowCoverageSignal = slowCoverageSignal,
-              fastSettlementTarget = fastSettlementTarget,
-              slowCoverageTarget = slowCoverageTarget,
-              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
+                },
+                errorDrainer = errorDrainer,
+                liaisonTickFibers = headTickFibers ++ coilTickFibers,
+                backendStores = peerMrms.map { case (peerNum, peerMrm) =>
+                    peerNum -> peerMrm.backendStore
+                },
+                log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
+              ),
+              mutable = Stage4SutMutable(
+                sutErrors = sutErrors,
+                blockBriefs = blockBriefsMap,
+                stacks = stacksMap,
+                coilStacks = coilStacksMap,
+                submittedRequestIds = submittedRequestIds,
+                fastSettlementSignal = fastSettlementSignal,
+                slowCoverageSignal = slowCoverageSignal,
+                fastSettlementTarget = fastSettlementTarget,
+                slowCoverageTarget = slowCoverageTarget,
+                effectsLanded = effectsLanded,
+                effectsLandedSignal = effectsLandedSignal,
+                effectsLandedTarget = effectsLandedTarget,
+                fallbackEnteredSignal = fallbackEnteredSignal,
+              ),
             )
+
+        case class CoilMrm(
+            mrm: CoilMultisigRegimeManager,
+            backendStore: BackendStore[IO],
+            config: NodeConfig,
+        )
+
+        /** Concrete WS handle + the OS-assigned port the NodeWsServer bound to. Carried in
+          * [[HeadNetwork.ws]] so the outer for-comprehension can compute remote URIs from real
+          * bound ports (post-bind) and start every peer's dialers in a second pass.
+          */
+        case class WsBinding(
+            wsPeerTransport: WsPeerTransport,
+            boundPort: Int,
+        )
+
+        case class HeadNetwork(
+            peerTransport: PeerTransport,
+            hubTransport: Option[HubTransport],
+            ws: Option[WsBinding],
+        )
+
+        // Per-head-peer transports: head-mesh PeerTransport (always) plus, for hub head peers, the
+        // hub-side HubTransport for the hub↔coil link. WS mode mounts both routes on ONE shared
+        // NodeWsServer per peer (bound on port 0 — OS-assigned ephemeral — so two WS test instances
+        // never collide); Direct mode wires them to the shared in-process registries instead.
+        def headNetworkFor(
+            peerNum: HeadPeerNumber,
+            inProcessRegistry: InProcessPeerTransport.Registry,
+            hubCoilRegistry: Option[InProcessHubCoilTransport.Registry],
+        ): Resource[IO, HeadNetwork] = {
+            val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
+            val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
+            transportMode match {
+                case TransportMode.Direct =>
+                    for {
+                        peerT <- Resource.eval(
+                          InProcessPeerTransport.create(ownHeadPeerId, inProcessRegistry)
+                        )
+                        hubT <-
+                            if hubbedCoils.isEmpty then
+                                Resource.pure[IO, Option[HubTransport]](None)
+                            else
+                                hubCoilRegistry match {
+                                    case None =>
+                                        Resource.eval(
+                                          IO.raiseError(
+                                            new IllegalStateException(
+                                              s"head peer $peerNum hubs coil peers in Direct mode " +
+                                                  "but no hubCoilRegistry was allocated"
+                                            )
+                                          )
+                                        )
+                                    case Some(reg) =>
+                                        Resource
+                                            .eval(InProcessHubCoilTransport.Hub.create(reg))
+                                            .map(h => Some(h: HubTransport))
+                                }
+                    } yield HeadNetwork(peerT, hubT, None)
+                case TransportMode.WebSocket =>
+                    given CardanoNetwork.Section = multiNodeConfig.headConfig
+                    val remoteIds: List[HeadPeerId] =
+                        peers.filterNot(_ == peerNum).map(headPeerId(multiNodeConfig, _)).toList
+                    val ptTracer =
+                        Slf4jTracer.sink.contramap(PeerTransportEventFormat.humanFormat(peerNum))
+                    val nwsTracer =
+                        Slf4jTracer.sink.contramap(NodeWsServerEventFormat.humanFormat(peerNum))
+                    val hubTracer =
+                        Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
+                    val bindHost = host"127.0.0.1"
+                    for {
+                        peerT <- Resource.eval(
+                          WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
+                        )
+                        hubTConcrete: Option[HubWsTransport] <-
+                            if hubbedCoils.isEmpty then
+                                Resource.pure[IO, Option[HubWsTransport]](None)
+                            else
+                                Resource
+                                    .eval(HubWsTransport.create(hubbedCoils, hubTracer))
+                                    .map(Some(_))
+                        meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
+                        hubRoutes = hubTConcrete.toList.map(h =>
+                            (wsb: WebSocketBuilder2[IO]) => h.routes(wsb)
+                        )
+                        server <- NodeWsServer.resource(
+                          bindHost,
+                          Port.fromInt(0).get,
+                          meshRoute :: hubRoutes,
+                          nwsTracer,
+                        )
+                        boundPort = server.address.getPort
+                    } yield HeadNetwork(
+                      peerT,
+                      hubTConcrete.map(h => h: HubTransport),
+                      Some(WsBinding(peerT, boundPort)),
+                    )
+            }
+        }
+
+        // Per-coil-peer uplink transport toward its single hub. Direct mode uses the shared
+        // in-process hub-coil registry; WS mode dials the hub's `/hub` route at the hub's
+        // post-bind ephemeral port (passed in via `hubBoundPort`).
+        def coilUplinkFor(
+            coilNum: CoilPeerNumber,
+            hubCoilRegistry: InProcessHubCoilTransport.Registry,
+            wsClient: Option[WSClient[IO]],
+            hubBoundPort: Option[Int],
+        ): Resource[
+          IO,
+          ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+        ] = transportMode match {
+            case TransportMode.Direct =>
+                Resource
+                    .eval(InProcessHubCoilTransport.Coil.create(coilNum, hubCoilRegistry))
+                    .map(t =>
+                        (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                            t: CoilTransport
+                    )
+            case TransportMode.WebSocket =>
+                given CardanoNetwork.Section = multiNodeConfig.headConfig
+                val port = hubBoundPort.getOrElse(
+                  sys.error(s"coil $coilNum's hub has no bound port — head networks not built yet?")
+                )
+                val hubUri = Uri.unsafeFromString(s"ws://127.0.0.1:$port/hub")
+                val cpwtTracer =
+                    Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(coilNum))
+                val client = wsClient.getOrElse(
+                  sys.error("WebSocket transport requires a shared JdkWSClient")
+                )
+                for {
+                    t <- Resource.eval(CoilPeerWsTransport.create(coilNum, cpwtTracer))
+                    _ <- t.startDialer(client, hubUri)
+                } yield (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    t: CoilTransport
+        }
+
+        // ------ Per-coil-peer follower stack: full CoilMultisigRegimeManager + its own in-memory
+        // ------ backend + persistence + L2 ledger, with the SCA capture sink wired into the
+        // ------ MRM tracer so hard-confirmed stacks land in `coilStacksRef`.
+        def buildCoilMrm(
+            coilConfig: NodeConfig,
+            coilNum: CoilPeerNumber,
+            system: ActorSystem[IO],
+            cardanoBackend: CardanoBackend[IO],
+            coilTransport: Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+            ],
+            coilStacksRef: Ref[IO, Vector[Stack.HardConfirmed]],
+            effectsLanded: Ref[IO, Set[TransactionHash]],
+            effectsLandedSignal: Deferred[IO, Unit],
+            effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+            fallbackEnteredSignal: Deferred[IO, TransactionHash],
+        ): Resource[IO, CoilMrm] = {
+            // Reuse the head-typed event format with a synthetic peer number (matches the legacy
+            // labelling); a coil-specific format is a separate follow-up.
+            val labelNum = HeadPeerNumber(nPeers + coilNum.convert)
+            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+                Slf4jTracer.sink.contramap(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(labelNum)
+                )
+            // Coil also runs a CardanoLiaison and can submit backbone txs to L1 (e.g. the init tx
+            // in some races), so the TxSubmitting + FallbackToRuleBased capture observers must be
+            // wired to its tracer too — otherwise the test's landed set and fallback signal miss
+            // coil-side submissions.
+            val mrmTracer =
+                slf4jMrm |+|
+                    Observers.captureCoilStackHardConfirmed(coilStacksRef) |+|
+                    Observers.captureTxSubmitting(
+                      effectsLanded,
+                      effectsLandedSignal,
+                      effectsLandedTarget,
+                    ) |+|
+                    Observers.captureFallbackEntered(fallbackEnteredSignal)
+            val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+
+            InMemoryBackendStore.open(persistenceTracer).flatMap { backendStore =>
+                for {
+                    persistence <- Resource.eval {
+                        given CardanoNetwork.Section = coilConfig
+                        Persistence.fromBackend(backendStore, persistenceTracer)
+                    }
+                    l2Ledger <- Resource.eval(EutxoL2Ledger(coilConfig))
+                    mrm <- CoilMultisigRegimeManager.resource(
+                      coilConfig,
+                      cardanoBackend,
+                      l2Ledger,
+                      persistence,
+                      mrmTracer,
+                      coilTransport,
+                    )
+                    _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
+                } yield CoilMrm(mrm, backendStore, coilConfig)
+            }
         }
 
         for {
-            _ <- Resource.eval(preSystem)
+            _      <- Resource.eval(preSystem)
             system <- ActorSystem[IO](label)
-            pss <- Resource.eval(postSystem)
-            peerStackMap <- peers.toList
+            pss    <- Resource.eval(postSystem)
+            inProcessRegistry <- Resource.eval(InProcessPeerTransport.emptyRegistry)
+            // Allocated only when this scenario has coil peers; in Direct mode it backs the
+            // in-process hub↔coil routing, and in WS mode the field stays `None` (the hub/coil
+            // WS transports own their own routing). Heads with no hubbed coils pass `None`
+            // either way.
+            hubCoilRegistry <-
+                if coilConfigs.isEmpty then
+                    Resource.pure[IO, Option[InProcessHubCoilTransport.Registry]](None)
+                else
+                    Resource
+                        .eval(InProcessHubCoilTransport.emptyRegistry)
+                        .map(Some(_))
+            // Shared WS client: allocated once for WebSocket mode, unused for Direct.
+            wsClient <- transportMode match {
+                case TransportMode.Direct =>
+                    Resource.pure[IO, Option[WSClient[IO]]](None)
+                case TransportMode.WebSocket =>
+                    Resource.eval(JdkWSClient.simple[IO]).map(Some(_))
+            }
+            // Pass 1: allocate every head peer's transports + bind their NodeWsServers (WS mode on
+            // port 0 ⇒ OS-assigned ephemeral). Each `HeadNetwork` carries the bound port; dialers
+            // are deferred to Pass 2 so URIs can be built from the real port map.
+            headNetworks <- peers.toList
                 .traverse { peerNum =>
-                    buildPeerStack(
+                    headNetworkFor(peerNum, inProcessRegistry, hubCoilRegistry)
+                        .map(peerNum -> _)
+                }
+                .map(_.toMap)
+            // Pass 2 (WS only): now that every peer's server is bound and we know its ephemeral
+            // port, build the `HeadPeerId -> Uri` map and start each peer's dialers against the
+            // ones with higher peerNum (lower dials higher; matches the production wiring).
+            _ <- transportMode match {
+                case TransportMode.Direct => Resource.pure[IO, Unit](())
+                case TransportMode.WebSocket =>
+                    val client = wsClient.getOrElse(
+                      sys.error("WebSocket transport requires a shared JdkWSClient")
+                    )
+                    val peerHeadUris: Map[HeadPeerId, Uri] = peers.map { p =>
+                        val port = headNetworks(p).ws
+                            .map(_.boundPort)
+                            .getOrElse(sys.error(s"peer $p has no WS binding in WS mode"))
+                        headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
+                          s"ws://127.0.0.1:$port/head"
+                        )
+                    }.toMap
+                    peers.toList.traverse_ { peerNum =>
+                        val ownId = headPeerId(multiNodeConfig, peerNum)
+                        val ws = headNetworks(peerNum).ws.get
+                        ws.wsPeerTransport.startDialers(client, peerHeadUris - ownId)
+                    }
+            }
+            peerMrms <- peers.toList
+                .traverse { peerNum =>
+                    val net = headNetworks(peerNum)
+                    val peerFactory: Resource[
+                      IO,
+                      ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => PeerTransport
+                    ] =
+                        Resource.pure(
+                          (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                              net.peerTransport
+                        )
+                    val hubFactory: Option[Resource[
+                      IO,
+                      ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+                    ]] = net.hubTransport.map { h =>
+                        Resource.pure(
+                          (_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) => h
+                        )
+                    }
+                    buildPeerMrm(
                       peerNum,
                       system,
                       pss.cardanoBackend,
-                      pss.pendingConnsMap,
+                      peerFactory,
+                      hubFactory,
                       pss.blockBriefsMap,
                       pss.stacksMap,
-                      pss.submittedRequestIds,
                       pss.fastSettlementSignal,
                       pss.slowCoverageSignal,
                       pss.fastSettlementTarget,
                       pss.slowCoverageTarget,
+                      pss.effectsLanded,
+                      pss.effectsLandedSignal,
+                      pss.effectsLandedTarget,
+                      pss.fallbackEnteredSignal,
                     ).map(peerNum -> _)
                 }
                 .map(_.toMap)
-            peerLiaisonMap <- Resource.eval(postStack(system, peerStackMap, pss.pendingConnsMap))
-            ws <- transportSetup(system, peerLiaisonMap)
-            coilParts <- buildCoilWirings(
-              system,
-              pss.cardanoBackend,
-              peerStackMap,
-              pss.pendingConnsMap,
-              ws,
-            )
-            (coilAckSequencer, coilRelay, coilWirings) = coilParts
+            // Per-coil follower stack. The MRM gets its uplink transport via `coilUplinkFor`; in
+            // Direct mode this shares `hubCoilRegistry` with the hub head peer's `HubTransport`.
+            coilMrms <- coilConfigs
+                .traverse { coilConfig =>
+                    val coilNum = coilConfig.ownPeerId match {
+                        case PeerId.Coil(n) => n
+                        case PeerId.Head(_) =>
+                            throw new IllegalStateException(
+                              "coil node config carries a head peer id"
+                            )
+                    }
+                    val hubNum = coilConfig
+                        .coilPeerHub(coilNum)
+                        .getOrElse(
+                          throw new IllegalStateException(
+                            s"no hub configured for coil peer $coilNum"
+                          )
+                        )
+                    val registry = hubCoilRegistry.getOrElse(
+                      throw new IllegalStateException(
+                        "coilConfigs is non-empty but hubCoilRegistry was not allocated"
+                      )
+                    )
+                    val hubBoundPort = headNetworks(hubNum).ws.map(_.boundPort)
+                    buildCoilMrm(
+                      coilConfig,
+                      coilNum,
+                      system,
+                      pss.cardanoBackend,
+                      coilUplinkFor(coilNum, registry, wsClient, hubBoundPort),
+                      pss.coilStacksMap(coilNum),
+                      pss.effectsLanded,
+                      pss.effectsLandedSignal,
+                      pss.effectsLandedTarget,
+                      pss.fallbackEnteredSignal,
+                    ).map(coilNum -> _)
+                }
+                .map(_.toMap)
             sut <- Resource.make(
-              acquireSut(
+              acquireSutFromMrms(
                 system,
                 pss.cardanoBackend,
-                peerStackMap,
-                pss.pendingConnsMap,
+                peerMrms,
+                coilMrms,
                 pss.blockBriefsMap,
                 pss.stacksMap,
-                peerLiaisonMap,
-                ws,
-                coilAckSequencer,
-                coilRelay,
-                coilWirings,
+                pss.coilStacksMap,
                 pss.submittedRequestIds,
                 pss.fastSettlementSignal,
                 pss.slowCoverageSignal,
                 pss.fastSettlementTarget,
                 pss.slowCoverageTarget,
+                pss.effectsLanded,
+                pss.effectsLandedSignal,
+                pss.effectsLandedTarget,
+                pss.fallbackEnteredSignal,
               )
             )(sut =>
-                sut.liaisonTickFibers.traverse_(_.cancel) >>
+                sut.static.liaisonTickFibers.traverse_(_.cancel) >>
                     IO.sleep(100.millis) >>
-                    sut.errorDrainer.cancel
+                    sut.static.errorDrainer.cancel
             )
         } yield sut
     }
@@ -968,180 +831,40 @@ case class Stage4Suite(
     ): HeadPeerId =
         HeadPeerId(peerNum, multiNodeConfig.nHeadPeers)
 
-    /** WS-mode helper. Builds, per head peer, the head-mesh [[PeerWsTransport]] and (on the hub)
-      * the [[HubWsTransport]], mounts both on **one** shared [[NodeWsServer]] per peer (routes
-      * `/head` and `/hub`), and starts the mesh dialers. For each coil peer it builds a
-      * [[CoilPeerWsTransport]] dialing the hub's `/hub`. Returns the head-mesh remote-proxy map
-      * plus the coil transports and the [[RemoteCoilProxy]] / [[RemoteHubProxy]] handles, and a
-      * cleanup IO that releases every server/dialer/client.
-      *
-      * The real coil liaisons are spawned later (in `buildCoilWirings`) and registered onto these
-      * transports there.
-      */
-    private def setupWebSocketNetwork(
-        multiNodeConfig: MultiNodeConfig,
-        peers: Seq[HeadPeerNumber],
-        basePort: Int,
-        system: ActorSystem[IO],
-        peerLiaisonMap: Map[HeadPeerNumber, Map[HeadPeerId, PeerLiaisonHeadToHead.Handle]],
-        coilConfigs: List[NodeConfig],
-        hubNum: HeadPeerNumber,
-    )(using CardanoNetwork.Section): Resource[IO, WsNetwork] = {
-        // Map each peer to a localhost address. Bind on 127.0.0.1 (avoids firewall prompts on
-        // dev machines); peers dial each other at the same address+port.
-        def addrFor(peerNum: HeadPeerNumber): (Host, Port) =
-            (host"127.0.0.1", Port.fromInt(basePort + (peerNum: Int)).get)
-
-        def uriFor(peerNum: HeadPeerNumber): Uri = {
-            val (h, p) = addrFor(peerNum)
-            Uri.unsafeFromString(s"ws://$h:$p/head")
-        }
-
-        val coilNums: List[CoilPeerNumber] = coilConfigs.map(_.ownPeerId match {
-            case PeerId.Coil(n) => n
-            case PeerId.Head(_) => throw new IllegalStateException("coil config carries a head id")
-        })
-        val (hubHost, hubPort) = addrFor(hubNum)
-        val hubCoilUri = Uri.unsafeFromString(s"ws://$hubHost:$hubPort/hub")
-
-        for {
-            // Per-head mesh transports, hub coil transport, and shared WS client (all IO).
-            wsParts <- Resource.eval(for {
-                meshTransports <- peers.toList
-                    .traverse { ownPeerNum =>
-                        val ownPeerId = headPeerId(multiNodeConfig, ownPeerNum)
-                        val remotes: Map[HeadPeerId, Uri] = peers
-                            .filterNot(_ == ownPeerNum)
-                            .map(rpn => headPeerId(multiNodeConfig, rpn) -> uriFor(rpn))
-                            .toMap
-                        val pwsTracer = Slf4jTracer.sink.contramap(
-                          PeerWsTransportEventFormat.humanFormat(ownPeerNum)
-                        )
-                        PeerWsTransport.create(ownPeerId, remotes, pwsTracer).map(ownPeerNum -> _)
-                    }
-                    .map(_.toMap)
-                coilHubTransportOpt <-
-                    if coilNums.isEmpty then IO.none[HubWsTransport]
-                    else
-                        val hwtTracer = Slf4jTracer.sink
-                            .contramap(HubWsTransportEventFormat.humanFormat(hubNum))
-                        HubWsTransport.create(coilNums, hwtTracer).map(Some(_))
-                client <- JdkWSClient.simple[IO]
-            } yield (meshTransports, coilHubTransportOpt, client))
-            (meshTransports, coilHubTransportOpt, client) = wsParts
-
-            // One shared server per peer: mesh `/head` for every head, plus the hub's `/hub`.
-            _ <- peers.toList.traverse_ { ownPeerNum =>
-                val (bindH, bindP) = addrFor(ownPeerNum)
-                val meshRoute =
-                    (wsb: WebSocketBuilder2[IO]) => meshTransports(ownPeerNum).routes(wsb)
-                val coilRoute =
-                    if ownPeerNum == hubNum then
-                        coilHubTransportOpt.toList.map(t =>
-                            (wsb: WebSocketBuilder2[IO]) => t.routes(wsb)
-                        )
-                    else Nil
-                val nwsTracer =
-                    Slf4jTracer.sink.contramap(NodeWsServerEventFormat.humanFormat(ownPeerNum))
-                NodeWsServer.resource(bindH, bindP, meshRoute :: coilRoute, nwsTracer)
-            }
-
-            // Register liaisons, start mesh dialers, build remote proxies (IO between Resource steps).
-            remoteParts <- Resource.eval(for {
-                _ <- peers.toList.traverse_ { ownPeerNum =>
-                    peerLiaisonMap(ownPeerNum).toList.traverse_ { case (remotePeerId, localLiaison) =>
-                        meshTransports(ownPeerNum).register(remotePeerId, localLiaison)
-                    }
-                }
-                remoteHeadByPeer <- peers.toList
-                    .traverse { ownPeerNum =>
-                        val transport = meshTransports(ownPeerNum)
-                        peers
-                            .filterNot(_ == ownPeerNum)
-                            .toList
-                            .traverse { remotePeerNum =>
-                                val remotePeerId = headPeerId(multiNodeConfig, remotePeerNum)
-                                RemotePeerProxy(remotePeerId, transport)
-                                    .flatMap(system.actorOf)
-                                    .map(remotePeerNum -> _)
-                            }
-                            .map(ownPeerNum -> _.toMap)
-                    }
-                    .map(_.toMap)
-                remoteCoilProxies <- coilHubTransportOpt match {
-                    case None => IO.pure(Map.empty[CoilPeerNumber, LiaisonProtocol.CoilToHubHandle])
-                    case Some(t) =>
-                        coilNums
-                            .traverse(coilNum =>
-                                RemoteCoilProxy(coilNum, t)
-                                    .flatMap(system.actorOf)
-                                    .map(coilNum -> _)
-                            )
-                            .map(_.toMap)
-                }
-            } yield (remoteHeadByPeer, remoteCoilProxies))
-            (remoteHeadByPeer, remoteCoilProxies) = remoteParts
-
-            // Start the mesh dialers (lower dials higher).
-            _ <- peers.toList.traverse_ { ownPeerNum =>
-                meshTransports(ownPeerNum).startDialers(client)
-            }
-
-            // Coil uplinks: create each transport, start its dialer, then build the hub proxy.
-            coilParts <- coilNums
-                .traverse { coilNum =>
-                    val cpwtTracer = Slf4jTracer.sink
-                        .contramap(CoilPeerWsTransportEventFormat.humanFormat(coilNum))
-                    for
-                        up <- Resource.eval(
-                          CoilPeerWsTransport.create(coilNum, hubCoilUri, cpwtTracer)
-                        )
-                        _ <- up.startDialer(client)
-                        proxy <- Resource.eval(
-                          RemoteHubProxy(up).flatMap(system.actorOf)
-                        )
-                    yield (coilNum -> up, coilNum -> proxy)
-                }
-                .map(entries => (entries.map(_._1).toMap, entries.map(_._2).toMap))
-            (coilUplinks, remoteHubProxies) = coilParts
-        } yield WsNetwork(
-          remoteHeadByPeer = remoteHeadByPeer,
-          coilHubTransport = coilHubTransportOpt,
-          coilUplinks = coilUplinks,
-          remoteCoilProxies = remoteCoilProxies,
-          remoteHubProxies = remoteHubProxies,
-        )
-    }
-
-    override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] =
-        for
+    override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+        // Race the happy-path drain against the fallback-entered signal. If any peer's CL
+        // successfully submits a `FallbackToRuleBased`, abandon the analysis and fail with
+        // a clear message — the properties below (liveness / coverage / effects-landed) don't
+        // model rule-based; waiting on them after fallback would spin the CL polling loop
+        // until the outer test timeout, accumulating the InitWindowElapsed warn flood.
+        val happyPathProp: IO[Prop] = for
             _ <- log.warn("beforeFinalize")
-            submitted <- sut.submittedRequestIds.get
+            submitted <- sut.mutable.submittedRequestIds.get
             // Arm the fast-cycle drain: publish the final submitted set so the JL capture sink
             // knows the target. The sink fires fastSettlementSignal only after this is set,
             // preventing mid-run firing against a partial submittedRequestIds snapshot.
-            _ <- sut.fastSettlementTarget.complete(submitted.toSet)
+            _ <- sut.mutable.fastSettlementTarget.complete(submitted.toSet)
             // One-time coverage check: if all IDs already landed before we armed the target,
             // fire the signal ourselves (no new brief will arrive to trigger the sink).
-            allBriefs <- sut.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
+            allBriefs <- sut.mutable.blockBriefs.values.toList.traverse(_.get).map(_.flatten)
             seen       = allBriefs
                              .flatMap(br =>
                                  br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
                              )
                              .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
-                     sut.fastSettlementSignal.complete(()).void
+                     sut.mutable.fastSettlementSignal.complete(()).void
                  )
-            _ <- IO.whenA(submitted.nonEmpty)(sut.fastSettlementSignal.get)
+            _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.get)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
-            blockNums <- sut.blockBriefs.values.toList
+            blockNums <- sut.mutable.blockBriefs.values.toList
                              .traverse(_.get)
                              .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
-            _ <- sut.slowCoverageTarget.complete(blockNums)
+            _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
             // One-time coverage check across ALL peers — matching the sink condition so a spurious
             // signal fire can't race ahead of any peer's stacksMap update.
-            allPeersStacks <- sut.stacks.values.toList.traverse(_.get)
+            allPeersStacks <- sut.mutable.stacks.values.toList.traverse(_.get)
             allCovered      = blockNums.isEmpty ||
                                   allPeersStacks.forall { peerStacks =>
                                       blockNums.forall { bn =>
@@ -1151,14 +874,57 @@ case class Stage4Suite(
                                           }
                                       }
                                   }
-            _ <- IO.whenA(allCovered)(sut.slowCoverageSignal.complete(()).void)
-            _ <- IO.whenA(blockNums.nonEmpty)(sut.slowCoverageSignal.get)
-            errors <- sut.sutErrors.get
-            analysisProp <- analyzeBlockBriefs(lastState, sut)
-            sortedPeers = sut.stacks.keys.toSeq.sortBy(p => p: Int)
-            stacksByPeer <- sut.stacks.toList
+            _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()).void)
+            _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.get)
+            // Arm the effects-landed drain: now that the slow cycle has reached agreement on
+            // every block, derive the backbone expectations from the canonical peer's stacks and
+            // wait for the TxSubmitting sink to observe enough hashes to satisfy them. Gap
+            // between slow signal and this one = the StackComposer rate-limit delay.
+            canonicalStacksForTarget <- sut.mutable.stacks.toList
+                                            .traverse { case (p, ref) => ref.get.map(p -> _) }
+                                            .map { byPeer =>
+                                                val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
+                                                sorted.headOption.map(_._2).getOrElse(Vector.empty)
+                                            }
+            expectations = EffectsLanded.expectations(canonicalStacksForTarget)
+            _ <- sut.mutable.effectsLandedTarget.complete(expectations)
+            // One-time check: if every relevant expectation is already satisfied by the hashes
+            // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
+            landedNow <- sut.mutable.effectsLanded.get
+            _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
+                     sut.mutable.effectsLandedSignal.complete(()).void
+                 )
+            _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.get)
+            errors <- sut.mutable.sutErrors.get
+            // Snapshot every observer-written Ref ONCE here, after all drain signals have fired,
+            // and reuse this single frozen view for the whole analysis. Re-reading these Refs
+            // separately (here and again inside analyzeBlockBriefs) races the observer fibers
+            // under WS (real clock, no TestControl tick-drain): cross-peer quantities could then
+            // be derived from inconsistent snapshots. Freezing once removes that window by
+            // construction.
+            briefsByPeer <- sut.mutable.blockBriefs.toList
                                 .traverse { case (p, ref) => ref.get.map(p -> _) }
                                 .map(_.toMap)
+            stacksByPeer <- sut.mutable.stacks.toList
+                                .traverse { case (p, ref) => ref.get.map(p -> _) }
+                                .map(_.toMap)
+            coilStacksByCoil <- sut.mutable.coilStacks.toList
+                                    .traverse { case (c, ref) => ref.get.map(c -> _) }
+                                    .map(_.toMap)
+            submittedIds <- sut.mutable.submittedRequestIds.get
+            sortedPeers = stacksByPeer.keys.toSeq.sortBy(p => p: Int)
+            // propEffectsLanded must check exactly what effectsLandedSignal confirmed landed, so it
+            // uses the stacks frozen when effectsLandedTarget was armed (above), not the post-signal
+            // snapshot — which could include a trailing stack whose txs have not landed yet.
+            analysisProp <- analyzeBlockBriefs(
+                              lastState,
+                              sut,
+                              briefsByPeer,
+                              stacksByPeer,
+                              coilStacksByCoil,
+                              submittedIds,
+                              canonicalStacksForTarget,
+                            )
             persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
             props = analysisProp && persistenceProp
         yield
@@ -1166,21 +932,32 @@ case class Stage4Suite(
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else props
 
-    private def analyzeBlockBriefs(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
+        IO.race(sut.mutable.fallbackEnteredSignal.get, happyPathProp).map {
+            case Left(txId) =>
+                Prop.exception(
+                  RuntimeException(
+                    s"scenario entered rule-based fallback (txId=$txId) — outside the modeled" +
+                        " happy-path regime; widen stage4 timings or cap the inter-arrival tail"
+                  )
+                )
+            case Right(prop) => prop
+        }
+    }
+
+    private def analyzeBlockBriefs(
+        lastState: ModelState,
+        sut: Stage4Sut,
+        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+        coilStacksByCoil: Map[CoilPeerNumber, Vector[Stack.HardConfirmed]],
+        submittedIds: Vector[RequestId],
+        canonicalStacksForEffects: Vector[Stack.HardConfirmed],
+    ): IO[Prop] = {
+        val sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
+        val nPeers = sortedPeers.length
+        val canonicalBriefs = briefsByPeer(sortedPeers.head)
+        val canonicalStacks = stacksByPeer(sortedPeers.head)
         for
-            briefsByPeer <- sut.blockBriefs.toList
-                .traverse { case (p, ref) => ref.get.map(p -> _) }
-                .map(_.toMap)
-
-            sortedPeers = briefsByPeer.keys.toSeq.sortBy(p => p: Int)
-            nPeers = sortedPeers.length
-            canonicalBriefs = briefsByPeer(sortedPeers.head)
-            submittedIds <- sut.submittedRequestIds.get
-
-            stacksByPeer <- sut.stacks.toList
-                .traverse { case (p, ref) => ref.get.map(p -> _) }
-                .map(_.toMap)
-            canonicalStacks = stacksByPeer(sortedPeers.head)
             _ <- log.info(
               "hard-confirmed stacks per peer: " +
                   sortedPeers
@@ -1188,9 +965,6 @@ case class Stage4Suite(
                       .mkString(", ")
             )
 
-            coilStacksByCoil <- sut.coilStacks.toList
-                .traverse { case (c, ref) => ref.get.map(c -> _) }
-                .map(_.toMap)
             _ <- IO.whenA(coilStacksByCoil.nonEmpty)(
               log.info(
                 "coil hard-confirmed stacks: " +
@@ -1212,17 +986,20 @@ case class Stage4Suite(
 
             _ <- traceStackTable(canonicalStacks, sortedPeers, stacksByPeer, nPeers)
 
-            // Mock backend resolves instantly; one attempt is enough. Kept the (attempts, sleep)
-            // knob so a Yaci / Blockfrost-backed stage4 future swap just bumps these.
+            // Checks the stacks frozen when the effects-landed target was armed — consistent with
+            // the signal. Under virtual time (Direct) the backend resolves instantly, so one
+            // attempt suffices. Under WS (real clock) `effectsLandedSignal` confirms only that the
+            // TxSubmitting sink *observed* each hash; the backend's `isTxKnown` can still lag that
+            // observation by a submission round-trip, so poll to absorb the gap.
             effectsLandedProp <- EffectsLanded.propEffectsLanded(
-              canonicalStacks,
-              sut.cardanoBackend,
+              canonicalStacksForEffects,
+              sut.static.cardanoBackend,
               log,
-              attempts = 1,
-              sleep = 0.seconds,
+              attempts = if useTestControl then 1 else 20,
+              sleep = if useTestControl then 0.seconds else 1.second,
             )
 
-            targetBlockNums <- sut.slowCoverageTarget.get
+            targetBlockNums <- sut.mutable.slowCoverageTarget.get
 
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
@@ -1275,7 +1052,7 @@ case class Stage4Suite(
     ): IO[Prop] = {
         sortedPeers
             .traverse { peerNum =>
-                val backend = sut.backendStores(peerNum)
+                val backend = sut.static.backendStores(peerNum)
                 val captured = stacksByPeer.getOrElse(peerNum, Vector.empty)
                 val expectedStacks = captured.size
                 // Only the blocks that back an on-chain KZG commitment get an `EvacuationMap`
@@ -1504,7 +1281,7 @@ case class Stage4Suite(
                 sutValid * modelTotal <= modelValid * sutTotal
         Prop(holds) :|
             s"valid ratio: SUT $sutValid/$sutTotal exceeds model $modelValid/$modelTotal " +
-            s"(SUT is more permissive than the model)"
+            "(SUT is more permissive than the model)"
     }
 
     /** Property: the slow cycle hard-confirmed at least one stack, and every block in the frozen
@@ -1751,7 +1528,19 @@ object Stage4Suite:
               // currently produce mismatched block briefs at major-block consensus.
               generateNodeOperationMultisigConfig = hc =>
                   hydrozoa.config.node.operation.multisig.generateNodeOperationMultisigConfig(
-                    hc.maxCardanoLiaisonPollingPeriod / 2
+                    maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                    // Narrow both periods to fit the WS test wall-clock budget (see
+                    // docs/rate-limiter.md). The 20s production `softBlockMinPeriod` paces every
+                    // soft-confirmed block on the real clock under WS, stretching each scenario to
+                    // tens of minutes and delaying settlement submission past the effects-landed
+                    // poll budget; 5s keeps block production (and the model command-batching that
+                    // tracks it) brisk while preserving the throttle's cross-block batching intent.
+                    // `hardStackMinPeriod`'s 3-minute production value would likewise starve
+                    // CardanoLiaison of PushResults within the budget; 2s preserves batching too.
+                    rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
+                      softBlockMinPeriod = 5.seconds,
+                      hardStackMinPeriod = 2.seconds
+                    )
                   )
             )
 
@@ -1768,9 +1557,12 @@ object Stage4Suite:
                       ownCoilWallet = w,
                       nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      hydrozoaHost = "localhost",
-                      hydrozoaPort = "4973",
-                      blockfrostApiKey = "not-a-real-key"
+                      blockfrostApiKey = "not-a-real-key",
+                      sugarRushUri = "ws://localhost:3001/ws",
+                      adminUsername = "admin",
+                      adminPassword = "welcome",
+                      httpHost = "0.0.0.0",
+                      httpPort = "8080",
                     )
                     .get
             }

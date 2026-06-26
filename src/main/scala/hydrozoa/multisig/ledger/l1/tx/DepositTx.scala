@@ -9,8 +9,8 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidit
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
@@ -29,7 +29,7 @@ final case class DepositTx(
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends Tx[DepositTx] {
+) extends EnrichedTx[DepositTx] {
     override def transactionFamily: String = "DepositTx"
 }
 
@@ -116,7 +116,7 @@ private object DepositTxOps {
                       diffHandler = Change
                           .changeOutputDiffHandler(_, _, config.cardanoProtocolParams, 1),
                       evaluator = config.plutusScriptEvaluatorForTxBuild,
-                      validators = Tx.Validators.nonSigningNonValidityChecksValidators
+                      validators = EnrichedTx.Validators.nonSigningNonValidityChecksValidators
                     )
                     .explainConst("balancing deposit tx failed")
 
@@ -193,7 +193,7 @@ private object DepositTxOps {
       * address (given in the transaction metadata) with an Inline datum that parses correctly.
       */
     final case class Parse(config: Config)(
-        txBytes: Tx.Serialized,
+        txBytes: EnrichedTx.Serialized,
         l2Payload: ByteString,
         requestValidityEndTime: RequestValidityEndTime
     ) {

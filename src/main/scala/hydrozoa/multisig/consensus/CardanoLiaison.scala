@@ -4,9 +4,9 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
-import hydrozoa.config.head.initialization.InitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
@@ -61,8 +61,8 @@ object CardanoLiaison:
           new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer, persistence) {}
         )
 
-    type Config = CardanoNetwork.Section & InitialBlock.Section &
-        NodeOperationMultisigConfig.Section & OwnPeerPublic.Section
+    type Config = CardanoNetwork.Section & NodeOperationMultisigConfig.Section &
+        OwnPeerPublic.Section & HeadPeers.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle
@@ -528,7 +528,7 @@ trait CardanoLiaison(
     private def runEffects: IO[Unit] = for {
         _ <- tracer.traceWith(CardanoLiaisonEvent.RunEffectsStarted)
         // 1. Get the L1 state, i.e. the list of utxo ids at the multisig address  + the current time
-        resp <- cardanoBackend.utxosAt(config.initializationTx.treasuryProduced.address)
+        resp <- cardanoBackend.utxosAt(config.headMultisigAddress)
 
         _ <- resp match {
 
@@ -571,9 +571,13 @@ trait CardanoLiaison(
                               IO.raiseError(RuntimeException(e.msg)),
                       IO.pure
                     )
-                    // .fold(e => {throw RuntimeException(e.msg)}, x => x)
 
+                    // 3. Decide what to submit this cycle, in priority order:
+                    //      (a) direct actions — effects whose inputs just appeared on L1;
+                    //      (b) else a fallback tx that has become valid → rule-based regime;
+                    //      (c) else reconcile the L1 target state (init / settlement / finalization).
                     actionsToSubmit <-
+                        // (a) Effect inputs are on L1 — submit exactly those direct actions.
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else
@@ -581,46 +585,76 @@ trait CardanoLiaison(
 
                                 _ <- tracer.traceWith(CardanoLiaisonEvent.NoActionsScheduled)
 
-                                // Empty direct actions indicate another actions should be considered:
-                                //  - the last fallback tx might have become valid
-                                //  - the init (whole happy path) tx submission might be needed
+                                // No direct actions. Fall through to (b) a now-valid fallback, else
+                                // (c) reconciling the target state.
 
                                 // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
                                 //   more systematically
-                                lastFallback: Option[Transaction] = for {
+                                lastFallback: Option[FallbackTx] = for {
                                     maxKey <- state.fallbackEffects.keySet.maxOption
                                     fallbackTx = state.fallbackEffects(maxKey)
                                     if utxoIds.contains(
                                       fallbackTx.treasurySpent.utxoId
                                     ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
-                                } yield fallbackTx.tx
+                                } yield fallbackTx
 
                                 ret <- lastFallback match {
+                                    // (b) A fallback tx has become valid on L1 (its spent treasury is
+                                    // present and its start time has passed) — switch to rule-based.
                                     case Some(fallback) =>
                                         IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
+                                    // (c) No fallback due — reconcile the L1 target state below.
                                     case None => {
-                                        lazy val initAction = {
-                                            if currentTime < config.initializationTx.initializationTxEndTime.convert
-                                            then
-                                                Seq(
-                                                  Action.InitializeHead(
-                                                    state.happyPathEffects.values.map(_.tx).toSeq
-                                                  )
-                                                )
-                                            else {
-                                                Seq.empty
+                                        // `initAction` re-submits the full effect sequence to rebuild
+                                        // the head's L1 state when the expected target isn't there
+                                        // (e.g. after an L1 rollback). The init tx — and its validity
+                                        // window — come from the hard-confirmed stack 0 (held in
+                                        // `happyPathEffects`), NOT the unsigned config body; it is
+                                        // present whenever the head is Active/Finalized, i.e. whenever
+                                        // `initAction` runs. Within that window it resubmits
+                                        // everything; once `initializationTxEndTime` passes the init tx
+                                        // can never confirm, so the head cannot be rebuilt and we trace
+                                        // `InitWindowElapsed`.
+                                        val initEndTime =
+                                            state.happyPathEffects
+                                                .get(EffectId.initializationEffectId)
+                                                .collect { case it: InitializationTx =>
+                                                    it.initializationTxEndTime.convert
+                                                }
+                                        val initAction: IO[Seq[Action]] =
+                                            initEndTime match {
+                                                case Some(end) if currentTime < end =>
+                                                    IO.pure(
+                                                      Seq(
+                                                        Action.InitializeHead(
+                                                          state.happyPathEffects.values.toSeq
+                                                        )
+                                                      )
+                                                    )
+                                                case Some(end) =>
+                                                    tracer.traceWith(
+                                                      CardanoLiaisonEvent.InitWindowElapsed(
+                                                        currentTime.toString,
+                                                        end.toString
+                                                      )
+                                                    ) >> IO.pure(Seq.empty)
+                                                case None =>
+                                                    // No hard-confirmed init tx in state yet —
+                                                    // nothing to re-submit.
+                                                    IO.pure(Seq.empty)
                                             }
-                                        }
                                         // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
+                                        // (c) Reconcile the local target with what is actually on L1:
                                         state.targetState match {
                                             case TargetState.Uninitialized =>
                                                 // Pre stack-0: no L1 target to reconcile and nothing
                                                 // submittable — wait for the Initial stack effects.
                                                 IO.pure(List.empty)
                                             case TargetState.Active(targetTreasuryUtxoId) =>
+                                                // The head's current treasury should be on L1.
                                                 if utxoIds.contains(targetTreasuryUtxoId)
                                                 then
-                                                    // everything is up-to-date on L1
+                                                    // Present — L1 is in sync with the target.
                                                     tracer.traceWith(
                                                       CardanoLiaisonEvent.TargetUtxoStatus(
                                                         targetTreasuryUtxoId.toString,
@@ -628,19 +662,26 @@ trait CardanoLiaison(
                                                       )
                                                     ) >> IO.pure(List.empty)
                                                 else
+                                                    // Missing — the expected state isn't on L1 (a
+                                                    // possible rollback, or the head moved to the
+                                                    // rule-based regime — see TODO). Re-submit the
+                                                    // full sequence to rebuild.
                                                     tracer.traceWith(
                                                       CardanoLiaisonEvent.TargetUtxoStatus(
                                                         targetTreasuryUtxoId.toString,
                                                         found = false
                                                       )
-                                                    ) >> IO.pure(initAction)
+                                                    ) >> initAction
 
                                             case TargetState.Finalized(finalizationTxHash) =>
+                                                // Head is finalized: the finalization tx should be on
+                                                // L1. Check whether the backend knows it yet.
                                                 for {
                                                     txResp <- cardanoBackend.isTxKnown(
                                                       finalizationTxHash
                                                     )
                                                     mbInitAction <- txResp match {
+                                                        // Couldn't query its status — skip this cycle.
                                                         case Left(err) =>
                                                             tracer.traceWith(
                                                               CardanoLiaisonEvent
@@ -656,8 +697,11 @@ trait CardanoLiaison(
                                                                     if isKnown then "known"
                                                                     else "not known"
                                                                   )
-                                                            ) >> IO.pure(
-                                                              if isKnown then Seq.empty
+                                                            ) >> (
+                                                              // Known → in sync. Not on L1 →
+                                                              // possible rollback; re-submit the full
+                                                              // sequence to recover.
+                                                              if isKnown then IO.pure(Seq.empty)
                                                               else initAction
                                                             )
                                                     }
@@ -682,15 +726,19 @@ trait CardanoLiaison(
                         )
                     }
 
+                    fallbackTxId = actionsToSubmit.collectFirst {
+                        case Action.FallbackToRuleBased(tx) => tx.tx.id
+                    }
+
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
-                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(tx =>
+                            IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
                                 for {
                                     _ <- tracer.traceWith(
-                                      CardanoLiaisonEvent.TxSubmitting(tx.id.toString)
+                                      CardanoLiaisonEvent.TxSubmitting(etx.tx.id)
                                     )
-                                    ret <- cardanoBackend.submitTx(tx)
-                                } yield tx -> ret
+                                    ret <- cardanoBackend.submitTx(etx.tx)
+                                } yield (etx, ret)
                             )
                         else IO.pure(List.empty)
 
@@ -699,6 +747,22 @@ trait CardanoLiaison(
                     _ <- IO.whenA(submissionErrors.nonEmpty)(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
+
+                    // Post-submission: fire FallbackToRuleBasedDispatched only after the fallback
+                    // tx was accepted by the backend. "Dispatched" denotes confirmed submission, not
+                    // intent — pre-effect intent is logged earlier as ActionsDispatched.
+                    _ <- fallbackTxId match {
+                        case None => IO.unit
+                        case Some(id) =>
+                            val submittedOk = submitRet.exists { case (etx, ret) =>
+                                etx.tx.id == id && ret.isRight
+                            }
+                            IO.whenA(submittedOk)(
+                              tracer.traceWith(
+                                CardanoLiaisonEvent.FallbackToRuleBasedDispatched(id)
+                              )
+                            )
+                    }
 
                 } yield ()
         }
@@ -712,16 +776,25 @@ trait CardanoLiaison(
     sealed trait Action
     sealed trait DirectAction extends Action
 
+    // TODO: narrow these element types beyond `EnrichedTx[?]` — the construction sites already
+    // carry concrete subtypes:
+    //   - FallbackToRuleBased.tx        => FallbackTx
+    //   - PushForwardMultisig.txs       => Seq[SettlementTx | FinalizationTx | RolloutTx]
+    //   - Rollout.txs                   => Seq[RolloutTx]
+    //   - InitializeHead.txs            => Seq[HappyPathEffect]
+    // Tightening these makes the `.tx` strip at the construction sites a compile error rather
+    // than a code-review catch (the "throwing away useful information too early" pattern that
+    // motivated this refactor). HappyPathEffect would need to be promoted out of the trait body.
     object Action {
 
         /** Switching into the rule-based regime. */
-        final case class FallbackToRuleBased(tx: Transaction) extends DirectAction
+        final case class FallbackToRuleBased(tx: EnrichedTx[?]) extends DirectAction
 
         /** Pushing the existing state in the multisig regime forward. */
-        final case class PushForwardMultisig(txs: Seq[Transaction]) extends DirectAction
+        final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction
 
         /** Finalizing a rollout sequence. */
-        final case class Rollout(txs: Seq[Transaction]) extends DirectAction
+        final case class Rollout(txs: Seq[EnrichedTx[?]]) extends DirectAction
 
         /** Represents noop action that may occur when the current time falls into the silence
           * period - a gap between two competing transactions when the settlement/finalization tx
@@ -734,10 +807,10 @@ trait CardanoLiaison(
         ) extends DirectAction {}
 
         /** Like [[PushForwardMultisig]] but starting from the initialization tx. */
-        final case class InitializeHead(txs: Seq[Transaction]) extends Action
+        final case class InitializeHead(txs: Seq[EnrichedTx[?]]) extends Action
     }
 
-    private def actionTxs(action: Action): Seq[Transaction] = action match {
+    private def actionTxs(action: Action): Seq[EnrichedTx[?]] = action match {
         case Action.FallbackToRuleBased(tx)    => Seq(tx)
         case Action.PushForwardMultisig(txs)   => txs
         case Action.Rollout(txs)               => txs
@@ -750,11 +823,11 @@ trait CardanoLiaison(
         private def msg: String =
             import Action.*
             action match {
-                case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.id})"
-                case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.id)}"
-                case Rollout(txs)                    => s"Rollout (${txs.map(_.id)}"
+                case FallbackToRuleBased(tx)         => s"FallbackToRuleBased (${tx.tx.id})"
+                case PushForwardMultisig(txs)        => s"PushForwardMultisig (${txs.map(_.tx.id)}"
+                case Rollout(txs)                    => s"Rollout (${txs.map(_.tx.id)}"
                 case sp @ SilencePeriodNoop(_, _, _) => s"$sp"
-                case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.id)}"
+                case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
             }
 
     private def mkDirectActions(
@@ -839,7 +912,7 @@ trait CardanoLiaison(
                                             .toSeq
                                             .map(_._2)
                                     // println(s"effectTxs.size=${effectTxs.size}")
-                                    Right(PushForwardMultisig(effectTxs.map(_.tx)))
+                                    Right(PushForwardMultisig(effectTxs))
                                 // (2)
                                 case _
                                     if currentTime >= happyPathTxTtl && currentTime < fallbackValidityStart =>
@@ -854,7 +927,7 @@ trait CardanoLiaison(
                                 case _ if currentTime >= fallbackValidityStart =>
                                     Right(
                                       FallbackToRuleBased(
-                                        mbCompetingFallbackEffect.get.tx
+                                        mbCompetingFallbackEffect.get
                                       )
                                     )
                                 // Should never happen, indicates an error in validity range calculation
@@ -882,7 +955,7 @@ trait CardanoLiaison(
                 val nextBackboneTx = versionMajor.increment -> 0
                 val effectTxs =
                     state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
-                Right(Rollout(effectTxs.map(_.tx)))
+                Right(Rollout(effectTxs))
         }
     }
 

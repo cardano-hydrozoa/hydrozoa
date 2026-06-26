@@ -258,7 +258,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 //
 //                  // NOTE: resolved utxos are also self-referential
 //                  resolvedUtxos = iTx.resolvedUtxos,
-//                  // NOTE: Tx is also self-referential
+//                  // NOTE: tx is also self-referential
 //                  tx = iTx.tx
 //                )
 //

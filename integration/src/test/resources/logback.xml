@@ -85,7 +85,7 @@
     <logger name="PeerLiaison.HubToCoil" level="debug"/>
     <logger name="PeerLiaison.CoilToHub" level="debug"/>
     <logger name="PeerLiaisonMermaid" level="info"/>
-    <logger name="PeerWsTransport" level="debug"/>
+    <logger name="PeerTransport" level="debug"/>
     <logger name="CoilPeerWsTransport" level="debug"/>
     <logger name="HubWsTransport" level="debug"/>
     <logger name="CoilAckSequencer" level="info"/>

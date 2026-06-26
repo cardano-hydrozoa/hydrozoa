@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.l1.tx
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.multisig.ledger.l1.tx.Tx.SignatureError.InvalidSignature
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.SignatureError.InvalidSignature
 import monocle.{Focus, Lens}
 import scala.Function.const
 import scala.annotation.unused
@@ -21,7 +21,7 @@ import sourcecode.*
 
 // FIXME: This trait and parts of the companion object are applicable to the rulebased regime.
 //   Lets move it out
-trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
+trait EnrichedTx[Self <: EnrichedTx[Self]] extends HasResolvedUtxos { self: Self =>
 
     /** A human-readable name, primarily for error reporting
       */
@@ -38,7 +38,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
 
     /** This excludes the lens from equality. */
     override def equals(obj: Any): Boolean = obj match {
-        case that: Tx[?] =>
+        case that: EnrichedTx[?] =>
             this.tx == that.tx
         case _ => false
     }
@@ -46,7 +46,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
     /** @return
       *   - Invalid[SignatureError.InvalidSignature] if the verification key and signing key don't
       *     match
-      *   - The signed `Tx` otherwise
+      *   - The signed `EnrichedTx` otherwise
       */
     final def signTx(
         signingKey: SigningKey,
@@ -89,7 +89,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
             case invalidWitnesses if invalidWitnesses.nonEmpty =>
                 Invalid(
                   NonEmptyList.fromListUnsafe(
-                    invalidWitnesses.toList.map(Tx.SignatureError.InvalidSignature(_, self))
+                    invalidWitnesses.toList.map(EnrichedTx.SignatureError.InvalidSignature(_, self))
                   )
                 )
             case _ => Valid(())
@@ -101,24 +101,27 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
       *   - Checks all signatures (including ones not from the head peers -- eventually this will
       *     include the coil peers)
       * Then:
-      *   - Takes all the given transaction's signatures and applies it to this Tx[A]
+      *   - Takes all the given transaction's signatures and applies it to this EnrichedTx[A]
       */
     final def validateAndAddMultiSignatures(
         headPeers: HeadPeers,
         otherTx: Transaction
-    ): ValidatedNel[Tx.SignatureError[Self], Self] = {
+    ): ValidatedNel[EnrichedTx.SignatureError[Self], Self] = {
         // The Transaction type isn't very type safe... I think it's best to compare the bodies directly rather
         // than just hashes.
         val bodiesMatch =
             if tx.body == otherTx.body
             then Valid(this)
-            else Invalid(NonEmptyList.one(Tx.SignatureError.TransactionBodyMismatch(otherTx, self)))
+            else
+                Invalid(
+                  NonEmptyList.one(EnrichedTx.SignatureError.TransactionBodyMismatch(otherTx, self))
+                )
 
         val containsHeadPeerWitnesses = {
             val witnessVKeys = otherTx.witnessSetRaw.value.vkeyWitnesses.toSet.map(_.vkey)
-            val errors: List[Tx.SignatureError[Self]] = headPeers.headPeerVKeys
+            val errors: List[EnrichedTx.SignatureError[Self]] = headPeers.headPeerVKeys
                 .filter(vKey => !witnessVKeys.contains(vKey))
-                .map(Tx.SignatureError.MissingSignature(_, self))
+                .map(EnrichedTx.SignatureError.MissingSignature(_, self))
 
             if errors.isEmpty
             then Valid(this)
@@ -130,7 +133,7 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
         // It's a little bit clunky, but order matters here. We are right-biased in the fold, so addedSignatures must
         // come last
         List(bodiesMatch, containsHeadPeerWitnesses, addedSignatures).foldLeft(
-          Valid(this): ValidatedNel[Tx.SignatureError[Self], Self]
+          Valid(this): ValidatedNel[EnrichedTx.SignatureError[Self], Self]
         ) {
             case (Valid(_), Valid(v2))      => Valid(v2)
             case (Valid(_), e @ Invalid(_)) => e
@@ -142,8 +145,8 @@ trait Tx[Self <: Tx[Self]] extends HasResolvedUtxos { self: Self =>
 
 }
 
-object Tx {
-    enum SignatureError[T <: Tx[T]] extends Throwable:
+object EnrichedTx {
+    enum SignatureError[T <: EnrichedTx[T]] extends Throwable:
         case MissingSignature(vkey: VerificationKey, tx: T)
         case InvalidSignature(witness: VKeyWitness, tx: T)
         case TransactionBodyMismatch(otherTx: Transaction, tx: T)

@@ -13,9 +13,12 @@ final case class NodePrivateConfig(
     override val ownPeerPrivate: OwnPeerPrivate,
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
-    override val hydrozoaHost: String,
-    override val hydrozoaPort: String,
     override val blockfrostApiKey: String,
+    override val sugarRushUri: String,
+    override val adminUsername: String,
+    override val adminPassword: String,
+    override val httpHost: String,
+    override val httpPort: String,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -35,11 +38,17 @@ object NodePrivateConfig {
         def nodeOperationMultisigConfig: NodeOperationMultisigConfig =
             nodePrivateConfig.nodeOperationMultisigConfig
 
-        def hydrozoaHost: String = nodePrivateConfig.hydrozoaHost
-
-        def hydrozoaPort: String = nodePrivateConfig.hydrozoaPort
-
         def blockfrostApiKey: String = nodePrivateConfig.blockfrostApiKey
+
+        def sugarRushUri: String = nodePrivateConfig.sugarRushUri
+
+        def adminUsername: String = nodePrivateConfig.adminUsername
+
+        def adminPassword: String = nodePrivateConfig.adminPassword
+
+        def httpHost: String = nodePrivateConfig.httpHost
+
+        def httpPort: String = nodePrivateConfig.httpPort
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =

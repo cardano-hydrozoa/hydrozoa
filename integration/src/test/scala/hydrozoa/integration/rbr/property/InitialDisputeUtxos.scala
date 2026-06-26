@@ -8,13 +8,14 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryUtxo}
-import hydrozoa.multisig.ledger.joint.EvacuationMap
 import org.scalacheck.Gen
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{Coin, DatumOption, TransactionHash, TransactionInput, Utxos}
 import scalus.cardano.onchain.plutus.v3.PubKeyHash
@@ -23,8 +24,6 @@ import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
 import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.genEvacuationMap
-
-import scala.concurrent.duration.FiniteDuration
 
 /** All UTxOs that exist in the shared mock backend at the start of the dispute scenario. This
   * mimics what FallbackTx.Build would produce, but is constructed directly.

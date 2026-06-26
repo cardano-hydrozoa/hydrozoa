@@ -103,9 +103,12 @@ final case class DepositsMap private[map] (
                           entry.depositUtxo.absorptionEndTime
                         )
                     val isExistent = pollResults.utxos.contains(entry.depositUtxo.toUtxo.input)
+                    // A deposit whose absorption window closes before the settlement tx's
+                    // validity ends can never be safely absorbed, so it must be refunded even
+                    // if it has not matured yet — `isExpired` takes precedence over `isImmature`.
                     val compartment =
-                        if isImmature then Immature
-                        else if isExpired then Expired
+                        if isExpired then Expired
+                        else if isImmature then Immature
                         else if isExistent then Eligible
                         else NotInPollResults
                     tracer

@@ -5,10 +5,9 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import org.scalacheck.commands.{CommandLabel, CommandProp}
+import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{Transaction, TransactionInput}
 import scalus.uplc.builtin.ByteString
-
-import scala.concurrent.duration.FiniteDuration
 
 object Commands:
 

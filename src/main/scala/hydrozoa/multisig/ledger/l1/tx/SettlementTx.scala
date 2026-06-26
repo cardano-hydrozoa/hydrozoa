@@ -11,8 +11,8 @@ import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.commitment.KzgCommitment
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Settlement
-import hydrozoa.multisig.ledger.l1.tx.Tx.Builder.{BuilderResult, explainConst}
 import hydrozoa.multisig.ledger.l1.txseq.RolloutTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.{DepositUtxo, Equity, MultisigTreasuryUtxo, RolloutUtxo}
 import monocle.{Focus, Lens}
@@ -27,7 +27,7 @@ import scalus.uplc.builtin.Data.toData
 import KzgCommitment.KzgCommitment
 
 sealed trait SettlementTx
-    extends Tx[SettlementTx],
+    extends EnrichedTx[SettlementTx],
       BlockVersion.Major.Produced,
       DepositUtxo.Many.Spent,
       KzgCommitment.Produced,
@@ -100,7 +100,7 @@ object SettlementTx {
 }
 
 private object SettlementTxOps {
-    sealed trait Result[T <: SettlementTx] extends Tx.AugmentedResult[T]
+    sealed trait Result[T <: SettlementTx] extends EnrichedTx.AugmentedResult[T]
 
     object Result {
         type NoRollouts = Result[SettlementTx.NoRollouts]
@@ -571,7 +571,7 @@ private object SettlementTxOps {
                   config.cardanoProtocolParams,
                   diffHandler = diffHandler,
                   evaluator = config.plutusScriptEvaluatorForTxBuild,
-                  validators = Tx.Validators.nonSigningValidators
+                  validators = EnrichedTx.Validators.nonSigningValidators
                 )
         }
 

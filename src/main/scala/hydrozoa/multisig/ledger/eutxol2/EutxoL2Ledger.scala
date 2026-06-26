@@ -14,7 +14,7 @@ import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.Tx
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
@@ -70,7 +70,7 @@ object EutxoL2Ledger {
         activeUtxos: Utxos,
         pendingDeposits: Map[RequestId, L2Genesis],
         errors: Map[RequestId, String],
-        confirmations: Map[BlockNumber, Vector[(RequestId, Tx.Serialized)]],
+        confirmations: Map[BlockNumber, Vector[(RequestId, EnrichedTx.Serialized)]],
         headId: Option[HeadId],
         /** Monotonic commit counter — the recovery anchor (§R2b). Bumped once per successful
           * state-mutating command; the transient proxy commands (confirmations / errors) do not

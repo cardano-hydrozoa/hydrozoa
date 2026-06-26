@@ -1,219 +1,111 @@
 package hydrozoa.app
 
-import cats.effect.{ExitCode, IO, IOApp, Resource}
-import cats.implicits.*
+import cats.Monoid
+import cats.effect.{ExitCode, IO, Resource}
+import cats.syntax.apply.*
+import cats.syntax.contravariant.*
+import cats.syntax.semigroup.*
 import com.bloxbean.cardano.client.util.HexUtil.encodeHexString
-import com.comcast.ip4s.{Host, Port, host, port}
-import com.suprnation.actor.ActorSystem
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import com.comcast.ip4s.{Host, Port}
+import com.monovore.decline.Opts
+import com.monovore.decline.effect.CommandIOApp
+import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackendBlockfrost, CardanoBackendEventFormat}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
-import hydrozoa.multisig.server.{HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat}
-import io.github.cdimascio.dotenv.Dotenv
+import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat, MrmTracers}
 import java.nio.file.Path
-import scalus.cardano.address.{Address, ShelleyAddress}
-import scalus.cardano.ledger.Coin
-import scalus.crypto.ed25519.{SigningKey, VerificationKey}
-import scalus.uplc.builtin.ByteString
+import org.http4s.Uri
+import org.http4s.jdkhttpclient.JdkWSClient
+import org.http4s.server.websocket.WebSocketBuilder2
 
 /** Hydrozoa application entry point.
   *
-  * Runs the Hydrozoa node using cats-effect IOApp for resource-safe initialization and shutdown.
+  * Usage:
+  * {{{
+  *   sbt "runMain hydrozoa.app.Main <head-config.json> <peer-private.json>"
+  * }}}
   *
-  * Configuration is loaded from:
-  *   1. .env file in the current directory (if present)
-  *   2. System environment variables (override .env values)
-  *
-  * Required environment variables:
-  *   - BLOCKFROST_API_KEY: Blockfrost API key for Cardano backend
-  *   - CARDANO_VERIFICATION_KEY: Hex-encoded Ed25519 verification key (64 hex chars = 32 bytes)
-  *   - CARDANO_SIGNING_KEY: Hex-encoded Ed25519 signing key (64 hex chars = 32 bytes)
-  *   - EQUITY: Minimum equity size in lovelace (e.g., "2000000" for 2 ADA)
+  * Both files are produced by `GenerateSampleConfig` (or, eventually, a real bootstrap tool). All
+  * settings the node needs at runtime — Blockfrost API key, wallet keys, bind host/port, Sugar Rush
+  * WS URI, HTTP admin credentials — live in those files; the process reads no environment
+  * variables.
   */
-object Main extends IOApp {
-
-    /** Environment configuration loaded from .env file or system environment. */
-    final case class EnvConfig(
-        verificationKey: VerificationKey,
-        signingKey: SigningKey,
-        minEquity: Coin,
-        blockfrostApiKey: String,
-        hydrozoaHost: String,
-        hydrozoaPort: String,
-        sugarRushHost: String,
-        sugarRushPort: String,
-        tokenRecoveryAddress: Option[ShelleyAddress],
-        adminUsername: String,
-        adminPassword: String
+object Main
+    extends CommandIOApp(
+      name = "hydrozoa",
+      header = "Run a Hydrozoa head node from a generated config"
     ) {
-        val sugarRushUri: String = s"ws://$sugarRushHost:$sugarRushPort/ws"
-    }
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Main"))
 
-    // Load .env file (if present) at startup
-    private lazy val dotenv: Dotenv = Dotenv.configure().ignoreIfMissing().load()
+    private val headConfigPathArg: Opts[Path] =
+        Opts.argument[String]("head-config.json").map(Path.of(_))
 
-    /** Read a required environment variable, checking .env file first, then system environment. Use
-      * a default value if not found.
-      * @param name
-      *   variable name
-      * @param default
-      *   default value for the variable, if not found.
-      */
-    private def getOptionalEnvVar(name: String, default: => String): IO[String] =
-        IO(Option(dotenv.get(name)).orElse(sys.env.get(name)).getOrElse(default))
+    private val privateConfigPathArg: Opts[Path] =
+        Opts.argument[String]("peer-private.json").map(Path.of(_))
 
-    private def throwMissingEnvVarError(name: String): String = throw new IllegalStateException(
-      s"Required environment variable not set: $name (checked .env file and system environment)"
-    )
+    override def main: Opts[IO[ExitCode]] =
+        (headConfigPathArg, privateConfigPathArg).mapN((h, p) => runNode(h, p))
 
-    /** Parse hex string to ByteString. */
-    private def parseHex(hex: String, expectedBytes: Int, name: String): IO[ByteString] =
-        IO {
-            val cleaned = hex.replaceAll("\\s+", "")
-            if cleaned.length != expectedBytes * 2 then {
-                throw new IllegalArgumentException(
-                  s"$name: expected $expectedBytes bytes (${expectedBytes * 2} hex chars), got ${cleaned.length} hex chars"
-                )
-            }
-            val bytes = cleaned.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
-            ByteString.fromArray(bytes)
-        }
-
-    /** Read a required environment variable, checking .env file first, then system environment.
-      * Throw an error if not found.
+    /** Run a Hydrozoa head node from a loaded config.
       *
-      * @param name
-      *   variable name
+      * @param dataDir
+      *   filesystem location for the per-peer RocksDB persistence store; the actual store path is
+      *   `${dataDir}/peer-${ownPeerLabel}/rocksdb`. Defaults to `.hydrozoa-data` (relative to cwd)
+      *   for the CLI; tests should pass a temp dir.
+      * @param httpExtraTracer
+      *   additional observer fanned out alongside the slf4j HTTP server tracer (combined via the
+      *   `ContraTracer` monoid). Tests use this to observe `ServerStarted` (the bind milestone)
+      *   without disturbing logging.
+      * @param backendOverride
+      *   if `Some`, used in place of the Blockfrost backend the decoder would otherwise build. Lets
+      *   tests inject a mock so script-reference UTxO resolution doesn't hit the network.
       */
-    private def getMandatoryEnvVar(name: String): IO[String] =
-        getOptionalEnvVar(name, throwMissingEnvVarError(name))
-
-    /** Load configuration from environment variables. */
-    def loadEnv: IO[EnvConfig] =
-        for {
-            blockfrostKey <- getMandatoryEnvVar("BLOCKFROST_API_KEY")
-            _ <- log.info(s"Loaded Blockfrost API key: ${blockfrostKey.take(8)}...")
-
-            vKeyHex <- getMandatoryEnvVar("CARDANO_VERIFICATION_KEY")
-            vKeyBs <- parseHex(vKeyHex, 32, "CARDANO_VERIFICATION_KEY")
-            vKey = VerificationKey.unsafeFromByteString(vKeyBs)
-            _ <- log.info(s"Loaded verification key: ${vKeyHex.take(16)}...")
-
-            sKeyHex <- getMandatoryEnvVar("CARDANO_SIGNING_KEY")
-            sKeyBs <- parseHex(sKeyHex, 32, "CARDANO_SIGNING_KEY")
-            sKey = SigningKey.unsafeFromByteString(sKeyBs)
-            _ <- log.info("Loaded signing key")
-
-            minEquityStr <- getMandatoryEnvVar("EQUITY")
-            minEquity <- IO.fromEither(
-              minEquityStr.toLongOption
-                  .toRight(
-                    new IllegalArgumentException(
-                      s"EQUITY must be a valid long, got: $minEquityStr"
-                    )
-                  )
-                  .map(Coin.apply)
-            )
-
-            hydrozoaHost <- getOptionalEnvVar("HYDROZOA_HOST", "0.0.0.0")
-            hydrozoaPort <- getOptionalEnvVar("HYDROZOA_PORT", "9001")
-
-            sugarRushHost <- getOptionalEnvVar("SUGAR_RUSH_HOST", "localhost")
-            sugarRushPort <- getOptionalEnvVar("SUGAR_RUSH_PORT", "3001")
-
-            tokenRecoveryAddressOpt <- getOptionalEnvVar("TOKEN_RECOVERY_ADDRESS", "").flatMap {
-                case "" => IO.pure(None)
-                case addr =>
-                    IO.delay(Address.fromBech32(addr))
-                        .flatMap {
-                            case shelley: ShelleyAddress => IO.pure(Some(shelley))
-                            case _ =>
-                                IO.raiseError(
-                                  new IllegalArgumentException(
-                                    s"TOKEN_RECOVERY_ADDRESS must be a Shelley address, got: $addr"
-                                  )
-                                )
-                        }
-                        .handleErrorWith { err =>
-                            IO.raiseError(
-                              new IllegalArgumentException(
-                                s"TOKEN_RECOVERY_ADDRESS must be a valid Bech32 address: ${err.getMessage}"
-                              )
-                            )
-                        }
-            }
-            _ <- tokenRecoveryAddressOpt.fold(IO.unit)(addr =>
-                log.info(s"Token recovery address: ${addr.toBech32.get}")
-            )
-
-            adminUsername <- getMandatoryEnvVar("ADMIN_USERNAME")
-            adminPassword <- getMandatoryEnvVar("ADMIN_PASSWORD")
-            _ <- log.info(s"Loaded admin credentials for user: $adminUsername")
-
-            _ <- log.info(s"Minimum equity: $minEquity lovelace")
-        } yield EnvConfig(
-          verificationKey = vKey,
-          signingKey = sKey,
-          minEquity = minEquity,
-          blockfrostApiKey = blockfrostKey,
-          hydrozoaHost = hydrozoaHost,
-          hydrozoaPort = hydrozoaPort,
-          sugarRushHost = sugarRushHost,
-          sugarRushPort = sugarRushPort,
-          tokenRecoveryAddress = tokenRecoveryAddressOpt,
-          adminUsername = adminUsername,
-          adminPassword = adminPassword
-        )
-
-    val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
-    given CardanoNetwork.Section = cardanoNetwork
-
-    override def run(args: List[String]): IO[ExitCode] = {
+    def runNode(
+        headConfigPath: Path,
+        privateConfigPath: Path,
+        dataDir: Path = Path.of(".hydrozoa-data"),
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent] =
+            Monoid[ContraTracer[IO, HydrozoaHttpEvent]].empty,
+        backendOverride: Option[CardanoBackend[IO]] = None,
+    ): IO[ExitCode] = {
         val setupIO = for {
             _ <- log.info("Starting Hydrozoa node...")
-            env <- loadEnv
-            _ <- log.info("Starting Cardano Blockfrost Backend...")
-            backend <- CardanoBackendBlockfrost(
-              network = Left(cardanoNetwork),
-              apiKey = env.blockfrostApiKey,
-              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+            _ <- log.info(s"Loading head config from $headConfigPath")
+            _ <- log.info(s"Loading peer private config from $privateConfigPath")
+            loaded <- NodeConfig.load(
+              headConfigPath,
+              privateConfigPath,
+              backendOverride
             )
-            nodeConfig <- Bootstrap.mkNodeConfig(cardanoNetwork, backend)(
-              vKey = env.verificationKey,
-              sKey = env.signingKey,
-              minEquity = env.minEquity,
-              hydrozoaHost = env.hydrozoaHost,
-              hydrozoaPort = env.hydrozoaPort,
-            )
+            (nodeConfig, backend) = loaded
             _ <- log.info(s"headAddress: ${nodeConfig.headMultisigAddress.toBech32.get}")
             _ <- log.info(s"initTx hash: ${nodeConfig.initializationTx.tx.id}")
             _ <- log.info(
               s"initTx: ${encodeHexString(nodeConfig.initializationTx.tx.toCbor)}"
             )
-        } yield (env, backend, nodeConfig)
+        } yield (backend, nodeConfig)
 
         val resource = for {
             result <- Resource.eval(setupIO)
-            (env, backend, nodeConfig) = result
+            (backend, nodeConfig) = result
 
-            _ <- Resource.eval(
-              log.info(s"Connecting to L2 ledger at ${env.sugarRushUri}")
-            )
+            _ <- Resource.eval(log.info(s"Connecting to L2 ledger at ${nodeConfig.sugarRushUri}"))
             remoteL2LedgerTracer = Slf4jTracer.sink
                 .contramap(RemoteL2LedgerEventFormat.humanFormat)
             remoteL2Ledger <- Resource.eval(
               RemoteL2Ledger.create(
-                wsUri = env.sugarRushUri,
-                config = cardanoNetwork,
+                wsUri = nodeConfig.sugarRushUri,
+                config = nodeConfig,
                 tracer = remoteL2LedgerTracer,
               )
             )
@@ -224,7 +116,7 @@ object Main extends IOApp {
             // actor topology consumes.
             persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             backendStore <- RocksDbBackendStore.open(
-              Path.of(s".hydrozoa-data/peer-${nodeConfig.ownPeerLabel}/rocksdb"),
+              dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/rocksdb"),
               Cf.mkAll(
                 headPeers = nodeConfig.headConfig.headPeerNums.toList,
                 coilPeers = nodeConfig.headConfig.coilPeers.coilPeerNumbers,
@@ -232,83 +124,274 @@ object Main extends IOApp {
               ),
               persistenceTracer,
             )
-            persistence <- Resource.eval(
-              Persistence.fromBackend(backendStore, persistenceTracer)
-            )
+            persistence <- Resource.eval {
+                given CardanoNetwork.Section = nodeConfig
+                Persistence.fromBackend(backendStore, persistenceTracer)
+            }
 
-            // Attach cleanup to ActorSystem resource - env, backend, nodeConfig are in scope here
-            system <- ActorSystem[IO]("Hydrozoa Demo").onFinalize(
-              log.info("Hydrozoa node shut down, running janitor...") *>
-                  Janitor.cleanUp(
-                    backend = backend,
-                    peerWallet = nodeConfig.ownWallet,
-                    config = nodeConfig.headConfig,
-                    faucetAddress = env.verificationKey.shelleyAddress()(using cardanoNetwork),
-                    tokenRecoveryAddress = env.tokenRecoveryAddress
-                  )
-            )
+            system <- ActorSystem[IO]("Hydrozoa Demo")
 
-            // Main runs a head node (Bootstrap builds the config via NodeConfig.mkHeadConfig),
-            // so the peer index is this node's head peer number.
             mrmTracer = Slf4jTracer.sink.contramap(
               HeadMultisigRegimeManagerEventFormat.humanFormat(
                 HeadPeerNumber(nodeConfig.ownPeerIndex)
               )
             )
-            bindHost = Host
-                .fromString(env.hydrozoaHost)
-                .getOrElse(
-                  throw new IllegalArgumentException(s"Invalid HYDROZOA_HOST: ${env.hydrozoaHost}")
+            wsClient <- Resource.eval(JdkWSClient.simple[IO])
+
+            nodeRun <- nodeConfig.ownPeerId match {
+                case PeerId.Head(ownHeadNum) =>
+                    buildHeadNode(
+                      nodeConfig,
+                      backend,
+                      remoteL2Ledger,
+                      persistence,
+                      mrmTracer,
+                      wsClient,
+                      ownHeadNum,
+                    )
+                case PeerId.Coil(ownCoilNum) =>
+                    buildCoilNode(
+                      nodeConfig,
+                      backend,
+                      remoteL2Ledger,
+                      persistence,
+                      mrmTracer,
+                      wsClient,
+                      ownCoilNum,
+                    )
+            }
+        } yield (nodeConfig, system, nodeRun)
+
+        resource.use { case (nodeConfig, system, nodeRun) =>
+            nodeRun match {
+                case NodeRun.HeadNode(mrm) =>
+                    runHeadNode(nodeConfig, system, mrm, httpExtraTracer)
+                case NodeRun.CoilNode(mrm) =>
+                    runCoilNode(system, mrm)
+            }
+        }
+    }
+
+    /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,
+      * start dialers, and allocate the [[HeadMultisigRegimeManager]].
+      */
+    private def buildHeadNode(
+        nodeConfig: NodeConfig,
+        backend: CardanoBackend[IO],
+        remoteL2Ledger: RemoteL2Ledger,
+        persistence: Persistence[IO],
+        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        wsClient: org.http4s.client.websocket.WSClient[IO],
+        ownHeadNum: HeadPeerNumber,
+    ): Resource[IO, NodeRun.HeadNode] = {
+        given CardanoNetwork.Section = nodeConfig
+        val ownHeadPeerId = nodeConfig.headPeerIds.find(_.peerNum == ownHeadNum).get
+        // The inter-peer transport server binds where the shared head config advertises this peer,
+        // so bind address == the address other peers dial (single source of truth). The user-facing
+        // HTTP server uses the private httpHost/httpPort instead.
+        val ownWsAddress = nodeConfig.headConfig.headPeers.headPeerData
+            .lookup(ownHeadNum)
+            .map(_.webSocketAddress)
+            .getOrElse(
+              throw new IllegalStateException(
+                s"no webSocketAddress configured for own head peer $ownHeadNum"
+              )
+            )
+        val bindHost = ownWsAddress.host
+            .flatMap(h => Host.fromString(h.value))
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"own head peer $ownHeadNum webSocketAddress has no valid host: $ownWsAddress"
+              )
+            )
+        val bindPort = ownWsAddress.port
+            .flatMap(Port.fromInt)
+            .getOrElse(
+              throw new IllegalArgumentException(
+                s"own head peer $ownHeadNum webSocketAddress has no valid port: $ownWsAddress"
+              )
+            )
+        val remoteHeadUris: Map[HeadPeerId, Uri] = nodeConfig.headPeerIds
+            .filterNot(_.peerNum == ownHeadNum)
+            .toList
+            .flatMap { pid =>
+                nodeConfig.headConfig.headPeers.headPeerData
+                    .lookup(pid.peerNum)
+                    .map(hpd => pid -> (hpd.webSocketAddress / "head"))
+            }
+            .toMap
+        val hubbedCoils = nodeConfig.hubbedCoilPeerNums(ownHeadNum)
+        val tracers = MrmTracers.fromRoot(mrmTracer)
+        for {
+            peerT <- Resource.eval(
+              WsPeerTransport.create(
+                ownHeadPeerId,
+                remoteHeadUris.keys.toList,
+                tracers.peerTransport
+              )
+            )
+            hubT: Option[HubWsTransport] <-
+                if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
+                else
+                    Resource
+                        .eval(HubWsTransport.create(hubbedCoils, tracers.hubWsTransport))
+                        .map(Some(_))
+            meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
+            hubRoutes =
+                hubT.toList.map(h => (wsb: WebSocketBuilder2[IO]) => h.routes(wsb))
+            _ <- NodeWsServer.resource(
+              bindHost,
+              bindPort,
+              meshRoute :: hubRoutes,
+              tracers.nodeWsServer
+            )
+            _ <- peerT.startDialers(wsClient, remoteHeadUris)
+            peerFactory: Resource[
+              IO,
+              ActorContext[
+                IO,
+                HeadMultisigRegimeManager.Request,
+                Any
+              ] => hydrozoa.multisig.consensus.transport.PeerTransport
+            ] =
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    peerT
                 )
-            bindPort = Port
-                .fromString(env.hydrozoaPort)
-                .getOrElse(
-                  throw new IllegalArgumentException(s"Invalid HYDROZOA_PORT: ${env.hydrozoaPort}")
+            hubFactory: Option[Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => HubTransport
+            ]] = hubT.map { h =>
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    h: HubTransport
                 )
+            }
             mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
               remoteL2Ledger,
               persistence,
               mrmTracer,
-              bindHost,
-              bindPort,
+              peerFactory,
+              hubFactory,
             )
-        } yield (env, nodeConfig, system, mrm)
+        } yield NodeRun.HeadNode(mrm)
+    }
 
-        resource.use { case (env, nodeConfig, system, mrm) =>
-            for {
-                _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
-                _ <- log.info("Hydrozoa node started successfully")
+    /** Build the coil-node uplink dialer (no inbound server) and allocate the
+      * [[CoilMultisigRegimeManager]]. A coil peer runs no user-facing HTTP server.
+      */
+    private def buildCoilNode(
+        nodeConfig: NodeConfig,
+        backend: CardanoBackend[IO],
+        remoteL2Ledger: RemoteL2Ledger,
+        persistence: Persistence[IO],
+        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        wsClient: org.http4s.client.websocket.WSClient[IO],
+        ownCoilNum: CoilPeerNumber,
+    ): Resource[IO, NodeRun.CoilNode] = {
+        given CardanoNetwork.Section = nodeConfig
+        val hubNum = nodeConfig
+            .coilPeerHub(ownCoilNum)
+            .getOrElse(
+              throw new IllegalStateException(s"no hub configured for coil peer $ownCoilNum")
+            )
+        val hubUri = nodeConfig.headConfig.headPeers.headPeerData
+            .lookup(hubNum)
+            .map(hpd => hpd.webSocketAddress / "hub")
+            .getOrElse(
+              throw new IllegalStateException(
+                s"no webSocketAddress configured for hub head peer $hubNum"
+              )
+            )
+        val cpwtTracer =
+            Slf4jTracer.sink.contramap(CoilPeerWsTransportEventFormat.humanFormat(ownCoilNum))
+        for {
+            t <- Resource.eval(CoilPeerWsTransport.create(ownCoilNum, cpwtTracer))
+            _ <- t.startDialer(wsClient, hubUri)
+            coilFactory: Resource[
+              IO,
+              ActorContext[IO, HeadMultisigRegimeManager.Request, Any] => CoilTransport
+            ] =
+                Resource.pure((_: ActorContext[IO, HeadMultisigRegimeManager.Request, Any]) =>
+                    t: CoilTransport
+                )
+            mrm <- CoilMultisigRegimeManager.resource(
+              nodeConfig,
+              backend,
+              remoteL2Ledger,
+              persistence,
+              mrmTracer,
+              coilFactory,
+            )
+        } yield NodeRun.CoilNode(mrm)
+    }
 
-                // Start HTTP server once RequestSequencer is available
-                _ <- mrm.connectionsDeferred.get.flatMap { connections =>
-                    val serverConfig = HydrozoaServer.Config(
-                      host = host"0.0.0.0",
-                      port = port"8080",
-                      adminUsername = env.adminUsername,
-                      adminPassword = env.adminPassword
+    private def runHeadNode(
+        nodeConfig: NodeConfig,
+        system: ActorSystem[IO],
+        mrm: HeadMultisigRegimeManager,
+        httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
+    ): IO[ExitCode] =
+        for {
+            _ <- system.actorOf(mrm, "HeadMultisigRegimeManager")
+            _ <- log.info("Hydrozoa node started successfully")
+
+            // Start HTTP server once RequestSequencer is available
+            _ <- mrm.connectionsDeferred.get.flatMap { connections =>
+                val httpHost = Host
+                    .fromString(nodeConfig.httpHost)
+                    .getOrElse(
+                      throw new IllegalArgumentException(
+                        s"Invalid httpHost in node config: ${nodeConfig.httpHost}"
+                      )
                     )
-                    val httpTracer = Slf4jTracer.sink
-                        .contramap(HydrozoaHttpEventFormat.humanFormat)
-                    log.info("Starting HTTP server...") *>
-                        HydrozoaServer
-                            .create(
-                              connections.requestSequencer.getOrElse(
-                                sys.error("RequestSequencer required on head peers")
-                              ),
-                              connections.blockWeaver,
-                              nodeConfig.headConfig,
-                              serverConfig,
-                              httpTracer,
-                            )
-                            .use(_ => IO.never)
-                            .start // Run in background
-                            .void
-                }
+                val httpPort = Port
+                    .fromString(nodeConfig.httpPort)
+                    .getOrElse(
+                      throw new IllegalArgumentException(
+                        s"Invalid httpPort in node config: ${nodeConfig.httpPort}"
+                      )
+                    )
+                val serverConfig = HydrozoaServer.Config(
+                  host = httpHost,
+                  port = httpPort,
+                  adminUsername = nodeConfig.adminUsername,
+                  adminPassword = nodeConfig.adminPassword
+                )
+                val httpTracer = Slf4jTracer.sink
+                    .contramap(HydrozoaHttpEventFormat.humanFormat) |+| httpExtraTracer
+                log.info("Starting HTTP server...") *>
+                    HydrozoaServer
+                        .create(
+                          connections.requestSequencer.getOrElse(
+                            sys.error("RequestSequencer required on head peers")
+                          ),
+                          connections.blockWeaver,
+                          nodeConfig.headConfig,
+                          serverConfig,
+                          httpTracer,
+                        )
+                        .use(_ => IO.never)
+                        .start
+                        .void
+            }
 
-                _ <- system.waitForTermination
-            } yield ExitCode.Success
-        }
+            _ <- system.waitForTermination
+        } yield ExitCode.Success
+
+    private def runCoilNode(
+        system: ActorSystem[IO],
+        mrm: CoilMultisigRegimeManager,
+    ): IO[ExitCode] =
+        for {
+            _ <- system.actorOf(mrm, "CoilMultisigRegimeManager")
+            _ <- log.info("Hydrozoa coil node started successfully")
+            _ <- system.waitForTermination
+        } yield ExitCode.Success
+
+    private sealed trait NodeRun
+    private object NodeRun {
+        final case class HeadNode(mrm: HeadMultisigRegimeManager) extends NodeRun
+        final case class CoilNode(mrm: CoilMultisigRegimeManager) extends NodeRun
     }
 }
