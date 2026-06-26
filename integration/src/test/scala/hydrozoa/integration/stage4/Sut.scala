@@ -1,6 +1,6 @@
 package hydrozoa.integration.stage4
 
-import cats.effect.{Deferred, Fiber, IO, Ref}
+import cats.effect.{Deferred, IO, Ref}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
@@ -32,15 +32,6 @@ case class Stage4SutStatic(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
     peers: Map[HeadPeerNumber, Stage4PeerHandle],
-    errorDrainer: Fiber[IO, Throwable, Nothing],
-    // Per-peer fibers that periodically poke each `CardanoLiaison` with
-    // `CardanoLiaison.Timeout`. Replaces the broken `setReceiveTimeout`-based polling
-    // (cats-actors `setReceiveTimeout` checks via a hardcoded 1s ping AND uses
-    // `System.currentTimeMillis()` rather than the F-effect clock — both unusable under
-    // TestControl). Each fiber sleeps `cardanoLiaisonPollingPeriod` of virtual time, then
-    // sends `Timeout` directly to the liaison's mailbox, which triggers a normal `runEffects`
-    // (poll L1 + push `PollResults` to BlockWeaver).
-    liaisonTickFibers: List[Fiber[IO, Throwable, Nothing]],
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
@@ -102,21 +93,6 @@ case class Stage4Sut(
     static: Stage4SutStatic,
     mutable: Stage4SutMutable,
 )
-
-/** Selects how a [[Stage4Sut]] wires its peer liaisons to remote peers.
-  *
-  *   - [[Direct]] (default) — every peer's liaison gets the actual remote handle from the
-  *     corresponding peer's actor system (head↔head and hub↔coil alike). In-process, no network.
-  *     Compatible with [[ModelBasedSuite#useTestControl]] = `true`.
-  *   - [[WebSocket]] — every head peer runs one shared WS server (`NodeWsServer`) bound to
-  *     `127.0.0.1` on an OS-assigned ephemeral port, mounting `/head` for the head mesh and (on a
-  *     hub) `/hub` for its coil peers; each coil dials its hub's `/hub`. Ports are discovered
-  *     post-bind so two WS-mode test instances in the same JVM never collide. Forces
-  *     [[ModelBasedSuite#useTestControl]] = `false` since real sockets don't speak virtual time.
-  */
-enum TransportMode:
-    case Direct
-    case WebSocket
 
 // ===================================
 // SUT command instances (direct submission)

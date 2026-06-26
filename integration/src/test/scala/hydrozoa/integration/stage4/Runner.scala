@@ -4,6 +4,7 @@ import cats.data.StateT
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.implicits.*
+import hydrozoa.integration.harness.MultiPeerHeadHarness.{BackendMode, TransportMode}
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
