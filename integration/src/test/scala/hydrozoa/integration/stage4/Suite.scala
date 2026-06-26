@@ -12,7 +12,8 @@ import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
-import hydrozoa.integration.harness.MultiPeerHeadHarness.{BackendMode, TransportMode}
+import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
+import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
