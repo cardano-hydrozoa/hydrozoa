@@ -135,22 +135,19 @@ object MultiPeerHeadHarness:
         inputs: Inputs,
         hooks: Hooks[H, C],
     ): Resource[IO, Harness[H, C]] =
-        val cfg              = inputs.config
-        val multiNodeConfig  = inputs.multiNodeConfig
-        val coilNodeConfigs  = inputs.coilNodeConfigs
-        val cardanoInfo      = multiNodeConfig.headConfig.cardanoInfo
-        val peers            = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
-        val transportMode    = cfg.transportMode
-        val backendMode      = cfg.backendMode
-        val useTC            = transportMode.useTestControl
+        import inputs.*
+        import inputs.config.*
+        val cardanoInfo = multiNodeConfig.headConfig.cardanoInfo
+        val peers       = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
+        val useTC       = transportMode.useTestControl
         val log: ContraTracer[IO, Slf4jMsg] =
             Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Harness"))
 
         val preSystem: IO[Unit] = for
             _ <- IO.whenA(useTC)(
-                     IO.sleep(FiniteDuration(inputs.startEpochMs, TimeUnit.MILLISECONDS))
+                     IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS))
                  )
-            _ <- inputs.takeoffTime match
+            _ <- takeoffTime match
                 case None => IO.unit
                 case Some(t) =>
                     IO.realTimeInstant.flatMap { now =>
@@ -178,7 +175,7 @@ object MultiPeerHeadHarness:
         yield ()
 
         val mkCardanoBackend: IO[CardanoBackend[IO]] =
-            val genesisUtxos: Utxos = inputs.preinitPeerUtxosL1.values.reduce(_ ++ _)
+            val genesisUtxos: Utxos = preinitPeerUtxosL1.values.reduce(_ ++ _)
             CardanoBackendMock.mockIO(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
@@ -195,7 +192,7 @@ object MultiPeerHeadHarness:
 
         for
             _              <- Resource.eval(preSystem)
-            system         <- ActorSystem[IO](cfg.label)
+            system         <- ActorSystem[IO](label)
             cardanoBackend <- Resource.eval(mkCardanoBackend)
             inProcessRegistry <- Resource.eval(InProcessPeerTransport.emptyRegistry)
             hubCoilRegistry <-
