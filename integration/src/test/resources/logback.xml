@@ -77,6 +77,7 @@
     <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
     <logger name="HeadMultisigRegimeManager" level="info"/>
+    <logger name="CoilMultisigRegimeManager" level="info"/>
     <logger name="DisputeActor" level="info"/>
     <logger name="EvacuationActor" level="info"/>
     <logger name="Limiter" level="debug"/>
