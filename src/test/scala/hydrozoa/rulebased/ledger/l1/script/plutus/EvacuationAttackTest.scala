@@ -50,7 +50,8 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPubKeyUtxo}
   *     trusted setup so later evacuations pass any pairing) → `EvacuateSetupG2ShouldBePreserved`;
   *   - '''positional-parse insertion''' — the `Evacuate` branch reads outputs positionally
   *     (`change, treasury, evacuees…`); inserting an output shifts the treasury slot onto the
-  *     attacker's change output, which lacks the beacon → `EvacuateBeaconTokenShouldBePreserved`;
+  *     attacker's change output, which is not at the treasury script address →
+  *     `EvacuateTreasuryWrongAddress`;
   *   - '''stale accumulator''' — leave the residual treasury's accumulator at the input commitment
   *     instead of advancing it to the proof → `EvacuateOutputAccumulatorUpdated`;
   *   - '''double-drain''' (chained) — drain an obligation, then try to drain it again from the
@@ -305,7 +306,13 @@ class EvacuationAttackTest extends AnyFunSuite {
               fee = b.fee + feeBump
             )
         }
-        assertRejected("positional-insert", mutated, "Beacon token should be preserved")
+        // The shifted treasury slot lands on the attacker's change output, which is not at the
+        // treasury script address, so the address pin rejects it before the beacon check.
+        assertRejected(
+          "positional-insert",
+          mutated,
+          "Treasury output must remain at the treasury script address"
+        )
     }
 
     test("evacuate must advance the output accumulator (no replay of a drained set)") {
