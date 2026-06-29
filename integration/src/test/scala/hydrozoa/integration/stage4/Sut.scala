@@ -3,6 +3,7 @@ package hydrozoa.integration.stage4
 import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.ActorSystem
+import hydrozoa.integration.harness.{Capture, Signal}
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
@@ -40,13 +41,9 @@ case class Stage4SutStatic(
     log: ContraTracer[IO, Slf4jMsg],
 )
 
-/** Mutable state of a running stage4 SUT. `Ref`s are updated by capture observers (and a few
-  * SUT command-side accumulators); `Deferred`s are completed exactly once during shutdown
-  * coordination in `beforeFinalize`.
-  */
-/** Per-head-peer mutable Refs populated by the [[Observers]] capture sinks. `blockBriefs` holds
-  * every `BlockBrief.Intermediate` JL emits on the fast side; `stacks` holds every
-  * `Stack.HardConfirmed` SCA emits on the slow side. Bundled here so the SUT carries one
+/** Per-head-peer mutable Refs populated by the [[Stage4Plugins.perPeerCaptures]] writer arm.
+  * `blockBriefs` holds every `BlockBrief.Intermediate` JL emits on the fast side; `stacks` holds
+  * every `Stack.HardConfirmed` SCA emits on the slow side. Bundled here so the SUT carries one
   * `Map[HeadPeerNumber, PerPeerCaptures]` instead of two parallel maps.
   */
 case class PerPeerCaptures(
@@ -64,9 +61,10 @@ object PerPeerCaptures:
     def makeMap(peers: Seq[HeadPeerNumber]): IO[Map[HeadPeerNumber, PerPeerCaptures]] =
         peers.toList.traverse(p => make.map(p -> _)).map(_.toMap)
 
-/** Per-coil-peer mutable Refs populated by the [[Observers]] coil-side capture sinks. Today only
-  * the hard-confirmed stacks stream is captured; bundled here so a future coil-side signal (e.g.
-  * coil `TxSubmitting`) lands alongside it without churning the `Stage4SutMutable` field set.
+/** Per-coil-peer mutable Refs populated by the [[Stage4Plugins.perCoilCaptures]] writer arm.
+  * Today only the hard-confirmed stacks stream is captured; bundled here so a future coil-side
+  * signal (e.g. coil `TxSubmitting`) lands alongside it without churning the
+  * [[Stage4SutMutable]] field set.
   */
 case class PerCoilCaptures(
     stacks: Ref[IO, Vector[Stack.HardConfirmed]],
@@ -79,29 +77,33 @@ object PerCoilCaptures:
     def makeMap(coils: Seq[CoilPeerNumber]): IO[Map[CoilPeerNumber, PerCoilCaptures]] =
         coils.toList.traverse(c => make.map(c -> _)).map(_.toMap)
 
+/** Mutable state of a running stage4 SUT. [[Capture]]s wrap Refs populated by writer arms;
+  * [[Signal]]s wrap one-shot Deferreds completed by predicate arms; `*Target` Deferreds are
+  * armed by [[beforeFinalize]] to gate when the matching signal predicate may fire.
+  */
 case class Stage4SutMutable(
     sutErrors: Ref[IO, List[String]],
-    captures: Map[HeadPeerNumber, PerPeerCaptures],
-    // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA ContraTracer sink
-    // (same mechanism as `stacks` on the head side). Empty for a pure-head run. Used to assert
-    // the coil peer participates in the slow cycle.
-    coilCaptures: Map[CoilPeerNumber, PerCoilCaptures],
+    perPeer: Capture[Map[HeadPeerNumber, PerPeerCaptures]],
+    // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA arm
+    // (same mechanism as `perPeer.state(_).stacks` on the head side). Empty for a pure-head run.
+    // Used to assert the coil peer participates in the slow cycle.
+    perCoil: Capture[Map[CoilPeerNumber, PerCoilCaptures]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
-    fastSettlementSignal: Deferred[IO, Unit],
-    slowCoverageSignal: Deferred[IO, Unit],
-    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL capture sink reads it
+    fastSettlementSignal: Signal[Unit],
+    slowCoverageSignal: Signal[Unit],
+    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL predicate arm reads it
       * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
       * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
       */
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
     /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
-      * the SCA capture sink reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
+      * the SCA predicate arm reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
     /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
       * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
       */
-    effectsLanded: Ref[IO, Set[TransactionHash]],
+    landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
     /** Fires when the same condition `EffectsLanded.propEffectsLanded` checks is satisfied —
       * i.e. every backbone expectation completed via happy path or competing fallback. Anchored
       * on `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
@@ -109,16 +111,16 @@ case class Stage4SutMutable(
       * `StackComposer` rate-limit delay; observing both lets us distinguish "stalled at
       * consensus" from "stalled before enactment".
       */
-    effectsLandedSignal: Deferred[IO, Unit],
+    effectsLandedSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] (after slow drain) with the backbone expectations derived from
-      * the canonical hard-confirmed stacks. The TxSubmitting sink reads via `tryGet` and only
-      * fires [[effectsLandedSignal]] once this is populated.
+      * the canonical hard-confirmed stacks. The TxSubmitting predicate arm reads via `tryGet`
+      * and only fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
     /** Fires on the first successful `FallbackToRuleBased` dispatch; `beforeFinalize` races it
       * against the happy-path drain. See the package docstring for the contract.
       */
-    fallbackEnteredSignal: Deferred[IO, TransactionHash],
+    fallbackEnteredSignal: Signal[TransactionHash],
 )
 
 case class Stage4Sut(

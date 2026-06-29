@@ -14,6 +14,7 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.Plugin
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
@@ -31,7 +32,7 @@ import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{TransactionHash, TransactionInput, Utxos}
+import scalus.cardano.ledger.{TransactionInput, Utxos}
 import test.{SeedPhrase, TestPeers, given}
 
 // ===================================
@@ -90,57 +91,57 @@ case class Stage4Suite(
 
     override def canStartupNewSut(): Boolean = true
 
-    // Stage4 owns its own capture-observer Refs/Deferreds + handle extraction; the harness
+    // Stage4 owns its capture/signal plugins + handle extraction; the harness
     // (MultiPeerHeadHarness) owns the ActorSystem, mock CardanoBackend, transports, per-peer
     // HMRM with BackendStore + Persistence, per-coil CMRM, connections drain, error drainer,
-    // and CL tick fibers. Hooks thread the stage4-side tracers into each MRM.
+    // and CL tick fibers. Hooks thread the stage4-side root tracer (`Plugin.tracerOf(...)`)
+    // into each MRM.
     override def sutResource(state: ModelState): Resource[IO, Stage4Sut] =
         val multiNodeConfig = state.params.multiNodeConfig
         val peers           = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val coilConfigs     = state.params.coilNodeConfigs
         val startEpochMs    = state.currentModelTime.getEpochSecond * 1000L
+        val coilNums        = coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
 
         for
-            // Captures
-            captures <- Resource.eval(PerPeerCaptures.makeMap(peers))
-            coilCaptures <- Resource.eval(
-                                PerCoilCaptures.makeMap(
-                                  coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
-                                )
-                            )
-            submittedRequestIds   <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
-            effectsLanded         <- Resource.eval(Ref[IO].of(Set.empty[TransactionHash]))
+            // Captures (writer arms over Refs)
+            perPeer   <- Resource.eval(Stage4Plugins.perPeerCaptures(peers))
+            perCoil   <- Resource.eval(Stage4Plugins.perCoilCaptures(coilNums))
+            landedTxs <- Resource.eval(Stage4Plugins.effectsLandedCapture)
 
-            // Signals
-            fastSettlementSignal  <- Resource.eval(IO.deferred[Unit])
-            slowCoverageSignal    <- Resource.eval(IO.deferred[Unit])
-            fastSettlementTarget  <- Resource.eval(IO.deferred[Set[RequestId]])
-            slowCoverageTarget    <- Resource.eval(IO.deferred[Set[Int]])
-            effectsLandedSignal   <- Resource.eval(IO.deferred[Unit])
-            effectsLandedTarget   <- Resource.eval(IO.deferred[List[BlockExpectation]])
-            fallbackEnteredSignal <- Resource.eval(IO.deferred[TransactionHash])
+            // Target Deferreds — armed in beforeFinalize to gate the signal predicates below.
+            fastSettlementTarget <- Resource.eval(IO.deferred[Set[RequestId]])
+            slowCoverageTarget   <- Resource.eval(IO.deferred[Set[Int]])
+            effectsLandedTarget  <- Resource.eval(IO.deferred[List[BlockExpectation]])
 
-            // Hooks
-            captureStacks = Observers.captureStackHardConfirmed(
-                              captures,
-                              coilCaptures,
-                              slowCoverageSignal,
-                              slowCoverageTarget,
-                            )
-            captureBriefs = Observers.captureBriefProduced(
-                              captures,
-                              fastSettlementSignal,
-                              fastSettlementTarget,
-                            )
-            captureTxs = Observers.captureTxSubmitting(
-                           effectsLanded,
-                           effectsLandedSignal,
-                           effectsLandedTarget,
-                         )
-            captureFallback = Observers.captureFallbackEntered(fallbackEnteredSignal)
+            // Signals (predicate arms over Deferred[T])
+            fastSettlementSignal  <- Resource.eval(
+                                       Stage4Plugins
+                                           .fastSettlementSignal(perPeer, fastSettlementTarget)
+                                     )
+            slowCoverageSignal    <- Resource.eval(
+                                       Stage4Plugins
+                                           .slowCoverageSignal(perPeer, slowCoverageTarget)
+                                     )
+            effectsLandedSignal   <- Resource.eval(
+                                       Stage4Plugins
+                                           .effectsLandedSignal(landedTxs, effectsLandedTarget)
+                                     )
+            fallbackEnteredSignal <- Resource.eval(Stage4Plugins.fallbackEnteredSignal)
+
+            // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
+            submittedRequestIds <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
+
             hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
-                      tracer =
-                          captureStacks |+| captureBriefs |+| captureTxs |+| captureFallback,
+                      tracer = Plugin.tracerOf(
+                        perPeer,
+                        perCoil,
+                        landedTxs,
+                        fastSettlementSignal,
+                        slowCoverageSignal,
+                        effectsLandedSignal,
+                        fallbackEnteredSignal,
+                      ),
                       peerHandle = (peerNum, conns) =>
                           IO.pure(
                             Stage4PeerHandle(
@@ -173,14 +174,14 @@ case class Stage4Suite(
           ),
           mutable = Stage4SutMutable(
             sutErrors = harness.sutErrors,
-            captures = captures,
-            coilCaptures = coilCaptures,
+            perPeer = perPeer,
+            perCoil = perCoil,
             submittedRequestIds = submittedRequestIds,
             fastSettlementSignal = fastSettlementSignal,
             slowCoverageSignal = slowCoverageSignal,
             fastSettlementTarget = fastSettlementTarget,
             slowCoverageTarget = slowCoverageTarget,
-            effectsLanded = effectsLanded,
+            landedTxs = landedTxs,
             effectsLandedSignal = effectsLandedSignal,
             effectsLandedTarget = effectsLandedTarget,
             fallbackEnteredSignal = fallbackEnteredSignal,
@@ -197,13 +198,13 @@ case class Stage4Suite(
         val happyPathProp: IO[Prop] = for
             _ <- log.warn("beforeFinalize")
             submitted <- sut.mutable.submittedRequestIds.get
-            // Arm the fast-cycle drain: publish the final submitted set so the JL capture sink
-            // knows the target. The sink fires fastSettlementSignal only after this is set,
-            // preventing mid-run firing against a partial submittedRequestIds snapshot.
+            // Arm the fast-cycle drain: publish the final submitted set so the JL predicate arm
+            // knows the target. The signal fires only after this is set, preventing mid-run
+            // firing against a partial submittedRequestIds snapshot.
             _ <- sut.mutable.fastSettlementTarget.complete(submitted.toSet)
             // One-time coverage check: if all IDs already landed before we armed the target,
-            // fire the signal ourselves (no new brief will arrive to trigger the sink).
-            allBriefs <- sut.mutable.captures.values.toList
+            // fire the signal ourselves (no new brief will arrive to trigger the predicate).
+            allBriefs <- sut.mutable.perPeer.state.values.toList
                              .traverse(_.blockBriefs.get)
                              .map(_.flatten)
             seen       = allBriefs
@@ -212,18 +213,18 @@ case class Stage4Suite(
                              )
                              .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
-                     sut.mutable.fastSettlementSignal.complete(()).void
+                     sut.mutable.fastSettlementSignal.complete(())
                  )
-            _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.get)
+            _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.await)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
-            blockNums <- sut.mutable.captures.values.toList
+            blockNums <- sut.mutable.perPeer.state.values.toList
                              .traverse(_.blockBriefs.get)
                              .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
             _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
-            // One-time coverage check across ALL peers — matching the sink condition so a spurious
-            // signal fire can't race ahead of any peer's stacks update.
-            allPeersStacks <- sut.mutable.captures.values.toList.traverse(_.stacks.get)
+            // One-time coverage check across ALL peers — matching the predicate condition so a
+            // spurious signal fire can't race ahead of any peer's stacks update.
+            allPeersStacks <- sut.mutable.perPeer.state.values.toList.traverse(_.stacks.get)
             allCovered      = blockNums.isEmpty ||
                                   allPeersStacks.forall { peerStacks =>
                                       blockNums.forall { bn =>
@@ -233,13 +234,13 @@ case class Stage4Suite(
                                           }
                                       }
                                   }
-            _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()).void)
-            _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.get)
+            _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()))
+            _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.await)
             // Arm the effects-landed drain: now that the slow cycle has reached agreement on
             // every block, derive the backbone expectations from the canonical peer's stacks and
-            // wait for the TxSubmitting sink to observe enough hashes to satisfy them. Gap
+            // wait for the TxSubmitting predicate to observe enough hashes to satisfy them. Gap
             // between slow signal and this one = the StackComposer rate-limit delay.
-            canonicalStacksForTarget <- sut.mutable.captures.toList
+            canonicalStacksForTarget <- sut.mutable.perPeer.state.toList
                                             .traverse { case (p, c) => c.stacks.get.map(p -> _) }
                                             .map { byPeer =>
                                                 val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
@@ -249,25 +250,25 @@ case class Stage4Suite(
             _ <- sut.mutable.effectsLandedTarget.complete(expectations)
             // One-time check: if every relevant expectation is already satisfied by the hashes
             // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
-            landedNow <- sut.mutable.effectsLanded.get
+            landedNow <- sut.mutable.landedTxs.state.get
             _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
-                     sut.mutable.effectsLandedSignal.complete(()).void
+                     sut.mutable.effectsLandedSignal.complete(())
                  )
-            _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.get)
+            _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.await)
             errors <- sut.mutable.sutErrors.get
-            // Snapshot every observer-written Ref ONCE here, after all drain signals have fired,
+            // Snapshot every capture-written Ref ONCE here, after all drain signals have fired,
             // and reuse this single frozen view for the whole analysis. Re-reading these Refs
-            // separately (here and again inside analyzeBlockBriefs) races the observer fibers
-            // under WS (real clock, no TestControl tick-drain): cross-peer quantities could then
-            // be derived from inconsistent snapshots. Freezing once removes that window by
+            // separately (here and again inside analyzeBlockBriefs) races the capture arms under
+            // WS (real clock, no TestControl tick-drain): cross-peer quantities could then be
+            // derived from inconsistent snapshots. Freezing once removes that window by
             // construction.
-            briefsByPeer <- sut.mutable.captures.toList
+            briefsByPeer <- sut.mutable.perPeer.state.toList
                                 .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
                                 .map(_.toMap)
-            stacksByPeer <- sut.mutable.captures.toList
+            stacksByPeer <- sut.mutable.perPeer.state.toList
                                 .traverse { case (p, c) => c.stacks.get.map(p -> _) }
                                 .map(_.toMap)
-            coilStacksByCoil <- sut.mutable.coilCaptures.toList
+            coilStacksByCoil <- sut.mutable.perCoil.state.toList
                                     .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
                                     .map(_.toMap)
             submittedIds <- sut.mutable.submittedRequestIds.get
@@ -291,7 +292,7 @@ case class Stage4Suite(
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
             else props
 
-        IO.race(sut.mutable.fallbackEnteredSignal.get, happyPathProp).map {
+        IO.race(sut.mutable.fallbackEnteredSignal.await, happyPathProp).map {
             case Left(txId) =>
                 Prop.exception(
                   RuntimeException(
