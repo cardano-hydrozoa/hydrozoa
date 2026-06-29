@@ -11,7 +11,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
-import hydrozoa.rulebased.{EvacuationActor, EvacuationActorEventFormat}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
@@ -31,7 +31,7 @@ object EvacuationActorTestHelpers {
 
     def mkResolutionTx: MultiNodeConfigTestM[Transaction] = ???
 
-    def mkEvacuationActor: MultiNodeConfigTestM[EvacuationActor] =
+    def mkEvacuationActor: MultiNodeConfigTestM[RuleBasedActor] =
         for {
             env <- ask
             nEvacs <- pick(Gen.choose(0, 1000))
@@ -61,12 +61,17 @@ object EvacuationActorTestHelpers {
             )
 
             tracer = Slf4jTracer.sink.contramap(
-              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+              RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
-        } yield EvacuationActor(
-          loadInputs = IO.pure(
-            EvacuationActor.Inputs(
+        } yield RuleBasedActor(
+          loadAction = IO.raiseError(
+            new IllegalStateException(
+              "evacuation-actor unit test: dispute branch should not run"
+            )
+          ),
+          loadEvacuationInputs = IO.pure(
+            RuleBasedActor.EvacuationInputs(
               candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
               fallbackTxHash = fallbackTxHash
             )

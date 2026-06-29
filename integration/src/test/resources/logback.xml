@@ -78,8 +78,7 @@
     <logger name="JointLedger" level="info"/>
     <logger name="HeadMultisigRegimeManager" level="info"/>
     <logger name="CoilMultisigRegimeManager" level="info"/>
-    <logger name="DisputeActor" level="info"/>
-    <logger name="EvacuationActor" level="info"/>
+    <logger name="RuleBasedActor" level="info"/>
     <logger name="Limiter" level="debug"/>
     <logger name="PeerLiaison" level="debug"/>
     <logger name="PeerLiaison.HeadToHead" level="debug"/>

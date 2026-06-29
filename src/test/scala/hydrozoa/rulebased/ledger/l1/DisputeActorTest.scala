@@ -18,7 +18,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
-import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -105,7 +105,7 @@ object DisputeActorTestHelpers {
         versionMinor: BigInt,
         additionalL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
-    ): MultiNodeConfigTestM[DisputeActor] =
+    ): MultiNodeConfigTestM[RuleBasedActor] =
         for {
             env <- ask
 
@@ -167,15 +167,20 @@ object DisputeActorTestHelpers {
               )
             )
             tracer = Slf4jTracer.sink.contramap(
-              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+              RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
-            disputeActor = DisputeActor(
+            disputeActor = RuleBasedActor(
               loadAction = IO.pure(
                 RuleBasedRegimeManager.DisputeAction.Vote(
                   sec = blockHeader,
                   signatures = env.multisignHeader(blockHeader).toList,
                   coilSignatures = env.multisignHeaderCoil(blockHeader)
+                )
+              ),
+              loadEvacuationInputs = IO.raiseError(
+                new IllegalStateException(
+                  "dispute-actor unit test: evacuation branch should not run"
                 )
               ),
               cardanoBackend = cardanoBackend,
@@ -188,7 +193,7 @@ object DisputeActorTestHelpers {
 These tests test the basic functionality of the dispute actor.
 
 The first few tests are sanity checks to ensure that raising exceptions (for unrecoverable failures) and returning
-left are handled properly by `handleDisputeRes`.
+left are handled properly by `handleDispute`.
  */
 object DisputeActorTest extends Properties("Dispute Actor Test") {
 //    override def overrideParameters(p: Test.Parameters): Test.Parameters =
@@ -224,7 +229,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           initialEvacuationMap = EvacuationMap.empty
         )
         // Should throw here
-        res <- lift(disputeActor.handleDisputeRes.attempt)
+        res <- lift(disputeActor.handleDispute.attempt)
         _ <- {
             val expectedError = Left(
               BallotBox.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
@@ -243,10 +248,10 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           additionalL1Utxos = Map.empty,
           initialEvacuationMap = EvacuationMap.empty
         )
-        res <- lift(disputeActor.handleDisputeRes)
+        res <- lift(disputeActor.handleDispute)
         _ <- assertWith(
           msg = "Missing rules best treasury returns Left",
-          condition = res == Left(DisputeActor.Error.ParseError.Treasury.TreasuryMissing)
+          condition = res == Left(RuleBasedActor.Error.ParseError.Treasury.TreasuryMissing)
         )
     } yield true
 
@@ -313,7 +318,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           ),
           initialEvacuationMap = evacMap
         )
-        _ <- lift(disputeActor.handleDisputeRes)
+        _ <- lift(disputeActor.handleDispute)
         queryRes <- lift(
           disputeActor.cardanoBackend.utxosAt(
             HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -420,7 +425,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //          ),
 //          initialEvacuationMap = evacMap
 //        )
-//        _ <- lift(disputeActor.handleDisputeRes)
+//        _ <- lift(disputeActor.handleDispute)
 //        queryRes <- lift(
 //          disputeActor.cardanoBackend.utxosAt(
 //            HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -467,7 +472,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           evacMap
         )
 
-        _ <- lift(da.handleDisputeRes)
+        _ <- lift(da.handleDispute)
         utxosAtResolutionAddress <- lift(
           da.cardanoBackend.utxosAt(HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network))
         )

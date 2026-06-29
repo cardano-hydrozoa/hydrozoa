@@ -18,46 +18,33 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.secFromData
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
-/** This doesn't actually do much of anything right now. It just starts the dispute and evacuation
-  * actors, and those proceed autonomously. I don't think we need actors for these.
-  *
-  * On boot it reads the rule-based regime's recovery inputs (SEC, peer signatures, the evacuation
-  * map at fallback, the fallback tx hash) from [[Persistence]] so the same code path serves first
-  * run and crash recovery.
+/** Spawns the [[RuleBasedActor]] and supplies it with persistence-backed loaders for the inputs
+  * that can't be derived from chain state.
   */
 case class RuleBasedRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     persistence: Persistence[IO],
     backend: BackendStore[IO],
     votingDeadline: QuantizedInstant,
-    disputeTracer: ContraTracer[IO, DisputeActorEvent],
-    evacuationTracer: ContraTracer[IO, EvacuationActorEvent],
+    tracer: ContraTracer[IO, RuleBasedActorEvent],
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 
-    // Start the dispute and evacuation actors
-    override def preStart: IO[Unit] = {
-        for {
-            _ <- context.actorOf(
-              DisputeActor(
+    override def preStart: IO[Unit] =
+        context
+            .actorOf(
+              RuleBasedActor(
                 loadAction = loadAction,
+                loadEvacuationInputs = loadEvacuationInputs,
                 cardanoBackend = cardanoBackend,
-                tracer = disputeTracer
+                tracer = tracer
               )
             )
-            _ <- context.actorOf(
-              EvacuationActor(
-                loadInputs = loadEvacuationInputs,
-                cardanoBackend = cardanoBackend,
-                tracer = evacuationTracer
-              )
-            )
-        } yield ()
-    }
+            .void
 
     /** Re-read just enough state from persistence to decide whether this peer should vote or
-      * abstain. Called by [[DisputeActor]] on each tick that observes its own `AwaitingVote` ballot
-      * box, so it stays narrow: markers + the latest hard-confirmed stack's effects.
+      * abstain. Called by [[RuleBasedActor]] on each tick that observes its own `AwaitingVote`
+      * ballot box, so it stays narrow: markers + the latest hard-confirmed stack's effects.
       */
     private def loadAction: IO[DisputeAction] =
         for {
@@ -95,10 +82,10 @@ case class RuleBasedRegimeManager(
                 }
         }
 
-    /** Re-read the [[EvacuationActor]]'s rule-based inputs from persistence. Called by
-      * [[EvacuationActor]] on each tick.
+    /** Re-read the evacuation-side rule-based inputs from persistence. Called by [[RuleBasedActor]]
+      * on each tick that runs the evacuation branch.
       */
-    private def loadEvacuationInputs: IO[EvacuationActor.Inputs] =
+    private def loadEvacuationInputs: IO[RuleBasedActor.EvacuationInputs] =
         for {
             ownHeadPeerNum <- config.ownPeerId match {
                 case PeerId.Head(n) => IO.pure(n)
@@ -123,7 +110,7 @@ case class RuleBasedRegimeManager(
             res <- effects match {
                 case i: StackEffects.HardConfirmed.Initial =>
                     IO.pure(
-                      EvacuationActor.Inputs(
+                      RuleBasedActor.EvacuationInputs(
                         candidateEvacMaps = Map(
                           config.initialEvacuationMap.kzgCommitment ->
                               config.initialEvacuationMap
@@ -186,7 +173,7 @@ case class RuleBasedRegimeManager(
                                     )
                                     .map(map => multiSec.commitment.kzgCommitment -> map)
                             }
-                    } yield EvacuationActor.Inputs(
+                    } yield RuleBasedActor.EvacuationInputs(
                       candidateEvacMaps =
                           ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
                       fallbackTxHash = fallbackTx.tx.id
@@ -196,10 +183,10 @@ case class RuleBasedRegimeManager(
 }
 
 object RuleBasedRegimeManager {
-    type Config = EvacuationActor.Config & DisputeActor.Config
+    type Config = RuleBasedActor.Config
 
-    /** What action this peer's [[DisputeActor]] should take when it observes its own `AwaitingVote`
-      * vote utxo on L1.
+    /** What action this peer's [[RuleBasedActor]] should take when it observes its own
+      * `AwaitingVote` vote utxo on L1.
       *
       *   - [[Vote]]: the latest hard-confirmed stack ended with a Minor (or Major-with-trailing-
       *     minors) — we have a signed SEC + peer header signatures, so the actor builds and submits
