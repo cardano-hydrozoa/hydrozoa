@@ -19,7 +19,8 @@ import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEv
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import org.http4s.Uri
+import org.http4s.{HttpRoutes, Uri}
+import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
@@ -165,6 +166,12 @@ object MultiPeerHeadHarness:
                                     .map(coilNum -> _)
                             }
                             .map(_.toMap)
+            // WS Phase 2 — bind NodeWsServers and start mesh + coil dialers. Acquired *after*
+            // peerMrms/coilMrms so its finalizer (server stop + dialer cancel) runs *before*
+            // the MRMs stop their actors and close RocksDB. Otherwise an inbound WS frame can
+            // tell an actor whose handler calls Persistence after the column-family handles
+            // were freed → use-after-free SIGSEGV in `FailIfCfHasTs`. Direct mode: no-op.
+            _ <- transports.bringUpNetwork
             peerConnections <- Resource.eval(
                                    peerMrms.toList
                                        .traverse { case (peerNum, peerMrm) =>
@@ -356,28 +363,27 @@ object MultiPeerHeadHarness:
         /** All transport-layer state needed to build per-peer HMRM + per-coil CMRM. Produced by
           * exactly one of [[setupDirect]] / [[setupWebSocket]]; the consumer doesn't need to know
           * which mode it's in.
+          *
+          * `bringUpNetwork` is a second-phase resource the caller must acquire *after* the MRMs
+          * (and their RocksDB backends) are built. Under WS it binds each peer's `NodeWsServer`
+          * and starts every mesh + coil dialer; under Direct it is `Resource.unit`. Acquiring it
+          * last makes its finalizer (server stop + dialer fiber cancel) run *before* the MRM
+          * finalizers stop their actors and close RocksDB — so no inbound WS message can reach
+          * an actor handler that calls `Persistence` after the underlying column-family handles
+          * are freed (use-after-free → JVM SIGSEGV inside `FailIfCfHasTs`).
           */
         case class Setup(
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
             coilUplinks: Map[CoilPeerNumber, ContextFn[CoilTransport]],
+            bringUpNetwork: Resource[IO, Unit],
         )
 
-        /** Per-peer transport bundle: the head-mesh transport, an optional hub-side hub-coil
-          * transport (present on hubs), and (WS mode) the post-bind port carrier used by Pass 2
-          * dialers.
+        /** Per-peer transport bundle: the head-mesh transport and an optional hub-side hub-coil
+          * transport (present on hubs).
           */
         case class HeadNetwork(
             peerTransport: PeerTransport,
             hubTransport: Option[HubTransport],
-            ws: Option[WsBinding],
-        )
-
-        /** WS-only: the concrete `WsPeerTransport` paired with the OS-assigned port its
-          * `NodeWsServer` bound to. Pass 2 needs this to build the `HeadPeerId -> Uri` map.
-          */
-        private[harness] case class WsBinding(
-            wsPeerTransport: WsPeerTransport,
-            boundPort: Int,
         )
 
         type ContextArg  = ActorContext[IO, HeadMultisigRegimeManager.Request, Any]
@@ -450,13 +456,17 @@ object MultiPeerHeadHarness:
                                            )
                                    }
                                    .map(_.toMap)
-            yield Setup(headNetworks, coilUplinks)
+            yield Setup(headNetworks, coilUplinks, Resource.unit)
 
-        /** WebSocket (real-clock) bring-up: shared `JdkWSClient`, then a 2-pass dance — Pass 1
-          * binds every peer's `NodeWsServer` on port 0 (OS-assigned ephemeral) so its post-bind
-          * port can be recorded; Pass 2 builds the `HeadPeerId -> Uri` map from the bound ports
-          * and starts every peer's mesh dialers. Each coil's hub-uplink dialer is started the
-          * same way.
+        /** WebSocket (real-clock) bring-up: split into a creation phase (this method) and a
+          * deferred [[Setup.bringUpNetwork]] phase. The creation phase allocates the shared
+          * `JdkWSClient`, each peer's `WsPeerTransport`/`HubWsTransport`, and each coil's
+          * `CoilPeerWsTransport` — handles the MRMs need. The bring-up phase, acquired by the
+          * harness *after* the MRMs are built, binds every peer's `NodeWsServer` on port 0
+          * (OS-assigned ephemeral), then builds the `HeadPeerId -> Uri` map from the bound ports
+          * and starts every mesh + coil dialer. Acquiring bring-up last guarantees its
+          * finalizers (server stop + dialer cancel) run before the MRMs stop their actors and
+          * close RocksDB.
           */
         private def setupWebSocket(
             multiNodeConfig: MultiNodeConfig,
@@ -466,58 +476,103 @@ object MultiPeerHeadHarness:
             given CardanoNetwork.Section = multiNodeConfig.headConfig
             for
                 wsClient <- Resource.eval(JdkWSClient.simple[IO])
-                headNetworks <- peers.toList
-                                    .traverse(peerNum =>
-                                        wsHeadNetwork(peerNum, multiNodeConfig, peers)
-                                            .map(peerNum -> _)
-                                    )
-                                    .map(_.toMap)
+                headParts <- peers.toList
+                                 .traverse(peerNum =>
+                                     wsHeadParts(peerNum, multiNodeConfig, peers)
+                                         .map(peerNum -> _)
+                                 )
+                                 .map(_.toMap)
+                coilTransports <- coilNodeConfigs
+                                      .traverse { coilConfig =>
+                                          val coilNum = coilNumOf(coilConfig)
+                                          val cpwtTracer = Slf4jTracer.sink.contramap(
+                                            CoilPeerWsTransportEventFormat.humanFormat(coilNum)
+                                          )
+                                          Resource
+                                              .eval(
+                                                CoilPeerWsTransport.create(coilNum, cpwtTracer)
+                                              )
+                                              .map(coilNum -> _)
+                                      }
+                                      .map(_.toMap)
+                headNetworks = headParts.view.mapValues(_.network).toMap
+                coilUplinks  = coilTransports.view
+                                   .mapValues(t => (_: ContextArg) => t: CoilTransport)
+                                   .toMap
+                bringUp = wsBringUpNetwork(
+                              multiNodeConfig,
+                              peers,
+                              coilNodeConfigs,
+                              wsClient,
+                              headParts,
+                              coilTransports,
+                          )
+            yield Setup(headNetworks, coilUplinks, bringUp)
+
+        /** Per-peer parts produced in WS Phase 1: the transport bundle exposed to the MRM, the
+          * concrete mesh transport needed by Phase 2's dialer starter, and the route builders
+          * Phase 2 binds into a `NodeWsServer`.
+          */
+        private case class WsHeadParts(
+            network: HeadNetwork,
+            wsPeerTransport: WsPeerTransport,
+            routes: List[WebSocketBuilder2[IO] => HttpRoutes[IO]],
+            nwsTracer: ContraTracer[IO, NodeWsServerEvent],
+        )
+
+        /** WS Phase 2: bind each peer's `NodeWsServer`, derive its `Uri`, then start every mesh
+          * and coil dialer. Returned as a `Resource` so the harness can acquire it *after* the
+          * MRMs and ensure LIFO release: dialers + servers stop, then actors stop, then
+          * RocksDB closes.
+          */
+        private def wsBringUpNetwork(
+            multiNodeConfig: MultiNodeConfig,
+            peers: Seq[HeadPeerNumber],
+            coilNodeConfigs: List[NodeConfig],
+            wsClient: WSClient[IO],
+            headParts: Map[HeadPeerNumber, WsHeadParts],
+            coilTransports: Map[CoilPeerNumber, CoilPeerWsTransport],
+        ): Resource[IO, Unit] =
+            val bindHost = host"127.0.0.1"
+            for
+                boundPorts <- peers.toList
+                                  .traverse { peerNum =>
+                                      val parts = headParts(peerNum)
+                                      NodeWsServer
+                                          .resource(
+                                            bindHost,
+                                            Port.fromInt(0).get,
+                                            parts.routes,
+                                            parts.nwsTracer,
+                                          )
+                                          .map(server => peerNum -> server.address.getPort)
+                                  }
+                                  .map(_.toMap)
                 peerHeadUris = peers.map { p =>
-                                   val port = headNetworks(p).ws
-                                       .map(_.boundPort)
-                                       .getOrElse(sys.error(s"peer $p has no WS binding in WS mode"))
                                    headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
-                                     s"ws://127.0.0.1:$port/head"
+                                     s"ws://127.0.0.1:${boundPorts(p)}/head"
                                    )
                                }.toMap
                 _ <- peers.toList.traverse_ { peerNum =>
                          val ownId = headPeerId(multiNodeConfig, peerNum)
-                         val ws    = headNetworks(peerNum).ws.get
-                         ws.wsPeerTransport.startDialers(wsClient, peerHeadUris - ownId)
+                         headParts(peerNum).wsPeerTransport
+                             .startDialers(wsClient, peerHeadUris - ownId)
                      }
-                coilUplinks <- coilNodeConfigs
-                                   .traverse { coilConfig =>
-                                       val coilNum = coilNumOf(coilConfig)
-                                       val hubNum = coilConfig
-                                           .coilPeerHub(coilNum)
-                                           .getOrElse(
-                                             throw new IllegalStateException(
-                                               s"no hub configured for coil peer $coilNum"
-                                             )
-                                           )
-                                       val port = headNetworks(hubNum).ws
-                                           .map(_.boundPort)
-                                           .getOrElse(
-                                             sys.error(
-                                               s"coil $coilNum's hub has no bound port — " +
-                                                   "WS bind failed?"
-                                             )
-                                           )
-                                       val hubUri =
-                                           Uri.unsafeFromString(s"ws://127.0.0.1:$port/hub")
-                                       val cpwtTracer =
-                                           Slf4jTracer.sink.contramap(
-                                             CoilPeerWsTransportEventFormat.humanFormat(coilNum)
-                                           )
-                                       for
-                                           t <- Resource.eval(
-                                                    CoilPeerWsTransport.create(coilNum, cpwtTracer)
-                                                )
-                                           _ <- t.startDialer(wsClient, hubUri)
-                                       yield coilNum -> ((_: ContextArg) => t: CoilTransport)
-                                   }
-                                   .map(_.toMap)
-            yield Setup(headNetworks, coilUplinks)
+                _ <- coilNodeConfigs.traverse_ { coilConfig =>
+                         val coilNum = coilNumOf(coilConfig)
+                         val hubNum = coilConfig
+                             .coilPeerHub(coilNum)
+                             .getOrElse(
+                               throw new IllegalStateException(
+                                 s"no hub configured for coil peer $coilNum"
+                               )
+                             )
+                         val hubUri = Uri.unsafeFromString(
+                           s"ws://127.0.0.1:${boundPorts(hubNum)}/hub"
+                         )
+                         coilTransports(coilNum).startDialer(wsClient, hubUri)
+                     }
+            yield ()
 
         private def directHeadNetwork(
             peerNum: HeadPeerNumber,
@@ -548,13 +603,17 @@ object MultiPeerHeadHarness:
                                 Resource
                                     .eval(InProcessHubCoilTransport.Hub.create(reg))
                                     .map(h => Some(h: HubTransport))
-            yield HeadNetwork(peerT, hubT, None)
+            yield HeadNetwork(peerT, hubT)
 
-        private def wsHeadNetwork(
+        /** WS Phase 1: allocate the concrete `WsPeerTransport` (+ optional `HubWsTransport`)
+          * and the route builders that Phase 2 binds into a `NodeWsServer`. No bind, no dialer
+          * start.
+          */
+        private def wsHeadParts(
             peerNum: HeadPeerNumber,
             multiNodeConfig: MultiNodeConfig,
             peers: Seq[HeadPeerNumber],
-        )(using CardanoNetwork.Section): Resource[IO, HeadNetwork] =
+        )(using CardanoNetwork.Section): Resource[IO, WsHeadParts] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
             val hubbedCoils   = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             val remoteIds: List[HeadPeerId] =
@@ -565,7 +624,6 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(NodeWsServerEventFormat.humanFormat(peerNum))
             val hubTracer =
                 Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
-            val bindHost = host"127.0.0.1"
             for
                 peerT <- Resource.eval(
                              WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
@@ -581,17 +639,11 @@ object MultiPeerHeadHarness:
                 hubRoutes = hubTConcrete.toList.map(h =>
                                 (wsb: WebSocketBuilder2[IO]) => h.routes(wsb)
                             )
-                server <- NodeWsServer.resource(
-                             bindHost,
-                             Port.fromInt(0).get,
-                             meshRoute :: hubRoutes,
-                             nwsTracer,
-                         )
-                boundPort = server.address.getPort
-            yield HeadNetwork(
-              peerT,
-              hubTConcrete.map(h => h: HubTransport),
-              Some(WsBinding(peerT, boundPort)),
+            yield WsHeadParts(
+              network = HeadNetwork(peerT, hubTConcrete.map(h => h: HubTransport)),
+              wsPeerTransport = peerT,
+              routes = meshRoute :: hubRoutes,
+              nwsTracer = nwsTracer,
             )
 
     // ===================================
