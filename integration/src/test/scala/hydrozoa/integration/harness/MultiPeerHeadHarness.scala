@@ -472,20 +472,18 @@ object MultiPeerHeadHarness:
                                             .map(peerNum -> _)
                                     )
                                     .map(_.toMap)
-                _ <- Resource.eval {
-                         val peerHeadUris: Map[HeadPeerId, Uri] = peers.map { p =>
-                             val port = headNetworks(p).ws
-                                 .map(_.boundPort)
-                                 .getOrElse(sys.error(s"peer $p has no WS binding in WS mode"))
-                             headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
-                               s"ws://127.0.0.1:$port/head"
-                             )
-                         }.toMap
-                         peers.toList.traverse_ { peerNum =>
-                             val ownId = headPeerId(multiNodeConfig, peerNum)
-                             val ws    = headNetworks(peerNum).ws.get
-                             ws.wsPeerTransport.startDialers(wsClient, peerHeadUris - ownId).use_
-                         }
+                peerHeadUris = peers.map { p =>
+                                   val port = headNetworks(p).ws
+                                       .map(_.boundPort)
+                                       .getOrElse(sys.error(s"peer $p has no WS binding in WS mode"))
+                                   headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
+                                     s"ws://127.0.0.1:$port/head"
+                                   )
+                               }.toMap
+                _ <- peers.toList.traverse_ { peerNum =>
+                         val ownId = headPeerId(multiNodeConfig, peerNum)
+                         val ws    = headNetworks(peerNum).ws.get
+                         ws.wsPeerTransport.startDialers(wsClient, peerHeadUris - ownId)
                      }
                 coilUplinks <- coilNodeConfigs
                                    .traverse { coilConfig =>
