@@ -171,10 +171,12 @@ object DisputeActorTestHelpers {
             )
 
             disputeActor = DisputeActor(
-              action = RuleBasedRegimeManager.DisputeAction.Vote(
-                sec = blockHeader,
-                signatures = env.multisignHeader(blockHeader).toList,
-                coilSignatures = env.multisignHeaderCoil(blockHeader)
+              loadAction = IO.pure(
+                RuleBasedRegimeManager.DisputeAction.Vote(
+                  sec = blockHeader,
+                  signatures = env.multisignHeader(blockHeader).toList,
+                  coilSignatures = env.multisignHeaderCoil(blockHeader)
+                )
               ),
               cardanoBackend = cardanoBackend,
               tracer = tracer

@@ -36,19 +36,20 @@ import scalus.cardano.ledger.{TransactionHash, Utxo, Utxos}
 import scalus.uplc.builtin.Data.fromData
 import scalus.uplc.builtin.{ByteString, Data}
 
-/** @param candidateEvacMaps
-  *   every evacuation map peers could end up tallying onto, keyed by its kzg commitment. The actor
-  *   waits until the dispute resolution lands, reads the resolved treasury's `evacuationActive`
-  *   (the winning kzg), and picks the matching map from here as the active one to evacuate against.
-  * @param cardanoBackend
-  * @param fallbackTxHash
-  * @param tracer
-  * @param config
+/** The actor holds no per-iteration state: each tick re-queries the chain and calls [[loadInputs]]
+  * for the candidate evacuation maps and fallback tx anchor. [[loadInputs]] is expected to be
+  * idempotent (typically a persistence read).
+  *
+  * @param loadInputs
+  *   per-tick loader for the rule-based inputs that cannot be recovered from chain queries: every
+  *   evacuation map peers could end up tallying onto (keyed by kzg commitment) and the fallback tx
+  *   hash that anchors the `lastContinuingTxs` query. Once the dispute resolution lands, the actor
+  *   reads the resolved treasury's `evacuationActive` (the winning kzg) and picks the matching map
+  *   from `candidateEvacMaps`.
   */
 case class EvacuationActor(
-    candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
+    loadInputs: IO[EvacuationActor.Inputs],
     cardanoBackend: CardanoBackend[IO],
-    fallbackTxHash: TransactionHash,
     tracer: ContraTracer[IO, EvacuationActorEvent],
 )(using config: Config)
     extends Actor[IO, Requests.Request] {
@@ -99,6 +100,11 @@ case class EvacuationActor(
     private def handleEvacuation: IO[Either[EvacuationActor.Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, EvacuationActor.Error.RecoverableErrors, Unit] = {
             for {
+                inputs <- EitherT
+                    .liftF[IO, EvacuationActor.Error.RecoverableErrors, EvacuationActor.Inputs](
+                      loadInputs
+                    )
+
                 //////////////////////////////
                 // Step 1: Figure out utxos we need to withdraw
                 /////////////////////////////
@@ -111,7 +117,7 @@ case class EvacuationActor(
                       config.headMultisigScript.policyId,
                       config.headTokenNames.treasuryTokenName
                     ),
-                    after = fallbackTxHash
+                    after = inputs.fallbackTxHash
                   )
                 ).leftSemiflatTap(e =>
                     tracer.traceWith(EvacuationActorEvent.BackendErrorContinuingTxs(e))
@@ -175,7 +181,7 @@ case class EvacuationActor(
                     }
                 }
 
-                evacuationMapAtResolution <- candidateEvacMaps.get(resolutionKzg) match {
+                evacuationMapAtResolution <- inputs.candidateEvacMaps.get(resolutionKzg) match {
                     case None =>
                         EitherT.right(IO.raiseError(Error.UnknownResolvedKzg(resolutionKzg)))
                     case Some(evacMap) => EitherT.right(IO.pure(evacMap))
@@ -319,6 +325,17 @@ object EvacuationActor {
     type Config = NodeOperationEvacuationConfig.Section & CardanoNetwork.Section &
         HeadPeers.Section & HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
         HeadConfig.Bootstrap.Section
+
+    /** Per-tick rule-based inputs that cannot be recovered from chain queries:
+      *   - `candidateEvacMaps` enumerates the evacuation maps peers may tally onto; their kzg
+      *     commitment is on chain but the preimage (the actual L2 utxo map) is not.
+      *   - `fallbackTxHash` anchors the `lastContinuingTxs` query that surfaces the resolution and
+      *     subsequent withdrawal txs.
+      */
+    final case class Inputs(
+        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
+        fallbackTxHash: TransactionHash,
+    )
 
     type Handle = ActorRef[IO, Requests.Request]
 

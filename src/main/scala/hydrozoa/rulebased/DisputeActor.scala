@@ -40,6 +40,10 @@ extension (tx: Transaction) {
   *
   * This actor calls itself in a loop via an overridden [[preStart]] method.
   *
+  * The actor holds no per-iteration state: each tick re-queries the chain for vote/treasury utxos,
+  * and calls [[loadAction]] for the (Vote|Abstain) decision only when its own ballot box is still
+  * [[AwaitingVote]]. [[loadAction]] is expected to be idempotent (typically a persistence read).
+  *
   * Its erroring semantics are as follows:
   *   - It (currently) swallows query failures from the cardano backend and automatically retries.
   *     In the future, we may want this to notify the user after some number of failed attempts.
@@ -55,7 +59,7 @@ extension (tx: Transaction) {
   *   - It throws an exception if multiple utxos with the treasury token are found.
   */
 final case class DisputeActor(
-    action: RuleBasedRegimeManager.DisputeAction,
+    loadAction: IO[RuleBasedRegimeManager.DisputeAction],
     cardanoBackend: CardanoBackend[IO],
     tracer: ContraTracer[IO, DisputeActorEvent]
 )(using config: Config)
@@ -194,39 +198,46 @@ final case class DisputeActor(
 
             _ <- disputeUtxos match {
                 case DisputeUtxos.CastVote(ownBallotBox) =>
-                    action match {
-                        case RuleBasedRegimeManager.DisputeAction.Vote(
-                              sec,
-                              signatures,
-                              coilSignatures
-                            ) =>
-                            buildAndSubmit(
-                              label = "vote",
-                              result = VoteTx
-                                  .Build(
-                                    uncastBallotBox = ownBallotBox,
-                                    treasuryUtxo = treasuryUtxo,
-                                    collateralUtxo = collateralUtxo,
-                                    sec = sec,
-                                    signatures = signatures,
-                                    coilSignatures = coilSignatures,
-                                  )
-                                  .result,
-                              wrapError = Error.BuildError.Vote(_)
-                            )
+                    for {
+                        action <- EitherT.liftF[
+                          IO,
+                          DisputeActor.Error.RecoverableErrors,
+                          RuleBasedRegimeManager.DisputeAction
+                        ](loadAction)
+                        _ <- action match {
+                            case RuleBasedRegimeManager.DisputeAction.Vote(
+                                  sec,
+                                  signatures,
+                                  coilSignatures
+                                ) =>
+                                buildAndSubmit(
+                                  label = "vote",
+                                  result = VoteTx
+                                      .Build(
+                                        uncastBallotBox = ownBallotBox,
+                                        treasuryUtxo = treasuryUtxo,
+                                        collateralUtxo = collateralUtxo,
+                                        sec = sec,
+                                        signatures = signatures,
+                                        coilSignatures = coilSignatures,
+                                      )
+                                      .result,
+                                  wrapError = Error.BuildError.Vote(_)
+                                )
 
-                        case RuleBasedRegimeManager.DisputeAction.Abstain =>
-                            buildAndSubmit(
-                              label = "abstain",
-                              result = AbstainTx
-                                  .Build(
-                                    uncastBallotBox = ownBallotBox,
-                                    collateralUtxo = collateralUtxo
-                                  )
-                                  .result,
-                              wrapError = Error.BuildError.Abstain(_)
-                            )
-                    }
+                            case RuleBasedRegimeManager.DisputeAction.Abstain =>
+                                buildAndSubmit(
+                                  label = "abstain",
+                                  result = AbstainTx
+                                      .Build(
+                                        uncastBallotBox = ownBallotBox,
+                                        collateralUtxo = collateralUtxo
+                                      )
+                                      .result,
+                                  wrapError = Error.BuildError.Abstain(_)
+                                )
+                        }
+                    } yield ()
 
                 case DisputeUtxos.Tally(otherUtxos) =>
                     // We must have that they key of the continuing input is less than the key of the removed input,

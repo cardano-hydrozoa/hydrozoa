@@ -65,9 +65,13 @@ object EvacuationActorTestHelpers {
             )
 
         } yield EvacuationActor(
-          candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
+          loadInputs = IO.pure(
+            EvacuationActor.Inputs(
+              candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
+              fallbackTxHash = fallbackTxHash
+            )
+          ),
           cardanoBackend = cardanoBackend,
-          fallbackTxHash = fallbackTxHash,
           tracer = tracer
         )(using
           env.nodeConfigs.head._2

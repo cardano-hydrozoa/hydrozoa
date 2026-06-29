@@ -305,16 +305,20 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             for {
                 _ <- system.actorOf(
                   DisputeActor(
-                    action = action,
+                    loadAction = IO.pure(action),
                     cardanoBackend = sharedBackend,
                     tracer = disputeTracer
                   )
                 )
                 _ <- system.actorOf(
                   EvacuationActor(
-                    candidateEvacMaps = candidateEvacMaps,
+                    loadInputs = IO.pure(
+                      EvacuationActor.Inputs(
+                        candidateEvacMaps = candidateEvacMaps,
+                        fallbackTxHash = fallbackTxHash
+                      )
+                    ),
                     cardanoBackend = sharedBackend,
-                    fallbackTxHash = fallbackTxHash,
                     tracer = evacuationTracer
                   )
                 )
