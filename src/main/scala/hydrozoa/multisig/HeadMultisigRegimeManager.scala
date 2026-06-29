@@ -8,7 +8,7 @@ import com.suprnation.actor.ActorRef.NoSendActorRef
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, WatchingActors}
+import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.limiter.Limiter
@@ -29,7 +29,9 @@ trait HeadMultisigRegimeManager(
       * `config.hubbedCoilPeerNums(ownHeadNum)` is non-empty.
       */
     hubCoilTransport: Option[ActorContext[IO, Request, Any] => HubTransport],
-) extends MultisigRegimeManagerBase {
+) extends MultisigRegimeManagerBase[HeadMultisigRegimeManagerEvent] {
+
+    override protected lazy val tracers: MrmTracers = MrmTracers.fromRoot(tracer)
 
     override protected def preStartLocal: IO[Unit] =
         for {

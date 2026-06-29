@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventForma
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat, MrmTracers}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat, MrmTracers}
 import java.nio.file.Path
 import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -131,31 +131,36 @@ object Main
 
             system <- ActorSystem[IO]("Hydrozoa Demo")
 
-            mrmTracer = Slf4jTracer.sink.contramap(
-              HeadMultisigRegimeManagerEventFormat.humanFormat(
-                HeadPeerNumber(nodeConfig.ownPeerIndex)
-              )
-            )
             wsClient <- Resource.eval(JdkWSClient.simple[IO])
 
             nodeRun <- nodeConfig.ownPeerId match {
                 case PeerId.Head(ownHeadNum) =>
+                    val headTracer = Slf4jTracer.sink.contramap(
+                      HeadMultisigRegimeManagerEventFormat.humanFormat(ownHeadNum)
+                    )
                     buildHeadNode(
                       nodeConfig,
                       backend,
                       remoteL2Ledger,
                       persistence,
-                      mrmTracer,
+                      headTracer,
                       wsClient,
                       ownHeadNum,
                     )
                 case PeerId.Coil(ownCoilNum) =>
+                    // Synthetic label so coil log lines stay distinguishable from head ones.
+                    val labelNum = HeadPeerNumber(
+                      nodeConfig.headConfig.headPeerNums.size + ownCoilNum.convert
+                    )
+                    val coilTracer = Slf4jTracer.sink.contramap(
+                      CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, ownCoilNum)
+                    )
                     buildCoilNode(
                       nodeConfig,
                       backend,
                       remoteL2Ledger,
                       persistence,
-                      mrmTracer,
+                      coilTracer,
                       wsClient,
                       ownCoilNum,
                     )
@@ -285,7 +290,7 @@ object Main
         backend: CardanoBackend[IO],
         remoteL2Ledger: RemoteL2Ledger,
         persistence: Persistence[IO],
-        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        mrmTracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownCoilNum: CoilPeerNumber,
     ): Resource[IO, NodeRun.CoilNode] = {

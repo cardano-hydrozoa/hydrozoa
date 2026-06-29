@@ -21,6 +21,7 @@
     <logger name="FallbackTx" level="warn"/>
     <logger name="JointLedger" level="warn"/>
     <logger name="HeadMultisigRegimeManager" level="warn"/>
+    <logger name="CoilMultisigRegimeManager" level="warn"/>
     <logger name="DisputeActor" level="warn"/>
     <logger name="EvacuationActor" level="warn"/>
     <logger name="Limiter" level="warn"/>

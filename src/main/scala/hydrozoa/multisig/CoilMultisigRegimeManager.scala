@@ -5,7 +5,7 @@ import com.suprnation.actor.ActorContext
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.{StartingActors, WatchingActors}
+import hydrozoa.multisig.LifecycleEvent.{StartingActors, WatchingActors}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -30,10 +30,12 @@ trait CoilMultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    override protected val tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+    override protected val tracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
     /** Coil-uplink transport toward this coil peer's single hub. */
     coilTransport: ActorContext[IO, Request, Any] => CoilTransport,
-) extends MultisigRegimeManagerBase {
+) extends MultisigRegimeManagerBase[CoilMultisigRegimeManagerEvent] {
+
+    override protected lazy val tracers: CoilMrmTracers = CoilMrmTracers.fromRoot(tracer)
 
     override protected def preStartLocal: IO[Unit] =
         for {
@@ -136,7 +138,7 @@ object CoilMultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        tracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
         coilTransport: Resource[IO, ActorContext[IO, Request, Any] => CoilTransport],
     ): Resource[IO, CoilMultisigRegimeManager] =
         coilTransport.flatMap { factory =>

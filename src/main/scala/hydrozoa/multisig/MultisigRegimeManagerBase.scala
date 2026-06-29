@@ -10,8 +10,6 @@ import com.suprnation.actor.{OneForOneStrategy, SupervisionStrategy}
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent as MRMEvent
-import hydrozoa.multisig.HeadMultisigRegimeManagerEvent.TerminatedActor
 import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
@@ -31,17 +29,21 @@ import scala.concurrent.duration.DurationInt
   * constructor parameter (Scala 3 disallows traits passing args to a parameterized parent trait, so
   * the tracer is wired in via abstract-member override instead).
   */
-trait MultisigRegimeManagerBase extends Actor[IO, Request] {
+trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
+    extends Actor[IO, Request] {
 
     /** Regime-wide tracer, supplied by the subclass (typically as an `override val` constructor
-      * parameter). Producer-specific channels are derived from this via [[tracers]].
+      * parameter). The cell type `E` constrains which categories the subclass may emit;
+      * `E >: LifecycleEvent` lets the base trait emit lifecycle events here without further
+      * narrowing.
       */
-    protected def tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]
+    protected def tracer: ContraTracer[IO, E]
 
-    /** Per-producer projections of [[tracer]]. `lazy` because `tracer` is abstract — the subclass's
-      * `val tracer` may not be initialized yet when the base trait's fields are constructed.
+    /** Per-producer projections of [[tracer]] for the actors the base trait spawns. Subclasses
+      * supply their cell-specific carrier (e.g. [[MrmTracers]] for head, [[CoilMrmTracers]] for
+      * coil); both implement [[HasCoreTracers]] so [[spawnCoreActors]] sees a uniform surface.
       */
-    protected lazy val tracers: MrmTracers = MrmTracers.fromRoot(tracer)
+    protected def tracers: HasCoreTracers
 
     /** Completed by the subclass's [[preStartLocal]] once every actor is spawned and the
       * `Connections` slots are populated.
@@ -64,9 +66,9 @@ trait MultisigRegimeManagerBase extends Actor[IO, Request] {
     private def receiveTotal(req: Request): IO[Unit] = req match {
         case PreStart => preStartLocal
         case TerminatedChild(childType, _) =>
-            tracer.traceWith(TerminatedActor(childType))
+            tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
-            tracer.traceWith(MRMEvent.TerminatedDependency(dependencyType))
+            tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
