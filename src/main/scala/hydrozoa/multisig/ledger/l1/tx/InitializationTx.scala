@@ -33,9 +33,7 @@ final case class InitializationTx(
     override val resolvedUtxos: ResolvedUtxos,
     override val tx: Transaction,
     override val txLens: Lens[InitializationTx, Transaction] = Focus[InitializationTx](_.tx),
-    seedUtxo: Utxo,
-    additionalFundingUtxos: Utxos,
-    changeUtxos: List[Output]
+    seedUtxo: Utxo
 ) extends EnrichedTx[InitializationTx],
       HasResolvedUtxos,
       MultisigTreasuryUtxo.Produced,
@@ -330,9 +328,7 @@ object InitializationTx {
               headTokenNames = config.headTokenNames,
               resolvedUtxos = resolvedUtxos,
               tx = tx,
-              seedUtxo = seedUtxo,
-              additionalFundingUtxos = config.additionalFundingUtxos,
-              changeUtxos = config.initialChangeOutputs
+              seedUtxo = seedUtxo
             )
         }
     }

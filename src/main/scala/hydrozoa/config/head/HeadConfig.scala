@@ -52,12 +52,26 @@ final case class HeadConfig private (
     override def headConfigBootstrap: HeadConfig.Bootstrap = {
         val initTx = initialBlock.effects.initializationTx
 
+        // `additionalFundingUtxos` and the change outputs are no longer stored on the parsed
+        // InitializationTx; re-derive them here, since InitializationParameters still needs them for
+        // the bootstrap builder. Funding inputs = the resolved consumed inputs minus the seed;
+        // change outputs = the tx outputs other than the treasury and multisig-regime outputs.
+        val seedInput = initTx.seedUtxo.input
+        val additionalFundingUtxos = initTx.resolvedUtxos.utxos - seedInput
+        val treasuryIx = initTx.treasuryProduced.asUtxo.input.index
+        val regimeIx = initTx.multisigRegimeProduced.input.index
+        val initialChangeOutputs = initTx.tx.body.value.outputs.iterator
+            .map(_.value)
+            .zipWithIndex
+            .collect { case (output, ix) if ix != treasuryIx && ix != regimeIx => output }
+            .toList
+
         val initializationParameters: InitializationParameters = InitializationParameters(
           initialEvacuationMap = _initialEvacuationMap,
           initialEquityContributions = _initialEquityContributions,
           seedUtxo = initTx.seedUtxo,
-          additionalFundingUtxos = initTx.additionalFundingUtxos,
-          initialChangeOutputs = initTx.changeUtxos
+          additionalFundingUtxos = additionalFundingUtxos,
+          initialChangeOutputs = initialChangeOutputs
         )
         new HeadConfig.Bootstrap(
           cardanoNetwork,

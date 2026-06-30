@@ -204,9 +204,7 @@ object InitializationTxBuilder {
                   multisigRegimeProduced = multisigRegimeProduced,
                   headTokenNames = config.headTokenNames,
                   resolvedUtxos = finalized.resolvedUtxos,
-                  seedUtxo = config.initializationParameters.seedUtxo,
-                  additionalFundingUtxos = config.additionalFundingUtxos,
-                  changeUtxos = config.initialChangeOutputs
+                  seedUtxo = config.initializationParameters.seedUtxo
                 )
         }
 
