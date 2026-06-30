@@ -6,13 +6,10 @@ The head must **read** its initialization transaction from the config — by *pa
 Cardano transaction — instead of **re-building** it from scratch through the tx builder. The
 init-tx **builder** moves out of the head into a bootstrapping submodule that authors the config.
 
-Progress: steps A and B done (metadata `totalEquity`; `Parse` reads equity from it). Agreed order
-(2026-06-30): **C → bootstrap-copy → trim.** No sbt submodule — F is a package-level move: copy
-`InitializationTx` (+ the build half of `InitializationTxSeq`) into a `hydrozoa.bootstrap` package,
-staying in `core`. The builder only becomes cleanly isolatable after C stops the decoder calling
-`InitializationTxSeq.Build`; doing the copy first fights that cascade. So: C first, then copy the
-isolated builder to `hydrozoa.bootstrap`, then trim core's `InitializationTx` (drop
-`additionalFundingUtxos` / `changeUtxos`).
+Progress (2026-06-30): **A, B, C, F done & committed.** A = `totalEquity` metadata. B = `Parse` reads
+equity from it. C = `headConfigDecoder` parses (not rebuilds). F = init-tx **builder** moved to the
+`hydrozoa.bootstrap` package (option a: package move, one `InitializationTx` type in core, builder
+produces it; `InitializationTxSeq.Build` delegates). **The trim (step E) is deferred** — see below.
 
 ## Why
 
@@ -109,11 +106,17 @@ it does **not** require those inputs to exist on L1 (the tx may not be submittab
 existence / submission stays `CardanoLiaison`'s job. Depth of phase-2 evaluation is an
 implementation detail here.
 
-**E. Remove the dead bits** (folds into T2). Delete `changeUtxos` from `InitializationTx`; remove the
-build-only `InitializationParameters` fields (`initialChangeOutputs`, `initialFundingValue`) and the
-`isBalancedInitializationFunding` check; reconcile the `headConfigBootstrap` projection
-(`HeadConfig.scala:58-59`); update `InitializationTxCodec` (persistence). Keep the resolved-inputs
-carriers.
+**E. Remove the dead bits** (folds into T2) — **DEFERRED.** Dropping `additionalFundingUtxos` /
+`changeUtxos` from `InitializationTx` is **not** a one-line field removal: the head's
+`headConfigBootstrap` projection (`HeadConfig.scala:51-69`) reconstructs `InitializationParameters`
+by reading `initTx.additionalFundingUtxos` / `initTx.changeUtxos`, and `InitializationParameters`
+*requires* those fields (the bootstrap builder needs them). So the trim cascades into either
+re-deriving those values in the projection (from `tx` + `resolvedUtxos` + metadata) or trimming
+`InitializationParameters` itself. It is **pure cleanup with no runtime behaviour change**, so it's
+deferred under time pressure; the core deliverable (parse, not rebuild) is already in place.
+Touch points when picked up: `InitializationTx` fields, the bootstrap `InitializationTxBuilder`
+`Complete`, `InitializationTx.Parse`, `InitializationTxCodec` (persistence), and the
+`headConfigBootstrap` projection.
 
 **F. Move the builder out** (T2). Relocate `InitializationTx.Build` (and `InitializationTxSeq`'s
 init-build half + the funding/change/balance bookkeeping) into a new **bootstrapping submodule** that
