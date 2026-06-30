@@ -6,7 +6,13 @@ The head must **read** its initialization transaction from the config — by *pa
 Cardano transaction — instead of **re-building** it from scratch through the tx builder. The
 init-tx **builder** moves out of the head into a bootstrapping submodule that authors the config.
 
-Progress: steps A and B done (metadata `totalEquity`; `Parse` reads equity from it). Steps C–G open.
+Progress: steps A and B done (metadata `totalEquity`; `Parse` reads equity from it). Agreed order
+(2026-06-30): **C → bootstrap-copy → trim.** No sbt submodule — F is a package-level move: copy
+`InitializationTx` (+ the build half of `InitializationTxSeq`) into a `hydrozoa.bootstrap` package,
+staying in `core`. The builder only becomes cleanly isolatable after C stops the decoder calling
+`InitializationTxSeq.Build`; doing the copy first fights that cascade. So: C first, then copy the
+isolated builder to `hydrozoa.bootstrap`, then trim core's `InitializationTx` (drop
+`additionalFundingUtxos` / `changeUtxos`).
 
 ## Why
 

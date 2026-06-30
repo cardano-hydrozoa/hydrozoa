@@ -26,12 +26,13 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx, Metadata as MD}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
 import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.crypto.ed25519.VerificationKey
 
 /** Invariant: this _must_ be able to project down to a HeadConfig.Bootstrap
@@ -132,7 +133,6 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
-                        // TODO: parse not re-create, see https://linear.app/gummiworm-labs/issue/GUM-129/enrich-init-tx-metadata-implement-init-tx-parsing
                         brief <- c
                             .downField("initialBlock")
                             .downField("blockBrief")
@@ -146,23 +146,40 @@ object HeadConfig {
                           HeadConfig.Bootstrap.withInitTxDecoder(initTx)
                         )
 
-                        initTxSeq <- InitializationTxSeq
-                            .Build(hcBootstrap)(brief.endTime)
+                        // Parse the stored init tx (honouring its bytes) rather than re-building it.
+                        // The fallback is protocol-derived, so we build it from the parsed init tx.
+                        parsedInitTx <- InitializationTx
+                            .Parse(hcBootstrap)(
+                              blockCreationEndTime = brief.endTime,
+                              tx = initTx,
+                              resolvedUtxos = ResolvedUtxos(hcBootstrap.initialFundingUtxos)
+                            )
                             .result
                             .left
                             .map(e =>
                                 io.circe.DecodingFailure(
-                                  s"Failed to derive InitializationTxSeq: $e",
+                                  s"Failed to parse InitializationTx: $e",
+                                  c.history
+                                )
+                            )
+                        fallbackTx <- FallbackTx
+                            .Build(
+                              hcBootstrap.txTiming.newFallbackStartTime(brief.endTime),
+                              parsedInitTx.treasuryProduced,
+                              parsedInitTx.multisigRegimeProduced
+                            )(using hcBootstrap)
+                            .result
+                            .left
+                            .map(e =>
+                                io.circe.DecodingFailure(
+                                  s"Failed to derive fallback tx: $e",
                                   c.history
                                 )
                             )
                         ib = InitialBlock(
                           Block.Unsigned.Initial(
                             brief,
-                            BlockEffects.Unsigned.Initial(
-                              initTxSeq.initializationTx,
-                              initTxSeq.fallbackTx
-                            )
+                            BlockEffects.Unsigned.Initial(parsedInitTx, fallbackTx)
                           )
                         )
                         hc <- HeadConfig(hcBootstrap, ib).toEither.left.map(e =>
