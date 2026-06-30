@@ -15,8 +15,7 @@ object RuleBasedActorEventFormat:
                   "Cardano backend error encountered. This may be due to timeout, utxo contention," +
                       s" rollbacks, or timing skew, but it may also be a genuine error.\n\tError: \n$err"
                 )
-            case BuildingTx(label)        => info(s"Building $label Tx")
-            case SubmittingTxLabel(label) => info(s"Submitting $label Tx")
+            case BuildingTx(family) => info(s"Building $family")
             case SubmittingTxFamily(family, txId) =>
                 info(s"Submitting $family with Id $txId")
             case TxCbor(pretty, cbor) =>

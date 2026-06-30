@@ -9,8 +9,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningNonValidityChecksValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
@@ -27,11 +27,10 @@ final case class TallyTx(
     override val tx: Transaction,
     override val txLens: Lens[TallyTx, Transaction] = Focus[TallyTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[TallyTx] {
-    override def transactionFamily: String = "TallyTx"
-}
+) extends EnrichedTx[TallyTx] {}
 
 object TallyTx {
+    given TxFamily[TallyTx] = TxFamily.of("TallyTx")
     export TallyTxOps.{Build, Config}
 }
 

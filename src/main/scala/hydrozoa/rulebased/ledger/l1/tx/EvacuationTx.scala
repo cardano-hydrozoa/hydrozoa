@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, f
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
@@ -31,11 +31,10 @@ final case class EvacuationTx(
     override val tx: Transaction,
     override val txLens: Lens[EvacuationTx, Transaction] = Focus[EvacuationTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[EvacuationTx] {
-    override def transactionFamily: String = "EvacuationTx"
-}
+) extends EnrichedTx[EvacuationTx] {}
 
 object EvacuationTx {
+    given TxFamily[EvacuationTx] = TxFamily.of("EvacuationTx")
     export EvacuationTxOps.{Build, Config}
 
     object Assumptions {

@@ -23,7 +23,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.RuleBasedActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.RuleBasedActor.Error.ParseError.Treasury.TreasuryResolved
 import hydrozoa.rulebased.RuleBasedActor.Requests.Tick
@@ -92,22 +92,20 @@ final case class RuleBasedActor(
             }
         } yield a
 
-    /** Build, log, sign, and submit one dispute-flow tx. Each arm of `handleDispute` differs only
-      * in `label`, the lazy build result, and the per-tx-family error wrapper — this helper
-      * collapses the shared pattern.
+    /** Build, sign, and submit one dispute-flow tx.
       */
-    private def buildAndSubmit[T <: EnrichedTx[T], E <: Throwable](
-        label: String,
+    private def buildAndSubmit[T <: EnrichedTx[T]: TxFamily, E <: Throwable](
         result: => Either[E, T],
         wrapError: E => Throwable,
     ): EitherT[IO, Error.RecoverableErrors, Unit] =
         for {
-            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.BuildingTx(label)))
+            _ <- EitherT.liftF(
+              tracer.traceWith(RuleBasedActorEvent.BuildingTx(TxFamily[T].name))
+            )
             tx <- result match {
                 case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
                 case Right(tx) => EitherT.right(IO.pure(tx))
             }
-            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.SubmittingTxLabel(label)))
             _ <- signAndSubmitTx[T](tx)
         } yield ()
 
@@ -221,7 +219,6 @@ final case class RuleBasedActor(
                                   coilSignatures
                                 ) =>
                                 buildAndSubmit(
-                                  label = "vote",
                                   result = VoteTx
                                       .Build(
                                         uncastBallotBox = ownBallotBox,
@@ -237,7 +234,6 @@ final case class RuleBasedActor(
 
                             case RuleBasedRegimeManager.DisputeAction.Abstain =>
                                 buildAndSubmit(
-                                  label = "abstain",
                                   result = AbstainTx
                                       .Build(
                                         uncastBallotBox = ownBallotBox,
@@ -269,7 +265,6 @@ final case class RuleBasedActor(
                             case Some(x) => EitherT.right(IO.pure(x))
                         }
                         _ <- buildAndSubmit(
-                          label = "tally",
                           result = TallyTx
                               .Build(
                                 continuingBallotBox = continuing,
@@ -284,7 +279,6 @@ final case class RuleBasedActor(
 
                 case DisputeUtxos.Resolve(finalVoteUtxo) =>
                     buildAndSubmit(
-                      label = "resolve",
                       result = ResolutionTx
                           .Build(
                             talliedBallotBox = finalVoteUtxo,

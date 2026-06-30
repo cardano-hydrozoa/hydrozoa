@@ -5,8 +5,8 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, finalizeContext}
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Script, ScriptHash, ScriptRef, Timelock, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
@@ -29,11 +29,10 @@ final case class DeploymentTx(
     override val tx: Transaction,
     override val txLens: Lens[DeploymentTx, Transaction] = Focus[DeploymentTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[DeploymentTx] {
-    override def transactionFamily: String = "DeploymentTx"
-}
+) extends EnrichedTx[DeploymentTx] {}
 
 object DeploymentTx {
+    given TxFamily[DeploymentTx] = TxFamily.of("DeploymentTx")
     export DeploymentTxOps.Config
 }
 

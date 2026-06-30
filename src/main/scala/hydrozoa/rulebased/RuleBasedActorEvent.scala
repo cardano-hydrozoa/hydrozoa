@@ -9,8 +9,7 @@ object RuleBasedActorEvent:
     final case class CardanoBackendError(e: CardanoBackend.Error) extends RuleBasedActorEvent
 
     // Dispute side
-    final case class BuildingTx(label: String) extends RuleBasedActorEvent
-    final case class SubmittingTxLabel(label: String) extends RuleBasedActorEvent
+    final case class BuildingTx(family: String) extends RuleBasedActorEvent
     final case class SubmittingTxFamily(family: String, txId: String) extends RuleBasedActorEvent
     final case class TxCbor(pretty: String, cbor: String) extends RuleBasedActorEvent
     final case class TxSubmitSuccess(family: String, txId: String) extends RuleBasedActorEvent
