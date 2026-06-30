@@ -131,7 +131,10 @@ object HeadConfig {
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
               "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.unresolved.asJson,
-              "initialBlock" -> hc.initialBlock.asJson,
+              // The config carries only the init tx (bare CBOR) + its block brief — no fallback tx
+              // and no Block/BlockEffects envelope; the head derives the fallback on read.
+              "blockBrief" -> hc.initialBlock.blockBrief.asJson,
+              "initializationTx" -> hc.initializationTx.asJson,
               "seedUtxo" -> hc.seedUtxo.asJson,
               "additionalFundingUtxos" -> hc.additionalFundingUtxos.asJson
             )
@@ -148,12 +151,9 @@ object HeadConfig {
                     given CardanoNetwork = network
                     for {
                         brief <- c
-                            .downField("initialBlock")
                             .downField("blockBrief")
                             .as[BlockBrief.Initial]
                         initTx <- c
-                            .downField("initialBlock")
-                            .downField("effects")
                             .downField("initializationTx")
                             .as[Transaction]
                         hcBootstrap <- c.as[HeadConfig.Bootstrap](using
