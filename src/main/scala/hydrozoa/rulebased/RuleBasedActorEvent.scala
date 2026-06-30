@@ -1,39 +1,38 @@
 package hydrozoa.rulebased
 
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 
 sealed trait RuleBasedActorEvent
 
 object RuleBasedActorEvent:
-    // Shared
-    final case class CardanoBackendError(e: CardanoBackend.Error) extends RuleBasedActorEvent
 
-    // Dispute side
-    final case class BuildingTx(family: String) extends RuleBasedActorEvent
-    final case class SubmittingTxFamily(family: String, txId: String) extends RuleBasedActorEvent
-    final case class TxCbor(pretty: String, cbor: String) extends RuleBasedActorEvent
-    final case class TxSubmitSuccess(family: String, txId: String) extends RuleBasedActorEvent
-    final case class LookingForCollateral(addr: String) extends RuleBasedActorEvent
-    case object CollateralFound extends RuleBasedActorEvent
-    final case class NoCollateralFound(peerLabel: String) extends RuleBasedActorEvent
-    case object Tallying extends RuleBasedActorEvent
-    case object ParsingTreasury extends RuleBasedActorEvent
-    case object TreasuryIsUnresolved extends RuleBasedActorEvent
-    case object TreasuryIsResolved extends RuleBasedActorEvent
-    final case class TreasuryFound(value: String) extends RuleBasedActorEvent
+    object Backend:
+        final case class Error(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorContinuingTxs(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorFeeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorSubmittingEvacTx(e: CardanoBackend.Error) extends RuleBasedActorEvent
 
-    // Evacuation side
-    final case class BackendErrorContinuingTxs(e: CardanoBackend.Error) extends RuleBasedActorEvent
-    final case class BackendErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
-    final case class BackendErrorFeeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
-    final case class BackendErrorSubmittingEvacTx(e: CardanoBackend.Error)
-        extends RuleBasedActorEvent
-    case object TreasuryNotYetResolved extends RuleBasedActorEvent
-    case object NoMoreEvacuations extends RuleBasedActorEvent
-    final case class PayoutObligationsLeft(n: Int) extends RuleBasedActorEvent
-    case object NoFeeCollateralUtxo extends RuleBasedActorEvent
-    final case class BuildingEvacTx(treasuryValue: String, evacuateeCount: Int, totalValue: String)
-        extends RuleBasedActorEvent
-    final case class SubmittingEvacTx(evacuatedOutputs: Int, cbor: String)
-        extends RuleBasedActorEvent
-    case object EvacTxSubmitted extends RuleBasedActorEvent
+    object Treasury:
+        case object Parsing extends RuleBasedActorEvent
+        case object Unresolved extends RuleBasedActorEvent
+        case object Resolved extends RuleBasedActorEvent
+        final case class Found(value: String) extends RuleBasedActorEvent
+        case object NotYetResolved extends RuleBasedActorEvent
+
+    object Collateral:
+        final case class Looking(addr: String) extends RuleBasedActorEvent
+        case object Found extends RuleBasedActorEvent
+        final case class NotFound(peerLabel: String) extends RuleBasedActorEvent
+        case object NoFeeCollateralUtxo extends RuleBasedActorEvent
+
+    object Tx:
+        final case class Building(family: String) extends RuleBasedActorEvent
+        final case class Submitting(tx: EnrichedTx[?]) extends RuleBasedActorEvent
+        final case class SubmitSuccess(tx: EnrichedTx[?]) extends RuleBasedActorEvent
+        case object Tallying extends RuleBasedActorEvent
+
+    object Evacuation:
+        case object NoMore extends RuleBasedActorEvent
+        final case class PayoutsLeft(n: Int) extends RuleBasedActorEvent

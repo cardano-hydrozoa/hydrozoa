@@ -4,7 +4,6 @@ import cats.*
 import cats.data.*
 import cats.effect.*
 import cats.syntax.all.*
-import com.bloxbean.cardano.client.util.HexUtil
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import hydrozoa.*
@@ -40,9 +39,8 @@ import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionOutput, Utxo, Utxos}
+import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
-import scalus.uplc.builtin.{ByteString, Data}
-import scalus.utils.Pretty
 
 // TODO: relocate
 extension (tx: Transaction) {
@@ -85,7 +83,7 @@ final case class RuleBasedActor(
                 case Left(e) =>
                     EitherT.left(
                       tracer
-                          .traceWith(RuleBasedActorEvent.CardanoBackendError(e))
+                          .traceWith(RuleBasedActorEvent.Backend.Error(e))
                           .as(Error.RecoverableCardanoBackendError(e))
                     )
                 case Right(a) => EitherT.right[Error.RecoverableErrors](IO.pure(a))
@@ -100,7 +98,7 @@ final case class RuleBasedActor(
     ): EitherT[IO, Error.RecoverableErrors, Unit] =
         for {
             _ <- EitherT.liftF(
-              tracer.traceWith(RuleBasedActorEvent.BuildingTx(TxFamily[T].name))
+              tracer.traceWith(RuleBasedActorEvent.Tx.Building(TxFamily[T].name))
             )
             tx <- result match {
                 case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
@@ -115,21 +113,13 @@ final case class RuleBasedActor(
         for {
             _ <- EitherT.right(
               tracer.traceWith(
-                RuleBasedActorEvent.SubmittingTxFamily(tx.transactionFamily, tx.tx.id.toString)
-              )
-            )
-            _ <- EitherT.right(
-              tracer.traceWith(
-                RuleBasedActorEvent.TxCbor(
-                  summon[Pretty[Transaction]].pretty(tx.tx).render(100),
-                  HexUtil.encodeHexString(tx.tx.toCbor)
-                )
+                RuleBasedActorEvent.Tx.Submitting(tx)
               )
             )
             res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
             _ <- EitherT.right(
               tracer.traceWith(
-                RuleBasedActorEvent.TxSubmitSuccess(tx.transactionFamily, tx.tx.id.toString)
+                RuleBasedActorEvent.Tx.SubmitSuccess(tx)
               )
             )
         } yield res
@@ -139,7 +129,7 @@ final case class RuleBasedActor(
         val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
         for {
             _ <- EitherT.liftF(
-              tracer.traceWith(RuleBasedActorEvent.LookingForCollateral(peerAddr.toString))
+              tracer.traceWith(RuleBasedActorEvent.Collateral.Looking(peerAddr.toString))
             )
             collateralCandidates <- handleCardanoBackendError(
               cardanoBackend.utxosAt(peerAddr)
@@ -172,11 +162,11 @@ final case class RuleBasedActor(
                 case _ =>
                     EitherT.liftF(
                       tracer
-                          .traceWith(RuleBasedActorEvent.NoCollateralFound(config.ownPeerLabel))
+                          .traceWith(RuleBasedActorEvent.Collateral.NotFound(config.ownPeerLabel))
                           .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
                     )
             }
-            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.CollateralFound))
+            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Collateral.Found))
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
     }
 
@@ -251,7 +241,7 @@ final case class RuleBasedActor(
                     val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
-                        _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Tallying))
+                        _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Tx.Tallying))
 
                         removed <- keySorted.tail.find(ballotBox =>
                             ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
@@ -323,7 +313,7 @@ final case class RuleBasedActor(
                         after = inputs.fallbackTxHash
                       )
                     ).leftSemiflatTap(e =>
-                        tracer.traceWith(RuleBasedActorEvent.BackendErrorContinuingTxs(e))
+                        tracer.traceWith(RuleBasedActorEvent.Backend.ErrorContinuingTxs(e))
                     ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
@@ -332,7 +322,7 @@ final case class RuleBasedActor(
                         // Treasury not resolved, can't evacuate, return left and retry
                         case 0 =>
                             EitherT.left[List[EvacuateRedeemer]](
-                              tracer.traceWith(RuleBasedActorEvent.TreasuryNotYetResolved) >>
+                              tracer.traceWith(RuleBasedActorEvent.Treasury.NotYetResolved) >>
                                   IO.pure(Error.QueryError.NoTreasuryFound)
                             )
                         // Treasury resolved but no withdrawals processed yet, active utxo set will be as it was at fallback
@@ -403,7 +393,7 @@ final case class RuleBasedActor(
                     )
                   )
                 ).leftSemiflatTap(e =>
-                    tracer.traceWith(RuleBasedActorEvent.BackendErrorTreasuryUtxos(e))
+                    tracer.traceWith(RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(e))
                 ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
 
                 treasuryUtxoAndDatum <- parseRBTreasuryResolved(unparsedTreasuryUtxos)
@@ -429,7 +419,7 @@ final case class RuleBasedActor(
                     if toEvacuate.isEmpty
                     then
                         EitherT.left[Unit](
-                          tracer.traceWith(RuleBasedActorEvent.NoMoreEvacuations) >>
+                          tracer.traceWith(RuleBasedActorEvent.Evacuation.NoMore) >>
                               IO.sleep(10.seconds) >>
                               IO.pure(
                                 Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
@@ -438,7 +428,7 @@ final case class RuleBasedActor(
                     else
                         EitherT.right[Error.RecoverableErrors](
                           tracer.traceWith(
-                            RuleBasedActorEvent.PayoutObligationsLeft(toEvacuate.size)
+                            RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size)
                           )
                         )
 
@@ -452,14 +442,14 @@ final case class RuleBasedActor(
                     address = walletAddress
                   )
                 ).leftSemiflatTap(e =>
-                    tracer.traceWith(RuleBasedActorEvent.BackendErrorFeeUtxos(e))
+                    tracer.traceWith(RuleBasedActorEvent.Backend.ErrorFeeUtxos(e))
                 ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
 
                 // Derive collateral from the fee wallet UTxOs.
                 collateralUtxo <- feeUtxos.headOption match {
                     case None =>
                         EitherT.left[CollateralUtxo](
-                          tracer.traceWith(RuleBasedActorEvent.NoFeeCollateralUtxo) >>
+                          tracer.traceWith(RuleBasedActorEvent.Collateral.NoFeeCollateralUtxo) >>
                               IO.pure(Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
                         )
                     case Some((input, output)) =>
@@ -482,11 +472,7 @@ final case class RuleBasedActor(
 
                 _ <- EitherT.liftF[IO, Error.RecoverableErrors, Unit](
                   tracer.traceWith(
-                    RuleBasedActorEvent.BuildingEvacTx(
-                      treasuryUtxoAndDatum._1.treasuryOutput.value.toString,
-                      toEvacuate.size,
-                      toEvacuate.totalValue.toString
-                    )
+                    RuleBasedActorEvent.Tx.Building(TxFamily[EvacuationTx].name)
                   )
                 )
                 evacTx <- evacBuilder.result match {
@@ -503,22 +489,17 @@ final case class RuleBasedActor(
 
                 _ <- (for {
                     _ <- EitherT.liftF[IO, CardanoBackend.Error, Unit](
-                      tracer.traceWith(
-                        RuleBasedActorEvent.SubmittingEvacTx(
-                          evacTx.evacuatedOutputs.size,
-                          ByteString.fromArray(evacTx.tx.toCbor).toHex
-                        )
-                      )
+                      tracer.traceWith(RuleBasedActorEvent.Tx.Submitting(evacTx))
                     )
                     _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))
                 } yield ())
                     .leftSemiflatTap(e =>
-                        tracer.traceWith(RuleBasedActorEvent.BackendErrorSubmittingEvacTx(e))
+                        tracer.traceWith(RuleBasedActorEvent.Backend.ErrorSubmittingEvacTx(e))
                     )
                     .leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
 
                 _ <- EitherT.liftF[IO, Error.RecoverableErrors, Unit](
-                  tracer.traceWith(RuleBasedActorEvent.EvacTxSubmitted)
+                  tracer.traceWith(RuleBasedActorEvent.Tx.SubmitSuccess(evacTx))
                 )
             } yield ()
         }
@@ -750,7 +731,7 @@ object RuleBasedActor {
     ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         import RuleBasedTreasuryUtxo.LookupError
         for {
-            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.ParsingTreasury))
+            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Treasury.Parsing))
             treasuryUtxo <- EitherT(
               IO.pure(RuleBasedTreasuryUtxo.parseOrMissing(utxos)).map {
                   case Right(u) => Right(u)
@@ -762,19 +743,19 @@ object RuleBasedActor {
             _ <- treasuryUtxo.treasuryOutput.datum match {
                 case _: RuleBasedTreasuryDatum.Unresolved =>
                     EitherT.liftF[IO, Error.RecoverableErrors, Unit](
-                      tracer.traceWith(RuleBasedActorEvent.TreasuryIsUnresolved)
+                      tracer.traceWith(RuleBasedActorEvent.Treasury.Unresolved)
                     )
                 case _: RuleBasedTreasuryDatum.Resolved =>
                     EitherT.left[Unit](
                       tracer
-                          .traceWith(RuleBasedActorEvent.TreasuryIsResolved)
+                          .traceWith(RuleBasedActorEvent.Treasury.Resolved)
                           .as(TreasuryResolved: Error.RecoverableErrors)
                     )
             }
 
             _ <- EitherT.liftF(
               tracer.traceWith(
-                RuleBasedActorEvent.TreasuryFound(treasuryUtxo.treasuryOutput.value.toString)
+                RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value.toString)
               )
             )
         } yield treasuryUtxo

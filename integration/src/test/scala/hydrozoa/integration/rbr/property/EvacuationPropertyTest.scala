@@ -200,11 +200,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             // Fires when any peer logs that no evacuations remain.
             evacuatedSignal <- lift(IO.deferred[Unit])
 
-            peerNum = env.nodeConfigs.head._1
-            
             // Signal tracer that fires when any peer finishes evacuating.
             evacuationSignalTap: ContraTracer[IO, RuleBasedActorEvent] = ContraTracer.emit {
-                case RuleBasedActorEvent.NoMoreEvacuations => evacuatedSignal.complete(()).void
+                case RuleBasedActorEvent.Evacuation.NoMore => evacuatedSignal.complete(()).void
                 case _                                     => IO.unit
             }
 
@@ -228,14 +226,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                         )(using env.nodeConfigs(peerId))
                     }
 
-                val infoTracer = Slf4jTracer.sink.contramap(
-                  RuleBasedActorEventFormat.humanFormat(peerNum)
-                )
-
                 IO.race(
-                  evacuatedSignal.get
-                      >> infoTracer.traceWith(RuleBasedActorEvent.EvacTxSubmitted)
-                      >> IO.sleep(postCompletionBuffer),
+                  evacuatedSignal.get >> IO.sleep(postCompletionBuffer),
                   peerBots.parSequence
                 ).timeoutTo(
                   actorRunDuration,
