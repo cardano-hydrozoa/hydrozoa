@@ -76,26 +76,32 @@ final case class RuleBasedActor(
       */
     private object Backend {
         def utxosAtDispute: EitherT[IO, Error.RecoverableErrors, Utxos] =
-            run(
-              cardanoBackend.utxosAt(
+            traced(
+              before = RuleBasedActorEvent.Dispute.Querying,
+              action = cardanoBackend.utxosAt(
                 address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
                 asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
               ),
-              RuleBasedActorEvent.Backend.ErrorDisputeUtxos(_)
+              onError = RuleBasedActorEvent.Backend.ErrorDisputeUtxos(_)
             )
 
         def utxosAtTreasury: EitherT[IO, Error.RecoverableErrors, Utxos] =
-            run(
-              cardanoBackend.utxosAt(
+            traced(
+              before = RuleBasedActorEvent.Treasury.Querying,
+              action = cardanoBackend.utxosAt(
                 address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
                 asset =
                     (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
               ),
-              RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
+              onError = RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
             )
 
         def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
-            run(cardanoBackend.utxosAt(addr), RuleBasedActorEvent.Backend.ErrorPeerUtxos(_))
+            traced(
+              before = RuleBasedActorEvent.Collateral.Querying(addr.toString),
+              action = cardanoBackend.utxosAt(addr),
+              onError = RuleBasedActorEvent.Backend.ErrorPeerUtxos(_)
+            )
 
         def utxosAtFee(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             run(cardanoBackend.utxosAt(addr), RuleBasedActorEvent.Backend.ErrorFeeUtxos(_))
@@ -114,6 +120,15 @@ final case class RuleBasedActor(
 
         def submit(tx: Transaction): EitherT[IO, Error.RecoverableErrors, Unit] =
             run(cardanoBackend.submitTx(tx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
+
+        /** Emit `before` (a "Querying" event), then run + wrap error per [[run]]. */
+        private def traced[A](
+            before: RuleBasedActorEvent,
+            action: IO[Either[CardanoBackend.Error, A]],
+            onError: CardanoBackend.Error => RuleBasedActorEvent
+        ): EitherT[IO, Error.RecoverableErrors, A] =
+            EitherT.right[Error.RecoverableErrors](tracer.traceWith(before)) >>
+                run(action, onError)
 
         private def run[A](
             action: IO[Either[CardanoBackend.Error, A]],
@@ -169,25 +184,26 @@ final case class RuleBasedActor(
       */
     private def getTreasury: EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
         for {
-            _ <- traceRight(RuleBasedActorEvent.Treasury.Parsing)
             utxos <- Backend.utxosAtTreasury
             treasuryUtxo <- RuleBasedTreasuryUtxo.parseOrMissing(utxos) match {
                 case Right(u) => pure(u)
                 case Left(RuleBasedTreasuryUtxo.LookupError.Missing) =>
-                    EitherT.leftT[IO, RuleBasedTreasuryUtxo](
-                      Error.ParseError.Treasury.TreasuryMissing: Error.RecoverableErrors
-                    )
+                    traceRight(RuleBasedActorEvent.Treasury.NotFound) >>
+                        EitherT.leftT[IO, RuleBasedTreasuryUtxo](
+                          Error.ParseError.Treasury.TreasuryMissing: Error.RecoverableErrors
+                        )
                 case Left(e) => raiseError(e)
-            }
-            _ <- treasuryUtxo.treasuryOutput.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved =>
-                    traceRight(RuleBasedActorEvent.Treasury.Unresolved)
-                case _: RuleBasedTreasuryDatum.Resolved =>
-                    traceRight(RuleBasedActorEvent.Treasury.Resolved)
             }
             _ <- traceRight(
               RuleBasedActorEvent.Treasury.Found(treasuryUtxo.treasuryOutput.value.toString)
             )
+            _ <- traceRight(RuleBasedActorEvent.Treasury.Parsing)
+            _ <- treasuryUtxo.treasuryOutput.datum match {
+                case _: RuleBasedTreasuryDatum.Unresolved =>
+                    traceRight(RuleBasedActorEvent.Treasury.ParsedUnresolved)
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    traceRight(RuleBasedActorEvent.Treasury.ParsedResolved)
+            }
         } yield treasuryUtxo
 
     /** Dispute branch — treasury is Unresolved. Queries the dispute address, gets collateral,
@@ -197,8 +213,7 @@ final case class RuleBasedActor(
         treasuryUtxo: RuleBasedTreasuryUtxo
     ): EitherT[IO, Error.RecoverableErrors, Unit] =
         for {
-            unparsedDisputeUtxos <- Backend.utxosAtDispute
-            disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
+            disputeUtxos <- getDisputeUtxos
             collateralUtxo <- Dispute.getCollateral
             _ <- disputeUtxos match {
                 case DisputeUtxos.CastVote(ownBallotBox) =>
@@ -220,7 +235,6 @@ final case class RuleBasedActor(
         def getCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
             val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
             for {
-                _ <- traceRight(RuleBasedActorEvent.Collateral.Looking(peerAddr.toString))
                 collateralCandidates <- Backend.utxosAtPeer(peerAddr)
                 collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                     to.value.isOnlyAda
@@ -439,11 +453,10 @@ final case class RuleBasedActor(
         ): EitherT[IO, Error.RecoverableErrors, List[EvacuateRedeemer]] =
             treasuryTxs.length match {
                 // Backend hasn't surfaced the resolution tx yet — race vs the resolved datum we
-                // already parsed, or a rollback. Trace + recover.
+                // already parsed, or a rollback. The recoverable Left propagates; no extra trace.
                 case 0 =>
-                    EitherT.left[List[EvacuateRedeemer]](
-                      tracer.traceWith(RuleBasedActorEvent.Treasury.NotYetResolved) >>
-                          IO.pure(Error.QueryError.NoTreasuryFound)
+                    EitherT.leftT[IO, List[EvacuateRedeemer]](
+                      Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
                     )
                 // Resolution only, no withdrawals processed yet.
                 case 1 => pure(List.empty[EvacuateRedeemer])
@@ -561,13 +574,18 @@ final case class RuleBasedActor(
       *       - Each utxo has a correct transaction input according to the results of the query.
       *       - Each utxo has the correct vote token in it and sits at the correct adddress.
       */
-    private def parseDisputeUtxos(utxos: Utxos)(using
-        config: Config
-    ): IO[DisputeUtxos] = {
+    /** Query the dispute address utxos, parse each into a [[BallotBox]], and classify the set into
+      * the appropriate [[DisputeUtxos]] case. Traces each phase (Querying / Parsing / Parsed*).
+      */
+    private def getDisputeUtxos: EitherT[IO, Error.RecoverableErrors, DisputeUtxos] = {
         val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
         for {
+            utxos <- Backend.utxosAtDispute
+            _ <- traceRight(RuleBasedActorEvent.Dispute.Parsing)
             // TODO: Collect parsing errors
-            parsed <- IO.fromEither(utxos.toList.traverse((i, o) => BallotBox.parse(Utxo(i, o))))
+            parsed <- EitherT.liftF[IO, Error.RecoverableErrors, List[BallotBox[VoteStatus]]](
+              IO.fromEither(utxos.toList.traverse((i, o) => BallotBox.parse(Utxo(i, o))))
+            )
             ownAwaiting = parsed.collectFirst {
                 case v if v.ballotBoxOutput.status match {
                         case AwaitingVote(peer) => peer.hash == ownPkhHash
@@ -576,22 +594,28 @@ final case class RuleBasedActor(
                     v.asInstanceOf[BallotBox[AwaitingVote]]
             }
             result <- ownAwaiting match {
-                case Some(own) => IO.pure(DisputeUtxos.CastVote(own))
+                case Some(own) =>
+                    traceRight(RuleBasedActorEvent.Dispute.ParsedCastVote)
+                        .as(DisputeUtxos.CastVote(own): DisputeUtxos)
                 case None =>
                     parsed match {
-                        case Nil => IO.pure(DisputeUtxos.EmptyVotes)
+                        case Nil =>
+                            traceRight(RuleBasedActorEvent.Dispute.ParsedEmptyVotes)
+                                .as(DisputeUtxos.EmptyVotes: DisputeUtxos)
                         case x :: Nil =>
                             x.ballotBoxOutput.status match {
                                 case _: Voted =>
-                                    IO.pure(
-                                      DisputeUtxos.Resolve(x.asInstanceOf[BallotBox[Voted]])
-                                    )
-                                case _ =>
-                                    IO.raiseError(
-                                      Error.NonVotedUtxoAtResolve(x)
-                                    )
+                                    traceRight(RuleBasedActorEvent.Dispute.ParsedResolve)
+                                        .as(
+                                          DisputeUtxos.Resolve(
+                                            x.asInstanceOf[BallotBox[Voted]]
+                                          ): DisputeUtxos
+                                        )
+                                case _ => raiseError(Error.NonVotedUtxoAtResolve(x))
                             }
-                        case xs => IO.pure(DisputeUtxos.Tally(xs))
+                        case xs =>
+                            traceRight(RuleBasedActorEvent.Dispute.ParsedTally)
+                                .as(DisputeUtxos.Tally(xs): DisputeUtxos)
                     }
             }
         } yield result

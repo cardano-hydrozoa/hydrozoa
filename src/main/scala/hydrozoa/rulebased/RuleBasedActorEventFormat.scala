@@ -23,19 +23,27 @@ object RuleBasedActorEventFormat:
             case Backend.ErrorSubmittingTx(err) =>
                 warn(s"Backend error submitting tx. Will retry.\n\tError: $err")
 
-            case Treasury.Parsing        => debug("parsing RuleBased Treasury")
-            case Treasury.Unresolved     => info("Treasury is Unresolved")
-            case Treasury.Resolved       => info("Treasury is Resolved")
-            case Treasury.Found(value)   => debug(s"Found treasury utxo with $value")
-            case Treasury.NotYetResolved => debug("Treasury not yet resolved, retrying")
+            case Treasury.Querying         => debug("Querying treasury")
+            case Treasury.Found(value)     => debug(s"Found treasury utxo with $value")
+            case Treasury.NotFound         => debug("Treasury utxo not found, retrying")
+            case Treasury.Parsing          => debug("Parsing treasury")
+            case Treasury.ParsedUnresolved => info("Treasury is Unresolved")
+            case Treasury.ParsedResolved   => info("Treasury is Resolved")
 
-            case Collateral.Looking(addr) =>
-                debug(s"Looking for collateral utxos at address $addr")
+            case Collateral.Querying(addr) =>
+                debug(s"Querying collateral utxos at address $addr")
             case Collateral.Found => debug("Found collateral utxo")
             case Collateral.NotFound(peerLabel) =>
                 error(s"Could not find a collateral utxo for peer $peerLabel")
             case Collateral.NoFeeCollateralUtxo =>
                 debug("No fee/collateral UTxO found at wallet address, retrying")
+
+            case Dispute.Querying         => debug("Querying dispute utxos")
+            case Dispute.Parsing          => debug("Parsing dispute utxos")
+            case Dispute.ParsedCastVote   => info("Dispute state: own ballot awaits a vote")
+            case Dispute.ParsedTally      => info("Dispute state: ready to tally")
+            case Dispute.ParsedResolve    => info("Dispute state: ready to resolve")
+            case Dispute.ParsedEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
 
             case Tx.Building(family) => info(s"Building $family")
             case Tx.Submitting(tx) =>
