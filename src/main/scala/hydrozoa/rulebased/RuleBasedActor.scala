@@ -33,7 +33,6 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
-import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
 import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionOutput, Utxo, Utxos}
@@ -206,30 +205,30 @@ final case class RuleBasedActor(
             }
         } yield treasuryUtxo
 
-    /** Dispute branch — treasury is Unresolved. Queries the dispute address, gets collateral,
-      * dispatches to one of [[Dispute.castVote]] / [[Dispute.tally]] / [[Dispute.resolve]].
-      */
-    private def handleDispute(
-        treasuryUtxo: RuleBasedTreasuryUtxo
-    ): EitherT[IO, Error.RecoverableErrors, Unit] =
-        for {
-            disputeUtxos <- getDisputeUtxos
-            collateralUtxo <- Dispute.getCollateral
-            _ <- disputeUtxos match {
-                case DisputeUtxos.CastVote(ownBallotBox) =>
-                    Dispute.castVote(ownBallotBox, treasuryUtxo, collateralUtxo)
-                case DisputeUtxos.Tally(otherUtxos) =>
-                    Dispute.tally(otherUtxos, treasuryUtxo, collateralUtxo)
-                case DisputeUtxos.Resolve(finalVoteUtxo) =>
-                    Dispute.resolve(finalVoteUtxo, treasuryUtxo, collateralUtxo)
-                // Treasury was Unresolved but the dispute address holds no vote utxos. Per the
-                // spec this state is unreachable, so escalate.
-                case DisputeUtxos.EmptyVotes =>
-                    raiseError(Error.TreasuryUnresolvedButNoVotes)
-            }
-        } yield ()
-
     private object Dispute {
+
+        /** Dispute branch — treasury is Unresolved. Queries the dispute address, gets collateral,
+          * dispatches to one of [[castVote]] / [[tally]] / [[resolve]].
+          */
+        def handle(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): EitherT[IO, Error.RecoverableErrors, Unit] =
+            for {
+                disputeUtxos <- getDisputeUtxos
+                collateralUtxo <- getCollateral
+                _ <- disputeUtxos match {
+                    case DisputeUtxos.CastVote(ownBallotBox) =>
+                        castVote(ownBallotBox, treasuryUtxo, collateralUtxo)
+                    case DisputeUtxos.Tally(otherUtxos) =>
+                        tally(otherUtxos, treasuryUtxo, collateralUtxo)
+                    case DisputeUtxos.Resolve(finalVoteUtxo) =>
+                        resolve(finalVoteUtxo, treasuryUtxo, collateralUtxo)
+                    // Treasury was Unresolved but the dispute address holds no vote utxos. Per
+                    // the spec this state is unreachable, so escalate.
+                    case DisputeUtxos.EmptyVotes =>
+                        raiseError(Error.TreasuryUnresolvedButNoVotes)
+                }
+            } yield ()
 
         /** Find an ada-only collateral utxo at the own peer's address. */
         def getCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
@@ -370,79 +369,74 @@ final case class RuleBasedActor(
             )
     }
 
-    /** Evacuation branch — treasury is Resolved. Walks continuing treasury txs to determine which
-      * keys have already been evacuated, then builds + submits an [[EvacuationTx]] for the rest.
-      */
-    private def handleEvacuation(
-        treasuryUtxo: RuleBasedTreasuryUtxo
-    ): EitherT[IO, Error.RecoverableErrors, Unit] =
-        for {
-            inputs <- EitherT.liftF[
-              IO,
-              Error.RecoverableErrors,
-              RuleBasedActor.EvacuationInputs
-            ](loadEvacuationInputs)
-
-            // The resolution tx is the last (oldest) tx after the fallback that spends the
-            // treasury; the preceding entries are withdrawal transactions.
-            treasuryTxs <- Backend.continuingTreasuryTxsAfter(inputs.fallbackTxHash)
-            pastEvacuateRedeemers <- Evacuation.parsePastRedeemers(treasuryTxs)
-
-            // The treasury's current `evacuationActive` commits to the REMAINING map after past
-            // withdrawals; the original resolution-time map is committed by the oldest treasury
-            // tx's output datum, which is what `candidateEvacMaps` is keyed by.
-            resolutionKzg <- Evacuation.parseResolutionKzg(treasuryTxs)
-            evacuationMapAtResolution <- Evacuation.lookupMap(
-              resolutionKzg,
-              inputs.candidateEvacMaps
-            )
-
-            // L2 utxos that were withdrawn in previous withdrawal transactions.
-            previouslyEvacuated: Set[EvacuationKey] = pastEvacuateRedeemers.foldLeft(
-              Set.empty[EvacuationKey]
-            )((acc, redeemer) => acc ++ redeemer.evacuationKeys.toScalaList)
-
-            currentEvacuationMap: EvacuationMap = evacuationMapAtResolution.removedAll(
-              previouslyEvacuated
-            )
-
-            // Under the current "evacuate everything we voted for" policy, our own work matches
-            // the on-chain remainder.
-            toEvacuate: EvacuationMap = currentEvacuationMap
-
-            _ <-
-                if toEvacuate.isEmpty
-                then
-                    EitherT.left[Unit](
-                      tracer.traceWith(RuleBasedActorEvent.Evacuation.NoMore) >>
-                          IO.sleep(10.seconds) >>
-                          IO.pure(
-                            Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
-                          )
-                    )
-                else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
-
-            feeAndCollateral <- Evacuation.getFeeAndCollateral
-            evacBuilder = EvacuationTx.Build(
-              inputTreasuryUtxo = treasuryUtxo,
-              evacuateesToTryNext = toEvacuate,
-              allRemainingEvacuatees = currentEvacuationMap,
-              feeUtxos = feeAndCollateral._1,
-              collateralUtxo = feeAndCollateral._2
-            )
-            // NoEvacuatees is recoverable (poll-then-retry), not a fatal build failure — peel it
-            // off before delegating to the generic buildAndSubmit which raises on Left.
-            _ <- evacBuilder.result match {
-                case Left(EvacuationTx.Build.Error.NoEvacuatees) =>
-                    EitherT.leftT[IO, Unit](
-                      Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
-                    )
-                case other =>
-                    buildAndSubmit(other, Error.BuildError.Evacuate(_))
-            }
-        } yield ()
-
     private object Evacuation {
+
+        /** Evacuation branch — treasury is Resolved. Determines the remaining evacuation map (the
+          * full map at resolution time, minus already-evacuated keys), then builds + submits an
+          * [[EvacuationTx]] for whatever is left.
+          */
+        def handle(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): EitherT[IO, Error.RecoverableErrors, Unit] =
+            for {
+                toEvacuate <- getEvacuationMap
+                _ <-
+                    if toEvacuate.isEmpty
+                    then
+                        EitherT.left[Unit](
+                          tracer.traceWith(RuleBasedActorEvent.Evacuation.NoMore) >>
+                              IO.pure(
+                                Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
+                              )
+                        )
+                    else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
+
+                feeAndCollateral <- getFeeAndCollateral
+                evacBuilder = EvacuationTx.Build(
+                  inputTreasuryUtxo = treasuryUtxo,
+                  evacuateesToTryNext = toEvacuate,
+                  allRemainingEvacuatees = toEvacuate,
+                  feeUtxos = feeAndCollateral._1,
+                  collateralUtxo = feeAndCollateral._2
+                )
+                // NoEvacuatees is recoverable (poll-then-retry), not a fatal build failure — peel
+                // it off before delegating to the generic buildAndSubmit which raises on Left.
+                _ <- evacBuilder.result match {
+                    case Left(EvacuationTx.Build.Error.NoEvacuatees) =>
+                        EitherT.leftT[IO, Unit](
+                          Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
+                        )
+                    case other =>
+                        buildAndSubmit(other, Error.BuildError.Evacuate(_))
+                }
+            } yield ()
+
+        /** Query continuing treasury txs after the fallback and derive the current evacuation map
+          * = (map at resolution time) − (keys already evacuated by past withdrawal txs).
+          */
+        def getEvacuationMap: EitherT[IO, Error.RecoverableErrors, EvacuationMap] =
+            for {
+                inputs <- EitherT.liftF[
+                  IO,
+                  Error.RecoverableErrors,
+                  RuleBasedActor.EvacuationInputs
+                ](loadEvacuationInputs)
+
+                // The resolution tx is the last (oldest) tx after the fallback that spends the
+                // treasury; the preceding entries are withdrawal transactions.
+                treasuryTxs <- Backend.continuingTreasuryTxsAfter(inputs.fallbackTxHash)
+                pastEvacuateRedeemers <- parsePastRedeemers(treasuryTxs)
+
+                // The treasury's current `evacuationActive` commits to the REMAINING map after
+                // past withdrawals; the original resolution-time map is committed by the oldest
+                // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
+                resolutionKzg <- parseResolutionKzg(treasuryTxs)
+                evacuationMapAtResolution <- lookupMap(resolutionKzg, inputs.candidateEvacMaps)
+
+                previouslyEvacuated: Set[EvacuationKey] = pastEvacuateRedeemers.foldLeft(
+                  Set.empty[EvacuationKey]
+                )((acc, redeemer) => acc ++ redeemer.evacuationKeys.toScalaList)
+            } yield evacuationMapAtResolution.removedAll(previouslyEvacuated)
 
         /** Parse the redeemers of past withdrawal transactions. The list's last entry is the
           * resolution tx (no evacuate redeemer); everything before is a withdrawal whose redeemer
@@ -543,8 +537,8 @@ final case class RuleBasedActor(
         val et: EitherT[IO, Error.RecoverableErrors, Unit] = for {
             treasuryUtxo <- getTreasury
             _ <- treasuryUtxo.treasuryOutput.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved => handleDispute(treasuryUtxo)
-                case _: RuleBasedTreasuryDatum.Resolved   => handleEvacuation(treasuryUtxo)
+                case _: RuleBasedTreasuryDatum.Unresolved => Dispute.handle(treasuryUtxo)
+                case _: RuleBasedTreasuryDatum.Resolved   => Evacuation.handle(treasuryUtxo)
             }
         } yield ()
         et.value
