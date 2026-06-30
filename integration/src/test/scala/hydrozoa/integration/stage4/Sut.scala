@@ -83,28 +83,32 @@ object PerCoilCaptures:
   */
 case class Stage4SutMutable(
     sutErrors: Ref[IO, List[String]],
+    submittedRequestIds: Ref[IO, Vector[RequestId]],
+
     perPeer: Capture[Map[HeadPeerNumber, PerPeerCaptures]],
     // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA arm
     // (same mechanism as `perPeer.state(_).stacks` on the head side). Empty for a pure-head run.
     // Used to assert the coil peer participates in the slow cycle.
     perCoil: Capture[Map[CoilPeerNumber, PerCoilCaptures]],
-    submittedRequestIds: Ref[IO, Vector[RequestId]],
+    /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
+     * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
+     */
+    landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
+
     fastSettlementSignal: Signal[Unit],
-    slowCoverageSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] with the final submitted ID set; the JL predicate arm reads it
-      * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
-      * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
-      */
+     * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
+     * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
+     */
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
+
+    slowCoverageSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
       * the SCA predicate arm reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
-    /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
-      * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
-      */
-    landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
-    /** Fires when the same condition `EffectsLanded.propEffectsLanded` checks is satisfied —
+
+    /** Fires when the same condit2ion `EffectsLanded.propEffectsLanded` checks is satisfied —
       * i.e. every backbone expectation completed via happy path or competing fallback. Anchored
       * on `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
       * [[slowCoverageSignal]] which fires on consensus reach. The gap between the two is the
@@ -117,6 +121,7 @@ case class Stage4SutMutable(
       * and only fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+
     /** Fires on the first successful `FallbackToRuleBased` dispatch; `beforeFinalize` races it
       * against the happy-path drain. See the package docstring for the contract.
       */

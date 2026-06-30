@@ -27,11 +27,9 @@ import scala.concurrent.duration.{DurationLong, FiniteDuration}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 
-/** Reusable bring-up scaffold for a multi-peer head (+ optional coil followers) backed by a shared
-  * mock L1. The `resource` for-comprehension reads top-down through one stage per sub-object:
-  * [[PreSystem]] → `ActorSystem` → [[CardanoBackend]] → [[Transport]] → [[Mrm]] → connections drain
-  * → [[ErrorDrainer]] → [[Ticks]] → hook handle extraction.
-  *
+/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
+  * mock L1.
+ *
   * Test-side concerns (capture observers, signal `Deferred`s, custom per-peer handle types like
   * stage4's `Stage4PeerHandle`) are injected via [[Hooks]] — the harness threads test-provided
   * tracers into each MRM and runs a test-provided `(num, connections) => IO[H]` finalizer once
@@ -43,14 +41,12 @@ object MultiPeerHeadHarness:
     // Public surface
     // ===================================
 
-    /** Coarse-grained run knobs. `label` names the `ActorSystem`. */
     case class Config(
         label: String,
         backendMode: StorageBackend.Mode,
         transportMode: Transport.Mode,
     )
 
-    /** Per-run configuration assembled by the caller (typically derived from a `ModelState`). */
     case class Inputs(
         config: Config,
         multiNodeConfig: MultiNodeConfig,
@@ -60,18 +56,14 @@ object MultiPeerHeadHarness:
         startEpochMs: Long,
     )
 
-    /** Roll-up of every event emitted by the regime managers the harness owns. The harness
-      * `contramap`s its per-peer / per-coil MRM tracer sinks through this — one sink at the harness
-      * boundary feeds head and coil sides alike. Pattern-match on the wrapper for routing, then on
-      * the underlying [[RegimeManagerEvent]] category for the actor.
+    /** Roll-up of every event emitted by the regime managers the harness owns.
       */
     enum Event:
         case Head(peerNum: HeadPeerNumber, event: HeadMultisigRegimeManagerEvent)
         case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
 
-    /** Test-side wiring injected into each MRM. One [[Event]]-typed tracer captures every
-      * regime-manager event the harness owns; the harness combines it with its own slf4j sinks via
-      * the `ContraTracer` monoid. `peerHandle` / `coilHandle` run once each MRM's
+    /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
+     * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
       * `connectionsDeferred` resolves.
       */
     case class Hooks[H, C](
@@ -119,9 +111,11 @@ object MultiPeerHeadHarness:
         val log: ContraTracer[IO, Slf4jMsg] =
             Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Harness"))
         for
+            // Handle websocket "take off" timing alignment
             _ <- Resource.eval(
                      PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
                  )
+
             system         <- ActorSystem[IO](label)
             cardanoBackend <- Resource.eval(
                                   CardanoBackend.mkMock(
@@ -360,17 +354,15 @@ object MultiPeerHeadHarness:
                 case Mode.Direct    => true
                 case Mode.WebSocket => false
 
-        /** All transport-layer state needed to build per-peer HMRM + per-coil CMRM. Produced by
+        /** Transport-layer state needed to build Regime Managers. Produced by
           * exactly one of [[setupDirect]] / [[setupWebSocket]]; the consumer doesn't need to know
           * which mode it's in.
           *
           * `bringUpNetwork` is a second-phase resource the caller must acquire *after* the MRMs
-          * (and their RocksDB backends) are built. Under WS it binds each peer's `NodeWsServer`
-          * and starts every mesh + coil dialer; under Direct it is `Resource.unit`. Acquiring it
-          * last makes its finalizer (server stop + dialer fiber cancel) run *before* the MRM
-          * finalizers stop their actors and close RocksDB — so no inbound WS message can reach
-          * an actor handler that calls `Persistence` after the underlying column-family handles
-          * are freed (use-after-free → JVM SIGSEGV inside `FailIfCfHasTs`).
+          * (and their RocksDB backends) are built. Under WS it binds sockets and starts dialers;
+         *  under Direct it is a no-op. Acquiring it last makes its finalizer run *before* the MRM
+          * finalizers stop their actors and close RocksDB — so no inbound WS message can cause a use-after-free
+         * segfault.
           */
         case class Setup(
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
