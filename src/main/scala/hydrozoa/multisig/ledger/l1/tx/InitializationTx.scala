@@ -119,7 +119,8 @@ object InitializationTx {
                               Initialization(
                                 multisigTreasuryIx = 0,
                                 multisigRegimeIx = 1,
-                                seedIx = config.initialSeedIx
+                                seedIx = config.initialSeedIx,
+                                totalEquity = config.initialEquityContributed
                               ).asAuxData(config.headId)
                             )
                         )

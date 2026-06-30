@@ -181,7 +181,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     MD.Initialization(
                       multisigTreasuryIx = 0,
                       multisigRegimeIx = 1,
-                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input)
+                      seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input),
+                      totalEquity = config.initialEquityContributed
                     ).asAuxData(config.headId)
 
                 s"Unexpected metadata value.\n\tActual: $actual\n\tExpected: $expected" |: actual
@@ -214,7 +215,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       MD.Initialization(
                         multisigTreasuryIx = 0,
                         multisigRegimeIx = 1,
-                        seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input)
+                        seedIx = iTx.tx.body.value.inputs.toSeq.indexOf(config.seedUtxo.input),
+                        totalEquity = config.initialEquityContributed
                       )
                     )
                 val parsedMetadata = MD.Initialization.parse(
