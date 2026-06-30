@@ -508,8 +508,10 @@ object InitializationTx {
                         Left(InvalidTransactionError("multiple MR tokens minted"))
                 }
 
-                equity <- Equity(config.initialEquityContributed - tx.body.value.fee)
-                    .toRight(EquityToLow(config.initialEquityContributed, tx.body.value.fee))
+                // Equity comes from the tx's own metadata (totalEquity), not config — the init tx is
+                // self-contained. The produced treasury holds totalEquity minus this tx's fee.
+                equity <- Equity(md.totalEquity - tx.body.value.fee)
+                    .toRight(EquityToLow(md.totalEquity, tx.body.value.fee))
 
                 treasury = MultisigTreasuryUtxo(
                   treasuryTokenName = config.headTokenNames.treasuryTokenName,

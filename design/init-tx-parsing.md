@@ -79,11 +79,11 @@ fields; reuse the `Metadatum.Int` shape). `InitializationTx.Build` writes it
 (`config.initialEquityContributed`); `InitializationTx.Parse` reads it from metadata instead of
 config. Keep Build working for now.
 
-**B. Make `InitializationTx.Parse` self-sufficient.** Stop reading `additionalFundingUtxos` /
-`changeUtxos` / `initialEquityContributed` from config (`InitializationTx.scala:537-538`, `:510`):
-take equity from the metadata `totalEquity`, leave funding inputs in the tx body, and drop the
-change-output reconstruction. Result: `Parse` depends only on the tx + metadata + the plain config
-(peers/params/network/script-refs/evac-map/equity-split/`blockZeroEndTime`).
+**B. `InitializationTx.Parse` takes equity from the metadata.** Read the treasury equity from the
+parsed metadata's `totalEquity` (`md.totalEquity − fee`) instead of `config.initialEquityContributed`
+(`InitializationTx.scala:510`). This removes the last config value that wasn't tx-derivable. (The
+`additionalFundingUtxos` / `changeUtxos` config reads at `:537-538` stay until step E, where those
+fields are removed outright — deriving them now would be throwaway.)
 
 **C. Wire config-read to parse + give the config its own codec** (Task 4). Replace the
 `InitializationTxSeq.Build` call in `HeadConfig.headConfigDecoder` with a parse path (reuse
