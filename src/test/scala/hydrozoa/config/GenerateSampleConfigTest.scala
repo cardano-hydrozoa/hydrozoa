@@ -31,7 +31,7 @@ object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
         }
         npc.focus(_.ownPeerPrivate)
             .replace(OwnHeadPeerPrivate(headWallet, headPeers).get)
-            .focus(_.nodeOperationEvacuationConfig.evacuationWallet)
+            .focus(_.nodeOperationEvacuationConfig.ruleBasedWallet)
             .modify(mkDummyWallet)
     }
 

@@ -207,6 +207,24 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         txHash <- pick(genByteStringOfN(32).map(TransactionHash.fromByteString))
         index <- pick(Gen.choose(0, 10))
 
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        now <- lift(realTimeQuantizedInstant(env.headConfig.slotConfig))
+        // Provide an Unresolved treasury utxo so handleTick reaches the dispute branch.
+        ruleBasedTreasury <- mkRuleBasedTreasury(
+          versionMajor = 100,
+          value = Value.assets(
+            lovelace = Coin.ada(2),
+            assets = Map(
+              (
+                env.headConfig.headMultisigScript.policyId,
+                Map((env.headConfig.headTokenNames.treasuryTokenName, 1))
+              )
+            )
+          ),
+          txIn = TransactionInput(fallbackTxId, 0),
+          votingDeadline = now.toPosixTime + 600_000
+        )
+
         voteInput = TransactionInput(txHash, index)
         voteOutput = Babbage(
           address = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network),
@@ -225,11 +243,17 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         disputeActor <- mkDisputeActor(
           versionMajor = 100,
           versionMinor = 2,
-          additionalL1Utxos = Map((voteInput, voteOutput)),
+          additionalL1Utxos = Map(
+            (voteInput, voteOutput),
+            (
+              ruleBasedTreasury.utxoId,
+              ruleBasedTreasury.treasuryOutput.toOutput(using env.nodeConfigs.head._2)
+            )
+          ),
           initialEvacuationMap = EvacuationMap.empty
         )
         // Should throw here
-        res <- lift(disputeActor.handleDispute.attempt)
+        res <- lift(disputeActor.handleTick.attempt)
         _ <- {
             val expectedError = Left(
               BallotBox.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
@@ -248,7 +272,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           additionalL1Utxos = Map.empty,
           initialEvacuationMap = EvacuationMap.empty
         )
-        res <- lift(disputeActor.handleDispute)
+        res <- lift(disputeActor.handleTick)
         _ <- assertWith(
           msg = "Missing rules best treasury returns Left",
           condition = res == Left(RuleBasedActor.Error.ParseError.Treasury.TreasuryMissing)
@@ -318,7 +342,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           ),
           initialEvacuationMap = evacMap
         )
-        _ <- lift(disputeActor.handleDispute)
+        _ <- lift(disputeActor.handleTick)
         queryRes <- lift(
           disputeActor.cardanoBackend.utxosAt(
             HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -425,7 +449,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //          ),
 //          initialEvacuationMap = evacMap
 //        )
-//        _ <- lift(disputeActor.handleDispute)
+//        _ <- lift(disputeActor.handleTick)
 //        queryRes <- lift(
 //          disputeActor.cardanoBackend.utxosAt(
 //            HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -472,7 +496,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           evacMap
         )
 
-        _ <- lift(da.handleDispute)
+        _ <- lift(da.handleTick)
         utxosAtResolutionAddress <- lift(
           da.cardanoBackend.utxosAt(HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network))
         )

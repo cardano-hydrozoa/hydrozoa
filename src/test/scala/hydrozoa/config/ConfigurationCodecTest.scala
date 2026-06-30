@@ -68,7 +68,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             val dummyPrivate: OwnPeerPrivate = OwnHeadPeerPrivate(headWallet, headPeers).get
             ncp.focus(_.ownPeerPrivate)
                 .replace(dummyPrivate)
-                .focus(_.nodeOperationEvacuationConfig.evacuationWallet)
+                .focus(_.nodeOperationEvacuationConfig.ruleBasedWallet)
                 .modify(mkDummyWallet)
         }
 
