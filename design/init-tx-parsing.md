@@ -6,13 +6,13 @@ The head must **read** its initialization transaction from the config — by *pa
 Cardano transaction — instead of **re-building** it from scratch through the tx builder. The
 init-tx **builder** moves out of the head into a bootstrapping submodule that authors the config.
 
-Progress (2026-06-30): **A, B, C, E, F done & committed.** A = `totalEquity` metadata. B = `Parse`
-reads equity from it. C = `headConfigDecoder` parses (not rebuilds). F = init-tx **builder** moved to
-the `hydrozoa.bootstrap` package (option a: package move, one `InitializationTx` type in core, builder
-produces it; `InitializationTxSeq.Build` delegates). E = `additionalFundingUtxos` / `changeUtxos`
-dropped from `InitializationTx`. Remaining (optional): step D (richer evaluation-on-parse) and the
-deferred wire-format cleanup (C2: a dedicated bare-CBOR config codec, dropping the fallback +
-`BlockEffects` envelope).
+Progress (2026-06-30): **A, B, C, C2, E, F done & committed.** A = `totalEquity` metadata. B = `Parse`
+reads equity from it. C = `headConfigDecoder` parses (not rebuilds). C2 = the config serializes only
+the bare init tx + block brief (no fallback tx, no `Block`/`BlockEffects` envelope). E =
+`additionalFundingUtxos` / `changeUtxos` dropped from `InitializationTx`. F = init-tx **builder** moved
+to the `hydrozoa.bootstrap` package (option a: one `InitializationTx` type in core,
+`InitializationTxSeq.Build` delegates). **Remaining: step D** — evaluate the init tx on parse; ticket
+at `.scratch/init-tx-evaluate-on-parse.md`.
 
 ## Why
 
