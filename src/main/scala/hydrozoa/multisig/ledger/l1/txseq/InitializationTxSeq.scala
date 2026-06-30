@@ -1,5 +1,6 @@
 package hydrozoa.multisig.ledger.l1.txseq
 
+import hydrozoa.bootstrap.InitializationTxBuilder
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.*
@@ -37,7 +38,7 @@ private object InitializationTxSeqOps {
         import Build.Error.*
 
         def result: Either[Error, InitializationTxSeq] = for {
-            initializationTx <- InitializationTx
+            initializationTx <- InitializationTxBuilder
                 .Build(config)(blockCreationEndTime)
                 .result
                 .left
