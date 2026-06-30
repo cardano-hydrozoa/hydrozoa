@@ -5,18 +5,28 @@ import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
+import hydrozoa.lib.cardano.scalus.contextualscalus
+import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
+import hydrozoa.multisig.ledger.block.BlockHeader
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.rulebased.ledger.l1.DisputeActorTestHelpers.{mkBallotBoxUtxo, mkRuleBasedTreasury}
+import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
-import hydrozoa.rulebased.ledger.l1.utxo.BallotBox
+import hydrozoa.rulebased.ledger.l1.utxo.*
 import org.scalacheck.{Arbitrary, Gen, Properties, Test}
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart}
-import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
+import scalus.cardano.ledger.{BlockHeader as _, *}
+import scalus.cardano.onchain.plutus.prelude.{List as SList, Option as SOption}
+import scalus.cardano.txbuilder.SomeBuildError
+import scalus.cardano.txbuilder.TransactionBuilderStep.ValidityEndSlot
+import scalus.uplc.builtin.ByteString
 
 /** Negative tests for [[DisputeResolutionValidator]]: malformed votes the validator (or the
   * builder) must reject.
@@ -37,6 +47,13 @@ import scalus.cardano.ledger.rules.{CardanoMutator, Context, State, UtxoEnv}
   *     the attacker's stake key) → VoteVoteOutputExists. The on-chain `Eq[Address]` ANDs the
   *     payment AND staking credential, so the address is checked in full — a redirect that keeps
   *     the payment part but captures staking rights on the locked utxo is still rejected.
+  *   - E6 co-spend TWO ballot boxes in ONE Vote tx (regression for the on-chain audit fix). The two
+  *     boxes have DIFFERENT source txids — the case a *txid* filter (`outRef.id === ownRef.id`)
+  *     would miss once a box's source tx diverges from the FallbackTx through ratcheting.
+  *     `VoteOnlyOneVoteUtxoIsSpent` now rejects any co-spent input carrying the head policy token
+  *     (`containsCurrencySymbol(headMp)`), so a second ballot box (or the treasury) is caught
+  *     regardless of its origin tx. The builder's script evaluator runs the validator, so the
+  *     two-box tx fails to build with the guard's message.
   *
   * Each script-level assertion checks the rejection is a *script* failure mentioning the
   * validator's own message, so a reject cannot pass for an incidental ledger reason.
@@ -108,6 +125,62 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
                 (e.explain + " " + e.logs.mkString(" ")).contains(needle)
             case _ => false
         }
+
+    /** Build a single Vote tx that spends TWO ballot boxes at once (the E6 double-spend). Mirrors
+      * [[VoteTx.Build]]'s step list but with two `votingSpend` + `send` pairs; both boxes ratchet
+      * to the same `sec`, so they share the one Vote redeemer. The two named peers must each sign,
+      * so their hashes go into `addRequiredSigners`.
+      */
+    private def buildTwoBoxVoteTx(
+        boxA: BallotBox[VoteStatus.AwaitingVote],
+        boxB: BallotBox[VoteStatus.AwaitingVote],
+        treasuryUtxo: RuleBasedTreasuryUtxo,
+        collateralUtxo: CollateralUtxo,
+        sec: StandaloneEvacuationCommitmentOnchain,
+        signatures: List[BlockHeader.Minor.HeaderSignature],
+        coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]],
+        votingDeadline: Slot
+    )(using config: VoteTx.Config): Either[SomeBuildError, Transaction] = {
+        val redeemer = DisputeRedeemer.Vote(
+          VoteRedeemer(
+            sec,
+            SList.from(
+              signatures.map(sig => ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+            ),
+            SList.from(
+              coilSignatures.map {
+                  case Some(sig) =>
+                      SOption.Some(ByteString.fromArray(IArray.genericWrapArray(sig).toArray))
+                  case None => SOption.None
+              }
+            )
+          )
+        )
+        val votedA = boxA.ballotBoxOutput.castVote(sec.commitment, sec.versionMinor)
+        val votedB = boxB.ballotBoxOutput.castVote(sec.commitment, sec.versionMinor)
+        for {
+            context <- contextualscalus.TransactionBuilder.build(
+              List(
+                config.referenceDispute,
+                collateralUtxo.add,
+                collateralUtxo.spend,
+                collateralUtxo.collateralOutput.send,
+                boxA.votingSpend(redeemer),
+                votedA.send,
+                boxB.votingSpend(redeemer),
+                votedB.send,
+                treasuryUtxo.referenceOutput,
+                ValidityEndSlot(votingDeadline.slot)
+              )
+            )
+            finalized <- context
+                .addRequiredSigners(boxA.votingSigners ++ boxB.votingSigners)
+                .finalizeContext(
+                  diffHandler = contextualscalus.Change.changeOutputDiffHandler(0),
+                  validators = nonSigningValidators
+                )
+        } yield finalized.transaction
+    }
 
     def voteAttacks: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
@@ -277,6 +350,58 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
               s"E5: a staking-credential-only swap on the vote output must be rejected, got $e5Result",
           condition =
               rejectedByValidator(e5Result, "one continuing vote output with the same value")
+        )
+
+        // E6 (regression): co-spend TWO ballot boxes in ONE Vote tx. The boxes have DIFFERENT
+        // source txids — the case a pre-audit txid filter (`outRef.id === ownRef.id`) would miss
+        // once a box's source tx diverges from the FallbackTx. The current guard
+        // (`VoteOnlyOneVoteUtxoIsSpent`) rejects any co-spent input carrying the head policy token
+        // (`containsCurrencySymbol(headMp)`), so the second ballot box is caught regardless of its
+        // origin tx. The builder's script evaluator runs the validator, so the two-box tx fails to
+        // build with the guard's message.
+        e6TxidA <- pick(Arbitrary.arbitrary[TransactionHash])
+        e6TxidB <- pick(Arbitrary.arbitrary[TransactionHash])
+        e6BoxAUtxo <- mkBallotBoxUtxo(
+          5,
+          6,
+          VoteStatus.AwaitingVote(ownWallet.exportVerificationKey.pubKeyHash),
+          TransactionInput(e6TxidA, 0)
+        )
+        e6BoxBUtxo <- mkBallotBoxUtxo(
+          6,
+          7,
+          VoteStatus.AwaitingVote(otherWallet.exportVerificationKey.pubKeyHash),
+          TransactionInput(e6TxidB, 0)
+        )
+        e6BoxA <- failLeft(
+          BallotBox
+              .parse(e6BoxAUtxo)(using config)
+              .map(_.asInstanceOf[BallotBox[VoteStatus.AwaitingVote]])
+        )
+        e6BoxB <- failLeft(
+          BallotBox
+              .parse(e6BoxBUtxo)(using config)
+              .map(_.asInstanceOf[BallotBox[VoteStatus.AwaitingVote]])
+        )
+        e6Deadline <- failLeft(ruleBasedTreasury.parseVotingDeadline(using config))
+        e6BuildResult = buildTwoBoxVoteTx(
+          e6BoxA,
+          e6BoxB,
+          ruleBasedTreasury,
+          collateralUtxo,
+          sec,
+          signatures,
+          coilSignatures,
+          e6Deadline
+        )(using config)
+        _ <- assertWith(
+          msg = "E6: co-spending two ballot boxes (distinct source txids) in one Vote tx must be " +
+              "rejected by VoteOnlyOneVoteUtxoIsSpent — the guard filters co-spent inputs by " +
+              s"head-token identity, not source txid. got $e6BuildResult",
+          condition = e6BuildResult match {
+              case Left(e)  => e.toString.contains("Only one vote utxo can be spent")
+              case Right(_) => false
+          }
         )
     } yield true
 
