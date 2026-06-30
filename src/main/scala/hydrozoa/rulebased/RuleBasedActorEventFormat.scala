@@ -10,19 +10,18 @@ object RuleBasedActorEventFormat:
         val ev = LogEvent.From.forPeer("RuleBasedActor", peerNum)
         import ev.*
         e match
-            case Backend.Error(err) =>
-                warn(
-                  "Cardano backend error encountered. This may be due to timeout, utxo contention," +
-                      s" rollbacks, or timing skew, but it may also be a genuine error.\n\tError: \n$err"
-                )
-            case Backend.ErrorContinuingTxs(err) =>
-                warn(s"Backend error querying continuing txs. Will retry.\n\tError: $err")
+            case Backend.ErrorDisputeUtxos(err) =>
+                warn(s"Backend error querying dispute UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorTreasuryUtxos(err) =>
                 warn(s"Backend error querying treasury UTxOs. Will retry.\n\tError: $err")
+            case Backend.ErrorPeerUtxos(err) =>
+                warn(s"Backend error querying peer UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorFeeUtxos(err) =>
                 warn(s"Backend error querying fee UTxOs. Will retry.\n\tError: $err")
-            case Backend.ErrorSubmittingEvacTx(err) =>
-                warn(s"Backend error submitting evacuation tx. Will retry.\n\tError: $err")
+            case Backend.ErrorContinuingTxs(err) =>
+                warn(s"Backend error querying continuing txs. Will retry.\n\tError: $err")
+            case Backend.ErrorSubmittingTx(err) =>
+                warn(s"Backend error submitting tx. Will retry.\n\tError: $err")
 
             case Treasury.Parsing        => debug("parsing RuleBased Treasury")
             case Treasury.Unresolved     => info("Treasury is Unresolved")

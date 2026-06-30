@@ -8,11 +8,12 @@ sealed trait RuleBasedActorEvent
 object RuleBasedActorEvent:
 
     object Backend:
-        final case class Error(e: CardanoBackend.Error) extends RuleBasedActorEvent
-        final case class ErrorContinuingTxs(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorDisputeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorPeerUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorFeeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
-        final case class ErrorSubmittingEvacTx(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorContinuingTxs(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorSubmittingTx(e: CardanoBackend.Error) extends RuleBasedActorEvent
 
     object Treasury:
         case object Parsing extends RuleBasedActorEvent

@@ -71,24 +71,65 @@ final case class RuleBasedActor(
 )(using config: Config)
     extends Actor[IO, RuleBasedActor.Requests.Request] {
 
-    private def handleCardanoBackendError[A](
-        action: IO[Either[CardanoBackend.Error, A]]
-    ): EitherT[IO, Error.RecoverableErrors, A] =
-        for {
-            res <- EitherT.liftF(action)
-            a <- res match {
-                // All backend errors (Timeout, InvalidTx, etc.) are recoverable: swallow and retry on
-                // the next poll. We expect transient failures from UTxO contention, validity-interval
-                // mismatches (e.g. tally attempted before deadline), and rollbacks.
-                case Left(e) =>
-                    EitherT.left(
-                      tracer
-                          .traceWith(RuleBasedActorEvent.Backend.Error(e))
-                          .as(Error.RecoverableCardanoBackendError(e))
-                    )
-                case Right(a) => EitherT.right[Error.RecoverableErrors](IO.pure(a))
-            }
-        } yield a
+    /** Rule-based backend queries used by this actor. Each helper bakes in tracing of its specific
+      * backend-error event and lifts recoverable errors into `Error.RecoverableErrors`.
+      */
+    private object Backend {
+        def utxosAtDispute: EitherT[IO, Error.RecoverableErrors, Utxos] =
+            run(
+              cardanoBackend.utxosAt(
+                address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
+                asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
+              ),
+              RuleBasedActorEvent.Backend.ErrorDisputeUtxos(_)
+            )
+
+        def utxosAtTreasury: EitherT[IO, Error.RecoverableErrors, Utxos] =
+            run(
+              cardanoBackend.utxosAt(
+                address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
+                asset =
+                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
+              ),
+              RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
+            )
+
+        def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
+            run(cardanoBackend.utxosAt(addr), RuleBasedActorEvent.Backend.ErrorPeerUtxos(_))
+
+        def utxosAtFee(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
+            run(cardanoBackend.utxosAt(addr), RuleBasedActorEvent.Backend.ErrorFeeUtxos(_))
+
+        def continuingTreasuryTxsAfter(
+            after: TransactionHash
+        ): EitherT[IO, Error.RecoverableErrors, List[(TransactionHash, Data, Data)]] =
+            run(
+              cardanoBackend.lastContinuingTxs(
+                asset =
+                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName),
+                after = after
+              ),
+              RuleBasedActorEvent.Backend.ErrorContinuingTxs(_)
+            )
+
+        def submit(tx: Transaction): EitherT[IO, Error.RecoverableErrors, Unit] =
+            run(cardanoBackend.submitTx(tx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
+
+        private def run[A](
+            action: IO[Either[CardanoBackend.Error, A]],
+            errorEvent: CardanoBackend.Error => RuleBasedActorEvent
+        ): EitherT[IO, Error.RecoverableErrors, A] =
+            EitherT(action)
+                .leftSemiflatTap(e => tracer.traceWith(errorEvent(e)))
+                .leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
+    }
+
+    /** Tracing helpers that fold the tracer's emit into the EitherT pipeline. */
+    private object Trace {
+        def traceRight(event: RuleBasedActorEvent): EitherT[IO, Error.RecoverableErrors, Unit] =
+            EitherT.right(tracer.traceWith(event))
+    }
+    import Trace.*
 
     /** Build, sign, and submit one dispute-flow tx.
       */
@@ -97,9 +138,7 @@ final case class RuleBasedActor(
         wrapError: E => Throwable,
     ): EitherT[IO, Error.RecoverableErrors, Unit] =
         for {
-            _ <- EitherT.liftF(
-              tracer.traceWith(RuleBasedActorEvent.Tx.Building(TxFamily[T].name))
-            )
+            _ <- traceRight(RuleBasedActorEvent.Tx.Building(TxFamily[T].name))
             tx <- result match {
                 case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
                 case Right(tx) => EitherT.right(IO.pure(tx))
@@ -111,29 +150,17 @@ final case class RuleBasedActor(
         tx: EnrichedTx[TxType],
     ): EitherT[IO, Error.RecoverableErrors, Unit] = {
         for {
-            _ <- EitherT.right(
-              tracer.traceWith(
-                RuleBasedActorEvent.Tx.Submitting(tx)
-              )
-            )
-            res <- handleCardanoBackendError(cardanoBackend.submitTx(tx.tx.selfSigned))
-            _ <- EitherT.right(
-              tracer.traceWith(
-                RuleBasedActorEvent.Tx.SubmitSuccess(tx)
-              )
-            )
+            _ <- traceRight(RuleBasedActorEvent.Tx.Submitting(tx))
+            res <- Backend.submit(tx.tx.selfSigned)
+            _ <- traceRight(RuleBasedActorEvent.Tx.SubmitSuccess(tx))
         } yield res
     }
 
     private def getDisputeCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
         val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
         for {
-            _ <- EitherT.liftF(
-              tracer.traceWith(RuleBasedActorEvent.Collateral.Looking(peerAddr.toString))
-            )
-            collateralCandidates <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(peerAddr)
-            )
+            _ <- traceRight(RuleBasedActorEvent.Collateral.Looking(peerAddr.toString))
+            collateralCandidates <- Backend.utxosAtPeer(peerAddr)
             collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                 to.value.isOnlyAda
             ) match {
@@ -166,7 +193,7 @@ final case class RuleBasedActor(
                           .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
                     )
             }
-            _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Collateral.Found))
+            _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
         } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
     }
 
@@ -176,22 +203,11 @@ final case class RuleBasedActor(
       */
     def handleDispute: IO[Either[Error.RecoverableErrors, Unit]] = {
         val et: EitherT[IO, Error.RecoverableErrors, Unit] = for {
-            unparsedDisputeUtxos <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(
-                address = HydrozoaBlueprint.mkDisputeAddress(config.cardanoInfo.network),
-                asset = (config.headMultisigScript.policyId, config.headTokenNames.voteTokenName)
-              )
-            )
+            unparsedDisputeUtxos <- Backend.utxosAtDispute
             disputeUtxos <- EitherT.liftF(parseDisputeUtxos(unparsedDisputeUtxos))
             collateralUtxo <- getDisputeCollateral
 
-            unparsedTreasuryUtxo <- handleCardanoBackendError(
-              cardanoBackend.utxosAt(
-                address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
-                asset =
-                    (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
-              )
-            )
+            unparsedTreasuryUtxo <- Backend.utxosAtTreasury
             treasuryUtxo <- parseRBTreasuryUnresolved(unparsedTreasuryUtxo)(using config, tracer)
 
             _ <- disputeUtxos match {
@@ -241,7 +257,7 @@ final case class RuleBasedActor(
                     val keySorted = otherUtxos.sortBy(_.ballotBoxOutput.key)
                     val continuing = keySorted.head
                     for {
-                        _ <- EitherT.liftF(tracer.traceWith(RuleBasedActorEvent.Tx.Tallying))
+                        _ <- traceRight(RuleBasedActorEvent.Tx.Tallying)
 
                         removed <- keySorted.tail.find(ballotBox =>
                             ballotBox.ballotBoxOutput.key == continuing.ballotBoxOutput.link
@@ -304,17 +320,7 @@ final case class RuleBasedActor(
                 // The resolution tx is the first tx after the fallback that spends the treasury.
                 // Every subsequent transaction also spends the treasury for a withdrawal.
                 treasuryTxRedeemersAndDatums: List[(TransactionHash, Data, Data)] <-
-                    EitherT(
-                      cardanoBackend.lastContinuingTxs(
-                        asset = (
-                          config.headMultisigScript.policyId,
-                          config.headTokenNames.treasuryTokenName
-                        ),
-                        after = inputs.fallbackTxHash
-                      )
-                    ).leftSemiflatTap(e =>
-                        tracer.traceWith(RuleBasedActorEvent.Backend.ErrorContinuingTxs(e))
-                    ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
+                    Backend.continuingTreasuryTxsAfter(inputs.fallbackTxHash)
 
                 // All parsed redeemers. If parsing fails, something is seriously wrong and we return Left
                 evacuateRedeemers: List[EvacuateRedeemer] <-
@@ -384,17 +390,7 @@ final case class RuleBasedActor(
                     case Some(evacMap) => EitherT.right(IO.pure(evacMap))
                 }
 
-                unparsedTreasuryUtxos <- EitherT(
-                  cardanoBackend.utxosAt(
-                    address = HydrozoaBlueprint.mkTreasuryAddress(config.cardanoInfo.network),
-                    asset = (
-                      config.headMultisigScript.policyId,
-                      config.headTokenNames.treasuryTokenName
-                    )
-                  )
-                ).leftSemiflatTap(e =>
-                    tracer.traceWith(RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(e))
-                ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
+                unparsedTreasuryUtxos <- Backend.utxosAtTreasury
 
                 treasuryUtxoAndDatum <- parseRBTreasuryResolved(unparsedTreasuryUtxos)
 
@@ -425,25 +421,14 @@ final case class RuleBasedActor(
                                 Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
                               )
                         )
-                    else
-                        EitherT.right[Error.RecoverableErrors](
-                          tracer.traceWith(
-                            RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size)
-                          )
-                        )
+                    else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
 
                 walletAddress = config.evacuationWallet.exportVerificationKey.shelleyAddress()(using
                   config
                 )
 
                 // Note that if there are no fee utxos, we just try again.
-                feeUtxos <- EitherT(
-                  cardanoBackend.utxosAt(
-                    address = walletAddress
-                  )
-                ).leftSemiflatTap(e =>
-                    tracer.traceWith(RuleBasedActorEvent.Backend.ErrorFeeUtxos(e))
-                ).leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
+                feeUtxos <- Backend.utxosAtFee(walletAddress)
 
                 // Derive collateral from the fee wallet UTxOs.
                 collateralUtxo <- feeUtxos.headOption match {
@@ -487,20 +472,9 @@ final case class RuleBasedActor(
                     case Right(tx) => EitherT.pure[IO, Error.RecoverableErrors](tx)
                 }
 
-                _ <- (for {
-                    _ <- EitherT.liftF[IO, CardanoBackend.Error, Unit](
-                      tracer.traceWith(RuleBasedActorEvent.Tx.Submitting(evacTx))
-                    )
-                    _ <- EitherT(cardanoBackend.submitTx(config.evacuationWallet.signTx(evacTx.tx)))
-                } yield ())
-                    .leftSemiflatTap(e =>
-                        tracer.traceWith(RuleBasedActorEvent.Backend.ErrorSubmittingEvacTx(e))
-                    )
-                    .leftMap(Error.RecoverableCardanoBackendError(_): Error.RecoverableErrors)
-
-                _ <- EitherT.liftF[IO, Error.RecoverableErrors, Unit](
-                  tracer.traceWith(RuleBasedActorEvent.Tx.SubmitSuccess(evacTx))
-                )
+                _ <- traceRight(RuleBasedActorEvent.Tx.Submitting(evacTx))
+                _ <- Backend.submit(config.evacuationWallet.signTx(evacTx.tx))
+                _ <- traceRight(RuleBasedActorEvent.Tx.SubmitSuccess(evacTx))
             } yield ()
         }
         et.value
