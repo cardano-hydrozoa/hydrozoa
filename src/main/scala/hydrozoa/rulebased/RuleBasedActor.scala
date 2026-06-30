@@ -131,6 +131,12 @@ final case class RuleBasedActor(
     }
     import Trace.*
 
+    private def pure[A](a: A): EitherT[IO, Error.RecoverableErrors, A] =
+        EitherT.right(IO.pure(a))
+
+    private def raiseError[A](t: Throwable): EitherT[IO, Error.RecoverableErrors, A] =
+        EitherT.liftF(IO.raiseError(t))
+
     /** Build, sign, and submit one dispute-flow tx.
       */
     private def buildAndSubmit[T <: EnrichedTx[T]: TxFamily, E <: Throwable](
@@ -140,8 +146,8 @@ final case class RuleBasedActor(
         for {
             _ <- traceRight(RuleBasedActorEvent.Tx.Building(TxFamily[T].name))
             tx <- result match {
-                case Left(e)   => EitherT.liftF(IO.raiseError(wrapError(e)))
-                case Right(tx) => EitherT.right(IO.pure(tx))
+                case Left(e)   => raiseError(wrapError(e))
+                case Right(tx) => pure(tx)
             }
             _ <- signAndSubmitTx[T](tx)
         } yield ()
@@ -165,8 +171,8 @@ final case class RuleBasedActor(
                 to.value.isOnlyAda
             ) match {
                 case x if x.nonEmpty =>
-                    EitherT.right(IO.pure(x.toList.maxBy(_._2.value.coin.value)))
-                case _ => EitherT.liftF(IO.raiseError(NoSuitableCollateralUtxosFound))
+                    pure(x.toList.maxBy(_._2.value.coin.value))
+                case _ => raiseError(NoSuitableCollateralUtxosFound)
             }
             collateralOutput <- collateralUtxoTuple._2 match {
                 case TransactionOutput.Babbage(
@@ -268,7 +274,7 @@ final case class RuleBasedActor(
                                     Error.NoCompatibleVoteForTallyingFound(otherUtxos)
                                   )
                                 )
-                            case Some(x) => EitherT.right(IO.pure(x))
+                            case Some(x) => pure(x)
                         }
                         _ <- buildAndSubmit(
                           result = TallyTx
@@ -298,7 +304,7 @@ final case class RuleBasedActor(
                 // Treasury was still unresolved when we read it above but the dispute address holds
                 // no vote utxos. Per the spec this state is unreachable, so escalate.
                 case DisputeUtxos.EmptyVotes =>
-                    EitherT.liftF(IO.raiseError(Error.TreasuryUnresolvedButNoVotes))
+                    raiseError(Error.TreasuryUnresolvedButNoVotes)
             }
 
         } yield ()
@@ -376,7 +382,7 @@ final case class RuleBasedActor(
                         case Success(
                               r: TreasuryState.RuleBasedTreasuryDatumOnchain.ResolvedOnchain
                             ) =>
-                            EitherT.right(IO.pure(r.evacuationActive))
+                            pure(r.evacuationActive)
                         case Success(_) =>
                             EitherT(IO.raiseError(Error.ParseError.TreasuryNotResolved))
                     }
@@ -387,7 +393,7 @@ final case class RuleBasedActor(
                         EitherT.right[Error.RecoverableErrors](
                           IO.raiseError[EvacuationMap](Error.UnknownResolvedKzg(resolutionKzg))
                         )
-                    case Some(evacMap) => EitherT.right(IO.pure(evacMap))
+                    case Some(evacMap) => pure(evacMap)
                 }
 
                 unparsedTreasuryUtxos <- Backend.utxosAtTreasury
