@@ -6,10 +6,13 @@ The head must **read** its initialization transaction from the config — by *pa
 Cardano transaction — instead of **re-building** it from scratch through the tx builder. The
 init-tx **builder** moves out of the head into a bootstrapping submodule that authors the config.
 
-Progress (2026-06-30): **A, B, C, F done & committed.** A = `totalEquity` metadata. B = `Parse` reads
-equity from it. C = `headConfigDecoder` parses (not rebuilds). F = init-tx **builder** moved to the
-`hydrozoa.bootstrap` package (option a: package move, one `InitializationTx` type in core, builder
-produces it; `InitializationTxSeq.Build` delegates). **The trim (step E) is deferred** — see below.
+Progress (2026-06-30): **A, B, C, E, F done & committed.** A = `totalEquity` metadata. B = `Parse`
+reads equity from it. C = `headConfigDecoder` parses (not rebuilds). F = init-tx **builder** moved to
+the `hydrozoa.bootstrap` package (option a: package move, one `InitializationTx` type in core, builder
+produces it; `InitializationTxSeq.Build` delegates). E = `additionalFundingUtxos` / `changeUtxos`
+dropped from `InitializationTx`. Remaining (optional): step D (richer evaluation-on-parse) and the
+deferred wire-format cleanup (C2: a dedicated bare-CBOR config codec, dropping the fallback +
+`BlockEffects` envelope).
 
 ## Why
 
@@ -106,17 +109,15 @@ it does **not** require those inputs to exist on L1 (the tx may not be submittab
 existence / submission stays `CardanoLiaison`'s job. Depth of phase-2 evaluation is an
 implementation detail here.
 
-**E. Remove the dead bits** (folds into T2) — **DEFERRED.** Dropping `additionalFundingUtxos` /
-`changeUtxos` from `InitializationTx` is **not** a one-line field removal: the head's
-`headConfigBootstrap` projection (`HeadConfig.scala:51-69`) reconstructs `InitializationParameters`
-by reading `initTx.additionalFundingUtxos` / `initTx.changeUtxos`, and `InitializationParameters`
-*requires* those fields (the bootstrap builder needs them). So the trim cascades into either
-re-deriving those values in the projection (from `tx` + `resolvedUtxos` + metadata) or trimming
-`InitializationParameters` itself. It is **pure cleanup with no runtime behaviour change**, so it's
-deferred under time pressure; the core deliverable (parse, not rebuild) is already in place.
-Touch points when picked up: `InitializationTx` fields, the bootstrap `InitializationTxBuilder`
-`Complete`, `InitializationTx.Parse`, `InitializationTxCodec` (persistence), and the
-`headConfigBootstrap` projection.
+**E. Drop the dead fields** — **done.** Removed `additionalFundingUtxos` / `changeUtxos` from
+`InitializationTx` (build-time bookkeeping read by nothing at runtime). The bootstrap builder and
+`InitializationTx.Parse` stop setting them; `InitializationTxCodec` stops persisting them (old
+persisted records still decode — circe ignores the extra fields). `InitializationParameters` still
+*requires* them for the bootstrap builder, so the `headConfigBootstrap` projection re-derives them
+from the parsed `initTx`: funding inputs = `resolvedUtxos.utxos − seedInput`; change outputs = tx
+outputs other than the treasury/multisig-regime outputs (indices taken from
+`treasuryProduced`/`multisigRegimeProduced`). No runtime behaviour change; build/parse/config + 41
+persistence/recovery tests green.
 
 **F. Move the builder out** (T2). Relocate `InitializationTx.Build` (and `InitializationTxSeq`'s
 init-build half + the funding/change/balance bookkeeping) into a new **bootstrapping submodule** that
