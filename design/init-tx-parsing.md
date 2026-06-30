@@ -1,18 +1,22 @@
 # Initialization-tx parsing (GUM-129)
 
-Status: **Implementing** · Decisions locked 2026-06-30
+Status: **Core done (steps A–F)** · step D tracked as
+[GUM-168](https://linear.app/gummiworm-labs/issue/GUM-168/evaluate-the-init-tx-on-config-read-gum-129-step-d)
+· Decisions locked 2026-06-30
 
 The head must **read** its initialization transaction from the config — by *parsing* a bare
 Cardano transaction — instead of **re-building** it from scratch through the tx builder. The
-init-tx **builder** moves out of the head into a bootstrapping submodule that authors the config.
+init-tx **builder** moves out of the head into a bootstrapping package (`hydrozoa.bootstrap`) that
+authors the config.
 
 Progress (2026-06-30): **A, B, C, C2, E, F done & committed.** A = `totalEquity` metadata. B = `Parse`
 reads equity from it. C = `headConfigDecoder` parses (not rebuilds). C2 = the config serializes only
 the bare init tx + block brief (no fallback tx, no `Block`/`BlockEffects` envelope). E =
 `additionalFundingUtxos` / `changeUtxos` dropped from `InitializationTx`. F = init-tx **builder** moved
 to the `hydrozoa.bootstrap` package (option a: one `InitializationTx` type in core,
-`InitializationTxSeq.Build` delegates). **Remaining: step D** — evaluate the init tx on parse; ticket
-at `.scratch/init-tx-evaluate-on-parse.md`.
+`InitializationTxSeq.Build` delegates). **Remaining: step D** — evaluate the init tx on parse —
+tracked as **GUM-168**
+(https://linear.app/gummiworm-labs/issue/GUM-168/evaluate-the-init-tx-on-config-read-gum-129-step-d).
 
 ## Why
 
@@ -104,10 +108,11 @@ supplied fallback). Add a dedicated config encoder/decoder for the init tx as **
 (`BlockEffects.scala:32`). Stop serializing the fallback. **Keep current names** (no
 `BlockCreationEndTime` → `blockZeroEndTime` rename, no field renames, for now).
 
-**D. Evaluate on parse** (T3). `Parse` evaluates the tx against the config-supplied `resolvedUtxos`;
-it does **not** require those inputs to exist on L1 (the tx may not be submittable yet). On-chain
-existence / submission stays `CardanoLiaison`'s job. Depth of phase-2 evaluation is an
-implementation detail here.
+**D. Evaluate on parse** (T3) — **tracked as
+[GUM-168](https://linear.app/gummiworm-labs/issue/GUM-168/evaluate-the-init-tx-on-config-read-gum-129-step-d).**
+`Parse` evaluates the tx against the config-supplied `resolvedUtxos`; it does **not** require those
+inputs to exist on L1 (the tx may not be submittable yet). On-chain existence / submission stays
+`CardanoLiaison`'s job. Depth of phase-2 evaluation is an implementation detail here.
 
 **E. Drop the dead fields** — **done.** Removed `additionalFundingUtxos` / `changeUtxos` from
 `InitializationTx` (build-time bookkeeping read by nothing at runtime). The bootstrap builder and
