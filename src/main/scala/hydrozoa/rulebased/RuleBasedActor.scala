@@ -48,8 +48,9 @@ extension (tx: Transaction) {
 
 /** Single actor that drives the rule-based regime end to end: while the treasury is Unresolved it
   * runs the dispute branch (vote/abstain → tally → resolve); once Resolved it runs the evacuation
-  * branch (chained `lastContinuingTxs` reads + evacuation tx submissions). Each tick runs both
-  * branches in sequence; each branch short-circuits when the treasury is in the other state.
+  * branch (chained `lastContinuingTxs` reads + evacuation tx submissions). Each tick parses the
+  * treasury once and dispatches on its datum to exactly one branch, so only that branch's backend
+  * queries run.
   *
   * The actor holds no per-iteration state: every tick re-queries the chain and re-calls the loader
   * thunks ([[loadAction]], [[loadEvacuationInputs]]) for the pieces that can't be recovered from
