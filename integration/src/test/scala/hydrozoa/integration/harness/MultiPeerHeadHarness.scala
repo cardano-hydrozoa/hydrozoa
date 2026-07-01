@@ -50,7 +50,13 @@ object MultiPeerHeadHarness:
         transportMode: Transport.Mode,
     )
 
-    /** Per-run configuration assembled by the caller (typically derived from a `ModelState`). */
+    /** Per-run configuration assembled by the caller (typically derived from a `ModelState`).
+      *
+      * @param sharedCardanoBackend
+      *   if set, the head reuses this mock L1 instead of building a fresh one from
+      *   `preinitPeerUtxosL1`. Lets two heads share one L1 (e.g. a membership-change demo where a new
+      *   head runs against the L1 state an old head left behind).
+      */
     case class Inputs(
         config: Config,
         multiNodeConfig: MultiNodeConfig,
@@ -58,6 +64,7 @@ object MultiPeerHeadHarness:
         preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
         takeoffTime: Option[Instant],
         startEpochMs: Long,
+        sharedCardanoBackend: Option[L1Backend[IO]] = None,
     )
 
     /** Roll-up of every event emitted by the regime managers the harness owns. The harness
@@ -122,13 +129,16 @@ object MultiPeerHeadHarness:
             _ <- Resource.eval(
                      PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
                  )
-            system         <- ActorSystem[IO](label)
-            cardanoBackend <- Resource.eval(
-                                  CardanoBackend.mkMock(
-                                    preinitPeerUtxosL1,
-                                    multiNodeConfig.headConfig.cardanoInfo,
-                                  )
-                              )
+            system <- ActorSystem[IO](label)
+            cardanoBackend <- sharedCardanoBackend match
+                                  case Some(backend) => Resource.pure[IO, L1Backend[IO]](backend)
+                                  case None =>
+                                      Resource.eval(
+                                        CardanoBackend.mkMock(
+                                          preinitPeerUtxosL1,
+                                          multiNodeConfig.headConfig.cardanoInfo,
+                                        )
+                                      )
             transports <- Transport.setup(
                               transportMode,
                               multiNodeConfig,
