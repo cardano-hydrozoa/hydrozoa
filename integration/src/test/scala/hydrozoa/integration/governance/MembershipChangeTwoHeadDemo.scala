@@ -36,7 +36,7 @@ import scalus.cardano.ledger.rules.{Context as LedgerContext, UtxoEnv}
 import scalus.cardano.ledger.{AssetName, CertState, PolicyId, Transaction, TransactionHash, TransactionInput, Utxos}
 import test.{SeedPhrase, TestPeers, genMonad}
 
-/** End-to-end two-head membership-change demo (Phase 3).
+/** End-to-end two-head membership-change demo.
   *
   * A full live head A (multi-peer, real fast + slow consensus over an in-process mesh) lands its
   * initialization tx on a shared mock L1. That treasury is then handed to a DISJOINT head B via a

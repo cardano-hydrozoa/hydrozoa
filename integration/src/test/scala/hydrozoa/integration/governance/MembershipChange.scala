@@ -40,10 +40,6 @@ import test.{PeersNumberSpec, SeedPhrase, TestPeers, TestPeersSpec, genMonad}
   * head's initialization (mint new tokens, produce new treasury + regime, carry an
   * [[Metadata.Initialization]] tag), so the new head parses it as its own init tx. The old treasury
   * input is the seed, hence the new head id is `mkHeadId(oldTreasuryInput)`.
-  *
-  * This suite only exercises the builder in isolation: build → multisign with both peer sets →
-  * submit to a mock L1 running the real Conway ledger → parse as the new head's init tx. The
-  * two-head harness demo is a separate later phase.
   */
 object MembershipChange extends Properties("MembershipChange transfer tx") {
 
