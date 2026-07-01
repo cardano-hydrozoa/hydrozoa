@@ -163,7 +163,7 @@ object EnrichedTx {
         }
 
     enum Type:
-        case Deposit, Fallback, Finalization, Initialization, Refund, Rollout, Settlement
+        case Deposit, Fallback, Finalization, Initialization, Refund, Rollout, Settlement, Transfer
 
     object Validators {
 

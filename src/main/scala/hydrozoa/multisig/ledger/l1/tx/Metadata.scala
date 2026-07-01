@@ -81,6 +81,20 @@ object Metadata {
         } yield (headId, res)
     }
 
+    /** Combine several tagged metadata into one auxiliary data, all under the single CIP-67 HYDR
+      * tag. Each metadata's tx-type becomes a distinct role key with its head id as the sole key
+      * beneath it, so the per-role single-head-id parse assertion still holds. Used by the transfer
+      * tx, which carries both an [[Initialization]] tag (new head id) and a [[Transfer]] tag (old
+      * head id) in one transaction.
+      */
+    def asAuxData(tagged: (Metadata, HeadId)*): AuxiliaryData = {
+        val roleEntries: Map[Metadatum, Metadatum] = tagged.map { (metadata, headId) =>
+            Metadatum.Text(metadata.txType.toString) ->
+                Metadatum.Map(Map(Metadatum.Text(headId.toHex) -> Metadatum.Map(metadata.asMap)))
+        }.toMap
+        MD(Map(Word64(CIP67.Tags.head) -> Metadatum.Map(roleEntries)))
+    }
+
     /** @param depositIx
       *   The output index of the deposit utxo in this transaction
       * @param depositFee
@@ -276,6 +290,40 @@ object Metadata {
     object Settlement extends Parser[Settlement](EnrichedTx.Type.Settlement) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Settlement] =
             Right(Settlement())
+    }
+
+    /** Marks a membership-change "transfer tx". The tag rides under the OLD head id and names the
+      * NEW head the treasury is moving to. The same transaction is also a valid initialization tx
+      * under the new head id (via a separate [[Initialization]] tag), so the new head parses it as
+      * its init tx.
+      *
+      * @param newHeadId
+      *   the head id the treasury is transferred to.
+      */
+    case class Transfer(newHeadId: HeadId) extends Metadata(EnrichedTx.Type.Transfer) {
+        override def asMap: Map[Metadatum, Metadatum] = Map.from(
+          List(Metadatum.Text("newHeadId") -> Metadatum.Text(newHeadId.toHex))
+        )
+    }
+
+    object Transfer extends Parser[Transfer](EnrichedTx.Type.Transfer) {
+        override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Transfer] = {
+            val innerMapEntries = innerMap.entries
+            for {
+                newHeadIdRaw <- innerMapEntries
+                    .get(Metadatum.Text("newHeadId"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "newHeadId",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
+                newHeadId <- newHeadIdRaw match {
+                    case x: Metadatum.Text => Right(HeadId(AssetName.fromHex(x.value)))
+                    case _                 => Left(WrongMetadataValue("newHeadId", newHeadIdRaw))
+                }
+            } yield Transfer(newHeadId)
+        }
     }
 
     private def parseMdFromTxSerialized(
