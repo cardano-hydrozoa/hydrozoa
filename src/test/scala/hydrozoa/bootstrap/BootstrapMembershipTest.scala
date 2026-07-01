@@ -1,4 +1,4 @@
-package hydrozoa.app
+package hydrozoa.bootstrap
 
 import io.circe.parser
 import org.scalatest.funsuite.AnyFunSuite

@@ -4,6 +4,7 @@ import cats.*
 import cats.data.*
 import cats.data.Kleisli.{ask, liftF}
 import cats.syntax.all.*
+import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.multisig.fallback.{FallbackContingency, generateFallbackContingency}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
@@ -90,7 +91,7 @@ object InitializationParametersGenTopDown {
             generateFallbackContingency: GenWithTestPeers[FallbackContingency],
             generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
             equityRange: (Coin, Coin)
-        ) => GenWithTestPeers[InitializationParameters]
+        ) => GenWithTestPeers[(InitializationParameters, InitializationFunding)]
 
     type GenInitializationParameters2 =
         (
@@ -125,7 +126,7 @@ object InitializationParametersGenTopDown {
             generateFallbackContingency,
         generateGenesisUtxosL1: GenWithTestPeers[Map[HeadPeerNumber, Utxos]],
         equityRange: (Coin, Coin) = Coin(5_000_000) -> Coin(500_000_000)
-    ): GenWithTestPeers[InitializationParameters] =
+    ): GenWithTestPeers[(InitializationParameters, InitializationFunding)] =
         for {
             testPeers <- ask
             cardanoNetwork = testPeers.cardanoNetwork
@@ -191,13 +192,19 @@ object InitializationParametersGenTopDown {
                   )
                 )
 
-        } yield InitializationParameters(
-          initialEvacuationMap = initialEvacuationMap,
-          initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
-          seedUtxo = seedUtxo,
-          additionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
-          initialChangeOutputs = total.changeOutputs
-        )
+        } yield {
+            val funding = InitializationFunding(
+              seedUtxo = seedUtxo,
+              additionalFundingUtxos = total.fundingUtxos.asUtxos - seedUtxo.input,
+              changeOutputs = total.changeOutputs
+            )
+            val parameters = InitializationParameters(
+              initialEvacuationMap = initialEvacuationMap,
+              initialEquityContributions = NonEmptyMap.fromMapUnsafe(peersEquity),
+              headId = funding.headId
+            )
+            (parameters, funding)
+        }
 
     // ===================================
     // Semigroup contributions for initialization params
@@ -402,11 +409,13 @@ object InitializationParametersGenBottomUp {
       */
 
     type GenInitializationParameters =
-        GenWithTestPeers[FallbackContingency] => GenWithTestPeers[InitializationParameters]
+        GenWithTestPeers[FallbackContingency] => GenWithTestPeers[
+          (InitializationParameters, InitializationFunding)
+        ]
 
     def generateInitializationParameters(
         fallbackContingencyGen: GenWithTestPeers[FallbackContingency] = generateFallbackContingency
-    ): GenWithTestPeers[InitializationParameters] =
+    ): GenWithTestPeers[(InitializationParameters, InitializationFunding)] =
         for {
             testPeers <- ask
             cardanoNetwork = testPeers.cardanoNetwork
@@ -482,19 +491,28 @@ object InitializationParametersGenBottomUp {
               fundingUtxosList.tail.map(_.toTuple)
             )
 
-        } yield InitializationParameters(
-          initialEvacuationMap = EvacuationMap(
-            TreeMap.from(
-              l2Utxos.map((i, o) =>
-                  (i.toEvacuationKey, Payout.Obligation(KeepRaw(o), cardanoNetwork).toOption.get)
-              )
+        } yield {
+            val funding = InitializationFunding(
+              seedUtxo = seedUtxo,
+              additionalFundingUtxos = additionalFundingUtxos,
+              changeOutputs = changeUtxos.values.toList
             )
-          ),
-          initialEquityContributions = equityContributions,
-          seedUtxo = seedUtxo,
-          additionalFundingUtxos = additionalFundingUtxos,
-          initialChangeOutputs = changeUtxos.values.toList
-        )
+            val parameters = InitializationParameters(
+              initialEvacuationMap = EvacuationMap(
+                TreeMap.from(
+                  l2Utxos.map((i, o) =>
+                      (
+                        i.toEvacuationKey,
+                        Payout.Obligation(KeepRaw(o), cardanoNetwork).toOption.get
+                      )
+                  )
+                )
+              ),
+              initialEquityContributions = equityContributions,
+              headId = funding.headId
+            )
+            (parameters, funding)
+        }
 
     // TODO: improve?
     def generateEquityContributions(numPeers: Int): Gen[NonEmptyMap[HeadPeerNumber, Coin]] =
