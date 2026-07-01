@@ -51,7 +51,7 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, blake2b_256}
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers, genMonad}
 
-/** Air-drop demo: streamlining L1 token distribution through a Hydrozoa head.
+/** Airdrop demo: streamlining L1 token distribution through a Hydrozoa head.
   *
   * A publisher mints the entire token volume up front (here: seeded straight into the head's
   * initial L2 state as one pot utxo of [[totalSupply]] tokens) and boots a live multi-peer head
