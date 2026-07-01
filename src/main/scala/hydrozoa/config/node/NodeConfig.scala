@@ -156,7 +156,7 @@ object NodeConfig {
 
     /** Read both config files and decode the resulting [[NodeConfig]] together with the Blockfrost
       * backend the decoder constructs. Shared by every CLI that needs to act as a configured peer
-      * ([[hydrozoa.app.Main]], [[hydrozoa.app.Migrate]]).
+      * ([[hydrozoa.app.Main]], [[hydrozoa.bootstrap.Migrate]]).
       *
       * @param backendOverride
       *   if `Some`, used in place of the Blockfrost backend the decoder would otherwise build from

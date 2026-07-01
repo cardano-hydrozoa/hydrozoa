@@ -1,4 +1,4 @@
-package hydrozoa.app
+package hydrozoa.bootstrap
 
 import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.{ExitCode, IO, IOApp}
@@ -51,7 +51,7 @@ import scalus.uplc.builtin.ByteString
 
 object Bootstrap:
 
-    private val logger = Logging.loggerIO("hydrozoa.app.Bootstrap")
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.Bootstrap")
 
     /** Generate a new Ed25519 key pair for Cardano. */
     def generateKeyPair(): IO[(VerificationKey, SigningKey)] =
@@ -417,7 +417,7 @@ end GenerateKeyPair
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.Migrate <head-config.json> <peer-private.json> <bech32-dest>"
+  *   sbt "runMain hydrozoa.bootstrap.Migrate <head-config.json> <peer-private.json> <bech32-dest>"
   * }}}
   *
   * Reads wallet + Blockfrost credentials from the same files Main does; signs with the peer wallet
@@ -430,7 +430,7 @@ object Migrate
     ):
 
     private val log: ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Migrate"))
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.Migrate"))
 
     private val headArg: Opts[Path] =
         Opts.argument[String]("head-config.json").map(Path.of(_))
@@ -587,7 +587,7 @@ end Migrate
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.BuildHeadConfig <peers.json> \
+  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <peers.json> \
   *     --blockfrost-key <key> --equity <lovelace> [--out head-config.json]"
   * }}}
   *
@@ -601,7 +601,7 @@ object BuildHeadConfig
       header = "Build the shared head-config.json artifact every node loads"
     ):
 
-    private val logger = Logging.loggerIO("hydrozoa.app.BuildHeadConfig")
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
     private val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
 
