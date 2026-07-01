@@ -8,7 +8,7 @@ import scala.concurrent.duration.FiniteDuration
 
 final case class NodeOperationEvacuationConfig(
     override val evacuationBotPollingPeriod: FiniteDuration,
-    override val evacuationWallet: PeerWallet
+    override val ruleBasedWallet: PeerWallet
 ) extends NodeOperationEvacuationConfig.Section {
     override transparent inline def nodeOperationEvacuationConfig: NodeOperationEvacuationConfig =
         this
@@ -21,7 +21,7 @@ object NodeOperationEvacuationConfig {
         def evacuationBotPollingPeriod: FiniteDuration =
             nodeOperationEvacuationConfig.evacuationBotPollingPeriod
 
-        def evacuationWallet: PeerWallet = nodeOperationEvacuationConfig.evacuationWallet
+        def ruleBasedWallet: PeerWallet = nodeOperationEvacuationConfig.ruleBasedWallet
     }
 
     given nodeOperationEvacuationConfigEncoder: Encoder[NodeOperationEvacuationConfig] =
@@ -31,7 +31,7 @@ object NodeOperationEvacuationConfig {
         Decoder.instance(c =>
             for {
                 ebpp <- c.downField("evacuationBotPollingPeriod").as[FiniteDuration]
-                ew <- c.downField("evacuationWallet").as[PeerWallet]
-            } yield NodeOperationEvacuationConfig(ebpp, ew)
+                rbw <- c.downField("ruleBasedWallet").as[PeerWallet]
+            } yield NodeOperationEvacuationConfig(ebpp, rbw)
         )
 }

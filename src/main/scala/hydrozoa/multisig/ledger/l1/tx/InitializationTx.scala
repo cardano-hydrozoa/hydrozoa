@@ -49,12 +49,10 @@ final case class InitializationTx(
       HasResolvedUtxos,
       MultisigTreasuryUtxo.Produced,
       MultisigRegimeUtxo.Produced,
-      HasTokenNames {
-
-    override def transactionFamily: String = "I|nitialization"
-}
+      HasTokenNames {}
 
 object InitializationTx {
+    given TxFamily[InitializationTx] = TxFamily.of("Initialization")
     export InitializationTxOps.{Build, Parse}
 
     given initializationTxEncoder: Encoder[InitializationTx] =

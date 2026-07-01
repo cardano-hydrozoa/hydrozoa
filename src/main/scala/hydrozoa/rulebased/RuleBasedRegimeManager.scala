@@ -10,66 +10,83 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{BackendStore, Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
 import hydrozoa.rulebased.ledger.l1.state.VoteState.secFromData
-import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
-/** This doesn't actually do much of anything right now. It just starts the dispute and evacuation
-  * actors, and those proceed autonomously. I don't think we need actors for these.
-  *
-  * On boot it reads the rule-based regime's recovery inputs (SEC, peer signatures, the evacuation
-  * map at fallback, the fallback tx hash) from [[Persistence]] so the same code path serves first
-  * run and crash recovery.
+/** Spawns the [[RuleBasedActor]] and supplies it with persistence-backed loaders for the inputs
+  * that can't be derived from chain state.
   */
 case class RuleBasedRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     persistence: Persistence[IO],
     backend: BackendStore[IO],
     votingDeadline: QuantizedInstant,
-    disputeTracer: ContraTracer[IO, DisputeActorEvent],
-    evacuationTracer: ContraTracer[IO, EvacuationActorEvent],
+    tracer: ContraTracer[IO, RuleBasedActorEvent],
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
 
-    // Start the dispute and evacuation actors
-    override def preStart: IO[Unit] = {
-        for {
-            state <- loadRuleBasedState
-            _ <- context.actorOf(
-              DisputeActor(
-                action = state.action,
+    override def preStart: IO[Unit] =
+        context
+            .actorOf(
+              RuleBasedActor(
+                loadAction = loadAction,
+                loadEvacuationInputs = loadEvacuationInputs,
                 cardanoBackend = cardanoBackend,
-                tracer = disputeTracer
+                tracer = tracer
               )
             )
-            _ <- context.actorOf(
-              EvacuationActor(
-                candidateEvacMaps = state.candidateEvacMaps,
-                cardanoBackend = cardanoBackend,
-                fallbackTxHash = state.fallbackTxHash,
-                tracer = evacuationTracer
-              )
-            )
-        } yield ()
-    }
+            .void
 
-    /** Read the rule-based recovery inputs from persistence. The latest hard-confirmed stack always
-      * provides a fallback tx. It provides a SEC + peer signatures (=> [[DisputeAction.Vote]]) only
-      * when the latest partition is a Minor or a Major with trailing minors; otherwise (Initial
-      * stack, or Major-with-no-trailing-minors) the recovered action is [[DisputeAction.Abstain]]
-      * and the dispute resolves via the on-chain Abstain branch.
+    /** Re-read just enough state from persistence to decide whether this peer should vote or
+      * abstain. Called by [[RuleBasedActor]] on each tick that observes its own `AwaitingVote`
+      * ballot box, so it stays narrow: markers + the latest hard-confirmed stack's effects.
       */
-    private def loadRuleBasedState: IO[RuleBasedRegimeManager.State] =
+    private def loadAction: IO[DisputeAction] =
         for {
-            // Rule-based recovery via the head-peer markers is head-only; coil-side recovery lands
-            // with the coil-persistence workstream.
+            ownHeadPeerNum <- config.ownPeerId match {
+                case PeerId.Head(n) => IO.pure(n)
+                case PeerId.Coil(_) =>
+                    IO.raiseError(
+                      new IllegalStateException(
+                        "rule-based recovery via Markers.derive is head-only (coil recovery deferred)"
+                      )
+                    )
+            }
+            markers <- Markers.derive(backend, PeerId.Head(ownHeadPeerNum))
+            stackNum <- markers.hardConfirmed.liftTo[IO](
+              RuleBasedRegimeManager.MissingState("no hard-confirmed stack on disk")
+            )
+            effects <- persistence
+                .get(StoreKey.HardConfirmation(stackNum))
+                .flatMap(
+                  _.liftTo[IO](
+                    RuleBasedRegimeManager.MissingState(s"HardConfirmation($stackNum) missing")
+                  )
+                )
+        } yield effects match {
+            case _: StackEffects.HardConfirmed.Initial => DisputeAction.Abstain
+            case r: StackEffects.HardConfirmed.Regular =>
+                RuleBasedRegimeManager.lastSec(r.partitions) match {
+                    case None => DisputeAction.Abstain
+                    case Some(multiSec) =>
+                        DisputeAction.Vote(
+                          sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment),
+                          signatures = multiSec.headerMultiSigned,
+                          coilSignatures = Nil // coil-side recovery is deferred
+                        )
+                }
+        }
+
+    /** Re-read the evacuation-side rule-based inputs from persistence. Called by [[RuleBasedActor]]
+      * on each tick that runs the evacuation branch.
+      */
+    private def loadEvacuationInputs: IO[RuleBasedActor.EvacuationInputs] =
+        for {
             ownHeadPeerNum <- config.ownPeerId match {
                 case PeerId.Head(n) => IO.pure(n)
                 case PeerId.Coil(_) =>
@@ -93,8 +110,7 @@ case class RuleBasedRegimeManager(
             res <- effects match {
                 case i: StackEffects.HardConfirmed.Initial =>
                     IO.pure(
-                      RuleBasedRegimeManager.State(
-                        action = DisputeAction.Abstain,
+                      RuleBasedActor.EvacuationInputs(
                         candidateEvacMaps = Map(
                           config.initialEvacuationMap.kzgCommitment ->
                               config.initialEvacuationMap
@@ -111,15 +127,6 @@ case class RuleBasedRegimeManager(
                                 s"no fallback tx in stack $stackNum"
                               )
                             )
-                        action = RuleBasedRegimeManager.lastSec(r.partitions) match {
-                            case None => DisputeAction.Abstain
-                            case Some(multiSec) =>
-                                DisputeAction.Vote(
-                                  sec = RuleBasedRegimeManager.toOnchain(multiSec.commitment),
-                                  signatures = multiSec.headerMultiSigned,
-                                  coilSignatures = Nil // coil-side recovery is deferred
-                                )
-                        }
                         // Default-vote map — what the multisig treasury was committed to at
                         // fallback time. The default vote utxo carries this kzg, so if peers
                         // never tally onto a newer SEC the resolution will land here. The closing
@@ -166,8 +173,7 @@ case class RuleBasedRegimeManager(
                                     )
                                     .map(map => multiSec.commitment.kzgCommitment -> map)
                             }
-                    } yield RuleBasedRegimeManager.State(
-                      action = action,
+                    } yield RuleBasedActor.EvacuationInputs(
                       candidateEvacMaps =
                           ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
                       fallbackTxHash = fallbackTx.tx.id
@@ -177,10 +183,10 @@ case class RuleBasedRegimeManager(
 }
 
 object RuleBasedRegimeManager {
-    type Config = EvacuationActor.Config & DisputeActor.Config
+    type Config = RuleBasedActor.Config
 
-    /** What action this peer's [[DisputeActor]] should take when it observes its own `AwaitingVote`
-      * vote utxo on L1.
+    /** What action this peer's [[RuleBasedActor]] should take when it observes its own
+      * `AwaitingVote` vote utxo on L1.
       *
       *   - [[Vote]]: the latest hard-confirmed stack ended with a Minor (or Major-with-trailing-
       *     minors) — we have a signed SEC + peer header signatures, so the actor builds and submits
@@ -196,20 +202,6 @@ object RuleBasedRegimeManager {
             coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
         )
         case Abstain
-
-    /** The rule-based recovery inputs pulled from persistence at boot.
-      *
-      * `candidateEvacMaps` enumerates every evacuation map peers might end up tallying onto — each
-      * candidate SEC in the hard-confirmed partitions plus the "default vote" map (what the
-      * multisig treasury was committed to at fallback time). At runtime, once the dispute
-      * resolution lands, the EvacuationActor reads the resolved treasury's kzg commitment and picks
-      * the matching map.
-      */
-    final case class State(
-        action: DisputeAction,
-        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
-        fallbackTxHash: TransactionHash
-    )
 
     /** Raised when the loader can't reconstruct the rule-based state from persistence — e.g. no
       * hard-confirmed stack on disk, the latest stack is Initial, or the SEC/fallback/evacuation

@@ -51,11 +51,10 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
-      EnrichedTx[FallbackTx] {
-    override def transactionFamily: String = "FallbackTx"
-}
+      EnrichedTx[FallbackTx] {}
 
 object FallbackTx {
+    given TxFamily[FallbackTx] = TxFamily.of("FallbackTx")
     export FallbackTxOps.Build
 
     given fallbackTxEncoder: Encoder[FallbackTx] =

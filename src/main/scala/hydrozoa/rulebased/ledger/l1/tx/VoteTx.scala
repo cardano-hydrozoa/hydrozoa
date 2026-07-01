@@ -11,8 +11,8 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
@@ -37,11 +37,10 @@ final case class VoteTx(
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[VoteTx] {
-    override def transactionFamily: String = "VoteTx"
-}
+) extends EnrichedTx[VoteTx] {}
 
 object VoteTx {
+    given TxFamily[VoteTx] = TxFamily.of("VoteTx")
     export VoteTxOps.{Build, Config}
 }
 

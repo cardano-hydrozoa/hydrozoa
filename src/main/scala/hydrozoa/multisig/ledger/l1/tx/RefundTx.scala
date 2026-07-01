@@ -38,8 +38,10 @@ object RefundTx {
           EnrichedTx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
         override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    }
 
-        override def transactionFamily: String = "RefundTx.PostDated"
+    object PostDated {
+        given TxFamily[PostDated] = TxFamily.of("RefundTx.PostDated")
     }
 }
 

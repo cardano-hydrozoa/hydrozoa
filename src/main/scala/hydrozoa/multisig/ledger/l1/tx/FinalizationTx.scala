@@ -32,6 +32,7 @@ sealed trait FinalizationTx
 }
 
 object FinalizationTx {
+    given TxFamily[FinalizationTx] = TxFamily.of("FinalizationTx")
     export FinalizationTxOps.Build
     export FinalizationTxOps.Result
     export FinalizationTxOps.Error

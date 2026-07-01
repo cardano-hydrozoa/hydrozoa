@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
-import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, EvacuationActor, EvacuationActorEvent, EvacuationActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat, RuleBasedRegimeManager}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -200,31 +200,19 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             // Fires when any peer logs that no evacuations remain.
             evacuatedSignal <- lift(IO.deferred[Unit])
 
-            peerNum = env.nodeConfigs.head._1
-            
             // Signal tracer that fires when any peer finishes evacuating.
-            evacuationSignalTap: ContraTracer[IO, EvacuationActorEvent] = ContraTracer.emit {
-                case EvacuationActorEvent.NoMoreEvacuations => evacuatedSignal.complete(()).void
-                case _                                      => IO.unit
+            evacuationSignalTap: ContraTracer[IO, RuleBasedActorEvent] = ContraTracer.emit {
+                case RuleBasedActorEvent.Evacuation.NoMore => evacuatedSignal.complete(()).void
+                case _                                     => IO.unit
             }
-
-            _: ContraTracer[IO, EvacuationActorEvent] =
-                Slf4jTracer.sink.contramap(EvacuationActorEventFormat.humanFormat(peerNum))
-
-            _: ContraTracer[IO, DisputeActorEvent] =
-                Slf4jTracer.sink.contramap(DisputeActorEventFormat.humanFormat(peerNum))
 
             terminalUtxos <- lift {
                 val peerBots: List[IO[Unit]] =
                     env.nodePrivateConfigs.toList.map { (peerId, _) =>
-                        val peerEvacTracer =
+                        val peerTracer =
                             Slf4jTracer.sink.contramap(
-                              EvacuationActorEventFormat.humanFormat(peerId)
+                              RuleBasedActorEventFormat.humanFormat(peerId)
                             ) |+| evacuationSignalTap
-                        val peerDisputeTracer =
-                            Slf4jTracer.sink.contramap(
-                              DisputeActorEventFormat.humanFormat(peerId)
-                            )
                         actorsFor(
                           peerId = peerId,
                           action = action,
@@ -234,19 +222,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                                 initialUtxos.evacuationMap
                           ),
                           fallbackTxHash = fallbackTxId,
-                          disputeTracer = peerDisputeTracer,
-                          evacuationTracer = peerEvacTracer,
+                          tracer = peerTracer,
                         )(using env.nodeConfigs(peerId))
                     }
 
-                val infoTracer = Slf4jTracer.sink.contramap(
-                  EvacuationActorEventFormat.humanFormat(peerNum)
-                )
-
                 IO.race(
-                  evacuatedSignal.get
-                      >> infoTracer.traceWith(EvacuationActorEvent.EvacTxSubmitted)
-                      >> IO.sleep(postCompletionBuffer),
+                  evacuatedSignal.get >> IO.sleep(postCompletionBuffer),
                   peerBots.parSequence
                 ).timeoutTo(
                   actorRunDuration,
@@ -286,11 +267,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             )
         yield true
 
-    /** Spawn a [[DisputeActor]] + [[EvacuationActor]] pair for one peer inside its own
-      * [[ActorSystem]] and block until the system terminates. Until a stage4-style harness can
-      * drive a head through hard-confirmation + fallback into the rule-based regime, this test
-      * bypasses [[RuleBasedRegimeManager]] and feeds the synthetic post-fallback inputs straight
-      * to the actors.
+    /** Spawn a [[RuleBasedActor]] for one peer inside its own [[ActorSystem]] and block until the
+      * system terminates. Until a stage4-style harness can drive a head through hard-confirmation +
+      * fallback into the rule-based regime, this test bypasses [[RuleBasedRegimeManager]] and feeds
+      * the synthetic post-fallback inputs straight to the actor.
       */
     private def actorsFor(
         peerId: Int,
@@ -298,24 +278,21 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         sharedBackend: CardanoBackend[IO],
         candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
         fallbackTxHash: TransactionHash,
-        disputeTracer: ContraTracer[IO, DisputeActorEvent],
-        evacuationTracer: ContraTracer[IO, EvacuationActorEvent],
+        tracer: ContraTracer[IO, RuleBasedActorEvent],
     )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
-        ActorSystem[IO](s"RBR actors for peer $peerId").use { system =>
+        ActorSystem[IO](s"RBR actor for peer $peerId").use { system =>
             for {
                 _ <- system.actorOf(
-                  DisputeActor(
-                    action = action,
+                  RuleBasedActor(
+                    loadAction = IO.pure(action),
+                    loadEvacuationInputs = IO.pure(
+                      RuleBasedActor.EvacuationInputs(
+                        candidateEvacMaps = candidateEvacMaps,
+                        fallbackTxHash = fallbackTxHash
+                      )
+                    ),
                     cardanoBackend = sharedBackend,
-                    tracer = disputeTracer
-                  )
-                )
-                _ <- system.actorOf(
-                  EvacuationActor(
-                    candidateEvacMaps = candidateEvacMaps,
-                    cardanoBackend = sharedBackend,
-                    fallbackTxHash = fallbackTxHash,
-                    tracer = evacuationTracer
+                    tracer = tracer
                   )
                 )
                 _ <- system.waitForTermination
