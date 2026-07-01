@@ -6,7 +6,7 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{*, given}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116
-import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, InternalDepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
@@ -39,6 +39,12 @@ object JsonCodecs {
             )
         case UserRequestBody.TransactionRequestBody(l2Payload) =>
             Json.obj(
+              "l2Payload" -> byteStringEncoder(l2Payload)
+            )
+        case UserRequestBody.InternalDepositRequestBody(depositInput, depositOutput, l2Payload) =>
+            Json.obj(
+              "depositInput" -> byteStringEncoder(depositInput),
+              "depositOutput" -> byteStringEncoder(depositOutput),
               "l2Payload" -> byteStringEncoder(l2Payload)
             )
     }
@@ -201,6 +207,9 @@ object JsonCodecs {
                     case t: TransactionRequestBody =>
                         UserRequest
                             .TransactionRequest(header, t, vKey)
+                    case i: InternalDepositRequestBody =>
+                        UserRequest
+                            .InternalDepositRequest(header, i, vKey)
                 }
 
             } yield userRequest

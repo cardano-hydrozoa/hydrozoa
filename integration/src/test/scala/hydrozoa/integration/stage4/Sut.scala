@@ -183,4 +183,10 @@ extension (self: UserRequestWithId)
               body = r.body,
               userVk = r.userVk
             )
+        case UserRequestWithId.InternalDepositRequest(_, r) =>
+            UserRequest.InternalDepositRequest(
+              header = r.header,
+              body = r.body,
+              userVk = r.userVk
+            )
     }

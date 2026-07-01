@@ -16,12 +16,13 @@ import monocle.{Focus, Lens}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
+import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{ModifyAuxiliaryData, Send, Spend, ValidityEndSlot}
 import scalus.uplc.builtin.Builtins.blake2b_256
-import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.{ByteString, Data}
 
 final case class DepositTx(
     depositProduced: DepositUtxo,
@@ -48,13 +49,17 @@ private object DepositTxOps {
         depositFee: Coin,
         changeAddress: ShelleyAddress,
         requestValidityEndTime: RequestValidityEndTime,
-        refundInstructions: DepositUtxo.Refund.Instructions
+        refundInstructions: DepositUtxo.Refund.Instructions,
+        oraclePayload: ScalusOption[Data] = ScalusOption.None
     )(using config: Config) {
         def result: Either[(SomeBuildError, String), DepositTx] = {
             val spendUtxosFunding = utxosFunding.toList.map(Spend(_, PubKeyWitness))
 
             val depositDatum: DepositUtxo.Datum =
-                DepositUtxo.Datum(DepositUtxo.Refund.Instructions.Onchain.apply(refundInstructions))
+                DepositUtxo.Datum(
+                  DepositUtxo.Refund.Instructions.Onchain.apply(refundInstructions),
+                  oraclePayload
+                )
 
             val depositValue = l2Value + Value(depositFee)
 

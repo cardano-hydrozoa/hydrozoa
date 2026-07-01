@@ -421,6 +421,8 @@ object Codecs {
         deriveCodec[UserRequestBody.DepositRequestBody]
     private given Codec[UserRequestBody.TransactionRequestBody] =
         deriveCodec[UserRequestBody.TransactionRequestBody]
+    private given Codec[UserRequestBody.InternalDepositRequestBody] =
+        deriveCodec[UserRequestBody.InternalDepositRequestBody]
 
     given (using CardanoNetwork.Section): Codec[UserRequestHeader] = {
         import hydrozoa.multisig.server.JsonCodecs.given
@@ -463,6 +465,24 @@ object Codecs {
         io.circe.Codec.from(dec, enc)
     }
 
+    given (using CardanoNetwork.Section): Codec[UserRequest.InternalDepositRequest] = {
+        val enc: Encoder[UserRequest.InternalDepositRequest] = Encoder.instance(r =>
+            Json.obj(
+              "header" -> r.header.asJson,
+              "body" -> r.body.asJson,
+              "userVk" -> r.userVk.asJson
+            )
+        )
+        val dec: Decoder[UserRequest.InternalDepositRequest] = Decoder.instance(c =>
+            for {
+                h <- c.downField("header").as[UserRequestHeader]
+                b <- c.downField("body").as[UserRequestBody.InternalDepositRequestBody]
+                vk <- c.downField("userVk").as[VerificationKey]
+            } yield UserRequest.InternalDepositRequest(h, b, vk)
+        )
+        io.circe.Codec.from(dec, enc)
+    }
+
     given (using CardanoNetwork.Section): Codec[UserRequestWithId] = {
         val enc: Encoder[UserRequestWithId] = Encoder.instance {
             case UserRequestWithId.DepositRequest(rid, r) =>
@@ -474,6 +494,12 @@ object Codecs {
             case UserRequestWithId.TransactionRequest(rid, r) =>
                 Json.obj(
                   "kind" -> "Transaction".asJson,
+                  "requestId" -> rid.asJson,
+                  "request" -> r.asJson
+                )
+            case UserRequestWithId.InternalDepositRequest(rid, r) =>
+                Json.obj(
+                  "kind" -> "InternalDeposit".asJson,
                   "requestId" -> rid.asJson,
                   "request" -> r.asJson
                 )
@@ -491,6 +517,10 @@ object Codecs {
                         c.downField("request")
                             .as[UserRequest.TransactionRequest]
                             .map(r => UserRequestWithId.TransactionRequest(rid, r))
+                    case "InternalDeposit" =>
+                        c.downField("request")
+                            .as[UserRequest.InternalDepositRequest]
+                            .map(r => UserRequestWithId.InternalDepositRequest(rid, r))
                     case other =>
                         Left(
                           DecodingFailure(s"Unknown UserRequestWithId kind: $other", c.history)

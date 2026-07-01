@@ -1,42 +1,45 @@
 package hydrozoa.examples.oracle
 
-import cats.data.{NonEmptyMap, ReaderT}
-import cats.effect.IO
+import cats.data.{NonEmptyList, NonEmptyMap, ReaderT}
+import cats.effect.{IO, Ref}
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.InitParamsType.Constant
+import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.initialization.InitializationParameters
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.{DepositMaturityDuration, DepositSubmissionDuration}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
-import hydrozoa.config.head.multisig.timing.generateDefaultTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, RateLimits, generateNodeOperationMultisigConfig}
-import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
-import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{
-  MultiPeerHeadHarness,
-  Signal
-}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
 import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.CommonChildEvent
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
+import hydrozoa.multisig.consensus.UserRequestBody.DepositRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.{RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationKey
-import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering, given}
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.stack.StackEffects
+import hydrozoa.integration.harness.MultiPeerHeadHarness
+import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
+import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.Signal
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
+import io.bullet.borer.Cbor
 import java.time.Instant
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.Test.Parameters
@@ -49,7 +52,7 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context as LedgerContext, UtxoEnv}
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, CertState, Coin, KeepRaw, Metadatum, PolicyId, ScriptHash, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, CertState, Coin, Hash32, Metadatum, PolicyId, ScriptHash, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
@@ -58,29 +61,29 @@ import scalus.uplc.builtin.Builtins.{blake2b_224, blake2b_256}
 import scalus.uplc.builtin.Data.{fromData, toData}
 import scalus.uplc.builtin.FromData.given_FromData_BigInt
 import scalus.uplc.builtin.{ByteString, Data}
-import test.{SeedPhrase, TestPeers, genMonad}
+import test.{GenWithTestPeers, SeedPhrase, TestPeers, genMonad}
 
-/** Oracle demo: publishing an on-chain data feed through a Hydrozoa head.
+/** Oracle demo: a live, refreshing on-chain data feed through a Hydrozoa head.
   *
   * A data provider runs an oracle whose feed is the [Hofstadter
-  * Q-sequence](https://oeis.org/A005185) — a self-contained, deterministic integer sequence
-  * standing in for any real-world feed. Each successive term Q(n) is published to Cardano L1 as an
-  * **oracle utxo**: a utxo at the head's native script address carrying (a) an authentication token
-  * proving provenance and (b) the term itself in the `oraclePayload` field of the deposit datum.
-  * Any Cardano contract can read the current value as a CIP-31 reference input.
+  * Q-sequence](https://oeis.org/A005185) — `Q(1)=Q(2)=1, Q(n)=Q(n-Q(n-1))+Q(n-Q(n-2))` — a
+  * self-contained, deterministic stand-in for any real-world feed. Each term is published as an
+  * **oracle utxo** at the head's native script address, carrying an authentication token + the term
+  * in the deposit datum's `oraclePayload`. Any Cardano contract could reference it (CIP-31) to read
+  * the current value.
   *
-  * The provider's authentication tokens live in the head's L2. Each refresh is an L2 transaction
-  * request that produces an L1-bound payout to the native script address, carrying one auth token
-  * and the new term — the head's settlement machinery lands it on L1. So after the initial funding,
-  * the whole feed is driven from L2, at head cost, without repeated external L1 transactions.
+  * This demo is faithful to the whitepaper's refresh cycle, exercising the full deposit lifecycle:
+  *   - Term 1 is published as an **external deposit** — the provider brings the auth token into the
+  *     head. The deposit sits on L1 during its (short, ~10s) maturity window — a guaranteed
+  *     **stability window** during which it is referenceable — then the head absorbs it.
+  *   - Terms 2..N are published as **internal deposits**: the provider submits an L2 payout to the
+  *     native script address, then re-registers that settled utxo as a deposit (via the internal
+  *     deposit backdoor). One auth token cycles L1 -> L2 -> L1 forever; only ~one oracle utxo is
+  *     live at a time.
   *
-  * (The whitepaper's single-token-recycling refresh relies on internal-deposit re-absorption, which
-  * is future work; this demo spends one auth token of the provider's policy per publication.
-  * Consumers authenticate on the token's *policy*, so this is equivalent from their side.)
-  *
-  * Bespoke real-clock run (like the airdrop / membership-change demos, NOT ModelBasedSuite). The
-  * final assertion reads the mock L1 directly: every published term appears in an oracle utxo, each
-  * bearing the provider's auth token, with the payloads decoding to exactly Q(1)..Q(nTerms).
+  * The maturity duration is shortened to ~10s (default is 1 hour) so the stability windows are
+  * observable in a couple of minutes. For each term the demo asserts it was seen **present** on L1
+  * (in its window) and then **absorbed**, in Q-sequence order, with no consensus errors.
   */
 object OracleDemo extends Properties("Oracle demo") {
 
@@ -96,26 +99,23 @@ object OracleDemo extends Properties("Oracle demo") {
 
     private val nHeadPeers = 2
 
-    /** How many terms of the feed to publish (Q(1)..Q(nTerms)). */
-    private val nTerms: Int = 25
-
-    /** ADA carried by each oracle utxo (leaves L2 with the auth token); above min-ada for a
-      * token+datum utxo.
+    /** How many terms of the feed to publish (Q(1)..Q(nTerms)). Kept small: each term costs a ~10s
+      * maturity window plus settlement rounds.
       */
+    private val nTerms: Int = 6
+
+    /** ADA carried by the single cycling oracle utxo. */
     private val oracleAdaLovelace: Long = 2_000_000L
 
-    /** ADA seeded into the provider's L2 pot — covers [[oracleAdaLovelace]] for every publication
-      * plus a change remainder above min-ada.
+    /** ADA in the provider's L1 funding utxo for the term-1 external deposit (covers the deposit
+      * output + change + tx fee).
       */
-    private val potAdaLovelace: Long = 100_000_000L
+    private val fundingAdaLovelace: Long = 10_000_000L
 
     /** Equity contributed per peer (covers the init tx fee). */
     private val equityPerPeerLovelace: Long = 20_000_000L
 
-    /** The provider's authentication token: one token per publication is spent, all of one policy.
-      * A fabricated policy id — the tokens are seeded straight into L2, never minted on the mock
-      * L1.
-      */
+    /** The provider's single authentication token, seeded on L1 and cycled through the head. */
     private val authPolicyId: PolicyId =
         ScriptHash.fromByteString(
           blake2b_224(ByteString.fromArray("hydrozoa-oracle-auth-policy".getBytes))
@@ -123,9 +123,7 @@ object OracleDemo extends Properties("Oracle demo") {
     private val authAssetName: AssetName =
         AssetName(ByteString.fromString("ORACLE"))
 
-    /** The [Hofstadter Q-sequence](https://oeis.org/A005185): Q(1)=Q(2)=1,
-      * Q(n)=Q(n-Q(n-1))+Q(n-Q(n-2)). The feed's data.
-      */
+    /** The [Hofstadter Q-sequence](https://oeis.org/A005185). */
     private val qSequence: Vector[Long] = {
         val q = Array.fill(nTerms + 1)(0L)
         if nTerms >= 1 then q(1) = 1L
@@ -134,126 +132,92 @@ object OracleDemo extends Properties("Oracle demo") {
         (1 to nTerms).map(q(_)).toVector
     }
 
+    // Poll budgets (real clock): ~2 minutes each at 500ms.
+    private val pollAttempts = 240
+    private val pollSleep: FiniteDuration = 500.millis
+
     // ===================================
     // Scenario fixture
     // ===================================
-
-    /** One built, signed publication: an L2 tx spending the provider's current pot, producing the
-      * oracle utxo (auth token + payload Q(n), withdrawn to L1) and change (kept in L2).
-      */
-    private case class Publication(signedTx: Transaction, term: Long)
 
     private case class Scenario(
         mnc: MultiNodeConfig,
         headGenesisUtxos: Utxos,
         headInitTxId: TransactionHash,
         nativeScriptAddress: ShelleyAddress,
-        publications: List[Publication]
+        providerAddress: ShelleyAddress,
+        providerFundingUtxo: Utxo
     )
 
-    // Narrow the rate limits (as stage4 does) so stack/block propagation isn't paced against the
-    // production defaults while the demo runs on the real clock.
-    private def genNodeOpMultisig(
-        hc: hydrozoa.config.head.HeadConfig
-    ): Gen[NodeOperationMultisigConfig] =
+    // Narrow the rate limits so blocks/stacks flow quickly on the real clock.
+    private def genNodeOpMultisig(hc: HeadConfig): Gen[NodeOperationMultisigConfig] =
         generateNodeOperationMultisigConfig(
           maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod,
           rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
         )
 
+    /** Tx timing with a ~10s deposit maturity (default is 1 hour) so stability windows are short
+      * enough to watch. Polling is auto-clamped to `maturity / safetyFactor` via
+      * `hc.maxCardanoLiaisonPollingPeriod`, so no other timing needs to change.
+      */
+    private def genShortMaturityTxTiming: GenWithTestPeers[TxTiming] =
+        ReaderT(network =>
+            Gen.const {
+                val sc = network.slotConfig
+                TxTiming
+                    .default(sc)
+                    .copy(
+                      depositSubmissionDuration = DepositSubmissionDuration(5.seconds.quantize(sc)),
+                      depositMaturityDuration = DepositMaturityDuration(10.seconds.quantize(sc))
+                    )
+            }
+        )
+
     private def authTokensOf(value: Value): Long =
         value.assets.assets.get(authPolicyId).flatMap(_.get(authAssetName)).getOrElse(0L)
 
-    /** Build the deterministic chain of signed publication txs off the initial pot utxo.
-      * Publication `i+1` spends publication `i`'s change output (index 1); tx ids are stable under
-      * signing, so the whole chain is known offline.
-      */
-    private def buildPublications(
-        mnc: MultiNodeConfig,
-        providerAddress: ShelleyAddress,
-        nativeScriptAddress: ShelleyAddress,
-        onchainRefund: DepositUtxo.Refund.Instructions.Onchain,
-        potInput0: TransactionInput,
-        potValue0: Value
-    ): List[Publication] = {
-        val network = mnc.headConfig.cardanoNetwork.cardanoInfo.network
-        val protocolParams = mnc.headConfig.cardanoProtocolParams.withZeroFees
-        val evaluator = mnc.headConfig.plutusScriptEvaluatorForTxBuild
-        val signAsProvider = mnc.signTxAs(HeadPeerNumber(0))
+    /** The value of one oracle utxo / one cycle of the token: the auth token + its carried ADA. */
+    private val cycleValue: Value =
+        Value(Coin(oracleAdaLovelace)) + Value.asset(authPolicyId, authAssetName, 1L)
 
-        // metadata: output 0 (oracle utxo) = 1 (withdraw to L1); output 1 (change) = 2 (stay in L2)
-        val withdrawMetadata: AuxiliaryData = Metadata(
-          Map(
-            Word64(CIP67.Tags.head) ->
-                Metadatum.List(IndexedSeq(Metadatum.Int(1), Metadatum.Int(2)))
+    /** The genesis obligation minting the token + ADA back to the provider's L2 account on
+      * absorption — this is what keeps the token cycling.
+      */
+    private def providerL2Payload(providerAddress: ShelleyAddress): ByteString = {
+        val obligation = GenesisObligation(
+          l2OutputPaymentAddress = providerAddress.payment,
+          l2OutputNetwork = providerAddress.network,
+          l2OutputDatum = ScalusOption.None,
+          l2OutputValue = cycleValue,
+          l2OutputRefScript = None
+        )
+        GenesisObligation.serialize(NonEmptyList.of(obligation))
+    }
+
+    /** The oracle datum for term `q`: a deposit datum whose `oraclePayload` carries the value. */
+    private def oracleDatum(
+        providerAddress: ShelleyAddress,
+        slotConfig: SlotConfig,
+        q: Long
+    ): DepositUtxo.Datum = {
+        val refundInstructions = DepositUtxo.Refund.Instructions.Onchain(
+          DepositUtxo.Refund.Instructions(
+            address = providerAddress,
+            datum = None,
+            validityStart = QuantizedInstant(
+              slotConfig = slotConfig,
+              instant = Instant.ofEpochMilli(slotConfig.zeroTime)
+            )
           )
         )
-
-        def oracleDatum(term: Long): DepositUtxo.Datum =
-            DepositUtxo.Datum(onchainRefund, ScalusOption.Some(Data.I(BigInt(term))))
-
-        qSequence.zipWithIndex
-            .foldLeft((List.empty[Publication], potInput0, potValue0)) {
-                case ((acc, potInput, potValue), (term, _)) =>
-                    val oracleValue =
-                        Value(Coin(oracleAdaLovelace)) + Value.asset(
-                          authPolicyId,
-                          authAssetName,
-                          1L
-                        )
-                    val changeValue = potValue - oracleValue
-
-                    val oracleOutput: TransactionOutput = Babbage(
-                      address = nativeScriptAddress,
-                      value = oracleValue,
-                      datumOption = Some(Inline(toData(oracleDatum(term)))),
-                      scriptRef = None
-                    )
-                    val changeOutput: TransactionOutput = Babbage(providerAddress, changeValue)
-                    val potOutput: TransactionOutput = Babbage(providerAddress, potValue)
-
-                    val steps = List(
-                      Spend(Utxo(potInput, potOutput), PubKeyWitness),
-                      Send(oracleOutput),
-                      Send(changeOutput),
-                      Fee(Coin.zero),
-                      ModifyAuxiliaryData(_ => Some(withdrawMetadata))
-                    )
-
-                    val unsigned = TransactionBuilder
-                        .build(network, steps)
-                        .flatMap(
-                          _.finalizeContext(
-                            protocolParams = protocolParams,
-                            diffHandler = prebalancedLovelaceDiffHandler,
-                            evaluator = evaluator,
-                            validators = Seq.empty
-                          )
-                        )
-                        .fold(
-                          err =>
-                              throw new RuntimeException(
-                                s"publication (Q=$term) tx build failed: $err"
-                              ),
-                          ctx => ctx.transaction
-                        )
-
-                    val signed = signAsProvider(unsigned)
-                    (Publication(signed, term) :: acc, TransactionInput(signed.id, 1), changeValue)
-            }
-            ._1
-            .reverse
+        DepositUtxo.Datum(refundInstructions, ScalusOption.Some(Data.I(BigInt(q))))
     }
 
     private val genScenario: Gen[Scenario] = {
         val testPeers = TestPeers(SeedPhrase.Yaci, CardanoNetwork.Preprod, nHeadPeers)
-        val cardanoNetwork = testPeers.cardanoNetwork
         val providerAddress = testPeers.shelleyAddressFor(HeadPeerNumber(0))
 
-        // The provider's whole stock of auth tokens (one per publication) plus ADA to fund each
-        // oracle utxo, seeded straight into their L2 account.
-        val potValue =
-            Value(Coin(potAdaLovelace)) + Value.asset(authPolicyId, authAssetName, nTerms.toLong)
+        // The head boots with an EMPTY L2 ledger; the token enters via the term-1 external deposit.
         val equity: NonEmptyMap[HeadPeerNumber, Coin] =
             NonEmptyMap.fromMapUnsafe(
               SortedMap(
@@ -270,8 +234,23 @@ object OracleDemo extends Properties("Oracle demo") {
           0
         )
 
+        // The provider's own L1 funding utxo (auth token + ADA) for the term-1 deposit — separate
+        // from the head's funding, seeded straight into the mock L1.
+        val providerFundingUtxo: Utxo = Utxo(
+          TransactionInput(
+            TransactionHash.fromByteString(
+              blake2b_256(ByteString.fromArray("hydrozoa-oracle-provider-funding".getBytes))
+            ),
+            0
+          ),
+          Babbage(
+            providerAddress,
+            Value(Coin(fundingAdaLovelace)) + Value.asset(authPolicyId, authAssetName, 1L)
+          )
+        )
+
         for {
-            headParams <- generateHeadParameters(generateTxTiming = generateDefaultTxTiming)
+            headParams <- generateHeadParameters(generateTxTiming = genShortMaturityTxTiming)
                 .run(testPeers)
 
             fc = headParams.fallbackContingency
@@ -279,26 +258,18 @@ object OracleDemo extends Properties("Oracle demo") {
               fc.collectiveContingency.total.value + nHeadPeers * fc.individualContingency.total.value
             )
 
-            fundingValueTarget = potValue + Value(totalEquity) + Value(totalContingency)
+            // initialL2Value is zero (empty evacuation map), so funding = equity + contingency.
             funding = InitializationFunding(
-              seedUtxo = Utxo(seedInput, Babbage(providerAddress, fundingValueTarget)),
+              seedUtxo = Utxo(
+                seedInput,
+                Babbage(providerAddress, Value(totalEquity) + Value(totalContingency))
+              ),
               additionalFundingUtxos = Map.empty,
               changeOutputs = Nil
             )
 
-            genesisId = L2Genesis.mkGenesisId(seedInput)
-            potInput0 = TransactionInput(genesisId, 0)
-            evacuationMap = EvacuationMap(
-              TreeMap(
-                potInput0.toEvacuationKey ->
-                    Payout
-                        .Obligation(KeepRaw(Babbage(providerAddress, potValue)), cardanoNetwork)
-                        .toOption
-                        .get
-              )
-            )
             params = InitializationParameters(
-              initialEvacuationMap = evacuationMap,
+              initialEvacuationMap = EvacuationMap(TreeMap.empty),
               initialEquityContributions = equity,
               headId = funding.headId
             )
@@ -314,36 +285,99 @@ object OracleDemo extends Properties("Oracle demo") {
               ),
               generateNodeOperationMultisigConfig = genNodeOpMultisig
             )
-        } yield {
-            val slotConfig = mnc.headConfig.slotConfig
-            // Vestigial refund instructions on the oracle datum (the utxo is a feed, not a
-            // refundable deposit); the payload is what consumers read.
-            val onchainRefund = DepositUtxo.Refund.Instructions.Onchain(
-              DepositUtxo.Refund.Instructions(
-                address = providerAddress,
-                datum = None,
-                validityStart = QuantizedInstant(
-                  slotConfig = slotConfig,
-                  instant = Instant.ofEpochMilli(slotConfig.zeroTime)
-                )
-              )
-            )
-            Scenario(
-              mnc = mnc,
-              headGenesisUtxos = mnc.initializationTx.resolvedUtxos.utxos,
-              headInitTxId = mnc.initializationTx.tx.id,
-              nativeScriptAddress = mnc.headConfig.headMultisigAddress,
-              publications = buildPublications(
-                mnc,
-                providerAddress,
-                mnc.headConfig.headMultisigAddress,
-                onchainRefund,
-                potInput0,
-                potValue
-              )
-            )
-        }
+        } yield Scenario(
+          mnc = mnc,
+          headGenesisUtxos = mnc.initializationTx.resolvedUtxos.utxos + providerFundingUtxo.toTuple,
+          headInitTxId = mnc.initializationTx.tx.id,
+          nativeScriptAddress = mnc.headConfig.headMultisigAddress,
+          providerAddress = providerAddress,
+          providerFundingUtxo = providerFundingUtxo
+        )
     }
+
+    // ===================================
+    // L1 observation helpers
+    // ===================================
+
+    /** Decode the oracle term from a utxo's datum, if it is an oracle utxo. */
+    private def readOracleTerm(output: TransactionOutput): Option[Long] =
+        output match {
+            case b: Babbage =>
+                b.datumOption match {
+                    case Some(Inline(data)) =>
+                        Try(fromData[DepositUtxo.Datum](data)).toOption.flatMap { datum =>
+                            datum.oraclePayload match {
+                                case ScalusOption.Some(d) =>
+                                    Try(fromData[BigInt](d).toLong).toOption
+                                case _ => None
+                            }
+                        }
+                    case _ => None
+                }
+            case _ => None
+        }
+
+    /** The live oracle utxos on L1: those at the native script address carrying the auth token
+      * whose datum decodes to an oracle payload. (Excludes the treasury, which holds the token
+      * between cycles but has a treasury datum.)
+      */
+    private def oracleUtxos(
+        backend: L1Backend[IO],
+        nativeScriptAddress: ShelleyAddress
+    ): IO[List[(TransactionInput, TransactionOutput, Long)]] =
+        backend.utxosAt(nativeScriptAddress, (authPolicyId, authAssetName)).map {
+            case Right(utxos) =>
+                utxos.toList.flatMap { case (input, output) =>
+                    readOracleTerm(output)
+                        .filter(_ => authTokensOf(output.value) >= 1)
+                        .map(t => (input, output, t))
+                }
+            case Left(_) => Nil
+        }
+
+    /** Poll until an oracle utxo carrying `term` is present on L1; return its (input, output). */
+    private def waitForTermPresent(
+        backend: L1Backend[IO],
+        nativeScriptAddress: ShelleyAddress,
+        term: Long,
+        attempts: Int
+    ): IO[Option[(TransactionInput, TransactionOutput)]] =
+        oracleUtxos(backend, nativeScriptAddress).flatMap { utxos =>
+            utxos.find(_._3 == term).map(u => (u._1, u._2)) match {
+                case some @ Some(_)        => IO.pure(some)
+                case None if attempts <= 1 => IO.pure(None)
+                case None =>
+                    IO.sleep(pollSleep) >> waitForTermPresent(
+                      backend,
+                      nativeScriptAddress,
+                      term,
+                      attempts - 1
+                    )
+            }
+        }
+
+    /** Poll until `input` is no longer on L1 (its deposit was absorbed by a settlement). */
+    private def waitForAbsorbed(
+        backend: L1Backend[IO],
+        input: TransactionInput,
+        attempts: Int
+    ): IO[Boolean] =
+        backend.resolve(input).flatMap {
+            case Right(None)        => IO.pure(true)
+            case _ if attempts <= 1 => IO.pure(false)
+            case _ => IO.sleep(pollSleep) >> waitForAbsorbed(backend, input, attempts - 1)
+        }
+
+    private def pollTxKnown(
+        backend: L1Backend[IO],
+        txId: TransactionHash,
+        attempts: Int
+    ): IO[Boolean] =
+        backend.isTxKnown(txId).flatMap {
+            case Right(true)        => IO.pure(true)
+            case _ if attempts <= 1 => IO.pure(false)
+            case _ => IO.sleep(pollSleep) >> pollTxKnown(backend, txId, attempts - 1)
+        }
 
     // ===================================
     // Live run
@@ -394,89 +428,195 @@ object OracleDemo extends Properties("Oracle demo") {
           coilHandle = (_, _) => IO.unit
         )
 
-    private def pollTxKnown(
-        backend: L1Backend[IO],
-        txId: TransactionHash,
-        attempts: Int,
-        sleep: FiniteDuration
-    ): IO[Boolean] =
-        backend.isTxKnown(txId).flatMap {
-            case Right(true)        => IO.pure(true)
-            case _ if attempts <= 1 => IO.pure(false)
-            case _ => IO.sleep(sleep) >> pollTxKnown(backend, txId, attempts - 1, sleep)
-        }
-
-    /** Decode the oracle term from a utxo's datum, if it is an oracle utxo (a `DepositUtxo.Datum`
-      * with an integer `oraclePayload`).
-      */
-    private def readOracleTerm(output: TransactionOutput): Option[Long] =
-        output match {
-            case b: Babbage =>
-                b.datumOption match {
-                    case Some(Inline(data)) =>
-                        Try(fromData[DepositUtxo.Datum](data)).toOption.flatMap { datum =>
-                            datum.oraclePayload match {
-                                case ScalusOption.Some(d) =>
-                                    Try(fromData[BigInt](d).toLong).toOption
-                                case _ => None
-                            }
-                        }
-                    case _ => None
-                }
-            case _ => None
-        }
-
-    /** Read the current feed off L1: every oracle utxo (auth-token-bearing, at the native script
-      * address) with its decoded term.
-      */
-    private def readFeed(
-        backend: L1Backend[IO],
-        nativeScriptAddress: ShelleyAddress
-    ): IO[List[Long]] =
-        backend.utxosAt(nativeScriptAddress, (authPolicyId, authAssetName)).map {
-            case Right(utxos) =>
-                utxos.values.toList
-                    .flatMap(o => readOracleTerm(o).filter(_ => authTokensOf(o.value) >= 1))
-            case Left(_) => Nil
-        }
-
-    /** Poll L1 until all `nTerms` terms have been published as oracle utxos. */
-    private def pollFeed(
-        backend: L1Backend[IO],
-        nativeScriptAddress: ShelleyAddress,
-        attempts: Int,
-        sleep: FiniteDuration
-    ): IO[List[Long]] =
-        readFeed(backend, nativeScriptAddress).flatMap { terms =>
-            if terms.sizeIs >= nTerms || attempts <= 1 then IO.pure(terms)
-            else IO.sleep(sleep) >> pollFeed(backend, nativeScriptAddress, attempts - 1, sleep)
-        }
-
-    private def submitPublication(
-        requestSequencer: RequestSequencer.Handle,
+    private def mkHeader(
         headId: InitializationParameters.HeadId,
         slotConfig: SlotConfig,
-        userVk: VerificationKey,
-        publication: Publication,
-        now: Instant
-    ): IO[Unit] = {
-        val body = TransactionRequestBody(ByteString.fromArray(publication.signedTx.toCbor))
-        val header = UserRequestHeader(
+        now: Instant,
+        validityEnd: RequestValidityEndTime,
+        bodyHash: Hash32
+    ): UserRequestHeader =
+        UserRequestHeader(
           headId = headId,
           validityStart = RequestValidityStartTime(
             QuantizedInstant.ofEpochSeconds(slotConfig, now.minusSeconds(60).getEpochSecond)
           ),
-          validityEnd = RequestValidityEndTime(
-            QuantizedInstant.ofEpochSeconds(slotConfig, now.plusSeconds(3600).getEpochSecond)
-          ),
-          bodyHash = body.hash
+          validityEnd = validityEnd,
+          bodyHash = bodyHash
         )
-        val request = UserRequest.TransactionRequest(
-          header,
-          body.asInstanceOf[UserRequestBody.TransactionRequestBody],
-          userVk
+
+    // Deposit absorption starts at `requestValidityEnd + depositSubmissionDuration (5s) +
+    // depositMaturityDuration (10s)`, so keep the validity end close to `now` (just enough margin to
+    // weave the request into a block) — otherwise the ~15s maturity is pushed far into the future.
+    private def validityEndFromNow(slotConfig: SlotConfig, now: Instant): RequestValidityEndTime =
+        RequestValidityEndTime(
+          QuantizedInstant.ofEpochSeconds(slotConfig, now.plusSeconds(25).getEpochSecond)
         )
-        (requestSequencer ?: request).void
+
+    /** Publish term 1 as an EXTERNAL deposit: build + sign the deposit tx, register it, submit it
+      * to L1, watch its stability window, and watch it get absorbed. Returns the L2 utxo id the
+      * token lands at after absorption (the input for the next payout).
+      */
+    private def publishExternal(
+        backend: L1Backend[IO],
+        scenario: Scenario,
+        requestSequencer: RequestSequencer.Handle,
+        userVk: VerificationKey,
+        observed: Ref[IO, Vector[Long]],
+        position: Int,
+        term: Long
+    ): IO[TransactionInput] = {
+        val config = scenario.mnc.headConfig
+        val slotConfig = config.slotConfig
+        val tag = s"Q($position)=$term (external)"
+        for {
+            now <- IO.realTimeInstant
+            validityEnd = validityEndFromNow(slotConfig, now)
+            l2Payload = providerL2Payload(scenario.providerAddress)
+            depositRefundSeq = DepositRefundTxSeq
+                .Build(
+                  l2Payload = l2Payload,
+                  l2Value = cycleValue,
+                  depositFee = Coin.zero,
+                  utxosFunding = NonEmptyList.of(scenario.providerFundingUtxo),
+                  changeAddress = scenario.providerAddress,
+                  requestValidityEndTime = validityEnd,
+                  refundAddress = scenario.providerAddress,
+                  refundDatum = None,
+                  requestId = RequestId(0, 0L),
+                  oraclePayload = ScalusOption.Some(Data.I(BigInt(term)))
+                )(using config)
+                .result
+                .fold(err => throw new RuntimeException(s"deposit build failed: $err"), identity)
+            signedDepositTx = scenario.mnc.signTxAs(HeadPeerNumber(0))(
+              depositRefundSeq.depositTx.tx
+            )
+            depositInput = depositRefundSeq.depositTx.depositProduced.utxoId
+            body = DepositRequestBody(
+              l1Payload = ByteString.fromArray(signedDepositTx.toCbor),
+              l2Payload = l2Payload
+            )
+            header = mkHeader(config.headId, slotConfig, now, validityEnd, body.hash)
+            request = UserRequest.DepositRequest(
+              header,
+              body.asInstanceOf[UserRequestBody.DepositRequestBody],
+              userVk
+            )
+            _ <- (requestSequencer ?: request).void
+            _ <- backend.submitTx(signedDepositTx)
+            _ <- log(s"$tag: external deposit submitted; awaiting its stability window on L1")
+            present <- waitForTermPresent(backend, scenario.nativeScriptAddress, term, pollAttempts)
+            _ <- IO.raiseWhen(present.isEmpty)(
+              new RuntimeException(s"$tag never became present on L1")
+            )
+            _ <- observed.update(_ :+ term)
+            _ <- log(s"$tag: present on L1 (stability window open, referenceable)")
+            absorbed <- waitForAbsorbed(backend, depositInput, pollAttempts)
+            _ <- IO.raiseWhen(!absorbed)(
+              new RuntimeException(s"$tag was never absorbed")
+            )
+            _ <- log(s"$tag: absorbed by settlement (window closed)")
+        } yield TransactionInput(L2Genesis.mkGenesisId(depositInput), 0)
+    }
+
+    /** Publish an INTERNAL deposit (terms 2..N): submit an L2 payout spending the recovered token
+      * utxo to the native script address, watch it settle onto L1, register it as an internal
+      * deposit (the backdoor), watch its window, and watch it get absorbed. Returns the next
+      * recovered L2 utxo id.
+      */
+    private def publishInternal(
+        backend: L1Backend[IO],
+        scenario: Scenario,
+        requestSequencer: RequestSequencer.Handle,
+        userVk: VerificationKey,
+        observed: Ref[IO, Vector[Long]],
+        recoveredL2: TransactionInput,
+        position: Int,
+        term: Long
+    ): IO[TransactionInput] = {
+        val config = scenario.mnc.headConfig
+        val slotConfig = config.slotConfig
+        val network = config.cardanoNetwork.cardanoInfo.network
+        val tag = s"Q($position)=$term (internal)"
+
+        val oracleOutput: TransactionOutput = Babbage(
+          address = scenario.nativeScriptAddress,
+          value = cycleValue,
+          datumOption =
+              Some(Inline(toData(oracleDatum(scenario.providerAddress, slotConfig, term)))),
+          scriptRef = None
+        )
+        val withdrawMetadata: AuxiliaryData = Metadata(
+          Map(Word64(CIP67.Tags.head) -> Metadatum.List(IndexedSeq(Metadatum.Int(1))))
+        )
+        val unsigned = TransactionBuilder
+            .build(
+              network,
+              List(
+                Spend(
+                  Utxo(recoveredL2, Babbage(scenario.providerAddress, cycleValue)),
+                  PubKeyWitness
+                ),
+                Send(oracleOutput),
+                Fee(Coin.zero),
+                ModifyAuxiliaryData(_ => Some(withdrawMetadata))
+              )
+            )
+            .flatMap(
+              _.finalizeContext(
+                protocolParams = config.cardanoProtocolParams.withZeroFees,
+                diffHandler = prebalancedLovelaceDiffHandler,
+                evaluator = config.plutusScriptEvaluatorForTxBuild,
+                validators = Seq.empty
+              )
+            )
+            .fold(
+              err => throw new RuntimeException(s"payout $term build failed: $err"),
+              _.transaction
+            )
+        val signedPayout = scenario.mnc.signTxAs(HeadPeerNumber(0))(unsigned)
+
+        for {
+            now <- IO.realTimeInstant
+            validityEnd = validityEndFromNow(slotConfig, now)
+            txBody = UserRequestBody.TransactionRequestBody(
+              ByteString.fromArray(signedPayout.toCbor)
+            )
+            txRequest = UserRequest.TransactionRequest(
+              mkHeader(config.headId, slotConfig, now, validityEnd, txBody.hash),
+              txBody.asInstanceOf[UserRequestBody.TransactionRequestBody],
+              userVk
+            )
+            _ <- (requestSequencer ?: txRequest).void
+            _ <- log(s"$tag: refresh payout submitted; awaiting settlement onto L1")
+            present <- waitForTermPresent(backend, scenario.nativeScriptAddress, term, pollAttempts)
+            inputOutput <- present.fold(
+              IO.raiseError[(TransactionInput, TransactionOutput)](
+                new RuntimeException(s"$tag payout never landed on L1")
+              )
+            )(IO.pure)
+            (onL1Input, output) = inputOutput
+            _ <- observed.update(_ :+ term)
+            _ <- log(s"$tag: present on L1 (stability window open, referenceable)")
+            idBody = UserRequestBody.InternalDepositRequestBody(
+              depositInput = ByteString.fromArray(Cbor.encode(onL1Input).toByteArray),
+              depositOutput = ByteString.fromArray(Cbor.encode(output).toByteArray),
+              l2Payload = providerL2Payload(scenario.providerAddress)
+            )
+            now2 <- IO.realTimeInstant
+            validityEnd2 = validityEndFromNow(slotConfig, now2)
+            idRequest = UserRequest.InternalDepositRequest(
+              mkHeader(config.headId, slotConfig, now2, validityEnd2, idBody.hash),
+              idBody.asInstanceOf[UserRequestBody.InternalDepositRequestBody],
+              userVk
+            )
+            _ <- (requestSequencer ?: idRequest).void
+            _ <- log(s"$tag: registered as internal deposit; awaiting absorption")
+            absorbed <- waitForAbsorbed(backend, onL1Input, pollAttempts)
+            _ <- IO.raiseWhen(!absorbed)(
+              new RuntimeException(s"$tag was never absorbed")
+            )
+            _ <- log(s"$tag: absorbed by settlement (window closed)")
+        } yield TransactionInput(L2Genesis.mkGenesisId(onL1Input), 0)
     }
 
     private def runDemo(scenario: Scenario): IO[Prop] = {
@@ -497,19 +637,16 @@ object OracleDemo extends Properties("Oracle demo") {
               initialState = MockState(scenario.headGenesisUtxos),
               mkContext = mkContext
             )
-
             sig <- stackZeroSignal
-            _ <- log(
-              s"publishing the Hofstadter Q-sequence: ${nTerms} terms ${qSequence.take(12).mkString(", ")}, ..."
-            )
+            _ <- log(s"oracle feed = Hofstadter Q-sequence: ${qSequence.mkString(", ")}")
 
             result <- MultiPeerHeadHarness
                 .resource(inputsFor(scenario.mnc, backend), hooksFor(sig))
                 .use { harness =>
                     for {
                         _ <- sig.await.timeout(120.seconds)
-                        _ <- log("head hard-confirmed stack 0; oracle provider funded in L2")
-                        initLanded <- pollTxKnown(backend, scenario.headInitTxId, 120, 500.millis)
+                        _ <- log("head hard-confirmed stack 0; L2 empty, provider funded on L1")
+                        initLanded <- pollTxKnown(backend, scenario.headInitTxId, pollAttempts)
                         _ <- log(s"init tx landed on L1: $initLanded")
 
                         requestSequencer = harness.peers(HeadPeerNumber(0)).handle
@@ -517,46 +654,51 @@ object OracleDemo extends Properties("Oracle demo") {
                             .nodeConfigs(HeadPeerNumber(0))
                             .ownWallet
                             .exportVerificationKey
-                        now <- IO.realTimeInstant
+                        observed <- Ref[IO].of(Vector.empty[Long])
 
-                        _ <- scenario.publications.zipWithIndex.traverse_ { case (publication, i) =>
-                            submitPublication(
-                              requestSequencer,
-                              cfg.headId,
-                              cfg.slotConfig,
-                              userVk,
-                              publication,
-                              now
-                            ) >>
-                                (if (i + 1) % 5 == 0 then
-                                     log(s"submitted ${i + 1}/${nTerms} oracle refreshes")
-                                 else IO.unit)
+                        rec1 <- publishExternal(
+                          backend,
+                          scenario,
+                          requestSequencer,
+                          userVk,
+                          observed,
+                          1,
+                          qSequence(0)
+                        )
+                        _ <- (1 until nTerms).toList.foldLeft(IO.pure(rec1)) { (accIO, i) =>
+                            accIO.flatMap(rec =>
+                                publishInternal(
+                                  backend,
+                                  scenario,
+                                  requestSequencer,
+                                  userVk,
+                                  observed,
+                                  rec,
+                                  i + 1,
+                                  qSequence(i)
+                                )
+                            )
                         }
-                        _ <- log(s"all ${nTerms} refreshes submitted; settling oracle utxos on L1")
-
-                        feed <- pollFeed(backend, scenario.nativeScriptAddress, 900, 500.millis)
+                        observedTerms <- observed.get
                         errors <- harness.sutErrors.get
                         _ <- log(
-                          s"oracle utxos on L1: ${feed.size} / ${nTerms}; " +
-                              s"terms=${feed.sorted.mkString(",")}; actor errors=${errors.size}"
+                          s"published all ${nTerms} terms through external+internal deposits; " +
+                              s"observed feed=${observedTerms.mkString(",")}; actor errors=${errors.size}"
                         )
-                    } yield (initLanded, feed, errors)
+                    } yield (initLanded, observedTerms, errors)
                 }
-            (initLanded, feed, errors) = result
+            (initLanded, observedTerms, errors) = result
         } yield {
-            val published = feed.sorted
-            val expected = qSequence.toList.sorted
             List(
               "init tx did not land on L1" |: initLanded,
-              s"not all terms published as oracle utxos: ${feed.size}/$nTerms" |: (feed.sizeIs == nTerms),
-              s"published feed does not match Q(1)..Q($nTerms): got $published, want $expected" |:
-                  (published == expected),
+              s"observed feed ${observedTerms.mkString(",")} != Q-sequence ${qSequence.mkString(",")}" |:
+                  (observedTerms == qSequence),
               s"head produced actor errors: ${errors.mkString("; ")}" |: errors.isEmpty
             ).foldLeft(Prop(true))(_ && _)
         }
     }
 
-    val _ = property("oracle feed (Q-sequence) is published to L1 as referenceable utxos") =
+    val _ = property("oracle feed (Q-sequence) cycles through the head as internal deposits") =
         Prop.forAll(genScenario) { scenario =>
             runDemo(scenario).unsafeRunSync()
         }

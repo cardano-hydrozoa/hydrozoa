@@ -13,6 +13,7 @@ import hydrozoa.multisig.ledger.l1.tx.{DepositTx, EnrichedTx, RefundTx}
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Coin, Utxo, Value}
+import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 import scalus.uplc.builtin.{ByteString, Data}
 
 /** Deposit-[post-dated] refund tx sequence contains a deposit and a refund txs see
@@ -125,7 +126,8 @@ private object DepositRefundTxSeqOps {
         requestValidityEndTime: RequestValidityEndTime,
         refundAddress: ShelleyAddress,
         refundDatum: Option[Data],
-        requestId: RequestId
+        requestId: RequestId,
+        oraclePayload: ScalusOption[Data] = ScalusOption.None
     )(using config: Config) {
         def result: Either[Build.Error, DepositRefundTxSeq] = {
             val expectedDepositValue = l2Value + Value(depositFee)
@@ -146,7 +148,8 @@ private object DepositRefundTxSeqOps {
                       depositFee,
                       changeAddress,
                       requestValidityEndTime,
-                      refundInstructions
+                      refundInstructions,
+                      oraclePayload
                     )
                     .result
                     .left

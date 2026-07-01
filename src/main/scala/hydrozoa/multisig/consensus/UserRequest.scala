@@ -4,7 +4,7 @@ import cats.effect.IO
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
-import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, InternalDepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.JsonCodecs.given_Encoder_UserRequestHeader
 import io.circe.*
@@ -42,6 +42,17 @@ enum UserRequest extends SyncRequest[IO, UserRequest, RequestId] {
         override val body: UserRequestBody.TransactionRequestBody,
         override val userVk: VerificationKey
     ) extends UserRequest
+
+    /** Registers an already-existing L1 utxo (a settlement/rollout output at the head's native
+      * script address) as an "internal deposit" — a deposit with no originating deposit tx. Used by
+      * the oracle demo to re-absorb a published oracle utxo. See the
+      * [oracles](https://gummiworm.net/whitepaper/future-work/cardano/oracles) design.
+      */
+    case InternalDepositRequest private (
+        override val header: UserRequestHeader,
+        override val body: UserRequestBody.InternalDepositRequestBody,
+        override val userVk: VerificationKey
+    ) extends UserRequest
 }
 
 object UserRequest {
@@ -60,6 +71,14 @@ object UserRequest {
             body: TransactionRequestBody,
             userVk: VerificationKey
         ): TransactionRequest = new UserRequest.TransactionRequest(header, body, userVk)
+    }
+
+    object InternalDepositRequest {
+        def apply(
+            header: UserRequestHeader,
+            body: InternalDepositRequestBody,
+            userVk: VerificationKey
+        ): InternalDepositRequest = new UserRequest.InternalDepositRequest(header, body, userVk)
     }
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
@@ -106,6 +125,19 @@ enum UserRequestBody {
         l2Payload: ByteString
     )
 
+    /** @param depositInput
+      *   CBOR of the existing L1 [[TransactionInput]] to register as an internal deposit.
+      * @param depositOutput
+      *   CBOR of that utxo's [[TransactionOutput]] (its value + oracle datum).
+      * @param l2Payload
+      *   the genesis obligations minted into L2 when the deposit is absorbed.
+      */
+    case InternalDepositRequestBody(
+        depositInput: ByteString,
+        depositOutput: ByteString,
+        l2Payload: ByteString
+    )
+
     /** To keep the hash injective, we hash deposits twice, to avoid collapsing liek hash(abc + def) ==
       * hash(ab + cdef)
       */
@@ -115,6 +147,14 @@ enum UserRequestBody {
                 blake2b_256(l1Payload)
                     .concat(blake2b_256(l2Payload))
             case UserRequestBody.TransactionRequestBody(l2Payload) => l2Payload
+            case UserRequestBody.InternalDepositRequestBody(
+                  depositInput,
+                  depositOutput,
+                  l2Payload
+                ) =>
+                blake2b_256(depositInput)
+                    .concat(blake2b_256(depositOutput))
+                    .concat(blake2b_256(l2Payload))
         }
 
         // println(s"preimage: $preimage")
@@ -136,6 +176,11 @@ enum UserRequestWithId {
         override val requestId: RequestId,
         override val request: UserRequest.TransactionRequest,
     )
+
+    case InternalDepositRequest(
+        override val requestId: RequestId,
+        override val request: UserRequest.InternalDepositRequest,
+    )
 }
 
 object UserRequestWithId {
@@ -146,5 +191,7 @@ object UserRequestWithId {
         case req: UserRequest.DepositRequest => UserRequestWithId.DepositRequest(requestId, req)
         case req: UserRequest.TransactionRequest =>
             UserRequestWithId.TransactionRequest(requestId, req)
+        case req: UserRequest.InternalDepositRequest =>
+            UserRequestWithId.InternalDepositRequest(requestId, req)
     }
 }

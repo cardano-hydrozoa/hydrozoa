@@ -32,10 +32,13 @@ import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.ledger.l2.{Destination, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
+import io.bullet.borer.Cbor
 import monocle.Focus.focus
+import scala.util.Try
+import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput, Utxo}
 
 private case class UserRequestState(
     requests: List[(RequestId, ValidityFlag)],
@@ -221,8 +224,9 @@ final case class JointLedger(
         } yield ()
 
     private def applyUserRequestWithId(e: UserRequestWithId): IO[Unit] = e match {
-        case req: UserRequestWithId.DepositRequest     => registerDeposit(req)
-        case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
+        case req: UserRequestWithId.DepositRequest         => registerDeposit(req)
+        case req: UserRequestWithId.TransactionRequest     => applyTransaction(req)
+        case req: UserRequestWithId.InternalDepositRequest => registerInternalDeposit(req)
     }
 
     private def checkRequestValidityInterval(
@@ -369,6 +373,112 @@ final case class JointLedger(
                                 }
                             } yield ()
                         }
+                    }
+                }
+        } yield ()
+    }
+
+    /** Register an already-existing L1 utxo (a settlement/rollout output at the head's native
+      * script address) as an internal deposit. Unlike [[registerDeposit]] there is no originating
+      * deposit tx: the utxo is parsed directly via [[DepositUtxo.parseUtxo]], and no post-dated
+      * refund tx is produced (internal deposits are not refundable). See
+      * [[UserRequest.InternalDepositRequest]].
+      */
+    private def registerInternalDeposit(
+        req: UserRequestWithId.InternalDepositRequest
+    ): IO[Unit] = {
+        import req.*
+        import request.*
+        import body.*
+
+        for {
+            _ <- tracer.traceWith(JointLedgerEvent.DepositRegistrationStarted(requestId))
+
+            p <- unsafeGetProducing
+            blockStartTime = p.BlockCreationStartTime
+            currentBlockNum = p.nextBlockNumber
+
+            _ <-
+                if !checkRequestValidityInterval(req, blockStartTime) then
+                    rejectEvent(
+                      requestId,
+                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
+                        blockStartTime,
+                        req.request.header.validityStart,
+                        req.request.header.validityEnd
+                      )
+                    )
+                else {
+                    val validityEndTime = RequestValidityEndTime(header.validityEnd)
+                    val parsed: Either[DepositLedgerError, DepositUtxo] =
+                        for {
+                            input <- Try(
+                              Cbor.decode(depositInput.bytes).to[TransactionInput].value
+                            ).toEither.left
+                                .map(e =>
+                                    DepositLedgerError.InternalDepositParseError(
+                                      s"input: ${e.getMessage}"
+                                    )
+                                )
+                            output <- Try(
+                              Cbor.decode(depositOutput.bytes).to[TransactionOutput].value
+                            ).toEither.left
+                                .map(e =>
+                                    DepositLedgerError.InternalDepositParseError(
+                                      s"output: ${e.getMessage}"
+                                    )
+                                )
+                            depositUtxo <- DepositUtxo
+                                .parseUtxo(
+                                  utxo = Utxo(input, output),
+                                  headNativeScriptAddress = config.headMultisigAddress,
+                                  l2Payload = l2Payload,
+                                  depositFee = Coin.zero,
+                                  requestValidityEndTime = validityEndTime,
+                                  txTiming = config.txTiming
+                                )
+                                .left
+                                .map(e => DepositLedgerError.InternalDepositParseError(e.toString))
+                        } yield depositUtxo
+
+                    parsed match {
+                        case Left(error) => rejectEvent(requestId, error)
+                        case Right(depositUtxo) =>
+                            val l2Command = L2LedgerCommand.RegisterDeposit(
+                              requestId = requestId,
+                              userVKey = req.request.userVk,
+                              blockNumber = currentBlockNum,
+                              blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
+                              depositId = depositUtxo.utxoId,
+                              depositFee = Coin.zero,
+                              depositL2Value = depositUtxo.l2Value,
+                              refundDestination = Destination(depositUtxo.address, None),
+                              l2Payload = l2Payload
+                            )
+                            for {
+                                res <- runL2Command(p, l2Command)
+                                _ <- res match {
+                                    case Left(e) => rejectEvent(requestId, e)
+                                    case Right(newL2State) =>
+                                        for {
+                                            _ <- state.set(
+                                              p.setDeposits(
+                                                p.deposits.append(
+                                                  DepositsMap.Entry(requestId, depositUtxo)
+                                                )
+                                              ).setL2LedgerState(newL2State)
+                                                  .focus(_.userRequestState.requests)
+                                                  .modify(_.appended((requestId, Valid)))
+                                            )
+                                            _ <- tracer.traceWith(
+                                              JointLedgerEvent.DepositRegistrationCompleted(
+                                                requestId,
+                                                currentBlockNum
+                                              )
+                                            )
+                                        } yield ()
+                                }
+                            } yield ()
                     }
                 }
         } yield ()
@@ -922,6 +1032,11 @@ object JointLedger {
             override def toString: String =
                 "DepositTxInvalidTTL: expected submission deadline " +
                     s"$expectedSubmissionDeadline, but got $actualSubmissionDeadline"
+        }
+
+        /** Failure decoding or validating the utxo of an [[UserRequest.InternalDepositRequest]]. */
+        final case class InternalDepositParseError(message: String) extends DepositLedgerError {
+            override def toString: String = s"InternalDepositParseError: $message"
         }
     }
 
