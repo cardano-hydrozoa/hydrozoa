@@ -22,7 +22,7 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
             result <- firewalled.submitTx(Transaction.empty)
             droppedEvents <- captured.get
         yield
-            assert(
+            val _ = assert(
               result.isLeft,
               s"expected Left from underlying (empty tx rejected), got $result",
             )
@@ -39,7 +39,7 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
             result <- firewalled.submitTx(Transaction.empty)
             droppedEvents <- captured.get
         yield
-            assert(result == Right(()), s"expected Right(()) short-circuit, got $result")
+            val _ = assert(result == Right(()), s"expected Right(()) short-circuit, got $result")
             assert(
               droppedEvents == List(
                 FirewalledCardanoBackendEvent.DroppedOutboundTx(Transaction.empty.id)

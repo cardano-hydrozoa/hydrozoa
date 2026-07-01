@@ -39,7 +39,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
             forwarded <- sends.get
             droppedEvents <- captured.get
         yield
-            assert(forwarded == List((remoteId, LiaisonProtocol.ResendCurrent)))
+            val _ = assert(forwarded == List((remoteId, LiaisonProtocol.ResendCurrent)))
             assert(droppedEvents.isEmpty)
         io.unsafeRunSync()
     }
@@ -55,7 +55,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
             forwarded <- sends.get
             droppedEvents <- captured.get
         yield
-            assert(forwarded.isEmpty)
+            val _ = assert(forwarded.isEmpty)
             assert(
               droppedEvents == List(FirewalledPeerTransportEvent.DroppedOutbound(remoteId))
             )
@@ -79,7 +79,7 @@ class FirewalledPeerTransportTest extends AnyFunSuite:
             forwarded <- sends.get
             droppedEvents <- captured.get
         yield
-            assert(forwarded == List((other, LiaisonProtocol.ResendCurrent)))
+            val _ = assert(forwarded == List((other, LiaisonProtocol.ResendCurrent)))
             assert(
               droppedEvents == List(FirewalledPeerTransportEvent.DroppedOutbound(remoteId))
             )
