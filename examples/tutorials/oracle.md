@@ -1,4 +1,4 @@
-# Tutorial: Oracles
+# Tutorial: Oracles — publishing a data feed from L2
 
 ## What this example demonstrates
 
@@ -9,13 +9,13 @@ existing deposit and transaction-request mechanisms with no new infrastructure r
 
 The mechanism (from the [oracles design](https://gummiworm.net/whitepaper/future-work/cardano/oracles)):
 
-- **Publish.** An oracle operator publishes data by producing an **oracle utxo** at the head's
+- **Publish.** An oracle operator publishes data by producing an oracle utxo at the head's
   native script address carrying the current data. Any Cardano transaction can reference it as a
-  CIP-31 **reference input** to read the data.
+  CIP-31 reference input to read the data.
 - **Stability window.** The oracle utxo sits at the native script address and cannot be spent
   without head and coil signatures, so it is a stable, contention-free reference target for the
   duration of its lifetime.
-- **Authenticate.** An **authentication token** in the utxo proves provenance — consuming contracts
+- **Authenticate.** An authentication token in the utxo proves provenance — consuming contracts
   trust data only from a utxo bearing the operator's token policy.
 - **Refresh.** The operator keeps their auth tokens inside the head (L2). Each refresh is an L2
   transaction request that produces an L1-bound payout to the native script address, carrying an auth
@@ -66,10 +66,11 @@ Step by step, the example:
    L2 account. The mock L1 is seeded with the funding utxos that back this state.
 
 3. **Builds the publications.** Ahead of time, assembles a chain of 25 signed L2 transactions. Each
-   spends the operator's current pot and produces two outputs: an **oracle output** — sent to the
-   head's native script address, carrying one auth token and the next term in its datum, tagged to be
-   withdrawn to L1 — and a **change output** that keeps the remaining tokens and ADA in L2 for the
-   next refresh.
+   spends the operator's current pot and produces two outputs:
+
+   - an oracle output, sent to the head's native script address, carrying one auth token and the
+     next term in its datum, tagged to be withdrawn to L1;
+   - a change output that keeps the remaining tokens and ADA in L2 for the next refresh.
 
 4. **Boots the head.** Brings up a live 2-peer head over the seeded state on the in-process mock L1
    (real fast + slow consensus). The head hard-confirms stack 0 and submits its initialization
@@ -80,8 +81,7 @@ Step by step, the example:
    speed and cost.
 
 6. **Settles to L1.** As the head produces settlement (and rollout) transactions, each oracle output
-   rolls out to L1 as a utxo at the native script address. Because that utxo cannot be spent without
-   head and coil signatures, it is a stable, contention-free reference target for its lifetime.
+   rolls out to L1 as a utxo at the native script address, where any Cardano contract can reference it.
 
 7. **Consumes the feed.** Acting as a consuming contract, the demo polls the mock L1 for utxos at the
    native script address bearing the operator's authentication-token policy, and decodes the oracle
@@ -94,7 +94,7 @@ Step by step, the example:
 
 - **Token recycling.** The whitepaper's fully-streamlined refresh keeps a *single* auth token
   cycling: each settlement absorbs the previous oracle utxo (returning the token to L2) and produces
-  the next one atomically — an **internal deposit**. That re-absorption is not yet implemented, so
+  the next one atomically — an internal deposit. That re-absorption is not yet implemented, so
   this demo spends one token of the provider's policy per publication. Since consumers authenticate
   on the token *policy*, not a specific token, the security model is identical from their side.
 - **Oracle compartment.** A further streamlining — managing oracle utxos as dedicated treasury
