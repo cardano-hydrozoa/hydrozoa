@@ -254,12 +254,12 @@ object Bootstrap:
           )
         )
 
-        initializationParameters = InitializationParameters(
-          initialEvacuationMap = evacMap,
-          initialEquityContributions = initialEquityContributions,
+        // The build-time funding recipe (seed + funding utxos + change). The head id is derived
+        // from the seed here, in the bootstrap module, and presented explicitly in the config.
+        funding = InitializationFunding(
           seedUtxo = seedUtxo,
           additionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
-          initialChangeOutputs = List(
+          changeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
               value = valueSelected - Value(minEquity) -
@@ -268,6 +268,12 @@ object Bootstrap:
               scriptRef = None
             )
           )
+        )
+
+        initializationParameters = InitializationParameters(
+          initialEvacuationMap = evacMap,
+          initialEquityContributions = initialEquityContributions,
+          headId = funding.headId
         )
 
         bootstrap <- IO.fromEither(
@@ -296,7 +302,7 @@ object Bootstrap:
         blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),

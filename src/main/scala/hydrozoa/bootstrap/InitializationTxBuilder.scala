@@ -33,12 +33,14 @@ object InitializationTxBuilder {
     type Config = CardanoNetwork.Section & HeadPeers.Section & FallbackContingency.Section &
         TxTiming.Section & InitializationParameters.Section
 
-    final case class Build(config: Config)(blockCreationEndTime: BlockCreationEndTime) {
+    final case class Build(config: Config, funding: InitializationFunding)(
+        blockCreationEndTime: BlockCreationEndTime
+    ) {
 
         lazy val result: BuilderResultSimple[InitializationTx] = for {
             _ <- Either
                 .cond(
-                  config.isBalancedInitializationFunding,
+                  funding.isBalanced(config),
                   (),
                   SomeBuildError.BalancingError(
                     TxBalancingError.Failed(new IllegalArgumentException),
@@ -47,7 +49,7 @@ object InitializationTxBuilder {
                 )
                 .explainConst(
                   "Initialization tx funding is unbalanced. We must have" +
-                      "\n\tconfig.initialFundingValue == config.initialL2Value " +
+                      "\n\tfunding.fundingValue == config.initialL2Value " +
                       "+ Value(config.initialEquityContributed " +
                       "+ config.totalFallbackContingency)" +
                       ""
@@ -84,7 +86,7 @@ object InitializationTxBuilder {
                           Initialization(
                             multisigTreasuryIx = 0,
                             multisigRegimeIx = 1,
-                            seedIx = config.initialSeedIx,
+                            seedIx = funding.seedIx,
                             totalEquity = config.initialEquityContributed
                           ).asAuxData(config.headId)
                         )
@@ -117,7 +119,7 @@ object InitializationTxBuilder {
             }
 
             object Spends {
-                def apply(): List[Spend] = config.initialFundingUtxos.iterator
+                def apply(): List[Spend] = funding.fundingUtxos.iterator
                     .map(kv => Spend(Utxo(kv), PubKeyWitness))
                     .toList
             }
@@ -150,7 +152,7 @@ object InitializationTxBuilder {
                 }
 
                 object ChangeOutputs {
-                    def apply(): List[Send] = config.initialChangeOutputs.map(Send.apply)
+                    def apply(): List[Send] = funding.changeOutputs.map(Send.apply)
                 }
             }
 
@@ -204,7 +206,7 @@ object InitializationTxBuilder {
                   multisigRegimeProduced = multisigRegimeProduced,
                   headTokenNames = config.headTokenNames,
                   resolvedUtxos = finalized.resolvedUtxos,
-                  seedUtxo = config.initializationParameters.seedUtxo
+                  seedUtxo = funding.seedUtxo
                 )
         }
 

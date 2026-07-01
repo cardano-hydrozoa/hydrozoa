@@ -17,9 +17,10 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 /** Persistence-layer JSON codec for [[InitializationTx]] — the constructor was made public (was
   * `private`) so the codec can reconstruct directly.
   *
-  * `headTokenNames` is **derived** from `seedUtxo.input` so it isn't persisted; on decode we
-  * reconstruct it via `HeadTokenNames(seedUtxo.input)`. `txLens` is similarly a default. The
-  * persisted shape carries: `initializationTxEndTime`, `treasuryProduced`,
+  * `headTokenNames` is **derived** so it isn't persisted; on decode we reconstruct it from the
+  * persisted treasury token name via
+  * `HeadTokenNames.fromHeadId(treasuryProduced.treasuryTokenName)`. `txLens` is similarly a
+  * default. The persisted shape carries: `initializationTxEndTime`, `treasuryProduced`,
   * `multisigRegimeProduced`, `resolvedUtxos`, `tx`, `seedUtxo`.
   */
 object InitializationTxCodec:
@@ -49,7 +50,7 @@ object InitializationTxCodec:
               initializationTxEndTime = iet,
               treasuryProduced = tp,
               multisigRegimeProduced = mrp,
-              headTokenNames = HeadTokenNames(seed.input),
+              headTokenNames = HeadTokenNames.fromHeadId(tp.treasuryTokenName),
               resolvedUtxos = ru,
               tx = tx,
               seedUtxo = seed
