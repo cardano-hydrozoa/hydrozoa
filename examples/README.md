@@ -12,8 +12,8 @@ operations, all from one `sbtn` command.
 
 | Example | What it shows | Run | Tutorial |
 | --- | --- | --- | --- |
-| Air-drop | Streamlining L1 operations through a head | `sbtn "examples/testOnly *AirdropDemo*"` | [tutorials/airdrop.md](tutorials/airdrop.md) |
-| Oracles | _(spec pending)_ | `sbtn "examples/testOnly *OracleDemo*"` | [tutorials/oracle.md](tutorials/oracle.md) |
+| Air-drop | Moving token claiming from L1 to L2: many claims → batched L1 withdrawals | `sbtn "examples/testOnly *AirdropDemo*"` | [tutorials/airdrop.md](tutorials/airdrop.md) |
+| Oracles | Publishing an on-chain data feed (Hofstadter Q-sequence) as referenceable L1 utxos | `sbtn "examples/testOnly *OracleDemo*"` | [tutorials/oracle.md](tutorials/oracle.md) |
 
 ## How the examples are built
 

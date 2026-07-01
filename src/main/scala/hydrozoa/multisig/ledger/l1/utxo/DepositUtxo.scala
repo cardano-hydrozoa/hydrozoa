@@ -52,9 +52,14 @@ object DepositUtxo {
       * @param refundInstructions
       *   instructions for when and how the deposit should be refunded if it is not absorbed into
       *   the head's treasury.
+      * @param oraclePayload
+      *   an optional arbitrary on-chain data payload. When set, the deposit utxo doubles as an
+      *   oracle feed: any Cardano transaction can reference it (CIP-31) to read this data off L1.
+      *   See the [oracles](https://gummiworm.net/whitepaper/future-work/cardano/oracles) design.
       */
     final case class Datum(
-        refundInstructions: Refund.Instructions.Onchain
+        refundInstructions: Refund.Instructions.Onchain,
+        oraclePayload: ScalusOption[Data] = ScalusOption.None
     ) derives FromData,
           ToData
 

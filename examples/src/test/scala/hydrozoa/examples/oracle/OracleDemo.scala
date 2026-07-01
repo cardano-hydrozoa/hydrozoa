@@ -1,4 +1,4 @@
-package hydrozoa.examples.airdrop
+package hydrozoa.examples.oracle
 
 import cats.data.{NonEmptyMap, ReaderT}
 import cats.effect.IO
@@ -16,7 +16,10 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.config.node.operation.multisig.{NodeOperationMultisigConfig, RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{MultiPeerHeadHarness, Signal}
+import hydrozoa.integration.harness.{
+  MultiPeerHeadHarness,
+  Signal
+}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
@@ -31,6 +34,7 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.stack.StackEffects
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import java.time.Instant
@@ -39,98 +43,112 @@ import org.scalacheck.Test.Parameters
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scala.util.Try
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{Context as LedgerContext, UtxoEnv}
-import scalus.cardano.ledger.{AddrKeyHash, AssetName, AuxiliaryData, CertState, Coin, KeepRaw, Metadatum, PolicyId, ScriptHash, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, CertState, Coin, KeepRaw, Metadatum, PolicyId, ScriptHash, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
+import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.Builtins.{blake2b_224, blake2b_256}
-import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.{fromData, toData}
+import scalus.uplc.builtin.FromData.given_FromData_BigInt
+import scalus.uplc.builtin.{ByteString, Data}
 import test.{SeedPhrase, TestPeers, genMonad}
 
-/** Air-drop demo: streamlining L1 token distribution through a Hydrozoa head.
+/** Oracle demo: publishing an on-chain data feed through a Hydrozoa head.
   *
-  * A publisher mints the entire token volume up front (here: seeded straight into the head's
-  * initial L2 state as one pot utxo of [[totalSupply]] tokens) and boots a live multi-peer head
-  * over it. The "claiming" then happens entirely on L2: a chain of cheap L2 transactions each carve
-  * a small amount (≤ [[maxClaim]]) off the pot to a fresh recipient, marking that output to be
-  * withdrawn to L1. Many claims produce many withdrawals — but the publisher pays for a single init
-  * tx on L1 instead of one L1 transfer per recipient. If real claim logic lived in a Plutus
-  * validator, all of that script execution would run on L2 too, at head cost rather than L1 cost.
+  * A data provider runs an oracle whose feed is the [Hofstadter
+  * Q-sequence](https://oeis.org/A005185) — a self-contained, deterministic integer sequence
+  * standing in for any real-world feed. Each successive term Q(n) is published to Cardano L1 as an
+  * **oracle utxo**: a utxo at the head's native script address carrying (a) an authentication token
+  * proving provenance and (b) the term itself in the `oraclePayload` field of the deposit datum.
+  * Any Cardano contract can read the current value as a CIP-31 reference input.
   *
-  * Bespoke real-clock run (like the membership-change demo, NOT ModelBasedSuite): the head boots
-  * immediately on the wall clock and the mock L1 derives its slot from wall time, so the default tx
-  * timing gives a wide validity window. Rate limits are narrowed so blocks/stacks flow quickly.
+  * The provider's authentication tokens live in the head's L2. Each refresh is an L2 transaction
+  * request that produces an L1-bound payout to the native script address, carrying one auth token
+  * and the new term — the head's settlement machinery lands it on L1. So after the initial funding,
+  * the whole feed is driven from L2, at head cost, without repeated external L1 transactions.
   *
-  * The final assertion reads the mock L1 directly: every airdrop token that started in the treasury
-  * must end up withdrawn to a recipient address (full drain, conservation of supply).
+  * (The whitepaper's single-token-recycling refresh relies on internal-deposit re-absorption, which
+  * is future work; this demo spends one auth token of the provider's policy per publication.
+  * Consumers authenticate on the token's *policy*, so this is equivalent from their side.)
+  *
+  * Bespoke real-clock run (like the airdrop / membership-change demos, NOT ModelBasedSuite). The
+  * final assertion reads the mock L1 directly: every published term appears in an oracle utxo, each
+  * bearing the provider's auth token, with the payloads decoding to exactly Q(1)..Q(nTerms).
   */
-object AirdropDemo extends Properties("Airdrop demo") {
+object OracleDemo extends Properties("Oracle demo") {
 
     // One live run is enough — it is a real, slow integration scenario.
     override def overrideParameters(p: Parameters): Parameters =
         p.withMinSuccessfulTests(1)
 
-    private val log: String => IO[Unit] = msg => IO(println(s"[airdrop-demo] $msg"))
+    private val log: String => IO[Unit] = msg => IO(println(s"[oracle-demo] $msg"))
 
     // ===================================
-    // Airdrop parameters
+    // Oracle parameters
     // ===================================
 
     private val nHeadPeers = 2
 
-    /** The whole token volume the publisher mints up front. */
-    private val totalSupply: Long = 10_000L
+    /** How many terms of the feed to publish (Q(1)..Q(nTerms)). */
+    private val nTerms: Int = 25
 
-    /** Max tokens a single claim can take (each claim draws [minClaim, maxClaim]). */
-    private val minClaim: Long = 40L
-    private val maxClaim: Long = 50L
-
-    /** ADA carried by each claim output (leaves L2 on withdrawal); above min-ada for a 1-asset
-      * utxo.
+    /** ADA carried by each oracle utxo (leaves L2 with the auth token); above min-ada for a
+      * token+datum utxo.
       */
-    private val claimAdaLovelace: Long = 2_000_000L
+    private val oracleAdaLovelace: Long = 2_000_000L
 
-    /** ADA seeded into the pot utxo — must cover [[claimAdaLovelace]] for every claim plus a change
-      * remainder above min-ada. Sized generously for the worst-case claim count.
+    /** ADA seeded into the provider's L2 pot — covers [[oracleAdaLovelace]] for every publication
+      * plus a change remainder above min-ada.
       */
-    private val potAdaLovelace: Long = 700_000_000L
+    private val potAdaLovelace: Long = 100_000_000L
 
     /** Equity contributed per peer (covers the init tx fee). */
     private val equityPerPeerLovelace: Long = 20_000_000L
 
-    /** The airdrop token's policy + name. A fabricated policy id — the tokens are seeded straight
-      * into L2, never minted on the mock L1, so no real minting script is needed.
+    /** The provider's authentication token: one token per publication is spent, all of one policy.
+      * A fabricated policy id — the tokens are seeded straight into L2, never minted on the mock
+      * L1.
       */
-    private val airdropPolicyId: PolicyId =
+    private val authPolicyId: PolicyId =
         ScriptHash.fromByteString(
-          blake2b_224(ByteString.fromArray("hydrozoa-airdrop-policy".getBytes))
+          blake2b_224(ByteString.fromArray("hydrozoa-oracle-auth-policy".getBytes))
         )
-    private val airdropAssetName: AssetName =
-        AssetName(ByteString.fromString("AIRDROP"))
+    private val authAssetName: AssetName =
+        AssetName(ByteString.fromString("ORACLE"))
+
+    /** The [Hofstadter Q-sequence](https://oeis.org/A005185): Q(1)=Q(2)=1,
+      * Q(n)=Q(n-Q(n-1))+Q(n-Q(n-2)). The feed's data.
+      */
+    private val qSequence: Vector[Long] = {
+        val q = Array.fill(nTerms + 1)(0L)
+        if nTerms >= 1 then q(1) = 1L
+        if nTerms >= 2 then q(2) = 1L
+        for n <- 3 to nTerms do q(n) = q(n - q(n - 1).toInt) + q(n - q(n - 2).toInt)
+        (1 to nTerms).map(q(_)).toVector
+    }
 
     // ===================================
     // Scenario fixture
     // ===================================
 
-    /** One built, signed claim: an L2 tx spending the current pot, paying `amount` tokens to
-      * `recipient` (marked for withdrawal) and the remainder back to the publisher (kept in L2).
+    /** One built, signed publication: an L2 tx spending the provider's current pot, producing the
+      * oracle utxo (auth token + payload Q(n), withdrawn to L1) and change (kept in L2).
       */
-    private case class BuiltClaim(
-        signedTx: Transaction,
-        recipient: ShelleyAddress,
-        amount: Long
-    )
+    private case class Publication(signedTx: Transaction, term: Long)
 
     private case class Scenario(
         mnc: MultiNodeConfig,
         headGenesisUtxos: Utxos,
         headInitTxId: TransactionHash,
-        treasuryAddress: ShelleyAddress,
-        claims: List[BuiltClaim]
+        nativeScriptAddress: ShelleyAddress,
+        publications: List[Publication]
     )
 
     // Narrow the rate limits (as stage4 does) so stack/block propagation isn't paced against the
@@ -143,53 +161,27 @@ object AirdropDemo extends Properties("Airdrop demo") {
           rateLimits = RateLimits(softBlockMinPeriod = 5.seconds, hardStackMinPeriod = 2.seconds)
         )
 
-    /** Draw random claim amounts (each in [minClaim, maxClaim], the last capped) until the whole
-      * supply is allocated. Sum is exactly [[totalSupply]].
-      */
-    private val genClaimAmounts: Gen[List[Long]] =
-        Gen.tailRecM((List.empty[Long], totalSupply)) { case (acc, remaining) =>
-            if remaining <= 0 then Gen.const(Right(acc.reverse))
-            else
-                Gen.choose(minClaim, maxClaim).map { drawn =>
-                    val amount = math.min(drawn, remaining)
-                    Left((amount :: acc, remaining - amount))
-                }
-        }
+    private def authTokensOf(value: Value): Long =
+        value.assets.assets.get(authPolicyId).flatMap(_.get(authAssetName)).getOrElse(0L)
 
-    /** A fresh, distinct L1 recipient address per claim (a bare pubkey address — withdrawal outputs
-      * are just paid to it, so no signing key is needed).
+    /** Build the deterministic chain of signed publication txs off the initial pot utxo.
+      * Publication `i+1` spends publication `i`'s change output (index 1); tx ids are stable under
+      * signing, so the whole chain is known offline.
       */
-    private def recipientAddress(network: Network, i: Int): ShelleyAddress =
-        ShelleyAddress(
-          network = network,
-          payment = ShelleyPaymentPart.Key(
-            AddrKeyHash.fromByteString(
-              blake2b_224(ByteString.fromArray(s"airdrop-recipient-$i".getBytes))
-            )
-          ),
-          delegation = ShelleyDelegationPart.Null
-        )
-
-    private def tokensOf(value: Value): Long =
-        value.assets.assets.get(airdropPolicyId).flatMap(_.get(airdropAssetName)).getOrElse(0L)
-
-    /** Build the deterministic chain of signed claim txs off the initial pot utxo. Claim `i+1`
-      * spends claim `i`'s change output (index 1); tx ids are stable under signing, so the whole
-      * chain is known offline.
-      */
-    private def buildClaims(
+    private def buildPublications(
         mnc: MultiNodeConfig,
-        network: Network,
-        publisherAddress: ShelleyAddress,
+        providerAddress: ShelleyAddress,
+        nativeScriptAddress: ShelleyAddress,
+        onchainRefund: DepositUtxo.Refund.Instructions.Onchain,
         potInput0: TransactionInput,
-        potValue0: Value,
-        amounts: List[Long]
-    ): List[BuiltClaim] = {
+        potValue0: Value
+    ): List[Publication] = {
+        val network = mnc.headConfig.cardanoNetwork.cardanoInfo.network
         val protocolParams = mnc.headConfig.cardanoProtocolParams.withZeroFees
         val evaluator = mnc.headConfig.plutusScriptEvaluatorForTxBuild
-        val signAsPublisher = mnc.signTxAs(HeadPeerNumber(0))
+        val signAsProvider = mnc.signTxAs(HeadPeerNumber(0))
 
-        // metadata: output 0 (claim) = 1 (withdraw to L1); output 1 (change) = 2 (stay in L2)
+        // metadata: output 0 (oracle utxo) = 1 (withdraw to L1); output 1 (change) = 2 (stay in L2)
         val withdrawMetadata: AuxiliaryData = Metadata(
           Map(
             Word64(CIP67.Tags.head) ->
@@ -197,26 +189,32 @@ object AirdropDemo extends Properties("Airdrop demo") {
           )
         )
 
-        amounts.zipWithIndex
-            .foldLeft((List.empty[BuiltClaim], potInput0, potValue0)) {
-                case ((acc, potInput, potValue), (amount, i)) =>
-                    val claimValue =
-                        Value(Coin(claimAdaLovelace)) + Value.asset(
-                          airdropPolicyId,
-                          airdropAssetName,
-                          amount
+        def oracleDatum(term: Long): DepositUtxo.Datum =
+            DepositUtxo.Datum(onchainRefund, ScalusOption.Some(Data.I(BigInt(term))))
+
+        qSequence.zipWithIndex
+            .foldLeft((List.empty[Publication], potInput0, potValue0)) {
+                case ((acc, potInput, potValue), (term, _)) =>
+                    val oracleValue =
+                        Value(Coin(oracleAdaLovelace)) + Value.asset(
+                          authPolicyId,
+                          authAssetName,
+                          1L
                         )
-                    val changeValue = potValue - claimValue
+                    val changeValue = potValue - oracleValue
 
-                    val claimOutput: TransactionOutput =
-                        Babbage(recipientAddress(network, i), claimValue)
-                    val changeOutput: TransactionOutput = Babbage(publisherAddress, changeValue)
-
-                    val potOutput: TransactionOutput = Babbage(publisherAddress, potValue)
+                    val oracleOutput: TransactionOutput = Babbage(
+                      address = nativeScriptAddress,
+                      value = oracleValue,
+                      datumOption = Some(Inline(toData(oracleDatum(term)))),
+                      scriptRef = None
+                    )
+                    val changeOutput: TransactionOutput = Babbage(providerAddress, changeValue)
+                    val potOutput: TransactionOutput = Babbage(providerAddress, potValue)
 
                     val steps = List(
                       Spend(Utxo(potInput, potOutput), PubKeyWitness),
-                      Send(claimOutput),
+                      Send(oracleOutput),
                       Send(changeOutput),
                       Fee(Coin.zero),
                       ModifyAuxiliaryData(_ => Some(withdrawMetadata))
@@ -233,14 +231,15 @@ object AirdropDemo extends Properties("Airdrop demo") {
                           )
                         )
                         .fold(
-                          err => throw new RuntimeException(s"claim $i tx build failed: $err"),
+                          err =>
+                              throw new RuntimeException(
+                                s"publication (Q=$term) tx build failed: $err"
+                              ),
                           ctx => ctx.transaction
                         )
 
-                    val signed = signAsPublisher(unsigned)
-                    val claim =
-                        BuiltClaim(signed, claimOutput.address.asInstanceOf[ShelleyAddress], amount)
-                    (claim :: acc, TransactionInput(signed.id, 1), changeValue)
+                    val signed = signAsProvider(unsigned)
+                    (Publication(signed, term) :: acc, TransactionInput(signed.id, 1), changeValue)
             }
             ._1
             .reverse
@@ -249,15 +248,12 @@ object AirdropDemo extends Properties("Airdrop demo") {
     private val genScenario: Gen[Scenario] = {
         val testPeers = TestPeers(SeedPhrase.Yaci, CardanoNetwork.Preprod, nHeadPeers)
         val cardanoNetwork = testPeers.cardanoNetwork
-        val network = cardanoNetwork.cardanoInfo.network
-        val publisherAddress = testPeers.shelleyAddressFor(HeadPeerNumber(0))
+        val providerAddress = testPeers.shelleyAddressFor(HeadPeerNumber(0))
 
+        // The provider's whole stock of auth tokens (one per publication) plus ADA to fund each
+        // oracle utxo, seeded straight into their L2 account.
         val potValue =
-            Value(Coin(potAdaLovelace)) + Value.asset(
-              airdropPolicyId,
-              airdropAssetName,
-              totalSupply
-            )
+            Value(Coin(potAdaLovelace)) + Value.asset(authPolicyId, authAssetName, nTerms.toLong)
         val equity: NonEmptyMap[HeadPeerNumber, Coin] =
             NonEmptyMap.fromMapUnsafe(
               SortedMap(
@@ -267,10 +263,9 @@ object AirdropDemo extends Properties("Airdrop demo") {
             )
         val totalEquity = Coin(equityPerPeerLovelace * nHeadPeers)
 
-        // A fixed seed funding utxo on L1 that the init tx spends; its input fixes the head id.
         val seedInput = TransactionInput(
           TransactionHash.fromByteString(
-            blake2b_256(ByteString.fromArray("hydrozoa-airdrop-seed".getBytes))
+            blake2b_256(ByteString.fromArray("hydrozoa-oracle-seed".getBytes))
           ),
           0
         )
@@ -279,8 +274,6 @@ object AirdropDemo extends Properties("Airdrop demo") {
             headParams <- generateHeadParameters(generateTxTiming = generateDefaultTxTiming)
                 .run(testPeers)
 
-            // Reuse the SAME generated fallback contingency both to size the funding and (below) in
-            // the bootstrap, so `funding.isBalanced` holds exactly.
             fc = headParams.fallbackContingency
             totalContingency = Coin(
               fc.collectiveContingency.total.value + nHeadPeers * fc.individualContingency.total.value
@@ -288,7 +281,7 @@ object AirdropDemo extends Properties("Airdrop demo") {
 
             fundingValueTarget = potValue + Value(totalEquity) + Value(totalContingency)
             funding = InitializationFunding(
-              seedUtxo = Utxo(seedInput, Babbage(publisherAddress, fundingValueTarget)),
+              seedUtxo = Utxo(seedInput, Babbage(providerAddress, fundingValueTarget)),
               additionalFundingUtxos = Map.empty,
               changeOutputs = Nil
             )
@@ -299,7 +292,7 @@ object AirdropDemo extends Properties("Airdrop demo") {
               TreeMap(
                 potInput0.toEvacuationKey ->
                     Payout
-                        .Obligation(KeepRaw(Babbage(publisherAddress, potValue)), cardanoNetwork)
+                        .Obligation(KeepRaw(Babbage(providerAddress, potValue)), cardanoNetwork)
                         .toOption
                         .get
               )
@@ -321,15 +314,35 @@ object AirdropDemo extends Properties("Airdrop demo") {
               ),
               generateNodeOperationMultisigConfig = genNodeOpMultisig
             )
-
-            amounts <- genClaimAmounts
-        } yield Scenario(
-          mnc = mnc,
-          headGenesisUtxos = mnc.initializationTx.resolvedUtxos.utxos,
-          headInitTxId = mnc.initializationTx.tx.id,
-          treasuryAddress = mnc.headConfig.headMultisigAddress,
-          claims = buildClaims(mnc, network, publisherAddress, potInput0, potValue, amounts)
-        )
+        } yield {
+            val slotConfig = mnc.headConfig.slotConfig
+            // Vestigial refund instructions on the oracle datum (the utxo is a feed, not a
+            // refundable deposit); the payload is what consumers read.
+            val onchainRefund = DepositUtxo.Refund.Instructions.Onchain(
+              DepositUtxo.Refund.Instructions(
+                address = providerAddress,
+                datum = None,
+                validityStart = QuantizedInstant(
+                  slotConfig = slotConfig,
+                  instant = Instant.ofEpochMilli(slotConfig.zeroTime)
+                )
+              )
+            )
+            Scenario(
+              mnc = mnc,
+              headGenesisUtxos = mnc.initializationTx.resolvedUtxos.utxos,
+              headInitTxId = mnc.initializationTx.tx.id,
+              nativeScriptAddress = mnc.headConfig.headMultisigAddress,
+              publications = buildPublications(
+                mnc,
+                providerAddress,
+                mnc.headConfig.headMultisigAddress,
+                onchainRefund,
+                potInput0,
+                potValue
+              )
+            )
+        }
     }
 
     // ===================================
@@ -358,7 +371,7 @@ object AirdropDemo extends Properties("Airdrop demo") {
     ): MultiPeerHeadHarness.Inputs =
         MultiPeerHeadHarness.Inputs(
           config =
-              MultiPeerHeadHarness.Config("airdrop", BackendMode.InMemory, TransportMode.Direct),
+              MultiPeerHeadHarness.Config("oracle", BackendMode.InMemory, TransportMode.Direct),
           multiNodeConfig = mnc,
           coilNodeConfigs = Nil,
           preinitPeerUtxosL1 = Map.empty,
@@ -393,33 +406,61 @@ object AirdropDemo extends Properties("Airdrop demo") {
             case _ => IO.sleep(sleep) >> pollTxKnown(backend, txId, attempts - 1, sleep)
         }
 
-    private def withdrawnTokens(utxos: Utxos, treasuryAddress: ShelleyAddress): Long =
-        utxos.iterator.collect {
-            case (_, o) if o.address != treasuryAddress => tokensOf(o.value)
-        }.sum
-
-    /** Poll the L1 snapshot until every airdrop token has left the treasury for a recipient. */
-    private def pollWithdrawn(
-        snapshot: IO[Utxos],
-        treasuryAddress: ShelleyAddress,
-        attempts: Int,
-        sleep: FiniteDuration
-    ): IO[Long] =
-        snapshot.flatMap { utxos =>
-            val withdrawn = withdrawnTokens(utxos, treasuryAddress)
-            if withdrawn >= totalSupply || attempts <= 1 then IO.pure(withdrawn)
-            else IO.sleep(sleep) >> pollWithdrawn(snapshot, treasuryAddress, attempts - 1, sleep)
+    /** Decode the oracle term from a utxo's datum, if it is an oracle utxo (a `DepositUtxo.Datum`
+      * with an integer `oraclePayload`).
+      */
+    private def readOracleTerm(output: TransactionOutput): Option[Long] =
+        output match {
+            case b: Babbage =>
+                b.datumOption match {
+                    case Some(Inline(data)) =>
+                        Try(fromData[DepositUtxo.Datum](data)).toOption.flatMap { datum =>
+                            datum.oraclePayload match {
+                                case ScalusOption.Some(d) =>
+                                    Try(fromData[BigInt](d).toLong).toOption
+                                case _ => None
+                            }
+                        }
+                    case _ => None
+                }
+            case _ => None
         }
 
-    private def submitClaim(
+    /** Read the current feed off L1: every oracle utxo (auth-token-bearing, at the native script
+      * address) with its decoded term.
+      */
+    private def readFeed(
+        backend: L1Backend[IO],
+        nativeScriptAddress: ShelleyAddress
+    ): IO[List[Long]] =
+        backend.utxosAt(nativeScriptAddress, (authPolicyId, authAssetName)).map {
+            case Right(utxos) =>
+                utxos.values.toList
+                    .flatMap(o => readOracleTerm(o).filter(_ => authTokensOf(o.value) >= 1))
+            case Left(_) => Nil
+        }
+
+    /** Poll L1 until all `nTerms` terms have been published as oracle utxos. */
+    private def pollFeed(
+        backend: L1Backend[IO],
+        nativeScriptAddress: ShelleyAddress,
+        attempts: Int,
+        sleep: FiniteDuration
+    ): IO[List[Long]] =
+        readFeed(backend, nativeScriptAddress).flatMap { terms =>
+            if terms.sizeIs >= nTerms || attempts <= 1 then IO.pure(terms)
+            else IO.sleep(sleep) >> pollFeed(backend, nativeScriptAddress, attempts - 1, sleep)
+        }
+
+    private def submitPublication(
         requestSequencer: RequestSequencer.Handle,
         headId: InitializationParameters.HeadId,
         slotConfig: SlotConfig,
         userVk: VerificationKey,
-        claim: BuiltClaim,
+        publication: Publication,
         now: Instant
     ): IO[Unit] = {
-        val body = TransactionRequestBody(ByteString.fromArray(claim.signedTx.toCbor))
+        val body = TransactionRequestBody(ByteString.fromArray(publication.signedTx.toCbor))
         val header = UserRequestHeader(
           headId = headId,
           validityStart = RequestValidityStartTime(
@@ -452,16 +493,14 @@ object AirdropDemo extends Properties("Airdrop demo") {
             )
 
         for {
-            backendAndSnapshot <- CardanoBackendMock.mockIOWithSnapshot(
+            backend <- CardanoBackendMock.mockIO(
               initialState = MockState(scenario.headGenesisUtxos),
               mkContext = mkContext
             )
-            (backend, snapshot) = backendAndSnapshot
 
             sig <- stackZeroSignal
             _ <- log(
-              s"minting $totalSupply tokens into the head's initial L2 state; " +
-                  s"${scenario.claims.size} claims queued"
+              s"publishing the Hofstadter Q-sequence: ${nTerms} terms ${qSequence.take(12).mkString(", ")}, ..."
             )
 
             result <- MultiPeerHeadHarness
@@ -469,7 +508,7 @@ object AirdropDemo extends Properties("Airdrop demo") {
                 .use { harness =>
                     for {
                         _ <- sig.await.timeout(120.seconds)
-                        _ <- log("head hard-confirmed stack 0; airdrop pot is live in L2")
+                        _ <- log("head hard-confirmed stack 0; oracle provider funded in L2")
                         initLanded <- pollTxKnown(backend, scenario.headInitTxId, 120, 500.millis)
                         _ <- log(s"init tx landed on L1: $initLanded")
 
@@ -480,46 +519,44 @@ object AirdropDemo extends Properties("Airdrop demo") {
                             .exportVerificationKey
                         now <- IO.realTimeInstant
 
-                        _ <- scenario.claims.zipWithIndex.traverse_ { case (claim, i) =>
-                            submitClaim(
+                        _ <- scenario.publications.zipWithIndex.traverse_ { case (publication, i) =>
+                            submitPublication(
                               requestSequencer,
                               cfg.headId,
                               cfg.slotConfig,
                               userVk,
-                              claim,
+                              publication,
                               now
                             ) >>
-                                (if (i + 1) % 50 == 0 then
-                                     log(s"submitted ${i + 1}/${scenario.claims.size} claims")
+                                (if (i + 1) % 5 == 0 then
+                                     log(s"submitted ${i + 1}/${nTerms} oracle refreshes")
                                  else IO.unit)
                         }
-                        _ <- log(
-                          s"all ${scenario.claims.size} claims submitted; settling withdrawals on L1"
-                        )
+                        _ <- log(s"all ${nTerms} refreshes submitted; settling oracle utxos on L1")
 
-                        withdrawn <- pollWithdrawn(
-                          snapshot,
-                          scenario.treasuryAddress,
-                          900,
-                          500.millis
-                        )
+                        feed <- pollFeed(backend, scenario.nativeScriptAddress, 900, 500.millis)
                         errors <- harness.sutErrors.get
                         _ <- log(
-                          s"withdrawn to L1: $withdrawn / $totalSupply tokens; actor errors=${errors.size}"
+                          s"oracle utxos on L1: ${feed.size} / ${nTerms}; " +
+                              s"terms=${feed.sorted.mkString(",")}; actor errors=${errors.size}"
                         )
-                    } yield (initLanded, withdrawn, errors)
+                    } yield (initLanded, feed, errors)
                 }
-            (initLanded, withdrawn, errors) = result
+            (initLanded, feed, errors) = result
         } yield {
+            val published = feed.sorted
+            val expected = qSequence.toList.sorted
             List(
               "init tx did not land on L1" |: initLanded,
-              s"not all tokens withdrawn to L1: $withdrawn/$totalSupply" |: (withdrawn == totalSupply),
+              s"not all terms published as oracle utxos: ${feed.size}/$nTerms" |: (feed.sizeIs == nTerms),
+              s"published feed does not match Q(1)..Q($nTerms): got $published, want $expected" |:
+                  (published == expected),
               s"head produced actor errors: ${errors.mkString("; ")}" |: errors.isEmpty
             ).foldLeft(Prop(true))(_ && _)
         }
     }
 
-    val _ = property("airdrop tokens flow from L2 claims onto L1 as withdrawals") =
+    val _ = property("oracle feed (Q-sequence) is published to L1 as referenceable utxos") =
         Prop.forAll(genScenario) { scenario =>
             runDemo(scenario).unsafeRunSync()
         }
