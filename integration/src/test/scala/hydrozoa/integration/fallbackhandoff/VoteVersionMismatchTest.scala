@@ -4,7 +4,9 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.generateHeadConfig
+import hydrozoa.config.head.initialization.generateInitialBlock
 import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
@@ -30,7 +32,7 @@ import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.cardano.ledger.TransactionHash
-import test.{SeedPhrase, TestPeers}
+import test.{SeedPhrase, TestPeers, given}
 
 /** Demonstrates the vote-version mismatch bug in [[RuleBasedRegimeManager.loadAction]].
   *
@@ -74,6 +76,26 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         given (MultiNodeConfig => Pretty) = _ => Pretty(_ => "MultiNodeConfig (too long)")
 
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
+        // Under WS (real wall-clock) mode we MUST anchor the initial block's creation-end-time to
+        // `takeoffTime` — otherwise the default generator picks a random Jan-1-2026 + 100-day
+        // offset that has already elapsed relative to `Instant.now()`, so the init tx validity
+        // window closes before CL ever wakes up. Stage4 does the same trick.
+        val takeoffTime: Option[java.time.Instant] =
+            if transportMode.useTestControl then None
+            else Some(java.time.Instant.now().plusSeconds(5))
+        val generateHeadStartTime: test.GenWithTestPeers[BlockCreationEndTime] =
+            ReaderT { tp =>
+                takeoffTime match {
+                    case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                    case None    =>
+                        val anchorTime = 1767225600L // Jan 1 2026, GMT
+                        val range      = 86_400 * 100L
+                        for offset <- Gen.choose(0L, range)
+                        yield BlockCreationEndTime(
+                          java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
+                        )
+                }
+            }
         // Fast timing knobs stolen from stage4/Suite.scala so blocks progress within our budget:
         // halve the CL polling period and shorten the two rate-limiter periods (see
         // docs/rate-limiter.md).
@@ -98,7 +120,15 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                   generateHeadConfig = generateHeadConfig(
                     genHeadConfigBootstrap = generateHeadConfigBootstrap(
                       generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming)
-                    )
+                    ),
+                    generateInitialBlock = bootstrap =>
+                        generateInitialBlock(
+                          genHeadConfigBootstrap =
+                              ReaderT.pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](
+                                bootstrap
+                              ),
+                          generateBlockCreationEndTime = generateHeadStartTime,
+                        ),
                   ),
                   generateNodeOperationMultisigConfig = hc =>
                       hydrozoa.config.node.operation.multisig
@@ -115,7 +145,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] =
             org.scalacheck.PropertyM
                 .pick[IO, MultiNodeConfig](genMultiNodeConfig)
-                .map(mnc => buildCtxResource(transportMode, mnc, testPeers))
+                .map(mnc => buildCtxResource(transportMode, mnc, testPeers, takeoffTime))
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
 
@@ -218,6 +248,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
         testPeers: TestPeers,
+        takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
             firewall <- Resource.eval(newFirewallState)
@@ -230,10 +261,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
-
-            takeoffTime: Option[java.time.Instant] =
-                if transportMode.useTestControl then None
-                else Some(java.time.Instant.now().plusSeconds(60))
 
             // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
             // exists (see MultiPeerHeadHarness.PreSystem.testControlPresleep). Anchor to the head's
