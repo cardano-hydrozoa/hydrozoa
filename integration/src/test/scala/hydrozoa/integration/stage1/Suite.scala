@@ -25,6 +25,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
@@ -510,6 +511,16 @@ case class Suite(
                     nodeConfig.headPeers.nHeadPeers: Int
                   )
                 )
+                // No HMRM in stage1 — provide a stub actor that swallows any HandoffToRuleBased
+                // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
+                // path only), so the ref is a required-but-inert construction parameter.
+                mrmSelfStub <- system.actorOf(
+                  new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased] {
+                      override def receive
+                          : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased] =
+                          _ => IO.unit
+                  }
+                )
                 // Cardano liaison
                 cardanoLiaison <- system.actorOf(
                   CardanoLiaison(
@@ -517,7 +528,8 @@ case class Suite(
                     cardanoBackend,
                     CardanoLiaison.Connections(blockWeaver),
                     clTracer,
-                    persistence
+                    persistence,
+                    mrmSelf = mrmSelfStub,
                   )
                 )
                 // Request sequencer stub
