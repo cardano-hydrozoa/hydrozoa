@@ -11,6 +11,7 @@ import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import monocle.Focus.focus
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.rules.STS.Mutator
@@ -151,7 +152,8 @@ class CardanoBackendMock private (
         } yield Right(result)
     }
 
-    override def submitTx(tx: Transaction): MockStateF[Either[CardanoBackend.Error, Unit]] =
+    override def submitTx(etx: EnrichedTx[?]): MockStateF[Either[CardanoBackend.Error, Unit]] =
+        val tx = etx.tx
         for {
             _ <- log.traceWith(CardanoBackendEvent.SubmitTxReceived(tx.id))
             _ <- log.traceWith(
@@ -288,8 +290,8 @@ object CardanoBackendMock {
                 ): IO[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]] =
                     transformer(mock.lastContinuingTxs(asset, after))
 
-                override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
-                    transformer(mock.submitTx(tx))
+                override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =
+                    transformer(mock.submitTx(etx))
 
                 def fetchLatestParams: IO[Either[Error, ProtocolParams]] =
                     transformer(mock.fetchLatestParams)

@@ -13,6 +13,7 @@ import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWi
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.stack.Stack
 import hydrozoa.multisig.persistence.BackendStore
 import org.scalacheck.commands.SutCommand
@@ -167,7 +168,7 @@ object Stage4SutCommands:
                 reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
                 _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
-                _ <- sut.static.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
+                _ <- sut.static.cardanoBackend.submitTx(RawTx(cmd.depositTxBytesSigned))
             } yield ValidityFlag.Valid
         }
     }

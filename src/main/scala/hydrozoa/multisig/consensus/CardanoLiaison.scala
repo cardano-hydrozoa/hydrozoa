@@ -746,7 +746,7 @@ trait CardanoLiaison(
                                     _ <- tracer.traceWith(
                                       CardanoLiaisonEvent.TxSubmitting(etx.tx.id)
                                     )
-                                    ret <- cardanoBackend.submitTx(etx.tx)
+                                    ret <- cardanoBackend.submitTx(etx)
                                 } yield (etx, ret)
                             )
                         else IO.pure(List.empty)

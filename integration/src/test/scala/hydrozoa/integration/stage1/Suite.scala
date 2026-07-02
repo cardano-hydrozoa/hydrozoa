@@ -31,6 +31,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
@@ -185,7 +186,7 @@ case class Suite(
                              s"mixSplitTxSigned = ${HexUtil.encodeHexString(mixSplitTxSigned.toCbor)}"
                            )
                          )
-                    ret <- run(backend.submitTx(mixSplitTxSigned))
+                    ret <- run(backend.submitTx(RawTx(mixSplitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
                     // TODO: await tx
@@ -224,7 +225,7 @@ case class Suite(
                              s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}"
                            )
                          )
-                    ret <- run(backend.submitTx(splitTxSigned))
+                    ret <- run(backend.submitTx(RawTx(splitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
                     // TODO: await tx
