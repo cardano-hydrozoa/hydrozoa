@@ -1,10 +1,13 @@
 package hydrozoa.integration.fallbackhandoff
 
-import cats.effect.{Deferred, IO, Ref, Resource}
+import cats.effect.*
+import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.SlowConsensusActorEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -15,14 +18,11 @@ import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
+import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.cardano.ledger.TransactionHash
+import test.{SeedPhrase, TestPeers}
 
-// WIP scaffold: step1_setup + harnessInputs are still `???`, so several helpers below are
-// currently unreferenced from the compiled tree. Suppress the unused-symbol errors under
-// -Werror while the scaffold lands piece by piece; drop the annotation once step1 wires them
-// together.
-@scala.annotation.nowarn("msg=unused private member")
 /** Demonstrates the vote-version mismatch bug in [[RuleBasedRegimeManager.loadAction]].
   *
   * Scenario:
@@ -36,29 +36,55 @@ import scalus.cardano.ledger.TransactionHash
   *   4. RRM's `loadAction` reads the latest hard-confirmed stack (major-2) and constructs a Vote
   *      whose SEC references major-2. The Vote submission reaches the mock (not a FallbackTx, not
   *      dropped); the mock rejects it because on-chain treasury still reflects major-1.
-  *
-  * Body is a straight for-yield of `step1..step4` — read it top-down.
   */
-object VoteVersionMismatchTest:
+object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
+
+    override def overrideParameters(
+        p: org.scalacheck.Test.Parameters
+    ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
     private val nHeadPeers: Int = 2
-    private val scenarioTimeout: FiniteDuration = 60.seconds
+    private val scenarioTimeout: FiniteDuration = 120.seconds
+    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     // ------------------------------------------------------------------
-    // Runners
+    // Test properties
     // ------------------------------------------------------------------
 
-    private def runDirect: IO[Unit] = runScenario(TransportMode.Direct)
-    private def runWs: IO[Unit] = runScenario(TransportMode.WebSocket)
+    val _ = property("direct: RRM votes at latest hard-confirmed major even when on-chain lags") =
+        testProperty(TransportMode.Direct)
 
-    /** The whole test, top to bottom. */
-    private def runScenario(transportMode: TransportMode): IO[Unit] =
+    val _ = property("ws: RRM votes at latest hard-confirmed major even when on-chain lags") =
+        testProperty(TransportMode.WebSocket)
+
+    private def testProperty(transportMode: TransportMode): Prop =
+        import org.scalacheck.util.Pretty
+
+        given (MultiNodeConfig => Pretty) = _ => Pretty(_ => "MultiNodeConfig (too long)")
+
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
+        val genMultiNodeConfig = MultiNodeConfig.generateWith(testPeers)().label("MultiNodeConfig")
+
+        val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] =
+            org.scalacheck.PropertyM
+                .pick[IO, MultiNodeConfig](genMultiNodeConfig)
+                .map(mnc => buildCtxResource(transportMode, mnc, testPeers))
+
+        test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
+
+    // ------------------------------------------------------------------
+    // Scenario body (in Ctx-fixed TestM)
+    // ------------------------------------------------------------------
+
+    private val ctxTestM = test.TestMFixedEnv[Ctx]()
+    import ctxTestM.*
+
+    private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
-            ctx <- step1_setup(transportMode)
-            _   <- step2_awaitBothPeersHardConfirmMajor2(ctx)
-            _   <- step3_awaitFallbackToRuleBasedHandoff(ctx)
-            _   <- step4_assertVoteRejected(ctx)
-        yield ()
+            _ <- step2_awaitBothPeersHardConfirmMajor2
+            _ <- step3_awaitFallbackToRuleBasedHandoff
+            _ <- step4_assertVoteRejected
+        yield true
 
     // ------------------------------------------------------------------
     // Shared scenario context
@@ -69,19 +95,12 @@ object VoteVersionMismatchTest:
         transportMode: TransportMode,
         firewall: FirewallState,
         harness: MultiPeerHeadHarness.Harness[Unit, Unit],
-        // Fires once any peer observes `CardanoLiaisonEvent.FallbackToRuleBasedDispatched`.
         fallbackDispatched: Deferred[IO, Unit],
-        // Fires once both peers hard-confirm a stack whose last major produced version 2.
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
-        // Fires once RBA logs `RuleBasedActorEvent.Backend.ErrorSubmittingTx`.
         voteSubmitFailed: Deferred[IO, Unit],
-        // Per-peer Vote tx ids as recorded from RBA's `Tx.Submitting(vote: VoteTx)` trace.
         voteTxIds: Ref[IO, Map[HeadPeerNumber, TransactionHash]],
     )
 
-    /** Firewall observability state: per-peer submitted / dropped log accumulated from the
-      * [[FirewalledCardanoBackendEvent]] stream.
-      */
     private final case class FirewallState(
         dropped: Ref[
           IO,
@@ -97,62 +116,127 @@ object VoteVersionMismatchTest:
     // Steps
     // ------------------------------------------------------------------
 
-    /** Allocate firewall + signals, build [[MultiNodeConfig]], and stand up the harness with the
-      * per-peer [[FirewalledCardanoBackend]] + an observer tracer wired to the signals.
-      */
-    private def step1_setup(transportMode: TransportMode): IO[Ctx] = ???
-
-    /** Wait until both peers hard-confirm a stack whose last major produced version 2. Consensus
-      * is off-chain so the fallback drop doesn't block this.
-      */
-    private def step2_awaitBothPeersHardConfirmMajor2(ctx: Ctx): IO[Unit] =
-        ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout)
-
-    /** Wait for `CardanoLiaisonEvent.FallbackToRuleBasedDispatched` from either peer. HMRM will
-      * have auto-spawned RRM by the time this fires; nothing for the test to do here besides
-      * synchronise.
-      */
-    private def step3_awaitFallbackToRuleBasedHandoff(ctx: Ctx): IO[Unit] =
-        ctx.fallbackDispatched.get.timeout(scenarioTimeout)
-
-    /** Belt-and-suspenders assertion:
-      *   (a) confirm `voteSubmitFailed` fired (RBA's own `Backend.ErrorSubmittingTx` trace).
-      *   (b) look up each peer's Vote tx id (recorded from RBA's `Tx.Submitting` trace) in the
-      *       firewall's `SubmittedTx` log; assert the recorded result is `Left(InvalidTx)`.
-      */
-    private def step4_assertVoteRejected(ctx: Ctx): IO[Unit] =
+    private def step2_awaitBothPeersHardConfirmMajor2: test.TestM[Ctx, Unit] =
         for
-            _ <- ctx.voteSubmitFailed.get.timeout(scenarioTimeout)
-            voteIds <- ctx.voteTxIds.get
-            submitted <- ctx.firewall.submitted.get
-            _ <- IO {
-                assert(
-                  voteIds.nonEmpty,
-                  "expected at least one peer to have submitted a Vote tx",
-                )
-                voteIds.foreach { case (peer, voteId) =>
-                    val peerSubs = submitted.getOrElse(peer, Nil)
-                    val voteSub = peerSubs.find(_.txHash == voteId)
-                    assert(
+            ctx <- ask
+            _   <- lift(ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout))
+        yield ()
+
+    private def step3_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+        yield ()
+
+    private def step4_assertVoteRejected: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(ctx.voteSubmitFailed.get.timeout(scenarioTimeout))
+            voteIds <- lift(ctx.voteTxIds.get)
+            submitted <- lift(ctx.firewall.submitted.get)
+            _ <- assertWith(
+              voteIds.nonEmpty,
+              "expected at least one peer to have submitted a Vote tx",
+            )
+            _ <- voteIds.toList.foldLeft(pure(())) { case (acc, (peer, voteId)) =>
+                val peerSubs = submitted.getOrElse(peer, Nil)
+                val voteSub  = peerSubs.find(_.txHash == voteId)
+                for
+                    _ <- acc
+                    _ <- assertWith(
                       voteSub.isDefined,
                       s"peer $peer: no SubmittedTx event for Vote id $voteId",
                     )
-                    voteSub.foreach { sub =>
-                        assert(
-                          sub.result.left.exists(_.isInstanceOf[L1Backend.Error.InvalidTx]),
-                          s"peer $peer: expected Left(InvalidTx) on Vote submission, " +
-                              s"got ${sub.result}",
-                        )
-                    }
-                }
+                    _ <- voteSub match
+                        case None => pure(())
+                        case Some(sub) =>
+                            assertWith(
+                              sub.result.left
+                                  .exists(_.isInstanceOf[L1Backend.Error.InvalidTx]),
+                              s"peer $peer: expected Left(InvalidTx) on Vote submission, " +
+                                  s"got ${sub.result}",
+                            )
+                yield ()
             }
         yield ()
 
     // ------------------------------------------------------------------
-    // Wiring helpers (used by step1)
+    // Ctx bring-up (step1_setup as a Resource[IO, Ctx])
     // ------------------------------------------------------------------
 
-    /** Allocate empty per-peer firewall log Refs. */
+    /** Allocate observability state, compute pre-init UTxOs from `testPeers`, stand up the
+      * [[MultiPeerHeadHarness]] with per-peer [[FirewalledCardanoBackend]] and the observer tracer.
+      */
+    private def buildCtxResource(
+        transportMode: TransportMode,
+        multiNodeConfig: MultiNodeConfig,
+        testPeers: TestPeers,
+    ): Resource[IO, Ctx] =
+        for
+            firewall <- Resource.eval(newFirewallState)
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
+            bothPeersConfirmedMajor2 <- Resource.eval(Deferred[IO, Unit])
+            voteSubmitFailed <- Resource.eval(Deferred[IO, Unit])
+            voteTxIds <- Resource.eval(
+              Ref[IO].of(Map.empty[HeadPeerNumber, TransactionHash])
+            )
+
+            preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+                .map { case (name, utxos) => name.headPeerNumber -> utxos }
+
+            takeoffTime: Option[java.time.Instant] =
+                if transportMode.useTestControl then None
+                else Some(java.time.Instant.now().plusSeconds(60))
+
+            // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
+            // exists (see MultiPeerHeadHarness.PreSystem.testControlPresleep). Anchor to the head's
+            // configured initial block end-time so the model clock is coherent with the head config.
+            startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
+                .convert.instant.toEpochMilli
+
+            hooks = MultiPeerHeadHarness.Hooks[Unit, Unit](
+              tracer = observerTracer(
+                bothPeersConfirmedMajor2,
+                fallbackDispatched,
+                voteTxIds,
+                voteSubmitFailed,
+              ),
+              peerHandle = (_, _) => IO.unit,
+              coilHandle = (_, _) => IO.unit,
+              wrapPeerBackend = wrapPeerBackend(firewall),
+            )
+
+            label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}"
+
+            harness <- MultiPeerHeadHarness.resource[Unit, Unit](
+              MultiPeerHeadHarness.Inputs(
+                config = MultiPeerHeadHarness.Config(
+                  label = label,
+                  backendMode = MultiPeerHeadHarness.StorageBackend.Mode.InMemory,
+                  transportMode = transportMode,
+                ),
+                multiNodeConfig = multiNodeConfig,
+                coilNodeConfigs = Nil,
+                preinitPeerUtxosL1 = preinitPeerUtxosL1,
+                takeoffTime = takeoffTime,
+                startEpochMs = startEpochMs,
+              ),
+              hooks,
+            )
+        yield Ctx(
+          transportMode = transportMode,
+          firewall = firewall,
+          harness = harness,
+          fallbackDispatched = fallbackDispatched,
+          bothPeersConfirmedMajor2 = bothPeersConfirmedMajor2,
+          voteSubmitFailed = voteSubmitFailed,
+          voteTxIds = voteTxIds,
+        )
+
+    // ------------------------------------------------------------------
+    // Wiring helpers
+    // ------------------------------------------------------------------
+
     private def newFirewallState: IO[FirewallState] =
         for
             dropped <- Ref[IO].of(
@@ -163,12 +247,7 @@ object VoteVersionMismatchTest:
             )
         yield FirewallState(dropped, submitted)
 
-    /** Per-peer backend wrapper installed via `MultiPeerHeadHarness.Hooks.wrapPeerBackend`.
-      * Static predicate: drop iff the tx is a [[FallbackTx]] whose produced treasury datum is
-      * `Unresolved(versionMajor == 2)`. Everything else (including RBA's Vote tx) passes through
-      * to the mock. Each firewall event lands in `state.dropped` / `state.submitted` for
-      * post-run inspection.
-      */
+    /** Static drop predicate + per-peer event capture. */
     private def wrapPeerBackend(state: FirewallState)(
         peerNum: HeadPeerNumber,
         underlying: L1Backend[IO],
@@ -195,21 +274,13 @@ object VoteVersionMismatchTest:
           firewallTracer = perPeerTracer,
         )
 
-    /** Attach to `MultiPeerHeadHarness.Hooks.tracer`:
-      *   - Complete `bothPeersConfirmedMajor2` once both peers emit a hard-confirmation whose last
-      *     major partition produced version 2.
-      *   - Complete `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`.
-      *   - Record `voteTxIds(peer) = voteTx.tx.id` on RBA's `Tx.Submitting(vote: VoteTx)`.
-      *   - Complete `voteSubmitFailed` on the first `RuleBasedActorEvent.Backend.ErrorSubmittingTx`.
-      */
+    /** Observer tracer wiring — see class-level Ctx doc for what each signal represents. */
     private def observerTracer(
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         fallbackDispatched: Deferred[IO, Unit],
         voteTxIds: Ref[IO, Map[HeadPeerNumber, TransactionHash]],
         voteSubmitFailed: Deferred[IO, Unit],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        // Accumulates the set of peers that have hard-confirmed a stack whose last major produced
-        // version 2. When the set reaches nHeadPeers, we release the deferred.
         val peersAtMajor2: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
 
         def lastMajorVersion(effects: StackEffects.HardConfirmed): Option[Int] =
@@ -258,8 +329,3 @@ object VoteVersionMismatchTest:
 
             case MultiPeerHeadHarness.Event.Coil(_, _) => IO.unit
         }
-
-    /** Build MultiNodeConfig + pre-init UTxOs + start epoch for the 2-peer scenario. */
-    private def harnessInputs(
-        transportMode: TransportMode
-    ): Resource[IO, MultiPeerHeadHarness.Inputs] = ???
