@@ -4,7 +4,8 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.generateHeadConfig
-import hydrozoa.config.head.initialization.generateInitialBlock
+import hydrozoa.config.head.InitParamsType
+import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
@@ -117,12 +118,26 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             )
         }
 
+        // Pin the head-bootstrap's genesis UTxOs to the SAME map the harness seeds into the mock
+        // backend below (`preinitPeerUtxosL1`). The default BottomUp generator randomises them
+        // independently, so the init tx tries to spend inputs the mock doesn't have → invalid tx
+        // → InitWindowElapsed. Stage4 uses the same trick (Suite.scala:847-853).
+        val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
         val genMultiNodeConfig =
             MultiNodeConfig
                 .generateWith(testPeers)(
                   generateHeadConfig = generateHeadConfig(
                     genHeadConfigBootstrap = generateHeadConfigBootstrap(
-                      generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming)
+                      generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming),
+                      generateInitializationParameters = InitParamsType.TopDown(
+                        InitializationParametersGenTopDown.GenWithDeps(
+                          generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
+                              Gen.const(
+                                testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
+                              )
+                          )
+                        )
+                      ),
                     ),
                     generateInitialBlock = bootstrap =>
                         generateInitialBlock(
