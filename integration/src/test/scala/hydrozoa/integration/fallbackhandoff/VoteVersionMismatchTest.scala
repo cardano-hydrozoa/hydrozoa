@@ -6,8 +6,10 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.logging.ContraTracer
+import cats.syntax.all.*
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
+import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManagerEventFormat}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.SlowConsensusActorEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -195,7 +197,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                 .convert.instant.toEpochMilli
 
             hooks = MultiPeerHeadHarness.Hooks[Unit, Unit](
-              tracer = observerTracer(
+              tracer = humanFormatTracer |+| observerTracer(
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
                 voteTxIds,
@@ -246,6 +248,22 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
               Map.empty[HeadPeerNumber, List[FirewalledCardanoBackendEvent.SubmittedTx]]
             )
         yield FirewallState(dropped, submitted)
+
+    /** Route every harness event through the existing per-cell human formatters into slf4j so
+      * scenario runs are visible in the console/log without touching each MRM's internal tracer.
+      */
+    private def humanFormatTracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
+        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
+                Slf4jTracer.sink.traceWith(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)(evt)
+                )
+            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
+                val syntheticLabel = HeadPeerNumber(nHeadPeers + coilNum.convert)
+                Slf4jTracer.sink.traceWith(
+                  CoilMultisigRegimeManagerEventFormat.humanFormat(syntheticLabel, coilNum)(evt)
+                )
+        }
 
     /** Static drop predicate + per-peer event capture. */
     private def wrapPeerBackend(state: FirewallState)(
