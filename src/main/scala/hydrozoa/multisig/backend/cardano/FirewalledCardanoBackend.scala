@@ -54,7 +54,11 @@ final class FirewalledCardanoBackend(
                     .traceWith(FirewalledCardanoBackendEvent.DroppedOutboundTx(etx.tx.id))
                     .as(Right(()))
             case false =>
-                underlying.submitTx(etx)
+                underlying.submitTx(etx).flatTap { result =>
+                    firewallTracer.traceWith(
+                      FirewalledCardanoBackendEvent.SubmittedTx(etx.tx.id, result)
+                    )
+                }
         }
 
     override def fetchLatestParams: IO[Either[Error, ProtocolParams]] =

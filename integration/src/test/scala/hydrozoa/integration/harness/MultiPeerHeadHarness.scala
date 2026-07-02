@@ -70,6 +70,8 @@ object MultiPeerHeadHarness:
         tracer: ContraTracer[IO, Event],
         peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
         coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
+        // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
+        wrapPeerBackend: (HeadPeerNumber, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
     /** Per-peer artifacts exposed to callers: resolved connections, persistence backend, and the
@@ -135,7 +137,7 @@ object MultiPeerHeadHarness:
                                     .buildPeer(
                                       peerNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapPeerBackend(peerNum, cardanoBackend),
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
