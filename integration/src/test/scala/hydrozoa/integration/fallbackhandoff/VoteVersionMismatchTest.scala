@@ -82,7 +82,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         // window closes before CL ever wakes up. Stage4 does the same trick.
         val takeoffTime: Option[java.time.Instant] =
             if transportMode.useTestControl then None
-            else Some(java.time.Instant.now().plusSeconds(5))
+            else Some(java.time.Instant.now().plusSeconds(20))
         val generateHeadStartTime: test.GenWithTestPeers[BlockCreationEndTime] =
             ReaderT { tp =>
                 takeoffTime match {
@@ -105,7 +105,10 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             Gen.const(
               TxTiming(
                 minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
-                inactivityMarginDuration = InactivityMarginDuration(5.seconds.quantize(network.slotConfig)),
+                // Widen the init tx window: initEndTime = bcet + minSettlementDuration +
+                // inactivityMarginDuration. Actor bring-up + stack-0 hard-confirmation + CL's
+                // first poll all have to fit inside that window or `InitWindowElapsed` fires.
+                inactivityMarginDuration = InactivityMarginDuration(60.seconds.quantize(network.slotConfig)),
                 silenceDuration = SilenceDuration(5.seconds.quantize(network.slotConfig)),
                 depositSubmissionDuration = DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
                 depositMaturityDuration = DepositMaturityDuration(1.second.quantize(network.slotConfig)),
