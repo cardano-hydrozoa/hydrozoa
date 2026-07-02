@@ -1,9 +1,17 @@
 package hydrozoa.integration.fallbackhandoff
 
+import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
+import hydrozoa.config.head.generateHeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.{generateHeadConfigBootstrap}
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
+import org.scalacheck.Gen
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import cats.syntax.all.*
@@ -14,11 +22,10 @@ import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.SlowConsensusActorEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
-import hydrozoa.multisig.ledger.l1.tx.FallbackTx
+import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.*
@@ -46,16 +53,18 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
     private val nHeadPeers: Int = 2
-    private val scenarioTimeout: FiniteDuration = 120.seconds
+    // Real wall-clock budget. Head config's minSettlementDuration + our fast-timing knobs
+    // determine major-block cadence; two majors + hard-confirmations comfortably fit in 5 min.
+    private val scenarioTimeout: FiniteDuration = 5.minutes
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     // ------------------------------------------------------------------
     // Test properties
     // ------------------------------------------------------------------
 
-    val _ = property("direct: RRM votes at latest hard-confirmed major even when on-chain lags") =
-        testProperty(TransportMode.Direct)
-
+    // Direct (TestControl) property is not registered yet: cats-actors' `setReceiveTimeout` uses
+    // the real wall clock (see EvacuationPropertyTest doc) so peers can't tick under TestControl
+    // without an explicit tickAll driver. Skip until we have that story.
     val _ = property("ws: RRM votes at latest hard-confirmed major even when on-chain lags") =
         testProperty(TransportMode.WebSocket)
 
@@ -65,7 +74,43 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         given (MultiNodeConfig => Pretty) = _ => Pretty(_ => "MultiNodeConfig (too long)")
 
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
-        val genMultiNodeConfig = MultiNodeConfig.generateWith(testPeers)().label("MultiNodeConfig")
+        // Fast timing knobs stolen from stage4/Suite.scala so blocks progress within our budget:
+        // halve the CL polling period and shorten the two rate-limiter periods (see
+        // docs/rate-limiter.md).
+        // Static fast TxTiming so `Action.FallbackToRuleBased` (case 3 at CardanoLiaison.scala:940)
+        // fires within our budget — settlement/fallback windows are seconds, not hours.
+        val fastTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
+            Gen.const(
+              TxTiming(
+                minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
+                inactivityMarginDuration = InactivityMarginDuration(5.seconds.quantize(network.slotConfig)),
+                silenceDuration = SilenceDuration(5.seconds.quantize(network.slotConfig)),
+                depositSubmissionDuration = DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+                depositMaturityDuration = DepositMaturityDuration(1.second.quantize(network.slotConfig)),
+                depositAbsorptionDuration = DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
+              )
+            )
+        }
+
+        val genMultiNodeConfig =
+            MultiNodeConfig
+                .generateWith(testPeers)(
+                  generateHeadConfig = generateHeadConfig(
+                    genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                      generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming)
+                    )
+                  ),
+                  generateNodeOperationMultisigConfig = hc =>
+                      hydrozoa.config.node.operation.multisig
+                          .generateNodeOperationMultisigConfig(
+                            maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                            rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
+                              softBlockMinPeriod = 5.seconds,
+                              hardStackMinPeriod = 2.seconds,
+                            ),
+                          )
+                )
+                .label("MultiNodeConfig")
 
         val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] =
             org.scalacheck.PropertyM
@@ -281,13 +326,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           underlying = underlying,
           shouldDrop = etx =>
               IO.pure(etx match {
-                  case fb: FallbackTx =>
-                      fb.treasuryProduced.treasuryOutput.datum match {
-                          case RuleBasedTreasuryDatum.Unresolved(_, versionMajor, _) =>
-                              versionMajor == BigInt(2)
-                          case _ => false
-                      }
-                  case _ => false
+                  case s: SettlementTx => s.majorVersionProduced.convert == 2
+                  case _               => false
               }),
           firewallTracer = perPeerTracer,
         )
