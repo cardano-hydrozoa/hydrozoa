@@ -55,10 +55,18 @@ object CardanoLiaison:
         pendingConnections: HeadMultisigRegimeManager.PendingConnections |
             CardanoLiaison.Connections,
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
     ): IO[CardanoLiaison] =
         IO(
-          new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer, persistence) {}
+          new CardanoLiaison(
+            config,
+            cardanoBackend,
+            pendingConnections,
+            tracer,
+            persistence,
+            mrmSelf
+          ) {}
         )
 
     type Config = CardanoNetwork.Section & NodeOperationMultisigConfig.Section &
@@ -344,6 +352,7 @@ trait CardanoLiaison(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
+    mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
@@ -726,8 +735,8 @@ trait CardanoLiaison(
                         )
                     }
 
-                    fallbackTxId = actionsToSubmit.collectFirst {
-                        case Action.FallbackToRuleBased(tx) => tx.tx.id
+                    fallbackAction = actionsToSubmit.collectFirst {
+                        case a: Action.FallbackToRuleBased => a
                     }
 
                     submitRet <-
@@ -737,7 +746,7 @@ trait CardanoLiaison(
                                     _ <- tracer.traceWith(
                                       CardanoLiaisonEvent.TxSubmitting(etx.tx.id)
                                     )
-                                    ret <- cardanoBackend.submitTx(etx.tx)
+                                    ret <- cardanoBackend.submitTx(etx)
                                 } yield (etx, ret)
                             )
                         else IO.pure(List.empty)
@@ -748,19 +757,23 @@ trait CardanoLiaison(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
 
-                    // Post-submission: fire FallbackToRuleBasedDispatched only after the fallback
-                    // tx was accepted by the backend. "Dispatched" denotes confirmed submission, not
-                    // intent — pre-effect intent is logged earlier as ActionsDispatched.
-                    _ <- fallbackTxId match {
+                    // Post-submission: fire FallbackToRuleBasedDispatched and signal the regime
+                    // manager only after the fallback tx was accepted by the backend. "Dispatched"
+                    // denotes confirmed submission, not intent — pre-effect intent is logged
+                    // earlier as ActionsDispatched.
+                    _ <- fallbackAction match {
                         case None => IO.unit
-                        case Some(id) =>
+                        case Some(action) =>
+                            val id = action.tx.tx.id
                             val submittedOk = submitRet.exists { case (etx, ret) =>
                                 etx.tx.id == id && ret.isRight
                             }
                             IO.whenA(submittedOk)(
                               tracer.traceWith(
                                 CardanoLiaisonEvent.FallbackToRuleBasedDispatched(id)
-                              )
+                              ) >> (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased(
+                                action.tx
+                              ))
                             )
                     }
 
@@ -788,7 +801,7 @@ trait CardanoLiaison(
     object Action {
 
         /** Switching into the rule-based regime. */
-        final case class FallbackToRuleBased(tx: EnrichedTx[?]) extends DirectAction
+        final case class FallbackToRuleBased(tx: FallbackTx) extends DirectAction
 
         /** Pushing the existing state in the multisig regime forward. */
         final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction

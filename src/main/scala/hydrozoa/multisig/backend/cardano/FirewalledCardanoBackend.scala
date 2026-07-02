@@ -3,17 +3,21 @@ package hydrozoa.multisig.backend.cardano
 import cats.effect.IO
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, Utxo, Utxos}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, TransactionHash, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 
 /** Wraps a [[CardanoBackend]] and drops outbound [[submitTx]] calls when `shouldDrop` says so.
   * Every other method delegates unchanged. Emits
   * [[FirewalledCardanoBackendEvent.DroppedOutboundTx]] on drop.
+  *
+  * The predicate receives the full [[EnrichedTx]] so callers can dispatch on tx family / payload
+  * (e.g. "drop only `FallbackTx` at major version 2") without resorting to tx-id observation.
   */
 final class FirewalledCardanoBackend(
     underlying: CardanoBackend[IO],
-    shouldDrop: Transaction => IO[Boolean],
+    shouldDrop: EnrichedTx[?] => IO[Boolean],
     firewallTracer: ContraTracer[IO, FirewalledCardanoBackendEvent],
 ) extends CardanoBackend[IO]:
 
@@ -43,14 +47,14 @@ final class FirewalledCardanoBackend(
     ): IO[Either[Error, List[(TransactionHash, Data, Data)]]] =
         underlying.lastContinuingTxs(asset, after)
 
-    override def submitTx(tx: Transaction): IO[Either[Error, Unit]] =
-        shouldDrop(tx).flatMap {
+    override def submitTx(etx: EnrichedTx[?]): IO[Either[Error, Unit]] =
+        shouldDrop(etx).flatMap {
             case true =>
                 firewallTracer
-                    .traceWith(FirewalledCardanoBackendEvent.DroppedOutboundTx(tx.id))
+                    .traceWith(FirewalledCardanoBackendEvent.DroppedOutboundTx(etx.tx.id))
                     .as(Right(()))
             case false =>
-                underlying.submitTx(tx)
+                underlying.submitTx(etx)
         }
 
     override def fetchLatestParams: IO[Either[Error, ProtocolParams]] =

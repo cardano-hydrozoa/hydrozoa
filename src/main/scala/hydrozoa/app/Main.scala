@@ -20,7 +20,7 @@ import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventForma
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat, MrmTracers}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
 import org.http4s.Uri
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -185,7 +185,7 @@ object Main
         backend: CardanoBackend[IO],
         remoteL2Ledger: RemoteL2Ledger,
         persistence: Persistence[IO],
-        mrmTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        mrmTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
         ownHeadNum: HeadPeerNumber,
     ): Resource[IO, NodeRun.HeadNode] = {

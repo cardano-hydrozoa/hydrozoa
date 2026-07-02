@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO, Resource}
+import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.ActorContext
 import com.suprnation.actor.ActorRef.NoSendActorRef
@@ -15,23 +15,32 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.rulebased.RuleBasedRegimeManager
 
 trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    override protected val tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+    override protected val tracer: ContraTracer[IO, HeadRegimeManagerEvent],
     peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
     /** Hub-side coil transport, populated iff this peer hubs any coil peers; required when
       * `config.hubbedCoilPeerNums(ownHeadNum)` is non-empty.
       */
     hubCoilTransport: Option[ActorContext[IO, Request, Any] => HubTransport],
-) extends MultisigRegimeManagerBase[HeadMultisigRegimeManagerEvent] {
+) extends MultisigRegimeManagerBase[HeadRegimeManagerEvent] {
 
     override protected lazy val tracers: MrmTracers = MrmTracers.fromRoot(tracer)
+
+    /** Non-CL child refs, populated once every actor is spawned in [[preStartLocal]]. On
+      * [[HandoffToRuleBased]], `onHandoffToRuleBased` reads them and issues `context.stop` to each;
+      * CL stays alive to process refunds and finish rollouts.
+      */
+    private val nonClChildren: Ref[IO, List[NoSendActorRef[IO]]] =
+        Ref.unsafe(List.empty)
 
     override protected def preStartLocal: IO[Unit] =
         for {
@@ -232,6 +241,40 @@ trait HeadMultisigRegimeManager(
             )
             _ <- (headPeerLiaisons.toList ++ coilPeerLiaisons)
                 .traverse_(r => watchChildren(r -> Actors.PeerLiaisonHeadToHead))
+
+            // Record everything the handoff needs to stop. CL is deliberately excluded — it
+            // stays alive across the multisig→rule-based transition to process refunds and
+            // finish rollouts.
+            _ <- nonClChildren.set(
+              List[NoSendActorRef[IO]](
+                core.blockWeaver,
+                core.consensusActor,
+                core.jointLedger,
+                core.stackComposer,
+                core.slowConsensusActor,
+                blockWeaverLimiter,
+                stackComposerLimiter,
+                requestSequencer,
+              ) ++ headPeerLiaisons.toList
+                  ++ coilPeerLiaisons
+                  ++ remoteHeadProxies.values.toList
+                  ++ coilAckSequencer.toList
+                  ++ coilRelay.toList
+                  ++ remoteCoilLiaisons.values.toList
+            )
+        } yield ()
+
+    override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
+        for {
+            refs <- nonClChildren.getAndSet(Nil)
+            _ <- refs.traverse_(context.stop)
+            _ <- context.actorOf(
+              RuleBasedRegimeManager(
+                cardanoBackend = cardanoBackend,
+                persistence = persistence,
+                tracer = tracers.ruleBasedActor,
+              )(using config)
+            )
         } yield ()
 }
 
@@ -290,7 +333,7 @@ object HeadMultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+        tracer: ContraTracer[IO, HeadRegimeManagerEvent],
         peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
         hubCoilTransport: Option[Resource[IO, ActorContext[IO, Request, Any] => HubTransport]] =
             None,
@@ -322,7 +365,7 @@ object HeadMultisigRegimeManager {
             StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */
-    type Request = PreStart.type | TerminatedChild | TerminatedDependency
+    type Request = PreStart.type | TerminatedChild | TerminatedDependency | HandoffToRuleBased
 
     type Children = Actors
 
@@ -338,4 +381,10 @@ object HeadMultisigRegimeManager {
     final case class TerminatedChild(childType: Actors, ref: NoSendActorRef[IO])
 
     final case class TerminatedDependency(dependencyType: Dependencies, ref: NoSendActorRef[IO])
+
+    /** Sent by [[CardanoLiaison]] once a `FallbackToRuleBased` action has been dispatched. HMRM
+      * responds by gracefully stopping every multisig child except CL (which stays up to process
+      * refunds and finish rollouts) and spawning [[hydrozoa.rulebased.RuleBasedRegimeManager]].
+      */
+    final case class HandoffToRuleBased(fallback: FallbackTx)
 }

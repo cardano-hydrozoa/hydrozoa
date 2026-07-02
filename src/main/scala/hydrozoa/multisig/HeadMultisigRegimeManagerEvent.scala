@@ -9,6 +9,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.transport.{HubWsTransportEvent, NodeWsServerEvent, PeerTransportEvent}
 import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
+import hydrozoa.rulebased.RuleBasedActorEvent
 
 /** The (head, multisig) cell of the regime-event grid. A union over the category traits from
   * [[RegimeManagerEvent]] that apply to a head peer running the multisig regime:
@@ -20,6 +21,12 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEvent
   */
 type HeadMultisigRegimeManagerEvent =
     LifecycleEvent | CommonChildEvent | HeadOnlyChildEvent | MultisigOnlyChildEvent
+
+/** The full head-side regime-event surface: the (head, multisig) cell plus the rule-based children
+  * the head may spawn after the multisig→rule-based handoff. HMRM's tracer is typed against this so
+  * the same manager can trace across both regime phases without a re-cast.
+  */
+type HeadRegimeManagerEvent = HeadMultisigRegimeManagerEvent | RuleBasedOnlyChildEvent
 
 /** Per-producer tracers shared by every regime+role — what
   * [[MultisigRegimeManagerBase .spawnCoreActors]] needs. Subclasses' cell-specific tracer carriers
@@ -53,6 +60,7 @@ final case class MrmTracers(
     hubWsTransport: ContraTracer[IO, HubWsTransportEvent],
     nodeWsServer: ContraTracer[IO, NodeWsServerEvent],
     peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent],
+    ruleBasedActor: ContraTracer[IO, RuleBasedActorEvent],
 ) extends HasCoreTracers
 
 object MrmTracers:
@@ -61,7 +69,7 @@ object MrmTracers:
       * routing is the only piece of wiring that has to know the [[RegimeManagerEvent]] category
       * constructors — every consumer downstream sees the narrow event type.
       */
-    def fromRoot(tracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent]): MrmTracers =
+    def fromRoot(tracer: ContraTracer[IO, HeadRegimeManagerEvent]): MrmTracers =
         MrmTracers(
           blockWeaver = tracer.contramap(CommonChildEvent.BlockWeaver.apply),
           jointLedger = tracer.contramap(CommonChildEvent.JointLedger.apply),
@@ -78,4 +86,5 @@ object MrmTracers:
           hubWsTransport = tracer.contramap(HeadOnlyChildEvent.HubWsTransport.apply),
           nodeWsServer = tracer.contramap(HeadOnlyChildEvent.NodeWsServer.apply),
           peerLiaison = pid => tracer.contramap(CommonChildEvent.PeerLiaison(pid, _)),
+          ruleBasedActor = tracer.contramap(RuleBasedOnlyChildEvent.RuleBasedActor.apply),
         )

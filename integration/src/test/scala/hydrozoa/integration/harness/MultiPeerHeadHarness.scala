@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -59,7 +59,7 @@ object MultiPeerHeadHarness:
     /** Roll-up of every event emitted by the regime managers the harness owns.
       */
     enum Event:
-        case Head(peerNum: HeadPeerNumber, event: HeadMultisigRegimeManagerEvent)
+        case Head(peerNum: HeadPeerNumber, event: HeadRegimeManagerEvent)
         case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
 
     /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
@@ -661,10 +661,10 @@ object MultiPeerHeadHarness:
             multiNodeConfig: MultiNodeConfig,
             backendMode: StorageBackend.Mode,
             network: Transport.HeadNetwork,
-            callerTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         ): Resource[IO, Peer] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, HeadRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
                 )
