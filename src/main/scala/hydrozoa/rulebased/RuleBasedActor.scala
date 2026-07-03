@@ -274,7 +274,11 @@ final case class RuleBasedActor(
         } yield action
 
     /** Re-read the evacuation-side rule-based inputs from persistence. Called on each tick that
-      * runs the evacuation branch.
+      * runs the evacuation branch. Walks backward through hard-confirmed stacks (like
+      * [[loadAction]]) until it finds one with a Major partition — its fallback tx is the anchor,
+      * and all its SECs / the default map come from the same stack. Minor-only stacks accumulated
+      * after the last Major are skipped; the initial stack terminates the walk with
+      * `config.initialEvacuationMap` + the initial fallback.
       */
     private def loadEvacuationInputs: IO[EvacuationInputs] =
         for {
@@ -289,80 +293,92 @@ final case class RuleBasedActor(
                     )
             }
             markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
-            stackNum <- markers.hardConfirmed.liftTo[IO](
+            latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
-            effects <- persistence
-                .get(StoreKey.HardConfirmation(stackNum))
-                .flatMap(
-                  _.liftTo[IO](MissingState(s"HardConfirmation($stackNum) missing"))
-                )
-            res <- effects match {
-                case i: StackEffects.HardConfirmed.Initial =>
-                    IO.pure(
-                      EvacuationInputs(
-                        candidateEvacMaps = Map(
-                          config.initialEvacuationMap.kzgCommitment ->
-                              config.initialEvacuationMap
-                        ),
-                        fallbackTxHash = i.fallbackTx.tx.id
-                      )
-                    )
-                case r: StackEffects.HardConfirmed.Regular =>
-                    for {
-                        fallbackTx <- RuleBasedActor
-                            .lastFallback(r.partitions)
-                            .liftTo[IO](MissingState(s"no fallback tx in stack $stackNum"))
-                        // Default-vote map — what the multisig treasury was committed to at
-                        // fallback time. The default vote utxo carries this kzg, so if peers
-                        // never tally onto a newer SEC the resolution will land here. The
-                        // closing stack's `lastBlockNum` comes from the `UnsignedStack` every
-                        // peer persists on every close (atomic with the hard-ack), so it is
-                        // present for any hard-confirmed stack — unlike the StackLane brief
-                        // (leader-authored only).
-                        unsignedStack <- persistence
-                            .get(StoreKey.UnsignedStack(stackNum))
-                            .flatMap(
-                              _.liftTo[IO](
-                                MissingState(s"UnsignedStack($stackNum) missing")
-                              )
+            res <- Monad[IO].tailRecM[StackNumber, EvacuationInputs](latest) { stack =>
+                persistence.get(StoreKey.HardConfirmation(stack)).flatMap {
+                    case None =>
+                        IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                    case Some(i: StackEffects.HardConfirmed.Initial) =>
+                        IO.pure(
+                          Right(
+                            EvacuationInputs(
+                              candidateEvacMaps = Map(
+                                config.initialEvacuationMap.kzgCommitment ->
+                                    config.initialEvacuationMap
+                              ),
+                              fallbackTxHash = i.fallbackTx.tx.id
                             )
-                        lastBlockNum = unsignedStack.brief.lastBlockNum
-                        defaultMap <- persistence
-                            .get(StoreKey.EvacuationMap(lastBlockNum))
-                            .flatMap(
-                              _.liftTo[IO](
-                                MissingState(s"EvacuationMap($lastBlockNum) missing")
-                              )
-                            )
-                        // SEC maps — every candidate SEC peers could vote for, keyed by its
-                        // kzg commitment. The dispute resolution writes whichever wins into
-                        // the treasury's Resolved.evacuationActive, so the EvacuationActor
-                        // looks it up here at runtime.
-                        secMaps <- RuleBasedActor
-                            .allSecs(r.partitions)
-                            .traverse { multiSec =>
-                                persistence
-                                    .get(
-                                      StoreKey.EvacuationMap(multiSec.commitment.blockNum)
-                                    )
-                                    .flatMap(
-                                      _.liftTo[IO](
-                                        MissingState(
-                                          s"EvacuationMap(${multiSec.commitment.blockNum})" +
-                                              " missing for candidate SEC"
-                                        )
+                          )
+                        )
+                    case Some(r: StackEffects.HardConfirmed.Regular) =>
+                        RuleBasedActor.lastFallback(r.partitions) match {
+                            case None =>
+                                // Minor-only stack: no fallback to anchor from. Walk back.
+                                if stack == StackNumber.first then
+                                    IO.raiseError(
+                                      MissingState(
+                                        s"walked back to $stack with no fallback found"
                                       )
                                     )
-                                    .map(map => multiSec.commitment.kzgCommitment -> map)
-                            }
-                    } yield EvacuationInputs(
-                      candidateEvacMaps =
-                          ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
-                      fallbackTxHash = fallbackTx.tx.id
-                    )
+                                else IO.pure(Left(stack.decrement))
+                            case Some(fallbackTx) =>
+                                loadRegularEvacuationInputs(stack, r, fallbackTx).map(Right(_))
+                        }
+                }
             }
         } yield res
+
+    /** Collect the evacuation inputs for a specific `Regular` stack that carries a fallback: the
+      * default evacuation map (keyed by the stack's `lastBlockNum`) and one entry per SEC carried
+      * by its partitions, keyed by kzg commitment. Extracted so the tailRec walk stays thin.
+      */
+    private def loadRegularEvacuationInputs(
+        stackNum: StackNumber,
+        r: StackEffects.HardConfirmed.Regular,
+        fallbackTx: FallbackTx,
+    ): IO[EvacuationInputs] =
+        for {
+            // Default-vote map — what the multisig treasury was committed to at fallback
+            // time. The default vote utxo carries this kzg, so if peers never tally onto a
+            // newer SEC the resolution will land here. The closing stack's `lastBlockNum`
+            // comes from the `UnsignedStack` every peer persists on every close (atomic
+            // with the hard-ack), so it is present for any hard-confirmed stack — unlike
+            // the StackLane brief (leader-authored only).
+            unsignedStack <- persistence
+                .get(StoreKey.UnsignedStack(stackNum))
+                .flatMap(
+                  _.liftTo[IO](MissingState(s"UnsignedStack($stackNum) missing"))
+                )
+            lastBlockNum = unsignedStack.brief.lastBlockNum
+            defaultMap <- persistence
+                .get(StoreKey.EvacuationMap(lastBlockNum))
+                .flatMap(
+                  _.liftTo[IO](MissingState(s"EvacuationMap($lastBlockNum) missing"))
+                )
+            // SEC maps — every candidate SEC peers could vote for, keyed by its kzg
+            // commitment. The dispute resolution writes whichever wins into the treasury's
+            // Resolved.evacuationActive, so the EvacuationActor looks it up here at runtime.
+            secMaps <- RuleBasedActor
+                .allSecs(r.partitions)
+                .traverse { multiSec =>
+                    persistence
+                        .get(StoreKey.EvacuationMap(multiSec.commitment.blockNum))
+                        .flatMap(
+                          _.liftTo[IO](
+                            MissingState(
+                              s"EvacuationMap(${multiSec.commitment.blockNum})" +
+                                  " missing for candidate SEC"
+                            )
+                          )
+                        )
+                        .map(map => multiSec.commitment.kzgCommitment -> map)
+                }
+        } yield EvacuationInputs(
+          candidateEvacMaps = ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
+          fallbackTxHash = fallbackTx.tx.id
+        )
 
     private object Dispute {
 
