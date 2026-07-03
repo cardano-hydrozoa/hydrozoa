@@ -1,6 +1,7 @@
 package hydrozoa.rulebased.ledger.l1
 
 import cats.*
+import cats.data.NonEmptyList
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
@@ -12,13 +13,16 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
+import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
-import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -170,23 +174,67 @@ object DisputeActorTestHelpers {
               RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
+            persistence <- lift(
+              mkPersistenceWithDisputeVote(
+                env = env,
+                blockHeader = blockHeader,
+                versionMajor = versionMajor,
+                versionMinor = versionMinor,
+                kzgCommitment = initialCommitment,
+              )
+            )
+
             disputeActor = RuleBasedActor(
-              loadAction = IO.pure(
-                RuleBasedRegimeManager.DisputeAction.Vote(
-                  sec = blockHeader,
-                  signatures = env.multisignHeader(blockHeader).toList,
-                  coilSignatures = env.multisignHeaderCoil(blockHeader)
-                )
-              ),
-              loadEvacuationInputs = IO.raiseError(
-                new IllegalStateException(
-                  "dispute-actor unit test: evacuation branch should not run"
-                )
-              ),
+              persistence = persistence,
               cardanoBackend = cardanoBackend,
               tracer = tracer
             )(using env.nodeConfigs.head._2)
         } yield disputeActor
+
+    /** Seed a persistence-backed InMemoryBackendStore with a single hard-confirmed stack whose
+      * Minor partition carries a [[StandaloneEvacuationCommitment.MultiSigned]] matching
+      * `blockHeader`. The actor's `loadAction(versionMajor)` will walk to `StackNumber.first` and
+      * find the SEC there, returning
+      * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
+      *
+      * NOTE: `coilSignatures` come back as `Nil` from `loadAction` (coil-side recovery is deferred
+      * in the current implementation). Tests that assert on `coilSignatures` will fail; the
+      * surviving tests here only exercise the head-multisigned path.
+      */
+    def mkPersistenceWithDisputeVote(
+        env: MultiNodeConfig,
+        blockHeader: StandaloneEvacuationCommitmentOnchain,
+        versionMajor: BigInt,
+        versionMinor: BigInt,
+        kzgCommitment: KzgCommitment,
+    ): IO[Persistence[IO]] =
+        val serialized: StandaloneEvacuationCommitmentOnchain.Serialized =
+            StandaloneEvacuationCommitmentOnchain(blockHeader)
+        val offchainSec: StandaloneEvacuationCommitment =
+            StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(1),
+              blockVersion = BlockVersion.Full(versionMajor.toInt, versionMinor.toInt),
+              kzgCommitment = kzgCommitment,
+              header = serialized,
+            )
+        val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
+            StandaloneEvacuationCommitment.MultiSigned(
+              commitment = offchainSec,
+              headerMultiSigned = env.multisignHeader(blockHeader).toList,
+            )
+        val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
+            PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)
+        val hardConfirmed: StackEffects.HardConfirmed.Regular =
+            StackEffects.HardConfirmed.Regular(NonEmptyList.of(partition))
+        val persistenceTracer =
+            Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        for
+            backend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
+            persistence <- Persistence.fromBackend(backend, persistenceTracer)(using
+              env.headConfig
+            )
+            _ <- persistence.put(StoreKey.HardConfirmation(StackNumber.first))(hardConfirmed)
+        yield persistence
 }
 
 /*
