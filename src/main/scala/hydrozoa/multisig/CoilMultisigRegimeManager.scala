@@ -11,6 +11,7 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
+import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 
@@ -130,6 +131,16 @@ trait CoilMultisigRegimeManager(
               core.slowConsensusActor -> Actors.SlowConsensus,
             )
         } yield ()
+
+    // TODO(coil-handoff): coil-side rule-based regime not yet implemented. Raising here on
+    // purpose so the gap is loud — a silent no-op would drop the handoff signal from CL.
+    override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
+        IO.raiseError(
+          new NotImplementedError(
+            s"CoilMultisigRegimeManager.onHandoffToRuleBased(${fallback.tx.id}) — " +
+                "coil-side handoff to the rule-based regime is not yet wired"
+          )
+        )
 }
 
 object CoilMultisigRegimeManager {

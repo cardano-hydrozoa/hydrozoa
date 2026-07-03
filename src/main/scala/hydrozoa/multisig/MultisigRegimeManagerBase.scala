@@ -14,6 +14,7 @@ import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
+import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
@@ -69,6 +70,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
             tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
+        case HandoffToRuleBased(fallback) => onHandoffToRuleBased(fallback)
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
@@ -76,6 +78,13 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * then complete the `pendingConnections` + [[connectionsDeferred]] barriers.
       */
     protected def preStartLocal: IO[Unit]
+
+    /** React to [[HandoffToRuleBased]] by stopping the multisig actors (except the still-live
+      * [[CardanoLiaison]]) and spawning the rule-based regime manager. Subclass-supplied per role:
+      * HMRM spawns [[hydrozoa.rulebased.RuleBasedRegimeManager]]; CMRM will spawn the coil-side
+      * equivalent. Abstract on purpose — a silent default would swallow the handoff.
+      */
+    protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit]
 
     /** Fan a list of (actorRef, actor-kind) pairs into per-child death watches that fire
       * `TerminatedChild` back to this manager.
@@ -105,7 +114,8 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 cardanoBackend,
                 pendingConnections,
                 tracers.cardanoLiaison,
-                persistence
+                persistence,
+                mrmSelf = context.self,
               )
             )
             consensusActor <- context.actorOf(

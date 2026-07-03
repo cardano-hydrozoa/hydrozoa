@@ -30,6 +30,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.circe.generic.semiauto.deriveDecoder
@@ -566,7 +567,7 @@ object Migrate
                         )
 
                         _ <- log.info("Submitting transaction...")
-                        submitResult <- backend.submitTx(signed)
+                        submitResult <- backend.submitTx(RawTx(signed))
                         _ <- IO.fromEither(
                           submitResult.left.map(err =>
                               new RuntimeException(s"Failed to submit transaction: $err")

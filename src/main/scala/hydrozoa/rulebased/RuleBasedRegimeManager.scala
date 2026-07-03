@@ -5,14 +5,13 @@ import cats.data.NonEmptyList
 import cats.effect.*
 import cats.syntax.all.*
 import com.suprnation.actor.Actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{BackendStore, Markers, Persistence, StoreKey}
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedRegimeManager.DisputeAction
 import hydrozoa.rulebased.ledger.l1.state.VoteState.secFromData
 import scalus.uplc.builtin.Data
@@ -24,8 +23,6 @@ import scalus.uplc.builtin.Data.fromData
 case class RuleBasedRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     persistence: Persistence[IO],
-    backend: BackendStore[IO],
-    votingDeadline: QuantizedInstant,
     tracer: ContraTracer[IO, RuleBasedActorEvent],
 )(using config: RuleBasedRegimeManager.Config)
     extends Actor[IO, Unit] {
@@ -57,7 +54,7 @@ case class RuleBasedRegimeManager(
                       )
                     )
             }
-            markers <- Markers.derive(backend, PeerId.Head(ownHeadPeerNum))
+            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
             stackNum <- markers.hardConfirmed.liftTo[IO](
               RuleBasedRegimeManager.MissingState("no hard-confirmed stack on disk")
             )
@@ -96,7 +93,7 @@ case class RuleBasedRegimeManager(
                       )
                     )
             }
-            markers <- Markers.derive(backend, PeerId.Head(ownHeadPeerNum))
+            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
             stackNum <- markers.hardConfirmed.liftTo[IO](
               RuleBasedRegimeManager.MissingState("no hard-confirmed stack on disk")
             )

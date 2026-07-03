@@ -46,6 +46,14 @@ extension (tx: Transaction) {
     def selfSigned(using config: Config): Transaction = config.ruleBasedWallet.signTx(tx)
 }
 
+extension [T <: EnrichedTx[T]](etx: T) {
+
+    /** Sign the enriched tx with the rule-based actor's own wallet, preserving family info so
+      * downstream wrappers (e.g. the firewall) can dispatch statically on it.
+      */
+    def selfSigned(using config: Config): T = config.ruleBasedWallet.signTx(etx)
+}
+
 /** Single actor that drives the rule-based regime end to end: while the treasury is Unresolved it
   * runs the dispute branch (vote/abstain → tally → resolve); once Resolved it runs the evacuation
   * branch (chained `lastContinuingTxs` reads + evacuation tx submissions). Each tick parses the
@@ -118,8 +126,8 @@ final case class RuleBasedActor(
               RuleBasedActorEvent.Backend.ErrorContinuingTxs(_)
             )
 
-        def submit(tx: Transaction): EitherT[IO, Error.RecoverableErrors, Unit] =
-            run(cardanoBackend.submitTx(tx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
+        def submit(etx: EnrichedTx[?]): EitherT[IO, Error.RecoverableErrors, Unit] =
+            run(cardanoBackend.submitTx(etx), RuleBasedActorEvent.Backend.ErrorSubmittingTx(_))
 
         /** Emit `before` (a "Querying" event), then run + wrap error per [[run]]. */
         private def traced[A](
@@ -168,11 +176,11 @@ final case class RuleBasedActor(
         } yield ()
 
     private def signAndSubmitTx[TxType <: EnrichedTx[TxType]](
-        tx: EnrichedTx[TxType],
+        tx: TxType,
     ): EitherT[IO, Error.RecoverableErrors, Unit] = {
         for {
             _ <- traceRight(RuleBasedActorEvent.Tx.Submitting(tx))
-            res <- Backend.submit(tx.tx.selfSigned)
+            res <- Backend.submit(tx.selfSigned)
             _ <- traceRight(RuleBasedActorEvent.Tx.SubmitSuccess(tx))
         } yield res
     }

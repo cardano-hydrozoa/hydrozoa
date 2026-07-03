@@ -7,11 +7,14 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubWsTransportEventFormat, NodeWsServerEventFormat, PeerTransportEventFormat}
 import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, CoilAckSequencerEventFormat, EventSequencerEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
+import hydrozoa.rulebased.RuleBasedActorEventFormat
 
-/** Top-level formatter delegating by category trait, then by per-actor format. */
+/** Top-level formatter delegating by category trait, then by per-actor format. Handles the full
+  * [[HeadRegimeManagerEvent]] surface (multisig phase + post-handoff rule-based phase).
+  */
 object HeadMultisigRegimeManagerEventFormat:
 
-    def humanFormat(peerNum: HeadPeerNumber)(e: HeadMultisigRegimeManagerEvent): LogEvent = {
+    def humanFormat(peerNum: HeadPeerNumber)(e: HeadRegimeManagerEvent): LogEvent = {
         val ev = LogEvent.From.forPeer("HeadMultisigRegimeManager", peerNum)
         import ev.*
         e match
@@ -47,4 +50,6 @@ object HeadMultisigRegimeManagerEventFormat:
                 LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
             case MultisigOnlyChildEvent.StackComposerLimiter(scl) =>
                 LimiterEventFormat.humanFormat("StackComposer")(scl)
+            case RuleBasedOnlyChildEvent.RuleBasedActor(rba) =>
+                RuleBasedActorEventFormat.humanFormat(peerNum)(rba)
     }
