@@ -244,6 +244,13 @@ final case class RuleBasedActor(
             val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
             for {
                 collateralCandidates <- Backend.utxosAtPeer(peerAddr)
+                _ <- traceRight(
+                  RuleBasedActorEvent.Collateral.QueryResult(
+                    config.ownPeerLabel,
+                    collateralCandidates.size,
+                    collateralCandidates.headOption.map(_.toString).getOrElse("<empty>"),
+                  )
+                )
                 collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
                     to.value.isOnlyAda
                 ) match {
@@ -557,11 +564,13 @@ final case class RuleBasedActor(
         context.self ! Requests.PreStart
 
     private def preStartLocal: IO[Unit] =
-        context.setReceiveTimeout(config.evacuationBotPollingPeriod, Tick)
+        tracer.traceWith(RuleBasedActorEvent.Lifecycle.ActorPreStartEntered) >>
+            context.setReceiveTimeout(config.evacuationBotPollingPeriod, Tick)
 
     override def receive: Receive[IO, Requests.Request] = {
         case _: Requests.PreStart.type => preStartLocal
-        case _: Requests.Tick.type     => handleTick.void
+        case _: Requests.Tick.type =>
+            tracer.traceWith(RuleBasedActorEvent.Lifecycle.TickReceived) >> handleTick.void
     }
 
     /** Queries the cardano backend for all utxos at the dispute resolution address, and then parses

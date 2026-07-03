@@ -28,16 +28,25 @@ case class RuleBasedRegimeManager(
     extends Actor[IO, Unit] {
 
     override def preStart: IO[Unit] =
-        context
-            .actorOf(
-              RuleBasedActor(
-                loadAction = loadAction,
-                loadEvacuationInputs = loadEvacuationInputs,
-                cardanoBackend = cardanoBackend,
-                tracer = tracer
-              )
-            )
-            .void
+        tracer.traceWith(RuleBasedActorEvent.Lifecycle.RegimeManagerPreStartEntered) >>
+            context
+                .actorOf(
+                  RuleBasedActor(
+                    loadAction = loadAction,
+                    loadEvacuationInputs = loadEvacuationInputs,
+                    cardanoBackend = cardanoBackend,
+                    tracer = tracer
+                  )
+                )
+                .void
+                .handleErrorWith(e =>
+                    tracer.traceWith(
+                      RuleBasedActorEvent.Lifecycle.RegimeManagerPreStartFailed(
+                        errorClass = e.getClass.getName,
+                        message = Option(e.getMessage).getOrElse("")
+                      )
+                    ) >> IO.raiseError(e)
+                )
 
     /** Re-read just enough state from persistence to decide whether this peer should vote or
       * abstain. Called by [[RuleBasedActor]] on each tick that observes its own `AwaitingVote`

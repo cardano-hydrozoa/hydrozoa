@@ -22,8 +22,13 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManagerEventFormat}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent
+import hydrozoa.multisig.consensus.RequestSequencer
 import hydrozoa.multisig.consensus.SlowConsensusActorEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import scalus.uplc.builtin.ByteString
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
@@ -83,7 +88,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         // window closes before CL ever wakes up. Stage4 does the same trick.
         val takeoffTime: Option[java.time.Instant] =
             if transportMode.useTestControl then None
-            else Some(java.time.Instant.now().plusSeconds(20))
+                // TODO: This should use IO.realtimeInstant
+            else Some(java.time.Instant.now().plusSeconds(5))
         val generateHeadStartTime: test.GenWithTestPeers[BlockCreationEndTime] =
             ReaderT { tp =>
                 takeoffTime match {
@@ -148,6 +154,17 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                           generateBlockCreationEndTime = generateHeadStartTime,
                         ),
                   ),
+                  // Default evacuationBotPollingPeriod is 1-10 MINUTES — RuleBasedActor's Tick
+                  // would then never fire inside our budget after handoff. cats-actors pings the
+                  // receive-timeout at 1 Hz anyway, so pin the config end low (100ms).
+                  generateNodeOperationEvacuationConfig = w =>
+                      Gen.const(
+                        hydrozoa.config.node.operation.evacuation
+                            .NodeOperationEvacuationConfig(
+                              evacuationBotPollingPeriod = 100.millis,
+                              ruleBasedWallet = w,
+                            )
+                      ),
                   generateNodeOperationMultisigConfig = hc =>
                       hydrozoa.config.node.operation.multisig
                           .generateNodeOperationMultisigConfig(
@@ -176,6 +193,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
     private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
+            _ <- step1a_submitBootstrapRequest
             _ <- step2_awaitBothPeersHardConfirmMajor2
             _ <- step3_awaitFallbackToRuleBasedHandoff
             _ <- step4_assertVoteRejected
@@ -188,8 +206,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     /** State + handles threaded between steps. */
     private final case class Ctx(
         transportMode: TransportMode,
+        multiNodeConfig: MultiNodeConfig,
         firewall: FirewallState,
-        harness: MultiPeerHeadHarness.Harness[Unit, Unit],
+        harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
         fallbackDispatched: Deferred[IO, Unit],
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         voteSubmitFailed: Deferred[IO, Unit],
@@ -210,6 +229,19 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // ------------------------------------------------------------------
     // Steps
     // ------------------------------------------------------------------
+
+    /** Submit one minimal `TransactionRequest` to peer 0's `RequestSequencer`. The head has no
+      * autonomous block-progress driver: `BlockWeaver.Leader.AwaitingConfirmation` waits for either
+      * a user request or a soft-confirmation for the previous block, and the initial block never
+      * gets soft-confirmed (it lives in config). Once block 1 lands via this single request, the
+      * `forcedMajorBlockWakeupTime` deadman switch on each block header takes over and force-
+      * completes empty major blocks until we reach major 2.
+      */
+    private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(submitOneUserRequest(ctx))
+        yield ()
 
     private def step2_awaitBothPeersHardConfirmMajor2: test.TestM[Ctx, Unit] =
         for
@@ -286,21 +318,26 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
                 .convert.instant.toEpochMilli
 
-            hooks = MultiPeerHeadHarness.Hooks[Unit, Unit](
+            hooks = MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
               tracer = humanFormatTracer |+| observerTracer(
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
                 voteTxIds,
                 voteSubmitFailed,
               ),
-              peerHandle = (_, _) => IO.unit,
+              peerHandle = (peerNum, conns) =>
+                  IO.fromOption(conns.requestSequencer)(
+                    new NoSuchElementException(
+                      s"peer $peerNum has no RequestSequencer.Handle in its Connections"
+                    )
+                  ),
               coilHandle = (_, _) => IO.unit,
               wrapPeerBackend = wrapPeerBackend(firewall),
             )
 
             label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}"
 
-            harness <- MultiPeerHeadHarness.resource[Unit, Unit](
+            harness <- MultiPeerHeadHarness.resource[RequestSequencer.Handle, Unit](
               MultiPeerHeadHarness.Inputs(
                 config = MultiPeerHeadHarness.Config(
                   label = label,
@@ -317,6 +354,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             )
         yield Ctx(
           transportMode = transportMode,
+          multiNodeConfig = multiNodeConfig,
           firewall = firewall,
           harness = harness,
           fallbackDispatched = fallbackDispatched,
@@ -328,6 +366,40 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // ------------------------------------------------------------------
     // Wiring helpers
     // ------------------------------------------------------------------
+
+    /** Submit one minimal `UserRequest.TransactionRequest` to peer 0's `RequestSequencer` to kick
+      * `BlockWeaver` past block 1's `Leader.AwaitingConfirmation` state so the deadman switch on
+      * subsequent block headers can start force-producing major blocks. The l2 payload is
+      * intentionally empty — `JointLedger` will mark the request `Invalid` but block 1 still
+      * completes, which is all we need.
+      */
+    private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
+        val peerNum    = HeadPeerNumber(0)
+        val slotConfig = ctx.multiNodeConfig.headConfig.cardanoNetwork.slotConfig
+        val body: UserRequestBody.TransactionRequestBody =
+            UserRequestBody.TransactionRequestBody(
+              l2Payload = ByteString.fromArray(Array.empty[Byte])
+            )
+        val userVk     =
+            ctx.multiNodeConfig.nodeConfigs(peerNum).ownWallet.exportVerificationKey
+        for
+            now    <- IO.realTimeInstant
+            header = UserRequestHeader(
+              headId = ctx.multiNodeConfig.headConfig.headId,
+              validityStart = RequestValidityStartTime(
+                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
+              ),
+              validityEnd = RequestValidityEndTime(
+                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
+              ),
+              bodyHash = body.hash,
+            )
+            userRequest = UserRequest.TransactionRequest(header, body, userVk)
+            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).map(_.handle))(
+              new NoSuchElementException(s"peer $peerNum missing in harness")
+            )
+            _ <- sequencer ?: userRequest
+        yield ()
 
     private def newFirewallState: IO[FirewallState] =
         for
@@ -360,8 +432,19 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         peerNum: HeadPeerNumber,
         underlying: L1Backend[IO],
     ): L1Backend[IO] =
+        val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
+            Slf4jTracer.sink.contramap {
+                case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
+                    hydrozoa.lib.logging.LogEvent
+                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .warn(s"firewall DROPPED tx $hash")
+                case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
+                    hydrozoa.lib.logging.LogEvent
+                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .info(s"firewall passed tx $hash result=$result")
+            }
         val perPeerTracer: ContraTracer[IO, FirewalledCardanoBackendEvent] =
-            ContraTracer[IO, FirewalledCardanoBackendEvent] {
+            slf4jSink |+| ContraTracer[IO, FirewalledCardanoBackendEvent] {
                 case e: FirewalledCardanoBackendEvent.DroppedOutboundTx =>
                     state.dropped.update(m => m.updated(peerNum, m.getOrElse(peerNum, Nil) :+ e))
                 case e: FirewalledCardanoBackendEvent.SubmittedTx =>

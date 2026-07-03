@@ -7,6 +7,13 @@ sealed trait RuleBasedActorEvent
 
 object RuleBasedActorEvent:
 
+    object Lifecycle:
+        case object RegimeManagerPreStartEntered extends RuleBasedActorEvent
+        final case class RegimeManagerPreStartFailed(errorClass: String, message: String)
+            extends RuleBasedActorEvent
+        case object ActorPreStartEntered extends RuleBasedActorEvent
+        case object TickReceived extends RuleBasedActorEvent
+
     object Backend:
         final case class ErrorDisputeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
@@ -28,6 +35,15 @@ object RuleBasedActorEvent:
         case object Found extends RuleBasedActorEvent
         final case class NotFound(peerLabel: String) extends RuleBasedActorEvent
         case object NoFeeCollateralUtxo extends RuleBasedActorEvent
+        // TEMPORARY (2026-07-02): diagnostic events for a `Collateral.NotFound` misfire while
+        // integrating RRM into the vote-version-mismatch test. Delete `QueryResult` and
+        // `DiagnosticMismatch` (and their emit sites in `RuleBasedActor.getCollateral` and their
+        // renderers in `RuleBasedActorEventFormat`) once the pattern-match failure is diagnosed
+        // and the test is green.
+        final case class QueryResult(peerLabel: String, count: Int, sample: String)
+            extends RuleBasedActorEvent
+        final case class DiagnosticMismatch(peerLabel: String, reason: String, detail: String)
+            extends RuleBasedActorEvent
 
     object Dispute:
         case object Querying extends RuleBasedActorEvent
