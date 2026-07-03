@@ -15,17 +15,17 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import org.http4s.{HttpRoutes, Uri}
 import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
+import org.http4s.{HttpRoutes, Uri}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
   * mock L1.
