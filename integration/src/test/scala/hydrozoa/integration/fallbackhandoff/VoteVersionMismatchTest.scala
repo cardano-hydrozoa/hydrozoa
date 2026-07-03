@@ -60,8 +60,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
     private val nHeadPeers: Int = 2
     // Real wall-clock budget. Head config's minSettlementDuration + our fast-timing knobs
-    // determine major-block cadence; two majors + hard-confirmations comfortably fit in 5 min.
-    private val scenarioTimeout: FiniteDuration = 5.minutes
+    // determine major-block cadence; two majors + RRM handoff + Plutus rejection fit in ~60s.
+    private val scenarioTimeout: FiniteDuration = 90.seconds
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     // ------------------------------------------------------------------
@@ -87,7 +87,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val takeoffTime: Option[java.time.Instant] =
             if transportMode.useTestControl then None
                 // TODO: This should use IO.realtimeInstant
-            else Some(java.time.Instant.now().plusSeconds(5))
+            else Some(java.time.Instant.now().plusSeconds(2))
         val generateHeadStartTime: test.GenWithTestPeers[BlockCreationEndTime] =
             ReaderT { tp =>
                 takeoffTime match {
@@ -109,12 +109,14 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val fastTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
             Gen.const(
               TxTiming(
-                minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
-                // Widen the init tx window: initEndTime = bcet + minSettlementDuration +
-                // inactivityMarginDuration. Actor bring-up + stack-0 hard-confirmation + CL's
-                // first poll all have to fit inside that window or `InitWindowElapsed` fires.
-                inactivityMarginDuration = InactivityMarginDuration(60.seconds.quantize(network.slotConfig)),
-                silenceDuration = SilenceDuration(5.seconds.quantize(network.slotConfig)),
+                minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
+                // Init tx window: initEndTime = bcet + minSettlementDuration +
+                // inactivityMarginDuration = 5s. Actor bring-up + stack-0 hard-confirmation +
+                // CL's first poll all have to fit inside that or `InitWindowElapsed` fires.
+                // `inactivityMarginDuration` also gates the Minor→Major deadman: majors fire
+                // every ~inactivityMarginDuration after the previous major's bcet.
+                inactivityMarginDuration = InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
+                silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
                 depositSubmissionDuration = DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
                 depositMaturityDuration = DepositMaturityDuration(1.second.quantize(network.slotConfig)),
                 depositAbsorptionDuration = DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
@@ -168,8 +170,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                           .generateNodeOperationMultisigConfig(
                             maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
                             rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                              softBlockMinPeriod = 5.seconds,
-                              hardStackMinPeriod = 2.seconds,
+                              softBlockMinPeriod = 500.millis,
+                              hardStackMinPeriod = 250.millis,
                             ),
                           )
                 )
@@ -253,7 +255,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         for
             ctx <- ask
             _ <- lift(
-              (IO.sleep(10.seconds) >> submitOneUserRequest(ctx)).foreverM.start.void
+              (IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void
             )
         yield ()
 
