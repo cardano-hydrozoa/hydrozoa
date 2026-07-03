@@ -122,6 +122,7 @@ object MultiPeerHeadHarness:
             cardanoBackend <- Resource.eval(
                                   CardanoBackend.mkMock(
                                     preinitPeerUtxosL1,
+                                    multiNodeConfig.headConfig.scriptReferenceUtxos,
                                     multiNodeConfig.headConfig.cardanoInfo,
                                   )
                               )
@@ -290,14 +291,18 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object CardanoBackend:
-        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs. The head
+        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
+          * globally-deployed script reference UTxOs (treasury + dispute validators). The head
           * initialization tx is submitted by the protocol through normal operation.
           */
         def mkMock(
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
+            scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
         ): IO[L1Backend[IO]] =
-            val genesisUtxos: Utxos = preinitPeerUtxosL1.values.reduce(_ ++ _)
+            val genesisUtxos: Utxos =
+                preinitPeerUtxosL1.values.reduce(_ ++ _) ++
+                    scriptReferenceUtxos.toList.map(_.toTuple).toMap
             CardanoBackendMock.mockIO(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
