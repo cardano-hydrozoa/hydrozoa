@@ -34,10 +34,8 @@ import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import hydrozoa.rulebased.ledger.l1.tx.VoteTx
 import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.*
-import scalus.cardano.ledger.TransactionHash
 import test.{SeedPhrase, TestPeers, given}
 
 /** Demonstrates the vote-version mismatch bug in [[RuleBasedRegimeManager.loadAction]].
@@ -194,6 +192,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
             _ <- step1a_submitBootstrapRequest
+            _ <- step1b_startPeriodicRequestLoop
             _ <- step2_awaitBothPeersHardConfirmMajor2
             _ <- step3_awaitFallbackToRuleBasedHandoff
             _ <- step4_assertVoteRejected
@@ -211,8 +210,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
         fallbackDispatched: Deferred[IO, Unit],
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
-        voteSubmitFailed: Deferred[IO, Unit],
-        voteTxIds: Ref[IO, Map[HeadPeerNumber, TransactionHash]],
+        voteBuildAttempted: Deferred[IO, Unit],
     )
 
     private final case class FirewallState(
@@ -243,6 +241,22 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             _   <- lift(submitOneUserRequest(ctx))
         yield ()
 
+    /** Start a background fiber that keeps submitting `TransactionRequest`s at a slow cadence
+      * (10s) for the rest of the scenario. Deadman-only progression yields all-Major partitions
+      * (each stack = one Major, no SEC → RRM abstains). Feeding requests periodically fills the
+      * `blockCanStayMinor` window after each Major with an extra Minor at the same major version,
+      * so the LAST hard-confirmed stack's Major partition carries an SEC and `loadAction` returns
+      * `Vote`. The fiber leaks harmlessly on scenario completion — the harness Resource cancels
+      * the actor system, which terminates the RequestSequencer that would receive further sends.
+      */
+    private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(
+              (IO.sleep(10.seconds) >> submitOneUserRequest(ctx)).foreverM.start.void
+            )
+        yield ()
+
     private def step2_awaitBothPeersHardConfirmMajor2: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
@@ -255,36 +269,31 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
+    /** The vote-version-mismatch bug: RRM loads the SEC from the latest hard-confirmed stack
+      * (major-2) and attempts to build a Vote for it, but the on-chain treasury still reflects
+      * major-1. The Plutus dispute script's `versionMajor` check rejects the vote during client-
+      * side tx finalize (before submission), surfacing as a `BuildError.Vote` that crashes the
+      * `RuleBasedActor` — captured in `harness.sutErrors`. We assert both signals: RRM tried to
+      * build a Vote (proves it found an SEC in a stack whose Major has already been dropped by
+      * the firewall) AND the build failed with the specific script error.
+      */
     private def step4_assertVoteRejected: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.voteSubmitFailed.get.timeout(scenarioTimeout))
-            voteIds <- lift(ctx.voteTxIds.get)
-            submitted <- lift(ctx.firewall.submitted.get)
-            _ <- assertWith(
-              voteIds.nonEmpty,
-              "expected at least one peer to have submitted a Vote tx",
+            _   <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
+            _ <- lift(
+              (for
+                  errs <- ctx.harness.sutErrors.get
+                  hit = errs.exists(_.contains("versionMajor field must match"))
+                  _ <- if hit then IO.unit else IO.sleep(500.millis)
+              yield hit).iterateUntil(identity).timeout(scenarioTimeout)
             )
-            _ <- voteIds.toList.foldLeft(pure(())) { case (acc, (peer, voteId)) =>
-                val peerSubs = submitted.getOrElse(peer, Nil)
-                val voteSub  = peerSubs.find(_.txHash == voteId)
-                for
-                    _ <- acc
-                    _ <- assertWith(
-                      voteSub.isDefined,
-                      s"peer $peer: no SubmittedTx event for Vote id $voteId",
-                    )
-                    _ <- voteSub match
-                        case None => pure(())
-                        case Some(sub) =>
-                            assertWith(
-                              sub.result.left
-                                  .exists(_.isInstanceOf[L1Backend.Error.InvalidTx]),
-                              s"peer $peer: expected Left(InvalidTx) on Vote submission, " +
-                                  s"got ${sub.result}",
-                            )
-                yield ()
-            }
+            errs <- lift(ctx.harness.sutErrors.get)
+            _ <- assertWith(
+              errs.exists(_.contains("versionMajor field must match")),
+              "expected a RuleBasedActor BuildError.Vote whose message contains the " +
+                  "'versionMajor field must match' plutus script rejection",
+            )
         yield ()
 
     // ------------------------------------------------------------------
@@ -304,10 +313,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             firewall <- Resource.eval(newFirewallState)
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             bothPeersConfirmedMajor2 <- Resource.eval(Deferred[IO, Unit])
-            voteSubmitFailed <- Resource.eval(Deferred[IO, Unit])
-            voteTxIds <- Resource.eval(
-              Ref[IO].of(Map.empty[HeadPeerNumber, TransactionHash])
-            )
+            voteBuildAttempted <- Resource.eval(Deferred[IO, Unit])
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
@@ -322,8 +328,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
               tracer = humanFormatTracer |+| observerTracer(
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
-                voteTxIds,
-                voteSubmitFailed,
+                voteBuildAttempted,
               ),
               peerHandle = (peerNum, conns) =>
                   IO.fromOption(conns.requestSequencer)(
@@ -359,8 +364,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           harness = harness,
           fallbackDispatched = fallbackDispatched,
           bothPeersConfirmedMajor2 = bothPeersConfirmedMajor2,
-          voteSubmitFailed = voteSubmitFailed,
-          voteTxIds = voteTxIds,
+          voteBuildAttempted = voteBuildAttempted,
         )
 
     // ------------------------------------------------------------------
@@ -464,8 +468,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     private def observerTracer(
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         fallbackDispatched: Deferred[IO, Unit],
-        voteTxIds: Ref[IO, Map[HeadPeerNumber, TransactionHash]],
-        voteSubmitFailed: Deferred[IO, Unit],
+        voteBuildAttempted: Deferred[IO, Unit],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         val peersAtMajor2: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
 
@@ -501,14 +504,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                         fallbackDispatched.complete(()).void
 
                     case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          RuleBasedActorEvent.Tx.Submitting(vote: VoteTx)
+                          RuleBasedActorEvent.Tx.Building("VoteTx")
                         ) =>
-                        voteTxIds.update(_.updated(peerNum, vote.tx.id))
-
-                    case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          _: RuleBasedActorEvent.Backend.ErrorSubmittingTx
-                        ) =>
-                        voteSubmitFailed.complete(()).void
+                        voteBuildAttempted.complete(()).void
 
                     case _ => IO.unit
                 }
