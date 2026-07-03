@@ -10,15 +10,6 @@ object RuleBasedActorEventFormat:
         val ev = LogEvent.From.forPeer("RuleBasedActor", peerNum)
         import ev.*
         e match
-            case Lifecycle.RegimeManagerPreStartEntered =>
-                info("RRM preStart: spawning RuleBasedActor")
-            case Lifecycle.RegimeManagerPreStartFailed(cls, msg) =>
-                error(s"RRM preStart FAILED: $cls: $msg")
-            case Lifecycle.ActorPreStartEntered =>
-                info("RuleBasedActor preStart: scheduling receive timeout")
-            case Lifecycle.TickReceived =>
-                debug("Tick received")
-
             case Backend.ErrorDisputeUtxos(err) =>
                 warn(s"Backend error querying dispute UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorTreasuryUtxos(err) =>
@@ -46,8 +37,6 @@ object RuleBasedActorEventFormat:
                 error(s"Could not find a collateral utxo for peer $peerLabel")
             case Collateral.NoFeeCollateralUtxo =>
                 debug("No fee/collateral UTxO found at wallet address, retrying")
-            case Collateral.QueryResult(peerLabel, count, sample) =>
-                info(s"utxosAtPeer($peerLabel) returned $count utxo(s); sample=$sample")
 
             case Dispute.Querying         => debug("Querying dispute utxos")
             case Dispute.Parsing          => debug("Parsing dispute utxos")

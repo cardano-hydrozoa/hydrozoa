@@ -44,8 +44,8 @@
     <!-- common test loggers -->
     <!-- default: warn -->
     <logger name="org.scalacheck.commands.ModelBasedSuite" level="warn"/>
-    <logger name="test.CardanoBackendMock" level="debug"/>
-    <logger name="CardanoBackend" level="debug"/>
+    <logger name="test.CardanoBackendMock" level="warn"/>
+    <logger name="CardanoBackend" level="warn"/>
 
     <!-- stage1 loggers -->
     <!-- default: info -->
@@ -74,11 +74,11 @@
     <logger name="FastConsensusActor" level="debug"/>
     <logger name="SlowConsensusActor" level="debug"/>
     <logger name="EventSequencer" level="info"/>
-    <logger name="CardanoLiaison" level="debug"/>
+    <logger name="CardanoLiaison" level="warn"/>
     <logger name="JointLedger" level="info"/>
     <logger name="HeadMultisigRegimeManager" level="info"/>
     <logger name="CoilMultisigRegimeManager" level="info"/>
-    <logger name="RuleBasedActor" level="debug"/>
+    <logger name="RuleBasedActor" level="info"/>
     <logger name="Limiter" level="debug"/>
     <logger name="PeerLiaison" level="debug"/>
     <logger name="PeerLiaison.HeadToHead" level="debug"/>
