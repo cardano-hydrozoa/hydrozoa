@@ -3,39 +3,54 @@ package hydrozoa.integration.fallbackhandoff
 import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
-import hydrozoa.config.head.generateHeadConfig
-import hydrozoa.config.head.InitParamsType
+import cats.syntax.all.*
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
-import hydrozoa.config.head.{generateHeadConfigBootstrap}
+import hydrozoa.config.head.{
+  InitParamsType,
+  generateHeadConfig,
+  generateHeadConfigBootstrap
+}
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import org.scalacheck.Gen
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import cats.syntax.all.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{
+  QuantizedInstant,
+  quantize
+}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManagerEventFormat}
-import hydrozoa.multisig.consensus.CardanoLiaisonEvent
-import hydrozoa.multisig.consensus.RequestSequencer
-import hydrozoa.multisig.consensus.SlowConsensusActorEvent
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import scalus.uplc.builtin.ByteString
+import hydrozoa.multisig.consensus.{
+  CardanoLiaisonEvent,
+  RequestSequencer,
+  SlowConsensusActorEvent,
+  UserRequest,
+  UserRequestBody,
+  UserRequestHeader
+}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
-import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
+import hydrozoa.multisig.{
+  CoilMultisigRegimeManagerEventFormat,
+  CommonChildEvent,
+  HeadMultisigRegimeManagerEventFormat,
+  RuleBasedOnlyChildEvent
+}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{Prop, Properties}
+import org.scalacheck.{
+  Gen,
+  Prop,
+  Properties
+}
 import scala.concurrent.duration.*
+import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers, given}
 
 /** Demonstrates the vote-version mismatch bug in [[RuleBasedRegimeManager.loadAction]].
@@ -197,7 +212,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             _ <- step1b_startPeriodicRequestLoop
             _ <- step2_awaitBothPeersHardConfirmMajor2
             _ <- step3_awaitFallbackToRuleBasedHandoff
-            _ <- step4_assertVoteRejected
+            _ <- step4_assertVoteAccepted
         yield true
 
     // ------------------------------------------------------------------
@@ -213,6 +228,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         fallbackDispatched: Deferred[IO, Unit],
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         voteBuildAttempted: Deferred[IO, Unit],
+        voteSubmittedOk: Deferred[IO, Unit],
     )
 
     private final case class FirewallState(
@@ -271,30 +287,24 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
-    /** The vote-version-mismatch bug: RRM loads the SEC from the latest hard-confirmed stack
-      * (major-2) and attempts to build a Vote for it, but the on-chain treasury still reflects
-      * major-1. The Plutus dispute script's `versionMajor` check rejects the vote during client-
-      * side tx finalize (before submission), surfacing as a `BuildError.Vote` that crashes the
-      * `RuleBasedActor` — captured in `harness.sutErrors`. We assert both signals: RRM tried to
-      * build a Vote (proves it found an SEC in a stack whose Major has already been dropped by
-      * the firewall) AND the build failed with the specific script error.
+    /** After the loader-move fix: the RBA's `loadAction` walks backward through hard-confirmed
+      * stacks and picks the SEC matching the on-chain treasury's `versionMajor` (major-1 here),
+      * so the built Vote passes the Plutus dispute-script check and submits successfully. Assert
+      * both: the actor attempted a Vote (proves handoff + persistence load), the Vote submitted
+      * OK (proves the version match worked), and `sutErrors` does NOT contain the old
+      * "versionMajor field must match" text (would indicate a regression to the pre-fix
+      * behavior).
       */
-    private def step4_assertVoteRejected: test.TestM[Ctx, Unit] =
+    private def step4_assertVoteAccepted: test.TestM[Ctx, Unit] =
         for
-            ctx <- ask
-            _   <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
-            _ <- lift(
-              (for
-                  errs <- ctx.harness.sutErrors.get
-                  hit = errs.exists(_.contains("versionMajor field must match"))
-                  _ <- if hit then IO.unit else IO.sleep(500.millis)
-              yield hit).iterateUntil(identity).timeout(scenarioTimeout)
-            )
+            ctx  <- ask
+            _    <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
+            _    <- lift(ctx.voteSubmittedOk.get.timeout(scenarioTimeout))
             errs <- lift(ctx.harness.sutErrors.get)
             _ <- assertWith(
-              errs.exists(_.contains("versionMajor field must match")),
-              "expected a RuleBasedActor BuildError.Vote whose message contains the " +
-                  "'versionMajor field must match' plutus script rejection",
+              !errs.exists(_.contains("versionMajor field must match")),
+              "regression: sutErrors contains 'versionMajor field must match' — RBA's " +
+                  "loadAction is voting with an SEC ahead of the on-chain treasury version",
             )
         yield ()
 
@@ -316,6 +326,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             bothPeersConfirmedMajor2 <- Resource.eval(Deferred[IO, Unit])
             voteBuildAttempted <- Resource.eval(Deferred[IO, Unit])
+            voteSubmittedOk    <- Resource.eval(Deferred[IO, Unit])
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
@@ -331,6 +342,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
                 voteBuildAttempted,
+                voteSubmittedOk,
               ),
               peerHandle = (peerNum, conns) =>
                   IO.fromOption(conns.requestSequencer)(
@@ -367,6 +379,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           fallbackDispatched = fallbackDispatched,
           bothPeersConfirmedMajor2 = bothPeersConfirmedMajor2,
           voteBuildAttempted = voteBuildAttempted,
+          voteSubmittedOk = voteSubmittedOk,
         )
 
     // ------------------------------------------------------------------
@@ -471,6 +484,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         fallbackDispatched: Deferred[IO, Unit],
         voteBuildAttempted: Deferred[IO, Unit],
+        voteSubmittedOk: Deferred[IO, Unit],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         val peersAtMajor2: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
 
@@ -509,6 +523,11 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                           RuleBasedActorEvent.Tx.Building("VoteTx")
                         ) =>
                         voteBuildAttempted.complete(()).void
+
+                    case RuleBasedOnlyChildEvent.RuleBasedActor(
+                          RuleBasedActorEvent.Tx.SubmitSuccess(tx)
+                        ) if tx.transactionFamily == "VoteTx" =>
+                        voteSubmittedOk.complete(()).void
 
                     case _ => IO.unit
                 }
