@@ -18,19 +18,23 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddr
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.peer.PeerId
+import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, FallbackTx, TxFamily}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedActor.Error.NoSuitableCollateralUtxosFound
 import hydrozoa.rulebased.RuleBasedActor.Requests.Tick
 import hydrozoa.rulebased.RuleBasedActor.{Error, *}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, secFromData}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
@@ -60,10 +64,10 @@ extension [T <: EnrichedTx[T]](etx: T) {
   * treasury once and dispatches on its datum to exactly one branch, so only that branch's backend
   * queries run.
   *
-  * The actor holds no per-iteration state: every tick re-queries the chain and re-calls the loader
-  * thunks ([[loadAction]], [[loadEvacuationInputs]]) for the pieces that can't be recovered from
-  * chain (the peer's SEC + signatures, the candidate evacuation maps, the fallback anchor). Loaders
-  * are expected to be idempotent (typically a persistence read).
+  * The actor holds no per-iteration state: every tick re-queries the chain and re-reads the two
+  * persistence-backed inputs it needs — the peer's SEC + signatures (for `Vote`), and the candidate
+  * evacuation maps + fallback anchor (for `Evacuate`). Both are recovered by reading `Persistence`
+  * at the current markers; idempotent by construction.
   *
   * Erroring semantics:
   *   - Cardano backend query/submit failures are swallowed and retried.
@@ -72,8 +76,7 @@ extension [T <: EnrichedTx[T]](etx: T) {
   *   - Multiple treasury utxos with the treasury token throw.
   */
 final case class RuleBasedActor(
-    loadAction: IO[RuleBasedRegimeManager.DisputeAction],
-    loadEvacuationInputs: IO[RuleBasedActor.EvacuationInputs],
+    persistence: Persistence[IO],
     cardanoBackend: CardanoBackend[IO],
     tracer: ContraTracer[IO, RuleBasedActorEvent]
 )(using config: Config)
@@ -214,6 +217,153 @@ final case class RuleBasedActor(
             }
         } yield treasuryUtxo
 
+    /** Determine this peer's dispute action, scoped to the on-chain treasury's `versionMajor`. The
+      * dispute-resolution script pins `sec.versionMajor` to the treasury reference input's, so a
+      * vote whose SEC came from a stack ahead of the on-chain settlement fails Plutus validation.
+      *
+      * Walks backward from `markers.hardConfirmed` down to `StackNumber.first`, at each stack
+      * picking the last SEC (partition reverse order) whose `blockVersion.major` matches
+      * `treasuryVersionMajor`. Stops at the first match. Returns `Abstain` if none exists — the
+      * dispute is tallied/resolved from there.
+      */
+    private def loadAction(treasuryVersionMajor: BigInt): IO[DisputeAction] =
+        for {
+            ownHeadPeerNum <- config.ownPeerId match {
+                case PeerId.Head(n) => IO.pure(n)
+                case PeerId.Coil(_) =>
+                    IO.raiseError(
+                      new IllegalStateException(
+                        "rule-based recovery via Markers.derive is head-only " +
+                            "(coil recovery deferred)"
+                      )
+                    )
+            }
+            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
+            latest <- markers.hardConfirmed.liftTo[IO](
+              MissingState("no hard-confirmed stack on disk")
+            )
+            action <- Monad[IO].tailRecM[StackNumber, DisputeAction](latest) { stack =>
+                persistence.get(StoreKey.HardConfirmation(stack)).flatMap {
+                    case None =>
+                        IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                    case Some(_: StackEffects.HardConfirmed.Initial) =>
+                        // Stack 0 is Initial by construction: no SEC-bearing partition, no
+                        // deeper walk. Even if the treasury's `versionMajor` were 0 here,
+                        // Initial stacks don't carry standalone evacuation commitments.
+                        IO.pure(Right(DisputeAction.Abstain))
+                    case Some(r: StackEffects.HardConfirmed.Regular) =>
+                        RuleBasedActor
+                            .lastSecMatchingVersion(r.partitions, treasuryVersionMajor) match {
+                            case Some(multiSec) =>
+                                IO.pure(
+                                  Right(
+                                    DisputeAction.Vote(
+                                      sec = RuleBasedActor.toOnchain(multiSec.commitment),
+                                      signatures = multiSec.headerMultiSigned,
+                                      coilSignatures = Nil // coil-side recovery deferred
+                                    )
+                                  )
+                                )
+                            case None if stack == StackNumber.first =>
+                                IO.pure(Right(DisputeAction.Abstain))
+                            case None =>
+                                IO.pure(Left(stack.decrement))
+                        }
+                }
+            }
+        } yield action
+
+    /** Re-read the evacuation-side rule-based inputs from persistence. Called on each tick that
+      * runs the evacuation branch.
+      */
+    private def loadEvacuationInputs: IO[EvacuationInputs] =
+        for {
+            ownHeadPeerNum <- config.ownPeerId match {
+                case PeerId.Head(n) => IO.pure(n)
+                case PeerId.Coil(_) =>
+                    IO.raiseError(
+                      new IllegalStateException(
+                        "rule-based recovery via Markers.derive is head-only " +
+                            "(coil recovery deferred)"
+                      )
+                    )
+            }
+            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
+            stackNum <- markers.hardConfirmed.liftTo[IO](
+              MissingState("no hard-confirmed stack on disk")
+            )
+            effects <- persistence
+                .get(StoreKey.HardConfirmation(stackNum))
+                .flatMap(
+                  _.liftTo[IO](MissingState(s"HardConfirmation($stackNum) missing"))
+                )
+            res <- effects match {
+                case i: StackEffects.HardConfirmed.Initial =>
+                    IO.pure(
+                      EvacuationInputs(
+                        candidateEvacMaps = Map(
+                          config.initialEvacuationMap.kzgCommitment ->
+                              config.initialEvacuationMap
+                        ),
+                        fallbackTxHash = i.fallbackTx.tx.id
+                      )
+                    )
+                case r: StackEffects.HardConfirmed.Regular =>
+                    for {
+                        fallbackTx <- RuleBasedActor
+                            .lastFallback(r.partitions)
+                            .liftTo[IO](MissingState(s"no fallback tx in stack $stackNum"))
+                        // Default-vote map — what the multisig treasury was committed to at
+                        // fallback time. The default vote utxo carries this kzg, so if peers
+                        // never tally onto a newer SEC the resolution will land here. The
+                        // closing stack's `lastBlockNum` comes from the `UnsignedStack` every
+                        // peer persists on every close (atomic with the hard-ack), so it is
+                        // present for any hard-confirmed stack — unlike the StackLane brief
+                        // (leader-authored only).
+                        unsignedStack <- persistence
+                            .get(StoreKey.UnsignedStack(stackNum))
+                            .flatMap(
+                              _.liftTo[IO](
+                                MissingState(s"UnsignedStack($stackNum) missing")
+                              )
+                            )
+                        lastBlockNum = unsignedStack.brief.lastBlockNum
+                        defaultMap <- persistence
+                            .get(StoreKey.EvacuationMap(lastBlockNum))
+                            .flatMap(
+                              _.liftTo[IO](
+                                MissingState(s"EvacuationMap($lastBlockNum) missing")
+                              )
+                            )
+                        // SEC maps — every candidate SEC peers could vote for, keyed by its
+                        // kzg commitment. The dispute resolution writes whichever wins into
+                        // the treasury's Resolved.evacuationActive, so the EvacuationActor
+                        // looks it up here at runtime.
+                        secMaps <- RuleBasedActor
+                            .allSecs(r.partitions)
+                            .traverse { multiSec =>
+                                persistence
+                                    .get(
+                                      StoreKey.EvacuationMap(multiSec.commitment.blockNum)
+                                    )
+                                    .flatMap(
+                                      _.liftTo[IO](
+                                        MissingState(
+                                          s"EvacuationMap(${multiSec.commitment.blockNum})" +
+                                              " missing for candidate SEC"
+                                        )
+                                      )
+                                    )
+                                    .map(map => multiSec.commitment.kzgCommitment -> map)
+                            }
+                    } yield EvacuationInputs(
+                      candidateEvacMaps =
+                          ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
+                      fallbackTxHash = fallbackTx.tx.id
+                    )
+            }
+        } yield res
+
     private object Dispute {
 
         /** Dispute branch — treasury is Unresolved. Queries the dispute address, gets collateral,
@@ -281,7 +431,10 @@ final case class RuleBasedActor(
         }
 
         /** Branch: own ballot box still `AwaitingVote`. Load this peer's action (Vote/Abstain) and
-          * submit the corresponding tx.
+          * submit the corresponding tx. `loadAction` is scoped to the on-chain treasury's
+          * `versionMajor` — the dispute script matches SEC.versionMajor against the treasury
+          * reference input, so voting with the newest off-chain SEC when the treasury's settlement
+          * is lagging is guaranteed to fail Plutus validation.
           */
         def castVote(
             ownBallotBox: BallotBox[AwaitingVote],
@@ -289,13 +442,23 @@ final case class RuleBasedActor(
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
+                treasuryVersionMajor <- treasuryUtxo.treasuryOutput.datum match {
+                    case RuleBasedTreasuryDatum.Unresolved(_, v, _) => pure(v)
+                    case _: RuleBasedTreasuryDatum.Resolved =>
+                        raiseError(
+                          new IllegalStateException(
+                            "castVote reached with a Resolved treasury datum; " +
+                                "handleTick dispatches Resolved to Evacuation.handle"
+                          )
+                        )
+                }
                 action <- EitherT.liftF[
                   IO,
                   Error.RecoverableErrors,
-                  RuleBasedRegimeManager.DisputeAction
-                ](loadAction)
+                  DisputeAction
+                ](loadAction(treasuryVersionMajor))
                 _ <- action match {
-                    case RuleBasedRegimeManager.DisputeAction.Vote(
+                    case DisputeAction.Vote(
                           sec,
                           signatures,
                           coilSignatures
@@ -313,7 +476,7 @@ final case class RuleBasedActor(
                               .result,
                           wrapError = Error.BuildError.Vote(_)
                         )
-                    case RuleBasedRegimeManager.DisputeAction.Abstain =>
+                    case DisputeAction.Abstain =>
                         buildAndSubmit(
                           result = AbstainTx
                               .Build(
@@ -657,6 +820,82 @@ object RuleBasedActor {
         NodeOperationEvacuationConfig.Section & CardanoNetwork.Section & HeadPeers.Section &
         HasTokenNames & ScriptReferenceUtxos.Section & OwnPeerPublic.Section &
         HeadConfig.Bootstrap.Section
+
+    /** What action this peer's [[RuleBasedActor]] should take when it observes its own
+      * `AwaitingVote` vote utxo on L1.
+      *
+      *   - [[Vote]]: a hard-confirmed stack carries a SEC whose `versionMajor` matches the on-chain
+      *     treasury's — we have a signed SEC + peer header signatures, so the actor builds and
+      *     submits a `VoteTx` that flips the datum to `Voted`.
+      *   - [[Abstain]]: no such SEC exists (the walk backward through hard-confirmed stacks found
+      *     nothing) — the actor publicly abstains via the on-chain Abstain branch and the dispute
+      *     is tallied/resolved from there.
+      */
+    enum DisputeAction:
+        case Vote(
+            sec: StandaloneEvacuationCommitment.Onchain,
+            signatures: List[BlockHeader.Minor.HeaderSignature],
+            coilSignatures: List[Option[BlockHeader.Minor.HeaderSignature]]
+        )
+        case Abstain
+
+    /** Raised when a loader can't reconstruct the rule-based state from persistence — e.g. no
+      * hard-confirmed stack on disk, a stack's `HardConfirmation` / `UnsignedStack` /
+      * `EvacuationMap` entry is absent, or a fallback tx is absent from a Regular stack.
+      */
+    final case class MissingState(message: String) extends RuntimeException(message)
+
+    /** Walk the partitions in reverse and return the latest SEC whose `blockVersion.major` matches
+      * `versionMajor`. Major's SEC is optional (only present when the partition has trailing
+      * minors); Minor's SEC is mandatory. Both are candidates.
+      */
+    private def lastSecMatchingVersion(
+        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]],
+        versionMajor: BigInt
+    ): Option[StandaloneEvacuationCommitment.MultiSigned] =
+        partitions.toList.reverseIterator.collectFirst {
+            case PartitionEffects.Minor(sec, _)
+                if BigInt(sec.commitment.blockVersion.major: Int) == versionMajor =>
+                sec
+            case PartitionEffects.Major(_, _, _, _, Some(sec))
+                if BigInt(sec.commitment.blockVersion.major: Int) == versionMajor =>
+                sec
+        }
+
+    /** Every SEC carried by the partitions, in partition order — these are the candidates peers may
+      * tally onto and the dispute resolution may settle on.
+      */
+    // TODO: Truncate this to the actual votable SECs -- anything lower than the default vote won't work
+    private def allSecs(
+        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]]
+    ): List[StandaloneEvacuationCommitment.MultiSigned] =
+        partitions.toList.flatMap {
+            case PartitionEffects.Minor(sec, _)                => List(sec)
+            case PartitionEffects.Major(_, _, _, _, Some(sec)) => List(sec)
+            case _                                             => Nil
+        }
+
+    /** Walk the partitions in reverse and return the latest fallback tx. Only Major partitions
+      * carry one (Treasury rotation happens via Major.settlement or Final.finalization).
+      */
+    private def lastFallback(
+        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]]
+    ): Option[FallbackTx] =
+        partitions.toList.reverseIterator.collectFirst {
+            case PartitionEffects.Major(_, fallback, _, _, _) => fallback
+        }
+
+    /** Decode the SEC's `Serialized` header bytes back into the on-chain datum form the dispute
+      * resolution script consumes. The bytes are `serialiseData(Onchain.toData)` per
+      * [[StandaloneEvacuationCommitment.Onchain.Serialized.apply]], so we round-trip through
+      * `Data.fromCbor` + `fromData`.
+      */
+    private def toOnchain(
+        commitment: StandaloneEvacuationCommitment
+    ): StandaloneEvacuationCommitment.Onchain = {
+        val bytes: Array[Byte] = commitment.header
+        fromData[StandaloneEvacuationCommitment.Onchain](Data.fromCbor(bytes))
+    }
 
     type Handle = ActorRef[IO, Requests.Request]
 
