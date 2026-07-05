@@ -160,19 +160,21 @@ case class EutxoL2Ledger private (
         case req: L2LedgerCommand.ApplyTransaction =>
             for
                 l2Tx <- L2Tx.parse(req.l2Payload.bytes, config).left.map(L2LedgerError(_))
-                newActiveUtxos <- HydrozoaTransactionMutator
+                compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
-                      state = s.activeUtxos,
+                      state = Compartments(s.activeUtxos, s.transientTokens),
                       l2Tx = l2Tx
                     )
                     .left
                     .map(error => L2LedgerError(error.toString))
             yield s
                 .focus(_.activeUtxos)
-                .replace(newActiveUtxos)
+                .replace(compartments.main)
+                .focus(_.transientTokens)
+                .replace(compartments.transientTokens)
                 .focus(_.commandNumber)
                 .modify(_.increment)
 

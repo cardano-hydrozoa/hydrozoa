@@ -118,7 +118,7 @@ given L2ConformanceValidator[RedeemerTag] with
     }
 
 given L2ConformanceValidator[Redeemer] with
-    /** Redeemer tag must be spending */
+    /** Redeemer tag must be an allowed one */
     def l2Validate(l1: Redeemer): Either[String, Unit] =
         given_L2ConformanceValidator_RedeemerTag.l2Validate(l1.tag)
 
