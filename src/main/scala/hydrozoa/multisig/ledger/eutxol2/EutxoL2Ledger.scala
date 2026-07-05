@@ -68,6 +68,11 @@ object EutxoL2Ledger {
 
     case class State(
         activeUtxos: Utxos,
+        /** The transient-token compartment overlaying `activeUtxos` (the main compartment). Only
+          * the combined view is visible to the ledger rules; evacuation diffs and payouts derive
+          * from `activeUtxos` alone.
+          */
+        transientTokens: TransientTokens,
         pendingDeposits: Map[RequestId, L2Genesis],
         errors: Map[RequestId, String],
         confirmations: Map[BlockNumber, Vector[(RequestId, EnrichedTx.Serialized)]],
@@ -87,6 +92,7 @@ object EutxoL2Ledger {
         def genesis(config: EutxoL2Ledger.Config): State =
             State(
               activeUtxos = config.initialEvacuationMap.toUtxos,
+              transientTokens = TransientTokens.empty,
               pendingDeposits = Map.empty,
               errors = Map.empty,
               confirmations = Map.empty,
