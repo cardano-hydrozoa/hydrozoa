@@ -5,9 +5,9 @@ import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.txbuilder.NativeScriptWitness
 import scalus.cardano.txbuilder.TransactionBuilderStep.Mint
-import scalus.uplc.builtin.ByteString
+import scalus.cardano.txbuilder.{NativeScriptWitness, ScriptSource, TwoArgumentPlutusScriptWitness}
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** Scenario tests for [[HydrozoaTransactionMutator.transit]] over the two compartments, with the
   * fixture's single-key native minting policy. The rejection cases pin the core property of the
@@ -204,6 +204,72 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         assert(
           result.left.exists(_.contains("cannot carry transient tokens")),
           s"expected an L1-bound rejection, got: $result"
+        )
+    }
+
+    test("plutus-v3 policy: mint with the script attached inline") {
+        val utxo = mkPeerUtxo(20, Value.ada(100))
+        val state = Compartments(Map(utxo), TransientTokens.empty)
+        val bundle = MultiAsset.asset(plutusMintPolicyId, demoAsset, 5)
+        val tx = buildSignedL2Tx(
+          spends = List(utxo),
+          sends = List(sendToPeer(Value(Coin.ada(100), bundle))),
+          mints = List(
+            Mint(
+              plutusMintPolicyId,
+              demoAsset,
+              5,
+              TwoArgumentPlutusScriptWitness(
+                ScriptSource.PlutusScriptValue(plutusMintScript),
+                Data.I(0)
+              )
+            )
+          ),
+          transientOutputs = Map(0 -> bundle)
+        )
+
+        val result = applyTransit(state, tx)
+        val _ = assert(result.isRight, s"expected success, got: $result")
+        val (l2Tx, next) = result.toOption.get
+        assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
+    }
+
+    test("plutus-v3 policy: mint via a reference script input") {
+        val utxo = mkPeerUtxo(21, Value.ada(100))
+        val referenceUtxo: (TransactionInput, TransactionOutput) =
+            mkInput(22) -> Babbage(
+              peerAddress,
+              Value.ada(20),
+              None,
+              Some(ScriptRef(plutusMintScript))
+            )
+        val state = Compartments(Map(utxo, referenceUtxo), TransientTokens.empty)
+        val bundle = MultiAsset.asset(plutusMintPolicyId, demoAsset, 3)
+        val tx = buildSignedL2Tx(
+          spends = List(utxo),
+          sends = List(sendToPeer(Value(Coin.ada(100), bundle))),
+          mints = List(
+            Mint(
+              plutusMintPolicyId,
+              demoAsset,
+              3,
+              TwoArgumentPlutusScriptWitness(
+                ScriptSource.PlutusScriptAttached,
+                Data.I(0)
+              )
+            )
+          ),
+          references = List(referenceUtxo),
+          transientOutputs = Map(0 -> bundle)
+        )
+
+        val result = applyTransit(state, tx)
+        val _ = assert(result.isRight, s"expected success, got: $result")
+        val (l2Tx, next) = result.toOption.get
+        assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
+        assert(
+          next.main.contains(referenceUtxo._1),
+          "the reference utxo stays in the main compartment"
         )
     }
 

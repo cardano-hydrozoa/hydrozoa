@@ -15,17 +15,22 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import scalus.cardano.txbuilder.{
-  PubKeyWitness,
-  TransactionBuilder,
-  TransactionBuilderStep
+import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder, TransactionBuilderStep}
+import scalus.compiler.{Compile, compile}
+import scalus.toUplc
+import scalus.uplc.builtin.{ByteString, Data}
+
+/** An always-succeeding minting policy: the V3 script takes the script context and returns unit.
+  */
+@Compile
+object AlwaysValidMintPolicy {
+    def validate(scriptContext: Data): Unit = ()
 }
-import scalus.uplc.builtin.ByteString
 
 /** Shared fixture for transient-token tests: a deterministic multi-peer config, a single-key native
-  * minting policy owned by peer 0, and a builder for real, fully signed L2 transactions carrying
-  * the head-label metadata in either shape (legacy marker list or the current map with optional
-  * `transientOutputs` declarations).
+  * minting policy owned by peer 0, an always-succeeding compiled Plutus V3 policy, and a builder
+  * for real, fully signed L2 transactions carrying the head-label metadata in either shape (legacy
+  * marker list or the current map with optional `transientOutputs` declarations).
   */
 object L2TxFixtures {
 
@@ -43,6 +48,17 @@ object L2TxFixtures {
         Script.Native(Timelock.Signature(multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)))
 
     val nativeMintPolicyId: PolicyId = nativeMintScript.scriptHash
+
+    /** The compiled [[AlwaysValidMintPolicy]] as a Plutus V3 script. */
+    val plutusMintScript: Script.PlutusV3 = {
+        val program =
+            compile((scriptContext: Data) => AlwaysValidMintPolicy.validate(scriptContext))
+                .toUplc()
+                .plutusV3
+        Script.PlutusV3(program.cborByteString)
+    }
+
+    val plutusMintPolicyId: PolicyId = plutusMintScript.scriptHash
 
     /** Wall-clock "now" quantized to the config's slots — the transaction creation time handed to
       * the mutator (fixture transactions carry no validity interval, so any instant works).
@@ -117,7 +133,7 @@ object L2TxFixtures {
               )
             )
             .fold(
-              error => throw RuntimeException(s"Can't build fixture L2 tx: $error"),
+              error => throw RuntimeException(s"Can't build fixture L2 tx: $error", error.reason),
               context => context.transaction
             )
         multiNodeConfig.multisignTx(unsigned)
