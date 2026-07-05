@@ -44,8 +44,8 @@ object L2ConformanceValidator {
         event: L2Tx | L2Genesis
     ): Either[String, Unit] =
         event match {
-            case L2Tx(tx, _, _, _) => given_L2ConformanceValidator_Transaction.l2Validate(tx)
-            case L2Genesis(_, _)   => Right(()) // Correct by construction
+            case l2Tx: L2Tx      => given_L2ConformanceValidator_Transaction.l2Validate(l2Tx.tx)
+            case L2Genesis(_, _) => Right(()) // Correct by construction
         }
 }
 
