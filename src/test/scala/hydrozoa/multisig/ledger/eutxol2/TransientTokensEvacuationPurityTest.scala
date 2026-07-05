@@ -1,17 +1,14 @@
 package hydrozoa.multisig.ledger.eutxol2
 
+import cats.data.EitherT
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.L2TxFixtures.*
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
-import hydrozoa.multisig.ledger.l2.L2LedgerCommand
+import hydrozoa.multisig.ledger.l2.L2LedgerError
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.uplc.builtin.ByteString
 
 /** Evacuation purity at the [[EutxoL2Ledger.sendApplyTransaction]] level: the evacuation diffs and
   * payout obligations a minting transaction produces never carry transient bundles — every `Update`
@@ -20,28 +17,9 @@ import scalus.uplc.builtin.ByteString
   */
 class TransientTokensEvacuationPurityTest extends AnyFunSuite {
 
-    private def mkApplyTransaction(
-        requestNumber: Long,
-        blockNumber: Int,
-        tx: Transaction
-    ): L2LedgerCommand.ApplyTransaction =
-        L2LedgerCommand.ApplyTransaction(
-          requestId = RequestId(
-            peerNum = HeadPeerNumber.zero,
-            requestNum = RequestNumber(requestNumber)
-          ),
-          userVKey = multiNodeConfig
-              .nodeConfigs(HeadPeerNumber.zero)
-              .ownWallet
-              .exportVerificationKey,
-          blockNumber = BlockNumber(blockNumber),
-          blockCreationStartTime = time.toPosixTime,
-          l2Payload = ByteString.fromArray(tx.toCbor)
-        )
-
     /** Unwrap the ledger reply, failing with the wrapped message (not just the class name). */
     private def orFail[A](
-        reply: cats.data.EitherT[IO, hydrozoa.multisig.ledger.l2.L2LedgerError, A]
+        reply: EitherT[IO, L2LedgerError, A]
     ): IO[A] =
         reply.value.flatMap {
             case Right(a)    => IO.pure(a)

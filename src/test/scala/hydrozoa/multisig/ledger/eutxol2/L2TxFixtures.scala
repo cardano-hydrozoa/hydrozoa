@@ -7,8 +7,11 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.TransientOutputs
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l1.token.CIP67
+import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import scalus.cardano.address.ShelleyAddress
@@ -81,6 +84,26 @@ object L2TxFixtures {
       */
     val time: QuantizedInstant =
         realTimeQuantizedInstant(ledgerConfig.slotConfig).unsafeRunSync()
+
+    /** Wrap a signed transaction as the ledger command peer 0 would submit for it. */
+    def mkApplyTransaction(
+        requestNumber: Long,
+        blockNumber: Int,
+        tx: Transaction
+    ): L2LedgerCommand.ApplyTransaction =
+        L2LedgerCommand.ApplyTransaction(
+          requestId = RequestId(
+            peerNum = HeadPeerNumber.zero,
+            requestNum = RequestNumber(requestNumber)
+          ),
+          userVKey = multiNodeConfig
+              .nodeConfigs(HeadPeerNumber.zero)
+              .ownWallet
+              .exportVerificationKey,
+          blockNumber = BlockNumber(blockNumber),
+          blockCreationStartTime = time.toPosixTime,
+          l2Payload = ByteString.fromArray(tx.toCbor)
+        )
 
     /** A deterministic fake utxo id. */
     def mkInput(seed: Int, index: Int = 0): TransactionInput =

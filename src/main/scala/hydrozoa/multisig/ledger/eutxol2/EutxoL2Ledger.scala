@@ -302,8 +302,8 @@ case class EutxoL2Ledger private (
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `pendingDeposits`, and `commandNumber` come from the snapshot; the transient `errors` /
-      * `confirmations` are not persisted and start empty (§R2b).
+      * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot; the
+      * transient `errors` / `confirmations` are not persisted and start empty (§R2b).
       */
     private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2
@@ -311,6 +311,7 @@ case class EutxoL2Ledger private (
             .genesis(config)
             .copy(
               activeUtxos = snapshot.activeUtxos,
+              transientTokens = snapshot.transientTokens,
               pendingDeposits = snapshot.pendingDeposits,
               commandNumber = snapshot.commandNumber
             )
