@@ -17,3 +17,4 @@ PDF). For project-wide conventions, start with the style guide.
 | [slow-consensus.md](slow-consensus.md) | The slow cycle: turning a run of soft-confirmed blocks into a multisigned, L1-submittable set of effect transactions; StackComposer / hard-acks. |
 | [style-guide.md](style-guide.md) | Hydrozoa Scala conventions: opaque-tuple conversions, naming rules (verb functions, `is*`/`has*` predicates), and other house style. |
 | [testcontrol-driver.md](testcontrol-driver.md) | How `ModelBasedSuite` drives the integration suites on a cats-effect `TestControl` virtual clock. |
+| [transient-tokens.md](transient-tokens.md) | Minting/burning on L2: the transient-token compartment, `transientOutputs` metadata, and projection-based validation of the main compartment. |

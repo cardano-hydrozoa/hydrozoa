@@ -89,6 +89,8 @@ Working design and reference docs live in `docs/`:
   blocks into a multisigned, L1-submittable set of effect transactions over stacks.
 - [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
   cycles without changing consensus logic.
+- [`transient-tokens.md`](docs/transient-tokens.md) — minting/burning on the L2 ledger: the
+  transient-token compartment and projection-based validation.
 
 **Testing**
 - [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
