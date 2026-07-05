@@ -60,9 +60,10 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
         val newId = outputId(l2Tx, 0)
-        assert(next.transientTokens == Map(newId -> demoBundle(5)))
-        assert(next.main.keySet == Set(newId))
-        assert(next.main(newId).value == Value.ada(100), "main must hold the projected value")
+        val _ = assert(next.transientTokens == Map(newId -> demoBundle(5)))
+        val _ = assert(next.main.keySet == Set(newId))
+        val _ =
+            assert(next.main(newId).value == Value.ada(100), "main must hold the projected value")
     }
 
     test("burn: spending an overlaid utxo with a negative mint drains the overlay") {
@@ -78,9 +79,9 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val result = applyTransit(state, tx)
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
-        assert(next.transientTokens.isEmpty)
-        assert(next.main.keySet == Set(outputId(l2Tx, 0)))
-        assert(next.main(outputId(l2Tx, 0)).value == Value.ada(100))
+        val _ = assert(next.transientTokens.isEmpty)
+        val _ = assert(next.main.keySet == Set(outputId(l2Tx, 0)))
+        val _ = assert(next.main(outputId(l2Tx, 0)).value == Value.ada(100))
     }
 
     test("pass-through: re-declared bundle moves to the new utxo id without a mint field") {
@@ -96,8 +97,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val result = applyTransit(state, tx)
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
-        assert(next.transientTokens == Map(outputId(l2Tx, 0) -> demoBundle(5)))
-        assert(next.main(outputId(l2Tx, 0)).value == Value.ada(100))
+        val _ = assert(next.transientTokens == Map(outputId(l2Tx, 0) -> demoBundle(5)))
+        val _ = assert(next.main(outputId(l2Tx, 0)).value == Value.ada(100))
     }
 
     test("same policy id may live in both compartments simultaneously") {
@@ -116,8 +117,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
         val newId = outputId(l2Tx, 0)
-        assert(next.transientTokens == Map(newId -> demoBundle(5)))
-        assert(
+        val _ = assert(next.transientTokens == Map(newId -> demoBundle(5)))
+        val _ = assert(
           next.main(newId).value == Value(Coin.ada(100), demoBundle(3)),
           "the L1-native 3 DEMO stay in main"
         )
@@ -135,7 +136,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
 
         val result = applyTransit(state, tx)
-        assert(
+        val _ = assert(
           result.left.exists(_.toString.contains("L1-projection conservation")),
           s"expected an L1-projection conservation failure, got: $result"
         )
@@ -153,7 +154,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
 
         val result = applyTransit(state, tx)
-        assert(
+        val _ = assert(
           result.left.exists(_.toString.contains("L1-projection conservation")),
           s"expected an L1-projection conservation failure, got: $result"
         )
@@ -169,7 +170,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
 
         val result = applyTransit(state, tx)
-        assert(
+        val _ = assert(
           result.left.exists(_.toString.contains("L1-projection conservation")),
           s"expected an L1-projection conservation failure, got: $result"
         )
@@ -185,7 +186,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
 
         val result = L2Tx.parse(tx.toCbor, ledgerConfig)
-        assert(
+        val _ = assert(
           result.left.exists(_.contains("exceeds the output's assets")),
           s"expected a sub-value rejection, got: $result"
         )
@@ -201,7 +202,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         )
 
         val result = L2Tx.parse(tx.toCbor, ledgerConfig)
-        assert(
+        val _ = assert(
           result.left.exists(_.contains("cannot carry transient tokens")),
           s"expected an L1-bound rejection, got: $result"
         )
@@ -231,7 +232,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val result = applyTransit(state, tx)
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
-        assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
+        val _ = assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
     }
 
     test("plutus-v3 policy: mint via a reference script input") {
@@ -266,8 +267,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val result = applyTransit(state, tx)
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
-        assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
-        assert(
+        val _ = assert(next.transientTokens == Map(outputId(l2Tx, 0) -> bundle))
+        val _ = assert(
           next.main.contains(referenceUtxo._1),
           "the reference utxo stays in the main compartment"
         )
@@ -285,7 +286,7 @@ class TransientTokensMutatorTest extends AnyFunSuite {
         val result = applyTransit(state, tx)
         val _ = assert(result.isRight, s"expected success, got: $result")
         val (l2Tx, next) = result.toOption.get
-        assert(l2Tx.transientOutputs.isEmpty)
-        assert(next.transientTokens.isEmpty)
+        val _ = assert(l2Tx.transientOutputs.isEmpty)
+        val _ = assert(next.transientTokens.isEmpty)
     }
 }
