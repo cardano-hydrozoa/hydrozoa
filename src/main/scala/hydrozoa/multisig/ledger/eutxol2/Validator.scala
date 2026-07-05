@@ -6,7 +6,7 @@ import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
-import scalus.cardano.ledger.RedeemerTag.Spend
+import scalus.cardano.ledger.RedeemerTag.{Mint, Spend}
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.UtxoEnv
 
@@ -88,8 +88,8 @@ given L2ConformanceValidator[DatumOption] with
 given L2ConformanceValidator[TransactionOutput] with
 
     /** Differs from the L1 Transaction Output in that: \- Only babbage-style outputs are allowed \-
-      * L2 transaction outputs can only contain Ada \- Datums, if present, must be inline \- Only
-      * native scripts or v3 plutus scripts allowed in the script ref
+      * Datums, if present, must be inline \- Only native scripts or v3 plutus scripts allowed in
+      * the script ref
       */
     def l2Validate(l1: TransactionOutput): Either[String, Unit] = {
         for
@@ -111,9 +111,11 @@ given L2ConformanceValidator[ScriptRef] with
     }
 
 given L2ConformanceValidator[RedeemerTag] with
-    /** Only the "Spend" redeemer tag is allowed */
-    def l2Validate(l1: RedeemerTag): Either[String, Unit] =
-        validateEquals("Redeemer Tag")(l1)(Spend)
+    /** Only the "Spend" and "Mint" redeemer tags are allowed */
+    def l2Validate(l1: RedeemerTag): Either[String, Unit] = l1 match {
+        case Spend | Mint => Right(())
+        case other        => Left(s"[L2Conformance for Redeemer Tag]: $other is not Spend or Mint")
+    }
 
 given L2ConformanceValidator[Redeemer] with
     /** Redeemer tag must be spending */
@@ -141,11 +143,15 @@ given L2ConformanceValidator[Transaction] with
 
 given L2ConformanceValidator[TransactionBody] with
     /** Differs from the L1 Tx Body as follows: \- The following omissions from the current spec
-      * (commit e2ef186, 2025-07-08 version): \- No certificates, withdrawals, mints,
-      * voting_procedures, proposal_procedures, current_treasury_value, or treasury_donation \-
-      * Omitting fields related to fees and collateral (see private discussion at
+      * (commit e2ef186, 2025-07-08 version): \- No certificates, withdrawals, voting_procedures,
+      * proposal_procedures, current_treasury_value, or treasury_donation \- Omitting fields related
+      * to fees and collateral (see private discussion at
       * https://discord.com/channels/@me/1387084765173121175/1389956276208926852; rationale being
-      * that someone can quit consensus if scripts keep failing)
+      * that someone can quit consensus if scripts keep failing) \- Minting/burning is allowed: the
+      * minted tokens are transient (tracked in the transient-token compartment, never
+      * L1-remittable); the L1-projection conservation rule is what keeps main-compartment tokens
+      * unmintable. The zero-fee and no-withdrawals rules here are load-bearing for that projection
+      * arithmetic.
       */
     def l2Validate(
         l1: TransactionBody
@@ -160,7 +166,6 @@ given L2ConformanceValidator[TransactionBody] with
             _ <- validateEquals("Certificates")(l1.certificates)(TaggedOrderedStrictSet.empty)
             _ <- validateEquals("Withdrawals")(l1.withdrawals)(None)
             _ <- validateEquals("Fee")(l1.fee)(Coin(0L))
-            _ <- validateEquals("Mint")(l1.mint)(None)
             _ <- validateEquals("Voting Procedures")(l1.votingProcedures)(None)
             _ <- validateEquals("Proposal Procedures")(l1.proposalProcedures)(
               TaggedOrderedSet.empty
