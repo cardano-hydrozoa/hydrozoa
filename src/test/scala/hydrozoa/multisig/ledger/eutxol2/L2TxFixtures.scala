@@ -15,7 +15,7 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, Mint as MintStep, ModifyAuxiliaryData, ReferenceOutput, Send, Spend}
-import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder, TransactionBuilderStep}
+import scalus.cardano.txbuilder.{NativeScriptWitness, PubKeyWitness, TransactionBuilder, TransactionBuilderStep}
 import scalus.compiler.{Compile, compile}
 import scalus.toUplc
 import scalus.uplc.builtin.{ByteString, Data}
@@ -59,6 +59,22 @@ object L2TxFixtures {
     }
 
     val plutusMintPolicyId: PolicyId = plutusMintScript.scriptHash
+
+    /** The demo asset name used by the transient-token tests. */
+    val demoAsset: AssetName = AssetName(ByteString.fromString("DEMO"))
+
+    /** A bundle of `quantity` [[demoAsset]] under the native policy. */
+    def mkDemoBundle(quantity: Long): MultiAsset =
+        MultiAsset.asset(nativeMintPolicyId, demoAsset, quantity)
+
+    /** A builder step minting `quantity` [[demoAsset]] under the native policy (attached). */
+    def mkMintDemoStep(quantity: Long): MintStep =
+        MintStep(
+          nativeMintPolicyId,
+          demoAsset,
+          quantity,
+          NativeScriptWitness.attached(nativeMintScript)
+        )
 
     /** Wall-clock "now" quantized to the config's slots — the transaction creation time handed to
       * the mutator (fixture transactions carry no validity interval, so any instant works).
