@@ -12,7 +12,7 @@ import scalus.uplc.builtin.{ByteString, Data}
 /** Scenario tests for [[HydrozoaTransactionMutator.transit]] over the two compartments, with the
   * fixture's single-key native minting policy. The rejection cases pin the core property of the
   * design: main-compartment (L1-native) tokens cannot be minted, burned, or smuggled out of the
-  * overlay, purely by the L1-projection conservation arithmetic — no policy-id checks exist
+  * overlay, purely by the main-projection conservation arithmetic — no policy-id checks exist
   * anywhere.
   */
 class TransientTokensMutatorTest extends AnyFunSuite {
@@ -137,8 +137,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
 
         val result = applyTransit(state, tx)
         val _ = assert(
-          result.left.exists(_.toString.contains("L1-projection conservation")),
-          s"expected an L1-projection conservation failure, got: $result"
+          result.left.exists(_.toString.contains("main-projection conservation")),
+          s"expected an main-projection conservation failure, got: $result"
         )
     }
 
@@ -155,8 +155,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
 
         val result = applyTransit(state, tx)
         val _ = assert(
-          result.left.exists(_.toString.contains("L1-projection conservation")),
-          s"expected an L1-projection conservation failure, got: $result"
+          result.left.exists(_.toString.contains("main-projection conservation")),
+          s"expected an main-projection conservation failure, got: $result"
         )
     }
 
@@ -171,8 +171,8 @@ class TransientTokensMutatorTest extends AnyFunSuite {
 
         val result = applyTransit(state, tx)
         val _ = assert(
-          result.left.exists(_.toString.contains("L1-projection conservation")),
-          s"expected an L1-projection conservation failure, got: $result"
+          result.left.exists(_.toString.contains("main-projection conservation")),
+          s"expected an main-projection conservation failure, got: $result"
         )
     }
 

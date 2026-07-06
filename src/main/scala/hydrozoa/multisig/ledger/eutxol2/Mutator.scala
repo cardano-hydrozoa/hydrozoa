@@ -43,7 +43,7 @@ object HydrozoaTransactionMutator {
       *   - the full transaction — scripts, signatures, redeemers, sizes, and value conservation
       *     with the mint field — validates against the **combined** view (main + transient), the
       *     only view the Cardano ledger rules ever see;
-      *   - the L1 projection ([[L2Tx.projectToL1]]) re-checks value conservation against the
+      *   - the main projection ([[L2Tx.projectMain]]) re-checks value conservation against the
       *     **main** compartment alone, which both keeps every reachable state L1-remittable and
       *     makes minting or burning main-compartment (L1-native) tokens fail by arithmetic.
       *
@@ -95,11 +95,11 @@ object HydrozoaTransactionMutator {
             _ <- helper(ProtocolParamsViewHashesMatchValidator)
             _ <- helper(WrongNetworkValidator)
             _ <- helper(WrongNetworkInTxBodyValidator)
-            // The L1 projection must balance against the main compartment alone
+            // The projection to the main compartment must balance against it alone
             _ <- ValueNotConservedUTxOValidator
-                .validate(context, L1State(utxos = state.main), l2Tx.projectToL1)
+                .validate(context, L1State(utxos = state.main), l2Tx.projectMain)
                 .left
-                .map(error => s"L1-projection conservation: $error")
+                .map(error => s"main-projection conservation: $error")
             // Upstream mutators: removes inputs, adds all outputs (L1 and L2)
             scalusState <-
                 PlutusScriptsTransactionMutator.transit(

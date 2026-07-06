@@ -38,7 +38,7 @@ Validation then runs twice over two views of the same transaction:
 
 1. **the full transaction** — scripts (minting policies included), signatures, and value
    conservation *with* the mint field — against the combined utxo values;
-2. **the L1 projection** — the mint field stripped, each output reduced by its declared transient
+2. **the main projection** — the mint field stripped, each output reduced by its declared transient
    content — must balance against the main compartment alone.
 
 The projection rule is the entire enforcement story. Minting an L1-native token fails it (the

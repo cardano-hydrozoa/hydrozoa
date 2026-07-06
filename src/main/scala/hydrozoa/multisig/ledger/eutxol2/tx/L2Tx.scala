@@ -48,14 +48,14 @@ final case class L2Tx(
             TransactionInput(tx.id, index) -> bundle
         }
 
-    /** The L1 projection of this transaction: the mint field stripped and each output's value
-      * reduced by its declared transient bundle. Balancing the projection against the main
-      * compartment alone proves the post-transaction state stays L1-remittable — and makes minting
-      * or burning main-compartment (L1-native) tokens impossible by arithmetic, with no policy-id
-      * checks anywhere. The projection's changed serialized id is irrelevant: it is fed only to the
-      * value-conservation rule, never signed or hashed against.
+    /** The projection of this transaction to the main compartment: the mint field stripped and each
+      * output's value reduced by its declared transient bundle. Balancing the projection against
+      * the main compartment alone proves the post-transaction state stays L1-remittable — and makes
+      * minting or burning main-compartment (L1-native) tokens impossible by arithmetic, with no
+      * policy-id checks anywhere. The projection's changed serialized id is irrelevant: it is fed
+      * only to the value-conservation rule, never signed or hashed against.
       */
-    def projectToL1: Transaction = {
+    def projectMain: Transaction = {
         val body = tx.body.value
         val projectedOutputs = body.outputs.zipWithIndex.map { case (sized, index) =>
             transientOutputs.get(index) match {

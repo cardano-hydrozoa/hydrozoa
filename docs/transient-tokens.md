@@ -72,7 +72,7 @@ checked, the third follows:
    L2 scripts: native or Plutus V3, inline or via reference inputs, standard policy-id
    derivation, executed by the upstream `PlutusScriptsTransactionMutator` with combined
    resolved values (the `Mint` redeemer tag is allowed by L2 conformance).
-2. **L1 projection, main view.** `L2Tx.projectToL1` rebuilds the transaction with the mint
+2. **Projection to the main compartment.** `L2Tx.projectMain` rebuilds the transaction with the mint
    field stripped and each output's value reduced by its declared bundle.
    `ValueNotConservedUTxOValidator` re-runs on this projection against the main compartment
    alone. This single re-run is the entire enforcement story for the main compartment:

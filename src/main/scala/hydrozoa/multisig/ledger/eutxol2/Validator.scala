@@ -149,7 +149,7 @@ given L2ConformanceValidator[TransactionBody] with
       * https://discord.com/channels/@me/1387084765173121175/1389956276208926852; rationale being
       * that someone can quit consensus if scripts keep failing) \- Minting/burning is allowed: the
       * minted tokens are transient (tracked in the transient-token compartment, never
-      * L1-remittable); the L1-projection conservation rule is what keeps main-compartment tokens
+      * L1-remittable); the main-projection conservation rule is what keeps main-compartment tokens
       * unmintable. The zero-fee and no-withdrawals rules here are load-bearing for that projection
       * arithmetic.
       */

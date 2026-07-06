@@ -10,7 +10,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
   *
   * The transient-token ("group 3") balance — `overlay_in + mint = declared transients` — has no
   * runtime execution path: with zero fees and no withdrawals it is linearly implied by the full-tx
-  * conservation (group 1, combined view) and the L1-projection conservation (group 2, main view).
+  * conservation (group 1, combined view) and the main-projection conservation (group 2, main view).
   * These properties pin that implication: every accepted transaction satisfies the group-3
   * equation, and perturbing the declarations by a single token in either direction gets the
   * transaction rejected.
@@ -125,7 +125,7 @@ object TransientTokensConservationTest extends Properties("TransientTokens conse
             }
         }
 
-    val _ = property("removing one declared token fails the L1 projection") =
+    val _ = property("removing one declared token fails the main projection") =
         forAll(genScenario.suchThat(_.tokenTotal >= 1)) { scenario =>
             val (index, bundle) = scenario.declarations.head
             val reduced = mkDemoBundle(-1) + bundle
@@ -133,8 +133,8 @@ object TransientTokensConservationTest extends Properties("TransientTokens conse
                 if reduced.isEmpty then scenario.declarations.removed(index)
                 else scenario.declarations.updated(index, reduced)
             val result = applyTransit(scenario.state, scenario.buildWith(underDeclared))
-            result.left.exists(_.toString.contains("L1-projection conservation")) :|
-                s"expected an L1-projection conservation failure, got: $result"
+            result.left.exists(_.toString.contains("main-projection conservation")) :|
+                s"expected an main-projection conservation failure, got: $result"
         }
 
     val _ = property("adding one declared token exceeds the output's assets") =
