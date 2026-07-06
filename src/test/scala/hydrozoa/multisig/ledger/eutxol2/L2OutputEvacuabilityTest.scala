@@ -89,11 +89,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
     private val maxTxSize: Long = params.maxTxSize
     private val maxValueSize: Long = params.maxValueSize
 
-    private val treasuryToken = Value.asset(
-      env.headConfig.headMultisigScript.policyId,
-      env.headConfig.headTokenNames.treasuryTokenName,
-      1
-    )
+    private val treasuryToken = env.headConfig.treasuryToken
     private val fallbackTxId = fixed(Arbitrary.arbitrary[TransactionHash], 1)
     private val now = realTimeQuantizedInstant(env.headConfig.slotConfig).unsafeRunSync()
     private val collateral = fixed(genCollateralUtxo(ownKeyHash)(using env.headConfig), 4)

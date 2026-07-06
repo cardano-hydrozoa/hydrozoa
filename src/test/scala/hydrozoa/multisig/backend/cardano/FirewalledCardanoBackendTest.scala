@@ -21,13 +21,21 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
             sink = ContraTracer[IO, FirewalledCardanoBackendEvent](e => captured.update(e :: _))
             firewalled = new FirewalledCardanoBackend(underlying, _ => IO.pure(false), sink)
             result <- firewalled.submitTx(RawTx(Transaction.empty))
-            droppedEvents <- captured.get
+            events <- captured.get
         yield
             val _ = assert(
               result.isLeft,
               s"expected Left from underlying (empty tx rejected), got $result",
             )
-            assert(droppedEvents.isEmpty)
+            val _ = assert(
+              !events.exists(_.isInstanceOf[FirewalledCardanoBackendEvent.DroppedOutboundTx]),
+              s"expected no drop event, got $events",
+            )
+            assert(
+              events.collect { case s: FirewalledCardanoBackendEvent.SubmittedTx => s } ==
+                  List(FirewalledCardanoBackendEvent.SubmittedTx(Transaction.empty.id, result)),
+              s"expected one pass-through SubmittedTx recording the underlying result, got $events",
+            )
         io.unsafeRunSync()
     }
 
@@ -38,13 +46,14 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
             sink = ContraTracer[IO, FirewalledCardanoBackendEvent](e => captured.update(e :: _))
             firewalled = new FirewalledCardanoBackend(underlying, _ => IO.pure(true), sink)
             result <- firewalled.submitTx(RawTx(Transaction.empty))
-            droppedEvents <- captured.get
+            events <- captured.get
         yield
             val _ = assert(result == Right(()), s"expected Right(()) short-circuit, got $result")
             assert(
-              droppedEvents == List(
+              events == List(
                 FirewalledCardanoBackendEvent.DroppedOutboundTx(Transaction.empty.id)
-              )
+              ),
+              s"expected exactly one DroppedOutboundTx (no SubmittedTx on the drop path), got $events",
             )
         io.unsafeRunSync()
     }

@@ -9,6 +9,7 @@ import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Script, ScriptHash, ScriptRef, Timelock, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -72,7 +73,7 @@ private object DeploymentTxOps {
             )
                 .ensureMinAda(config)
 
-            val changeOutput = TransactionOutput(
+            val changeOutput = Babbage(
               address = utxosToSpend.head.output.address,
               value = Value.combine(utxosToSpend.toList.map(_.output.value))
                   - refScriptOutput.value

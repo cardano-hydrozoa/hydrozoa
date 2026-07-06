@@ -10,6 +10,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
@@ -64,23 +65,27 @@ object EvacuationActorTestHelpers {
               RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
+            // The test body doesn't actually invoke the actor, so an empty persistence is
+            // sufficient — loadAction / loadEvacuationInputs would raise `MissingState` on any
+            // real read (no hard-confirmed stack on disk). Keeps the fixture minimal.
+            persistence <- lift(mkEmptyPersistence(env))
         } yield RuleBasedActor(
-          loadAction = IO.raiseError(
-            new IllegalStateException(
-              "evacuation-actor unit test: dispute branch should not run"
-            )
-          ),
-          loadEvacuationInputs = IO.pure(
-            RuleBasedActor.EvacuationInputs(
-              candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
-              fallbackTxHash = fallbackTxHash
-            )
-          ),
+          persistence = persistence,
           cardanoBackend = cardanoBackend,
           tracer = tracer
         )(using
           env.nodeConfigs.head._2
         )
+
+    private def mkEmptyPersistence(env: MultiNodeConfig): IO[Persistence[IO]] =
+        val persistenceTracer =
+            Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        for
+            backend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
+            persistence <- Persistence.fromBackend(backend, persistenceTracer)(using
+              env.headConfig
+            )
+        yield persistence
 
 }
 

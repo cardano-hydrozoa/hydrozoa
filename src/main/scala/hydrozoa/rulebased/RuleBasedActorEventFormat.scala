@@ -38,12 +38,19 @@ object RuleBasedActorEventFormat:
             case Collateral.NoFeeCollateralUtxo =>
                 debug("No fee/collateral UTxO found at wallet address, retrying")
 
-            case Dispute.Querying         => debug("Querying dispute utxos")
-            case Dispute.Parsing          => debug("Parsing dispute utxos")
-            case Dispute.ParsedCastVote   => info("Dispute state: own ballot awaits a vote")
-            case Dispute.ParsedTally      => info("Dispute state: ready to tally")
-            case Dispute.ParsedResolve    => info("Dispute state: ready to resolve")
-            case Dispute.ParsedEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
+            case Dispute.Querying          => debug("Querying dispute utxos")
+            case Dispute.Parsing           => debug("Parsing dispute utxos")
+            case Dispute.ParsingCastVote   => info("Dispute state: own ballot awaits a vote")
+            case Dispute.ParsingTally      => info("Dispute state: ready to tally")
+            case Dispute.ParsingResolve    => info("Dispute state: ready to resolve")
+            case Dispute.ParsingEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
+
+            case Dispute.Coil.ParsingRatchet =>
+                info("Coil dispute state: ratcheting a public ballot box")
+            case Dispute.Coil.AlreadyAtTarget =>
+                info("Coil dispute state: a public box already carries the target SEC; noop")
+            case Dispute.Coil.NoRatchetTarget =>
+                info("Coil dispute state: no ratchet target; falling through to tally/resolve")
 
             case Tx.Building(family) => info(s"Building $family")
             case Tx.Submitting(tx) =>

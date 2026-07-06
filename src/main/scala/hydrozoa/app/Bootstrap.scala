@@ -138,7 +138,7 @@ object Bootstrap:
                 Payout.Obligation
                     .apply(
                       output = KeepRaw.apply(
-                        TransactionOutput.apply(
+                        Babbage(
                           address = Address
                               .fromBech32(
                                 "addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4"

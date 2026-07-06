@@ -1,12 +1,24 @@
 package hydrozoa.integration.harness
 
+import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
+import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.CardanoLiaison
@@ -15,17 +27,19 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import org.http4s.{HttpRoutes, Uri}
 import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
+import org.http4s.{HttpRoutes, Uri}
+import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
+import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
   * mock L1.
@@ -40,6 +54,141 @@ object MultiPeerHeadHarness:
     // ===================================
     // Public surface
     // ===================================
+
+    /** Wall-clock alignment for the head's initial-block end-time.
+      *
+      *   - `useTestControl = true`: return `None`. The head-config generator falls back to the
+      *     deterministic Jan-1-2026 + 100-day random anchor (see [[generateHeadStartTime]]),
+      *     which is stable across TestControl seeds; reading `IO.realTimeInstant` there would
+      *     defeat reproducibility.
+      *   - `useTestControl = false`: return `Some(now + offset)`, materialised via
+      *     [[IO.realTimeInstant]] so no wall-clock read happens at property-construction time.
+      *     `offset` gives the scenario room to spawn actors before the initial block's
+      *     validity window opens; each test tunes it against its actor-spawn budget.
+      */
+    def mkTakeoffTime(
+        useTestControl: Boolean,
+        offset: FiniteDuration,
+    ): IO[Option[Instant]] =
+        if useTestControl then IO.pure(None)
+        else IO.realTimeInstant.map(t => Some(t.plusSeconds(offset.toSeconds)))
+
+    /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime`
+      * is `Some`, quantize it to the peer's slot config. When `None`, generate a random
+      * Jan-1-2026 + 100-day offset — deterministic per ScalaCheck seed, safe under TestControl.
+      * Feed to `hydrozoa.config.head.initialization.generateInitialBlock`'s
+      * `generateBlockCreationEndTime` parameter.
+      */
+    def generateHeadStartTime(
+        takeoffTime: Option[Instant]
+    ): GenWithTestPeers[BlockCreationEndTime] =
+        ReaderT { (tp: TestPeers) =>
+            takeoffTime match {
+                case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                case None    =>
+                    val anchorTime = 1767225600L // Jan 1 2026 00:00:00 UTC
+                    val range      = 86_400 * 100L // 100 days in seconds
+                    for offset <- Gen.choose(0L, range)
+                    yield BlockCreationEndTime(
+                      java.time.Instant
+                          .ofEpochSecond(anchorTime + offset)
+                          .quantize(tp.slotConfig)
+                    )
+            }
+        }
+
+    /** Static fast [[TxTiming]] so `Action.FallbackToRuleBased` fires within a wall-clock
+      * scenario budget (settlement/fallback windows are seconds, not hours). Shared by the
+      * dispute-flow tests via [[mkResource]]'s default.
+      */
+    val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        Gen.const(
+          TxTiming(
+            minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
+            // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
+            // = 5s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
+            inactivityMarginDuration =
+                InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
+            silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
+            depositSubmissionDuration =
+                DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+            depositMaturityDuration =
+                DepositMaturityDuration(1.second.quantize(network.slotConfig)),
+            depositAbsorptionDuration =
+                DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
+          )
+        )
+    }
+
+    /** Shared `PropertyM[IO, Resource[IO, Ctx]]` shell for dispute-flow integration tests: takeoff
+      * time, yaci-genesis-pinned MNC, initial block anchored on `takeoffTime`, coil peers in the
+      * bootstrap. Pins the 100ms evacuation polling + 500ms/250ms rate-limits both callers need;
+      * `buildCtx` owns everything test-specific.
+      */
+    def mkResource[Ctx](
+        transportMode: Transport.Mode,
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        takeoffOffset: FiniteDuration,
+        fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
+        disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+            generateDisputeResolutionConfig,
+        coilPeers: CoilPeers = CoilPeers.empty,
+        coilQuorum: Int = 0,
+    )(
+        buildCtx: (Option[Instant], MultiNodeConfig) => Resource[IO, Ctx]
+    ): PropertyM[IO, Resource[IO, Ctx]] =
+        for {
+            takeoffTime <- PropertyM.run(
+              mkTakeoffTime(transportMode.useTestControl, takeoffOffset)
+            )
+            mnc <- PropertyM.pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generateWith(testPeers)(
+                    generateHeadConfig = generateHeadConfig(
+                      genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                        generateHeadParams = generateHeadParameters(
+                          generateTxTiming = fastTxTiming,
+                          generateDisputeResolutionConfig = disputeResolutionConfig,
+                        ).map(_.copy(coilQuorum = coilQuorum)),
+                        generateInitializationParameters = InitParamsType.TopDown(
+                          InitializationParametersGenTopDown.GenWithDeps(
+                            generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
+                                Gen.const(
+                                  testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
+                                )
+                            )
+                          )
+                        ),
+                        coilPeers = coilPeers,
+                      ),
+                      generateInitialBlock = bootstrap =>
+                          generateInitialBlock(
+                            genHeadConfigBootstrap = ReaderT
+                                .pure[Gen, TestPeers, HeadConfig.Bootstrap](bootstrap),
+                            generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
+                          ),
+                    ),
+                    generateNodeOperationEvacuationConfig = w =>
+                        Gen.const(
+                          NodeOperationEvacuationConfig(
+                            evacuationBotPollingPeriod = 100.millis,
+                            ruleBasedWallet = w,
+                          )
+                        ),
+                    generateNodeOperationMultisigConfig = hc =>
+                        generateNodeOperationMultisigConfig(
+                          maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                          rateLimits = RateLimits(
+                            softBlockMinPeriod = 500.millis,
+                            hardStackMinPeriod = 250.millis,
+                          ),
+                        )
+                  )
+                  .label("MultiNodeConfig")
+            )
+        } yield buildCtx(takeoffTime, mnc)
 
     case class Config(
         label: String,
@@ -60,7 +209,7 @@ object MultiPeerHeadHarness:
       */
     enum Event:
         case Head(peerNum: HeadPeerNumber, event: HeadRegimeManagerEvent)
-        case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
+        case Coil(coilNum: CoilPeerNumber, event: CoilRegimeManagerEvent)
 
     /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
      * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
@@ -70,6 +219,8 @@ object MultiPeerHeadHarness:
         tracer: ContraTracer[IO, Event],
         peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
         coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
+        // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
+        wrapPeerBackend: (HeadPeerNumber, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
     /** Per-peer artifacts exposed to callers: resolved connections, persistence backend, and the
@@ -120,6 +271,7 @@ object MultiPeerHeadHarness:
             cardanoBackend <- Resource.eval(
                                   CardanoBackend.mkMock(
                                     preinitPeerUtxosL1,
+                                    multiNodeConfig.headConfig.scriptReferenceUtxos,
                                     multiNodeConfig.headConfig.cardanoInfo,
                                   )
                               )
@@ -135,7 +287,7 @@ object MultiPeerHeadHarness:
                                     .buildPeer(
                                       peerNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapPeerBackend(peerNum, cardanoBackend),
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
@@ -288,14 +440,18 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object CardanoBackend:
-        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs. The head
+        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
+          * globally-deployed script reference UTxOs (treasury + dispute validators). The head
           * initialization tx is submitted by the protocol through normal operation.
           */
         def mkMock(
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
+            scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
         ): IO[L1Backend[IO]] =
-            val genesisUtxos: Utxos = preinitPeerUtxosL1.values.reduce(_ ++ _)
+            val genesisUtxos: Utxos =
+                preinitPeerUtxosL1.values.reduce(_ ++ _) ++
+                    scriptReferenceUtxos.toList.map(_.toTuple).toMap
             CardanoBackendMock.mockIO(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
@@ -714,14 +870,14 @@ object MultiPeerHeadHarness:
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             uplink: Transport.ContextFn[CoilTransport],
-            callerTracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         ): Resource[IO, Coil] =
             val nHeadPeers = multiNodeConfig.nHeadPeers
             // Synthetic `HeadPeerNumber` label so coil log lines stay distinguishable from head
             // ones in the same run; passes through `CoilMultisigRegimeManagerEventFormat` which
             // still delegates to the head per-actor formatters (per the TODO inside that object).
             val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
-            val slf4jMrm: ContraTracer[IO, CoilMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, CoilRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
                 )

@@ -273,7 +273,7 @@ object InitializationParametersGenTopDown {
 
         } yield Contribution(
           fundingUtxos = fundingUtxos.toList,
-          changeOutputs = List(TransactionOutput(address = changeAddress, value = change)),
+          changeOutputs = List(Babbage(address = changeAddress, value = change)),
           l2transactionOutput = l2TransactionOutputs
         )
     }

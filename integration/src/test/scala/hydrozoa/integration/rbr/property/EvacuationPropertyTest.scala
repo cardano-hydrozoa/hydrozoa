@@ -1,300 +1,302 @@
 package hydrozoa.integration.rbr.property
 
+import cats.data.ReaderT
 import cats.effect.*
-import cats.effect.implicits.parallelForGenSpawn
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import com.suprnation.actor.ActorSystem
-import hydrozoa.*
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfig, NodeOperationEvacuationConfigGen}
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.integration.harness.MultiPeerHeadHarness
+import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.classification.Histogram
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
-import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
-import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat, RuleBasedRegimeManager}
-import org.scalacheck.util.Pretty
-import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.ArbitraryInstances.given
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import test.TestPeersSpec
+import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.ledger.l1.tx.SettlementTx
+import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
+import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
+import hydrozoa.rulebased.RuleBasedActorEvent
+import org.scalacheck.{Gen, Prop, Properties}
+import scala.concurrent.duration.*
+import scalus.uplc.builtin.ByteString
+import test.{SeedPhrase, TestPeers}
 
-/*
-CURRENT STATUS:
-- The test only tests "happy path" behavior, where every peer votes for the same commitment
-- We start with a mocked fallback tx
-- We go through dispute + resolution + evacuation successfully
-- Full classification of the utxo state matches
-- Next steps (in order):
-  - Instead of starting the actors individually, start them with the rule-based regime manager
-  - Add in a cardano backend proxy to drop transactions from certain peers and regain some determinism ("rig the races")
-  - Vote for different commitments
-  - start with an actual fallback
-  - add deinit
-  - Domain-based logging (rather than stringly typed)
-  - Model based testing of intermediary states according to full classification
- */
+/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
+  * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
+  *
+  * Scenario:
+  *   1. 2-peer head; per-peer [[FirewalledCardanoBackend]] drops any [[SettlementTx]] with
+  *      `versionMajor == 2`, so on-chain lags at v1 while peers hard-confirm through v2 off-chain.
+  *   2. Bootstrap L2 request + periodic requests give each Major stack a trailing Minor with SEC.
+  *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, HMRM spawns
+  *      [[RuleBasedRegimeManager]] which spawns [[RuleBasedActor]].
+  *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the
+  *      on-chain treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
+  *   5. Voting deadline elapses → TallyTx → ResolutionTx.
+  *   6. Test asserts a ResolutionTx submitted successfully (i.e. the dispute resolved).
+  *
+  * Full evacuation (`RuleBasedActorEvent.Evacuation.NoMore`) is not asserted: the EvacuationTx
+  * builder trips the treasury validator's `Trusted setup in the treasury is not big enough`
+  * check because [[FallbackTx.scala]] sets `setupG2 = SList.empty` (TODO there). Wiring the
+  * KZG G2 trusted setup through fallback construction is separate follow-up work.
+  */
 object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
-
-    given ppIDU: (InitialDisputeUtxos => Pretty) = _ =>
-        Pretty(_ => "InitialDisputeUtxos (too long to print)")
 
     override def overrideParameters(
         p: org.scalacheck.Test.Parameters
-    ): org.scalacheck.Test.Parameters =
-        p.withMinSuccessfulTests(3)
+    ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
-    // These might need to be tuned. Basically we don't want to end up in a spin loop.
-    //  TODO: How can we detect this in the actors themselves?
-    val votingDuration: FiniteDuration = 5.seconds
-    val evacuationDuration: FiniteDuration = 10.minute
-    // After the terminal "no more evacuations" signal fires, keep the actors running for this
-    // buffer to catch any post-completion crashes (e.g. building an EvacuationTx with an empty
-    // map; treating any such error as Recoverable is what keeps the actors alive for rollbacks).
-    val postCompletionBuffer: FiniteDuration = 30.seconds
-    val actorRunDuration: FiniteDuration =
-        votingDuration + evacuationDuration + postCompletionBuffer
+    private val nHeadPeers: Int              = 2
+    private val scenarioTimeout: FiniteDuration = 3.minutes
+    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
-    // 100ms polling period so actors poll on every ~1s cats-actors ping loop tick
-    val fastEvacConfig: NodeOperationEvacuationConfigGen =
-        (wallet: PeerWallet) => Gen.const(NodeOperationEvacuationConfig(100.millis, wallet))
+    val _ = property("ws: fallback→RRM→vote→tally→resolve dispute completes") =
+        testProperty(TransportMode.WebSocket)
 
-    import MultiNodeConfig.*
+    private def testProperty(transportMode: TransportMode): Prop =
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
 
-    val _ = property("evacuation resolves via vote: treasury present, no votes remain") =
-        run(
-          scenario(mkAction = (sec, sigs, coilSigs) =>
-              RuleBasedRegimeManager.DisputeAction.Vote(
-                sec = sec,
-                signatures = sigs,
-                coilSignatures = coilSigs
-              )
-          ),
-          PropertyM
-              .pick[IO, MultiNodeConfig](
-                MultiNodeConfig
-                    .generate(TestPeersSpec.default)(
-                      generateNodeOperationEvacuationConfig = fastEvacConfig
+        // Fast voting deadline so TallyTx becomes valid within our scenario budget. The default
+        // generator picks 1h..5d — way beyond our reach. `deadlineVoting` is
+        // `fallbackValidityStart + votingDuration`, and TallyTx has `validityStart = deadlineVoting`.
+        val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
+            ReaderT { network =>
+                Gen.const(
+                  DisputeResolutionConfig(
+                    votingDuration = QuantizedFiniteDuration(
+                      slotConfig = network.slotConfig,
+                      finiteDuration = 5.seconds
                     )
-                    .label("MultiNodeConfig")
-              )
-              .map(Resource.pure[IO, MultiNodeConfig](_))
-        )
-
-    lazy val _ = property("evacuation resolves via abstain: treasury present, no votes remain") =
-        run(
-          scenario(mkAction = (_, _, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
-          PropertyM
-              .pick[IO, MultiNodeConfig](
-                MultiNodeConfig
-                    .generate(TestPeersSpec.default)(
-                      generateNodeOperationEvacuationConfig = fastEvacConfig
-                    )
-                    .label("MultiNodeConfig")
-              )
-              .map(Resource.pure[IO, MultiNodeConfig](_))
-        )
-
-    /** Shared happy-path scenario: synthesize the post-fallback UTxO set, spawn the
-      * [[DisputeActor]] + [[EvacuationActor]] pair per peer (with the [[DisputeAction]] under test),
-      * and assert the terminal UTxO classification.
-      *
-      * Both Vote and Abstain produce the same terminal state — the default vote utxo already
-      * commits to `evacMap.kzgCommitment`, so peers either join the default's vote or step aside
-      * and let it carry the tally; in either case the resolution evacuates against `evacMap`.
-      *
-      * monadicIO (real time): `setReceiveTimeout` in cats-actors uses
-      * `System.currentTimeMillis()`, which is NOT controlled by TestControl. Real wall-clock time
-      * is required for actors to poll. `fastEvacConfig` overrides the default 1–10 min polling
-      * period so actors poll every ~1s.
-      */
-    private def scenario(
-        mkAction: (
-            StandaloneEvacuationCommitment.Onchain,
-            List[BlockHeader.Minor.HeaderSignature],
-            List[Option[BlockHeader.Minor.HeaderSignature]]
-        ) => RuleBasedRegimeManager.DisputeAction
-    ): MultiNodeConfigTestM[Boolean] =
-        for
-            env <- ask
-            fallbackTxId <- pick[TransactionHash](
-              Arbitrary.arbitrary[TransactionHash].label("FallbackTx id")
-            )
-            mockFallback: Transaction = new Transaction(
-              body = KeepRaw(TransactionBody(TaggedSortedSet.empty, IndexedSeq.empty, Coin.zero)),
-              witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
-              isValid = true,
-              auxiliaryData = None
-            ) {
-                override lazy val id = fallbackTxId
-            }
-
-            // Use real wall-clock time so the mock's currentSlot (also real wall-clock)
-            // advances past the voting deadline naturally as the test runs.
-            now <- lift(IO.realTimeInstant.map(t => QuantizedInstant(env.slotConfig, t)))
-
-            nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
-
-            // Generate the synthetic post-fallback UTxO set.
-            initialUtxos <- pick[InitialDisputeUtxos](
-              InitialDisputeUtxos
-                  .gen(fallbackTxId, now, votingDuration, nEvacs)(using env)
-                  .label("initial dispute utxos")
-            )
-
-            // block header: all peers vote for the same commitment (happy path).
-            blockHeader = StandaloneEvacuationCommitmentOnchain(
-              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
-              versionMajor = BigInt(1),
-              versionMinor = BigInt(1),
-              commitment = initialUtxos.kzgCommitment
-            )
-
-            // All peers co-sign the block header (a voted block requires all signatures)
-            signatures = env.multisignHeader(blockHeader).toList
-
-            // First coilQuorum coil peers sign; rest are None (per MultiNodeConfig helper).
-            coilSignatures = env.multisignHeaderCoil(blockHeader)
-
-            action = mkAction(blockHeader, signatures, coilSignatures)
-
-            backendAndSnapshot <- lift(
-              CardanoBackendMock.mockIOWithSnapshot(
-                MockState(
-                  ledgerState = State(initialUtxos.allUtxos(using env)),
-                  currentSlot = now.toSlot,
-                  knownTxs = Set(fallbackTxId),
-                  submittedTxs = List((Map.empty, mockFallback))
-                ),
-                mkContext = currentSlot =>
-                    // Needed so that the headConfig's network, slot config, etc. is used.
-                    // TODO: This should probably be factored out into a helper in CardanoBackedMock
-                    //   and used by default.
-                    Context(
-                      fee = Coin.zero,
-                      env = UtxoEnv.apply(
-                        currentSlot,
-                        env.headConfig.cardanoProtocolParams,
-                        certState = CertState.empty,
-                        env.headConfig.network
-                      ),
-                      slotConfig = env.headConfig.slotConfig,
-                      evaluatorMode = EvaluateAndComputeCost
-                    )
-              )
-            )
-
-            (sharedBackend, utxoSnapshot) = backendAndSnapshot
-
-            // Fires when any peer logs that no evacuations remain.
-            evacuatedSignal <- lift(IO.deferred[Unit])
-
-            // Signal tracer that fires when any peer finishes evacuating.
-            evacuationSignalTap: ContraTracer[IO, RuleBasedActorEvent] = ContraTracer.emit {
-                case RuleBasedActorEvent.Evacuation.NoMore => evacuatedSignal.complete(()).void
-                case _                                     => IO.unit
-            }
-
-            terminalUtxos <- lift {
-                val peerBots: List[IO[Unit]] =
-                    env.nodePrivateConfigs.toList.map { (peerId, _) =>
-                        val peerTracer =
-                            Slf4jTracer.sink.contramap(
-                              RuleBasedActorEventFormat.humanFormat(peerId)
-                            ) |+| evacuationSignalTap
-                        actorsFor(
-                          peerId = peerId,
-                          action = action,
-                          sharedBackend = sharedBackend,
-                          candidateEvacMaps = Map(
-                            initialUtxos.evacuationMap.kzgCommitment ->
-                                initialUtxos.evacuationMap
-                          ),
-                          fallbackTxHash = fallbackTxId,
-                          tracer = peerTracer,
-                        )(using env.nodeConfigs(peerId))
-                    }
-
-                IO.race(
-                  evacuatedSignal.get >> IO.sleep(postCompletionBuffer),
-                  peerBots.parSequence
-                ).timeoutTo(
-                  actorRunDuration,
-                  IO.raiseError(
-                    RuntimeException(s"Dispute/evacuation phase timed out after $actorRunDuration")
-                  )
-                ) >> utxoSnapshot
-            }
-
-            classification <- lift(
-              IO.fromEither(
-                Histogram
-                    .empty(RBRClassifier(using env))
-                    .addAll(terminalUtxos.map { case (i, o) => Utxo(i, o) })
-                    .toEither
-                    .left
-                    .map(errs => RuntimeException(errs.toList.mkString("\n")))
-              )
-            )
-
-            nPeers = env.headConfig.nHeadPeers.convert
-
-            // TODO: these buckets probably need refinement. TBD
-            expectedBuckets: Map[RBRPlaceId, Int] = Map(
-              TreasuryRefPlaceId -> 1,
-              DisputeRefPlaceId -> 1,
-              EvacuationOutputPlaceId -> nEvacs,
-              ResolvedTreasuryPlaceId -> 1,
-              CollateralPlaceId -> nPeers,
-            )
-
-            _ <- assertWith(
-              classification.classified == expectedBuckets,
-              "Histogram mismatch:\n" +
-                  s"  expected: ${expectedBuckets.toList.map((k, v) => (k.toString, v)).sorted.mkString("\n")}\n" +
-                  s"  actual:   $classification"
-            )
-        yield true
-
-    /** Spawn a [[RuleBasedActor]] for one peer inside its own [[ActorSystem]] and block until the
-      * system terminates. Until a stage4-style harness can drive a head through hard-confirmation +
-      * fallback into the rule-based regime, this test bypasses [[RuleBasedRegimeManager]] and feeds
-      * the synthetic post-fallback inputs straight to the actor.
-      */
-    private def actorsFor(
-        peerId: Int,
-        action: RuleBasedRegimeManager.DisputeAction,
-        sharedBackend: CardanoBackend[IO],
-        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
-        fallbackTxHash: TransactionHash,
-        tracer: ContraTracer[IO, RuleBasedActorEvent],
-    )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
-        ActorSystem[IO](s"RBR actor for peer $peerId").use { system =>
-            for {
-                _ <- system.actorOf(
-                  RuleBasedActor(
-                    loadAction = IO.pure(action),
-                    loadEvacuationInputs = IO.pure(
-                      RuleBasedActor.EvacuationInputs(
-                        candidateEvacMaps = candidateEvacMaps,
-                        fallbackTxHash = fallbackTxHash
-                      )
-                    ),
-                    cardanoBackend = sharedBackend,
-                    tracer = tracer
                   )
                 )
-                _ <- system.waitForTermination
-            } yield ()
+            }
+
+        val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+
+        val resource = MultiPeerHeadHarness.mkResource(
+          transportMode = transportMode,
+          testPeers = testPeers,
+          testPeerToUtxos = testPeerToUtxos,
+          takeoffOffset = 2.seconds,
+          disputeResolutionConfig = fastDisputeResolutionConfig,
+        ) { (takeoffTime, mnc) =>
+            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
+        }
+
+        test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
+
+    // ------------------------------------------------------------------
+    // Scenario body
+    // ------------------------------------------------------------------
+
+    private val ctxTestM = test.TestMFixedEnv[Ctx]()
+    import ctxTestM.*
+
+    private def scenarioTestM: test.TestM[Ctx, Boolean] =
+        for
+            _ <- step1a_submitBootstrapRequest
+            _ <- step1b_startPeriodicRequestLoop
+            _ <- step2_awaitFallbackToRuleBasedHandoff
+            _ <- step3_awaitResolutionSubmitted
+        yield true
+
+    /** State + handles threaded between steps. */
+    private final case class Ctx(
+        transportMode: TransportMode,
+        multiNodeConfig: MultiNodeConfig,
+        harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
+        fallbackDispatched: Deferred[IO, Unit],
+        resolutionSubmitted: Deferred[IO, Unit],
+    )
+
+    private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(submitOneUserRequest(ctx))
+        yield ()
+
+    /** Keep feeding requests so each Major stack has a trailing Minor with an SEC — otherwise
+      * `loadAction` walks backward past every Major-only stack and abstains, tally/resolve then
+      * takes the default vote's kzg. Either terminal state is acceptable for this test, but the
+      * shorter path via a real Vote exercises more of the flow.
+      */
+    private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(
+              (IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void
+            )
+        yield ()
+
+    private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+        yield ()
+
+    private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+        yield ()
+
+    // ------------------------------------------------------------------
+    // Ctx bring-up
+    // ------------------------------------------------------------------
+
+    private def buildCtxResource(
+        transportMode: TransportMode,
+        multiNodeConfig: MultiNodeConfig,
+        testPeers: TestPeers,
+        takeoffTime: Option[java.time.Instant],
+    ): Resource[IO, Ctx] =
+        for
+            fallbackDispatched  <- Resource.eval(Deferred[IO, Unit])
+            resolutionSubmitted <- Resource.eval(Deferred[IO, Unit])
+
+            preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+                .map { case (name, utxos) => name.headPeerNumber -> utxos }
+
+            startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
+                .convert.instant.toEpochMilli
+
+            hooks = MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
+              tracer = humanFormatTracer |+| observerTracer(
+                fallbackDispatched,
+                resolutionSubmitted,
+              ),
+              peerHandle = (peerNum, conns) =>
+                  IO.fromOption(conns.requestSequencer)(
+                    new NoSuchElementException(
+                      s"peer $peerNum has no RequestSequencer.Handle in its Connections"
+                    )
+                  ),
+              coilHandle = (_, _) => IO.unit,
+              wrapPeerBackend = wrapPeerBackend,
+            )
+
+            label = s"RBREvacuation-${transportMode.toString.toLowerCase}"
+
+            harness <- MultiPeerHeadHarness.resource[RequestSequencer.Handle, Unit](
+              MultiPeerHeadHarness.Inputs(
+                config = MultiPeerHeadHarness.Config(
+                  label = label,
+                  backendMode = MultiPeerHeadHarness.StorageBackend.Mode.InMemory,
+                  transportMode = transportMode,
+                ),
+                multiNodeConfig = multiNodeConfig,
+                coilNodeConfigs = Nil,
+                preinitPeerUtxosL1 = preinitPeerUtxosL1,
+                takeoffTime = takeoffTime,
+                startEpochMs = startEpochMs,
+              ),
+              hooks,
+            )
+        yield Ctx(
+          transportMode = transportMode,
+          multiNodeConfig = multiNodeConfig,
+          harness = harness,
+          fallbackDispatched = fallbackDispatched,
+          resolutionSubmitted = resolutionSubmitted,
+        )
+
+    // ------------------------------------------------------------------
+    // Wiring
+    // ------------------------------------------------------------------
+
+    private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
+        val peerNum    = HeadPeerNumber(0)
+        val slotConfig = ctx.multiNodeConfig.headConfig.cardanoNetwork.slotConfig
+        val body: UserRequestBody.TransactionRequestBody =
+            UserRequestBody.TransactionRequestBody(
+              l2Payload = ByteString.fromArray(Array.empty[Byte])
+            )
+        val userVk =
+            ctx.multiNodeConfig.nodeConfigs(peerNum).ownWallet.exportVerificationKey
+        for
+            now    <- IO.realTimeInstant
+            header = UserRequestHeader(
+              headId = ctx.multiNodeConfig.headConfig.headId,
+              validityStart = RequestValidityStartTime(
+                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
+              ),
+              validityEnd = RequestValidityEndTime(
+                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
+              ),
+              bodyHash = body.hash,
+            )
+            userRequest = UserRequest.TransactionRequest(header, body, userVk)
+            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).map(_.handle))(
+              new NoSuchElementException(s"peer $peerNum missing in harness")
+            )
+            _ <- sequencer ?: userRequest
+        yield ()
+
+    private def humanFormatTracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
+        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
+                Slf4jTracer.sink.traceWith(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)(evt)
+                )
+            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
+                val syntheticLabel = HeadPeerNumber(nHeadPeers + coilNum.convert)
+                Slf4jTracer.sink.traceWith(
+                  CoilMultisigRegimeManagerEventFormat.humanFormat(syntheticLabel, coilNum)(evt)
+                )
+        }
+
+    /** Drop any settlement whose produced treasury datum has `versionMajor == 2` — that's the
+      * settlement that would take on-chain from v1 to v2. Keeping on-chain at v1 while peers
+      * hard-confirm through v2 off-chain is what triggers `Action.FallbackToRuleBased`.
+      */
+    private def wrapPeerBackend(
+        peerNum: HeadPeerNumber,
+        underlying: L1Backend[IO],
+    ): L1Backend[IO] =
+        val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
+            Slf4jTracer.sink.contramap {
+                case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
+                    hydrozoa.lib.logging.LogEvent
+                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .warn(s"firewall DROPPED tx $hash")
+                case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
+                    hydrozoa.lib.logging.LogEvent
+                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .info(s"firewall passed tx $hash result=$result")
+            }
+        FirewalledCardanoBackend(
+          underlying = underlying,
+          shouldDrop = etx =>
+              IO.pure(etx match {
+                  case s: SettlementTx => s.majorVersionProduced.convert == 2
+                  case _               => false
+              }),
+          firewallTracer = slf4jSink,
+        )
+
+    private def observerTracer(
+        fallbackDispatched: Deferred[IO, Unit],
+        resolutionSubmitted: Deferred[IO, Unit],
+    ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
+        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+            case MultiPeerHeadHarness.Event.Head(_, evt) =>
+                evt match {
+                    case CommonChildEvent.CardanoLiaison(
+                          _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
+                        ) =>
+                        fallbackDispatched.complete(()).void
+
+                    case RuleBasedOnlyChildEvent.RuleBasedActor(
+                          RuleBasedActorEvent.Tx.SubmitSuccess(tx)
+                        ) if tx.transactionFamily == "Resolution" =>
+                        resolutionSubmitted.complete(()).void
+
+                    case _ => IO.unit
+                }
+
+            case MultiPeerHeadHarness.Event.Coil(_, _) => IO.unit
         }

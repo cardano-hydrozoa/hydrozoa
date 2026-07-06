@@ -605,6 +605,17 @@ object HeadConfig {
               */
             override def headMultisigScript: HeadMultisigScript =
                 HeadMultisigScript(this, coilPeerVKeys, coilQuorum)
+
+            /** The single-quantity treasury beacon token, under this head's multisig policy with
+              * the CIP-67 treasury asset name derived from the seed utxo. Tests build treasury utxo
+              * values as `evacMap.totalValue + treasuryToken`.
+              */
+            final def treasuryToken: scalus.cardano.ledger.Value =
+                scalus.cardano.ledger.Value.asset(
+                  headMultisigScript.policyId,
+                  headTokenNames.treasuryTokenName,
+                  1
+                )
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =
