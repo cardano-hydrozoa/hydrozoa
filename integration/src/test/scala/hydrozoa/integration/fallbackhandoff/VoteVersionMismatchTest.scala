@@ -55,10 +55,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // ------------------------------------------------------------------
     // Test properties
     // ------------------------------------------------------------------
-
-    // Direct (TestControl) property is not registered yet: cats-actors' `setReceiveTimeout` uses
-    // the real wall clock (see EvacuationPropertyTest doc) so peers can't tick under TestControl
-    // without an explicit tickAll driver. Skip until we have that story.
+    
     val _ = property("ws: RRM votes at latest hard-confirmed major even when on-chain lags") =
         testProperty(TransportMode.WebSocket)
 
@@ -66,10 +63,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
         val coilWallets = testPeers.coilWallets
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
-        // Pin the head-bootstrap's genesis UTxOs to the SAME map the harness seeds into the mock
-        // backend below (`preinitPeerUtxosL1`). The default BottomUp generator randomises them
-        // independently, so the init tx tries to spend inputs the mock doesn't have → invalid tx
-        // → InitWindowElapsed. Stage4 uses the same trick (Suite.scala:847-853).
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
         val resource = MultiPeerHeadHarness.mkResource(
@@ -93,12 +86,45 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
     private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
-            _ <- step1a_submitBootstrapRequest
-            _ <- step1b_startPeriodicRequestLoop
-            _ <- step2_awaitBothPeersHardConfirmMajor2
-            _ <- step3_awaitFallbackToRuleBasedHandoff
-            _ <- step4_assertVoteAccepted
-            _ <- if nCoilPeers > 0 then step5_assertCoilRatchetSubmitted else pure(())
+            ctx <- ask
+
+            // 1a. Submit one minimal `TransactionRequest` to peer 0's `RequestSequencer`. Once block 1
+            // lands via this request, the `forcedMajorBlockWakeupTime` deadman on each header
+            // takes over and force-completes empty major blocks until we reach major 2.
+            _ <- lift(submitOneUserRequest(ctx))
+
+            // 1b. Background fiber submitting requests at a slow cadence for minor block production.
+            _ <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void)
+
+            // 2. Both head peers hard-confirm through major-2 off-chain.
+            _ <- lift(ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout))
+
+            // 3. CL notices the on-chain treasury is stale and dispatches
+            // `Action.FallbackToRuleBased`; HMRM auto-spawns RRM/RBA.
+            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+
+            // 4. RBA's `loadAction` walks backward through hard-confirmed stacks and picks the
+            // SEC matching the on-chain treasury's `versionMajor` (major-1 here). Assert that:
+            // - the actor attempted a Vote (proves handoff + persistence load)
+            // - the Vote submitted OK (proves the version match worked)
+            // - `sutErrors` does not contain `"versionMajor field must match"` 
+            _    <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
+            _    <- lift(ctx.voteSubmittedOk.get.timeout(scenarioTimeout))
+            errs <- lift(ctx.harness.sutErrors.get)
+            _ <- assertWith(
+              !errs.exists(_.contains("versionMajor field must match")),
+              "regression: sutErrors contains 'versionMajor field must match' — RBA's " +
+                  "loadAction is voting with an SEC ahead of the on-chain treasury version",
+            )
+
+            // 5. Coil peer runs the same RBA as head peers (spawned by
+            // `CoilMultisigRegimeManager.onHandoffToRuleBased`) but its `Dispute.handle` routes
+            // into `handleCoil`: it picks an Open-phase ballot box and submits a
+            // `RatchetVoteTx`. Skipped when `nCoilPeers == 0`.
+            _ <-
+                if nCoilPeers > 0
+                then lift(ctx.coilRatchetSubmitted.get.timeout(scenarioTimeout))
+                else pure(())
         yield true
 
     // ------------------------------------------------------------------
@@ -130,85 +156,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     )
 
     // ------------------------------------------------------------------
-    // Steps
-    // ------------------------------------------------------------------
-
-    /** Submit one minimal `TransactionRequest` to peer 0's `RequestSequencer`. The head has no
-      * autonomous block-progress driver: `BlockWeaver.Leader.AwaitingConfirmation` waits for either
-      * a user request or a soft-confirmation for the previous block, and the initial block never
-      * gets soft-confirmed (it lives in config). Once block 1 lands via this single request, the
-      * `forcedMajorBlockWakeupTime` deadman switch on each block header takes over and force-
-      * completes empty major blocks until we reach major 2.
-      */
-    private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _   <- lift(submitOneUserRequest(ctx))
-        yield ()
-
-    /** Start a background fiber that keeps submitting `TransactionRequest`s at a slow cadence
-      * (10s) for the rest of the scenario. Deadman-only progression yields all-Major partitions
-      * (each stack = one Major, no SEC → RRM abstains). Feeding requests periodically fills the
-      * `blockCanStayMinor` window after each Major with an extra Minor at the same major version,
-      * so the LAST hard-confirmed stack's Major partition carries an SEC and `loadAction` returns
-      * `Vote`. The fiber leaks harmlessly on scenario completion — the harness Resource cancels
-      * the actor system, which terminates the RequestSequencer that would receive further sends.
-      */
-    private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _ <- lift(
-              (IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void
-            )
-        yield ()
-
-    private def step2_awaitBothPeersHardConfirmMajor2: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _   <- lift(ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout))
-        yield ()
-
-    private def step3_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
-        yield ()
-
-    /** RBA's `loadAction` walks backward through hard-confirmed stacks and picks the SEC
-      * matching the on-chain treasury's `versionMajor` (major-1 here), so the built Vote
-      * passes the Plutus dispute-script check and submits successfully. Assert that the actor
-      * attempted a Vote (proves handoff + persistence load), that the Vote submitted OK
-      * (proves the version match worked), and that `sutErrors` does not contain
-      * `"versionMajor field must match"` — presence would signal a regression where
-      * `loadAction` picked the newest SEC instead of the version-matching one.
-      */
-    private def step4_assertVoteAccepted: test.TestM[Ctx, Unit] =
-        for
-            ctx  <- ask
-            _    <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
-            _    <- lift(ctx.voteSubmittedOk.get.timeout(scenarioTimeout))
-            errs <- lift(ctx.harness.sutErrors.get)
-            _ <- assertWith(
-              !errs.exists(_.contains("versionMajor field must match")),
-              "regression: sutErrors contains 'versionMajor field must match' — RBA's " +
-                  "loadAction is voting with an SEC ahead of the on-chain treasury version",
-            )
-        yield ()
-
-    /** Coil peer runs the same [[hydrozoa.rulebased.RuleBasedActor]] as head peers (spawned by
-      * [[hydrozoa.multisig.CoilMultisigRegimeManager.onHandoffToRuleBased]]) but its
-      * `Dispute.handle` routes into `handleCoil`: it picks an Open-phase ballot box and submits
-      * a [[hydrozoa.rulebased.ledger.l1.tx.RatchetVoteTx]]. Assert one such submit lands within
-      * the scenario budget.
-      */
-    private def step5_assertCoilRatchetSubmitted: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _   <- lift(ctx.coilRatchetSubmitted.get.timeout(scenarioTimeout))
-        yield ()
-
-    // ------------------------------------------------------------------
-    // Ctx bring-up (step1_setup as a Resource[IO, Ctx])
+    // Ctx bring-up (Resource[IO, Ctx])
     // ------------------------------------------------------------------
 
     /** Allocate observability state, compute pre-init UTxOs from `testPeers`, stand up the
