@@ -101,27 +101,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
         val coilWallets = testPeers.coilWallets
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
-        // Under WS (real wall-clock) mode we MUST anchor the initial block's creation-end-time to
-        // `takeoffTime` — otherwise the default generator picks a random Jan-1-2026 + 100-day
-        // offset that has already elapsed relative to `Instant.now()`, so the init tx validity
-        // window closes before CL ever wakes up. Stage4 does the same trick.
-        val takeoffTime: Option[java.time.Instant] =
-            if transportMode.useTestControl then None
-                // TODO: This should use IO.realtimeInstant
-            else Some(java.time.Instant.now().plusSeconds(2))
-        val generateHeadStartTime: test.GenWithTestPeers[BlockCreationEndTime] =
-            ReaderT { tp =>
-                takeoffTime match {
-                    case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                    case None    =>
-                        val anchorTime = 1767225600L // Jan 1 2026, GMT
-                        val range      = 86_400 * 100L
-                        for offset <- Gen.choose(0L, range)
-                        yield BlockCreationEndTime(
-                          java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
-                        )
-                }
-            }
         // Fast timing knobs stolen from stage4/Suite.scala so blocks progress within our budget:
         // halve the CL polling period and shorten the two rate-limiter periods (see
         // docs/rate-limiter.md).
@@ -150,62 +129,83 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         // independently, so the init tx tries to spend inputs the mock doesn't have → invalid tx
         // → InitWindowElapsed. Stage4 uses the same trick (Suite.scala:847-853).
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-        val genMultiNodeConfig =
-            MultiNodeConfig
-                .generateWith(testPeers)(
-                  generateHeadConfig = generateHeadConfig(
-                    genHeadConfigBootstrap = generateHeadConfigBootstrap(
-                      generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming)
-                          .map(_.copy(coilQuorum = 0)),
-                      generateInitializationParameters = InitParamsType.TopDown(
-                        InitializationParametersGenTopDown.GenWithDeps(
-                          generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
-                              Gen.const(
-                                testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
-                              )
-                          )
-                        )
-                      ),
-                      coilPeers = coilPeersConfig,
-                    ),
-                    generateInitialBlock = bootstrap =>
-                        generateInitialBlock(
-                          genHeadConfigBootstrap =
-                              ReaderT.pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](
-                                bootstrap
-                              ),
-                          generateBlockCreationEndTime = generateHeadStartTime,
-                        ),
-                  ),
-                  // Default evacuationBotPollingPeriod is 1-10 MINUTES — RuleBasedActor's Tick
-                  // would then never fire inside our budget after handoff. cats-actors pings the
-                  // receive-timeout at 1 Hz anyway, so pin the config end low (100ms).
-                  generateNodeOperationEvacuationConfig = w =>
-                      Gen.const(
-                        hydrozoa.config.node.operation.evacuation
-                            .NodeOperationEvacuationConfig(
-                              evacuationBotPollingPeriod = 100.millis,
-                              ruleBasedWallet = w,
-                            )
-                      ),
-                  generateNodeOperationMultisigConfig = hc =>
-                      hydrozoa.config.node.operation.multisig
-                          .generateNodeOperationMultisigConfig(
-                            maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
-                            rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                              softBlockMinPeriod = 500.millis,
-                              hardStackMinPeriod = 250.millis,
-                            ),
-                          )
-                )
-                .label("MultiNodeConfig")
 
-        val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] =
-            org.scalacheck.PropertyM
-                .pick[IO, MultiNodeConfig](genMultiNodeConfig)
-                .map(mnc =>
-                    buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
-                )
+        // Under WS (real wall-clock) mode we MUST anchor the initial block's creation-end-time
+        // to `takeoffTime` — otherwise the default generator picks a random Jan-1-2026 +
+        // 100-day offset that has already elapsed relative to real time, so the init tx
+        // validity window closes before CL ever wakes up. Stage4 does the same trick.
+        // Materialised via `IO.realTimeInstant` inside the PropertyM chain so nothing reads
+        // the wall clock at property-construction time.
+        val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] = for {
+            takeoffTime <- org.scalacheck.PropertyM.run(
+              if transportMode.useTestControl then IO.pure(None)
+              else IO.realTimeInstant.map(t => Some(t.plusSeconds(2)))
+            )
+            mnc <- org.scalacheck.PropertyM.pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generateWith(testPeers)(
+                    generateHeadConfig = generateHeadConfig(
+                      genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                        generateHeadParams = generateHeadParameters(generateTxTiming = fastTxTiming)
+                            .map(_.copy(coilQuorum = 0)),
+                        generateInitializationParameters = InitParamsType.TopDown(
+                          InitializationParametersGenTopDown.GenWithDeps(
+                            generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
+                                Gen.const(
+                                  testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
+                                )
+                            )
+                          )
+                        ),
+                        coilPeers = coilPeersConfig,
+                      ),
+                      generateInitialBlock = bootstrap =>
+                          generateInitialBlock(
+                            genHeadConfigBootstrap = ReaderT
+                                .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](
+                                  bootstrap
+                                ),
+                            generateBlockCreationEndTime = ReaderT { tp =>
+                                takeoffTime match {
+                                    case Some(t) =>
+                                        Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                                    case None =>
+                                        val anchorTime = 1767225600L // Jan 1 2026, GMT
+                                        val range      = 86_400 * 100L
+                                        for offset <- Gen.choose(0L, range)
+                                        yield BlockCreationEndTime(
+                                          java.time.Instant
+                                              .ofEpochSecond(anchorTime + offset)
+                                              .quantize(tp.slotConfig)
+                                        )
+                                }
+                            },
+                          ),
+                    ),
+                    // Default evacuationBotPollingPeriod is 1-10 MINUTES — RuleBasedActor's Tick
+                    // would then never fire inside our budget after handoff. cats-actors pings
+                    // the receive-timeout at 1 Hz anyway, so pin the config end low (100ms).
+                    generateNodeOperationEvacuationConfig = w =>
+                        Gen.const(
+                          hydrozoa.config.node.operation.evacuation
+                              .NodeOperationEvacuationConfig(
+                                evacuationBotPollingPeriod = 100.millis,
+                                ruleBasedWallet = w,
+                              )
+                        ),
+                    generateNodeOperationMultisigConfig = hc =>
+                        hydrozoa.config.node.operation.multisig
+                            .generateNodeOperationMultisigConfig(
+                              maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                              rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
+                                softBlockMinPeriod = 500.millis,
+                                hardStackMinPeriod = 250.millis,
+                              ),
+                            )
+                  )
+                  .label("MultiNodeConfig")
+            )
+        } yield buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
 
