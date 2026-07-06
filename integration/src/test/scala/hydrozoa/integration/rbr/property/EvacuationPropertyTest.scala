@@ -31,9 +31,8 @@ import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers, given}
 
-/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — replaces the previous
-  * version which spawned [[RuleBasedActor]]s directly with mocked loader lambdas (no longer
-  * possible after the persistence-backed loader migration).
+/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
+  * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
   *
   * Scenario:
   *   1. 2-peer head; per-peer [[FirewalledCardanoBackend]] drops any [[SettlementTx]] with
@@ -41,15 +40,15 @@ import test.{SeedPhrase, TestPeers, given}
   *   2. Bootstrap L2 request + periodic requests give each Major stack a trailing Minor with SEC.
   *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, HMRM spawns
   *      [[RuleBasedRegimeManager]] which spawns [[RuleBasedActor]].
-  *   4. RBA's persistence-backed `loadAction` walks backward, finds SEC-v1 matching the on-chain
-  *      treasury, and submits a Vote that Plutus accepts (guarded by the version-major fix).
+  *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the
+  *      on-chain treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
   *   5. Voting deadline elapses → TallyTx → ResolutionTx.
   *   6. Test asserts a ResolutionTx submitted successfully (i.e. the dispute resolved).
   *
-  * Full evacuation (`RuleBasedActorEvent.Evacuation.NoMore`) is NOT asserted: the EvacuationTx
+  * Full evacuation (`RuleBasedActorEvent.Evacuation.NoMore`) is not asserted: the EvacuationTx
   * builder trips the treasury validator's `Trusted setup in the treasury is not big enough`
-  * check because [[FallbackTx.scala]] currently sets `setupG2 = SList.empty` (marked TODO).
-  * Wiring the KZG G2 trusted setup through fallback construction is a separate follow-up.
+  * check because [[FallbackTx.scala]] sets `setupG2 = SList.empty` (TODO there). Wiring the
+  * KZG G2 trusted setup through fallback construction is separate follow-up work.
   */
 object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
