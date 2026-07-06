@@ -32,10 +32,18 @@ object RuleBasedActorEvent:
     object Dispute:
         case object Querying extends RuleBasedActorEvent
         case object Parsing extends RuleBasedActorEvent
-        case object ParsedCastVote extends RuleBasedActorEvent
-        case object ParsedTally extends RuleBasedActorEvent
-        case object ParsedResolve extends RuleBasedActorEvent
-        case object ParsedEmptyVotes extends RuleBasedActorEvent
+        case object ParsingCastVote extends RuleBasedActorEvent
+        case object ParsingTally extends RuleBasedActorEvent
+        case object ParsingResolve extends RuleBasedActorEvent
+        case object ParsingEmptyVotes extends RuleBasedActorEvent
+
+        /** Coil-peer classifier outcomes for the coil ratchet path (see
+          * [[RuleBasedActor.Dispute.handleCoil]]).
+          */
+        object Coil:
+            case object ParsingRatchet extends RuleBasedActorEvent
+            case object AlreadyAtTarget extends RuleBasedActorEvent
+            case object NoRatchetTarget extends RuleBasedActorEvent
 
     object Tx:
         final case class Building(family: String) extends RuleBasedActorEvent

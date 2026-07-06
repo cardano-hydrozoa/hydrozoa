@@ -10,7 +10,7 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.state.VoteState
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{Abstain, AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus, given}
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.ledger.DatumOption.Inline
@@ -183,4 +183,29 @@ extension (uncastVote: BallotBoxOutput[AwaitingVote]) {
 
     def voterAddrKeyHash: AddrKeyHash =
         AddrKeyHash(uncastVote.status.peer.hash)
+}
+
+/** Raised when a ratchet would violate the on-chain [[Voted.versionMinor]] monotonicity check
+  * (`VoteRatchetNotMonotonic`). Abstain is treated as `prevVersionMinor = 0`.
+  */
+final case class RatchetNotMonotonic(prevVersionMinor: BigInt, proposedVersionMinor: BigInt)
+
+extension (openBox: BallotBoxOutput[Voted | Abstain.type]) {
+
+    /** Ratchet an Open-phase box forward with `(newKzg, newVersionMinor)`. Returns Left if
+      * `newVersionMinor` doesn't strictly exceed the box's current versionMinor (Voted) or 0
+      * (Abstain) — that is the only way for the caller to obtain a `BallotBoxOutput[Voted]` from an
+      * Open-phase one, so the type prevents an unchecked ratchet.
+      */
+    def ratchet(
+        newKzg: KzgCommitment,
+        newVersionMinor: BigInt
+    ): Either[RatchetNotMonotonic, BallotBoxOutput[Voted]] = {
+        val prev: BigInt = openBox.status match {
+            case Voted(_, v) => v
+            case Abstain     => BigInt(0)
+        }
+        if newVersionMinor > prev then Right(openBox.copy(status = Voted(newKzg, newVersionMinor)))
+        else Left(RatchetNotMonotonic(prev, newVersionMinor))
+    }
 }

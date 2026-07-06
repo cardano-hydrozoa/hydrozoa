@@ -33,7 +33,7 @@ import hydrozoa.rulebased.RuleBasedActor.{Error, *}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
+import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{Abstain, AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, secFromData}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
@@ -382,10 +382,23 @@ final case class RuleBasedActor(
 
     private object Dispute {
 
-        /** Dispute branch — treasury is Unresolved. Queries the dispute address, gets collateral,
-          * dispatches to one of [[castVote]] / [[tally]] / [[resolve]].
+        /** Dispute branch — treasury is Unresolved. Head peers cast their reserved AwaitingVote
+          * box; coil peers ratchet a public (Voted/Abstain) box forward with a multisigned SEC (see
+          * [[handleCoil]]). Both peer types fall through to Tally / Resolve / EmptyVotes
+          * classification when their peer-specific vote path is inapplicable.
           */
         def handle(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): EitherT[IO, Error.RecoverableErrors, Unit] =
+            config.ownPeerId match {
+                case PeerId.Head(_) => handleHead(treasuryUtxo)
+                case PeerId.Coil(_) => handleCoil(treasuryUtxo)
+            }
+
+        /** Head-peer dispute flow. Classifies the dispute address's utxos and dispatches to
+          * [[castVote]] / [[tally]] / [[resolve]].
+          */
+        private def handleHead(
             treasuryUtxo: RuleBasedTreasuryUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
@@ -404,6 +417,129 @@ final case class RuleBasedActor(
                         raiseError(Error.TreasuryUnresolvedButNoVotes)
                 }
             } yield ()
+
+        /** Coil-peer dispute flow. Loads the target SEC upfront (same SEC-selection logic as head
+          * peers), then decides between:
+          *   - if any Open-phase box is already at `(sec.commitment, sec.versionMinor)`, trace +
+          *     noop (nothing to add this tick);
+          *   - otherwise pick the lowest-versionMinor Open box below the target and submit a
+          *     [[RatchetVoteTx]];
+          *   - if no SEC (Abstain) or no ratchet-able box, fall through to residual
+          *     Tally/Resolve/EmptyVotes classification so the coil peer still helps finalize.
+          */
+        private def handleCoil(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): EitherT[IO, Error.RecoverableErrors, Unit] =
+            for {
+                versionMajor <- extractTreasuryVersionMajor(treasuryUtxo)
+                action <- EitherT.liftF[IO, Error.RecoverableErrors, DisputeAction](
+                  loadAction(versionMajor)
+                )
+                parsed <- parseDisputeUtxos
+                collateralUtxo <- getCollateral
+                _ <- action match {
+                    case v: DisputeAction.Vote =>
+                        val alreadyAtTarget = parsed.exists { bb =>
+                            bb.ballotBoxOutput.status match {
+                                case Voted(c, m) =>
+                                    c == v.sec.commitment && m == v.sec.versionMinor
+                                case _ => false
+                            }
+                        }
+                        if alreadyAtTarget then
+                            traceRight(RuleBasedActorEvent.Dispute.Coil.AlreadyAtTarget)
+                        else
+                            pickRatchetTarget(parsed, v.sec.versionMinor) match {
+                                case Some(openBox) =>
+                                    traceRight(RuleBasedActorEvent.Dispute.Coil.ParsingRatchet) >>
+                                        buildAndSubmit(
+                                          result = RatchetVoteTx
+                                              .Build(
+                                                openBallotBox = openBox,
+                                                treasuryUtxo = treasuryUtxo,
+                                                collateralUtxo = collateralUtxo,
+                                                sec = v.sec,
+                                                signatures = v.signatures,
+                                                coilSignatures = v.coilSignatures
+                                              )
+                                              .result,
+                                          wrapError = Error.BuildError.RatchetVote(_)
+                                        )
+                                case None =>
+                                    traceRight(
+                                      RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget
+                                    ) >> dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
+                            }
+                    case DisputeAction.Abstain =>
+                        traceRight(RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget) >>
+                            dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
+                }
+            } yield ()
+
+        /** Pick the lowest-versionMinor Open-phase box strictly below `targetVersionMinor`. Abstain
+          * is treated as `versionMinor = 0`. Deterministic ordering so multiple coil peers converge
+          * on the same target instead of racing to distinct boxes.
+          */
+        private def pickRatchetTarget(
+            parsed: List[BallotBox[VoteStatus]],
+            targetVersionMinor: BigInt
+        ): Option[BallotBox[Voted | Abstain.type]] = {
+            val openBoxes: List[(BallotBox[Voted | Abstain.type], BigInt)] = parsed.collect {
+                case bb if bb.ballotBoxOutput.status.isInstanceOf[Voted] =>
+                    val v = bb.ballotBoxOutput.status.asInstanceOf[Voted]
+                    (bb.asInstanceOf[BallotBox[Voted | Abstain.type]], v.versionMinor)
+                case bb if bb.ballotBoxOutput.status == Abstain =>
+                    (bb.asInstanceOf[BallotBox[Voted | Abstain.type]], BigInt(0))
+            }
+            openBoxes.filter(_._2 < targetVersionMinor).sortBy(_._2).headOption.map(_._1)
+        }
+
+        /** Residual dispatch shared by head fallthrough (own box absent) and coil fallthrough (no
+          * ratchet target or no SEC): Tally / Resolve / EmptyVotes.
+          */
+        private def dispatchResidual(
+            parsed: List[BallotBox[VoteStatus]],
+            treasuryUtxo: RuleBasedTreasuryUtxo,
+            collateralUtxo: CollateralUtxo
+        ): EitherT[IO, Error.RecoverableErrors, Unit] =
+            parsed match {
+                case Nil =>
+                    traceRight(RuleBasedActorEvent.Dispute.ParsingEmptyVotes) >>
+                        raiseError(Error.TreasuryUnresolvedButNoVotes)
+                case x :: Nil =>
+                    x.ballotBoxOutput.status match {
+                        case _: Voted =>
+                            traceRight(RuleBasedActorEvent.Dispute.ParsingResolve) >>
+                                resolve(
+                                  x.asInstanceOf[BallotBox[Voted]],
+                                  treasuryUtxo,
+                                  collateralUtxo
+                                )
+                        case _ => raiseError(Error.NonVotedUtxoAtResolve(x))
+                    }
+                case xs =>
+                    traceRight(RuleBasedActorEvent.Dispute.ParsingTally) >>
+                        tally(xs, treasuryUtxo, collateralUtxo)
+            }
+
+        /** Parse the treasury's `versionMajor` from an Unresolved datum. `Dispute.handle` is only
+          * invoked when the treasury is Unresolved (see [[handleTick]]), so the Resolved branch is
+          * unreachable — surfaced as an [[IllegalStateException]] rather than silently swallowed so
+          * any future dispatcher regression is loud.
+          */
+        private def extractTreasuryVersionMajor(
+            treasuryUtxo: RuleBasedTreasuryUtxo
+        ): EitherT[IO, Error.RecoverableErrors, BigInt] =
+            treasuryUtxo.treasuryOutput.datum match {
+                case RuleBasedTreasuryDatum.Unresolved(_, v, _) => pure(v)
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    raiseError(
+                      new IllegalStateException(
+                        "Dispute.handle reached with a Resolved treasury datum; " +
+                            "handleTick dispatches Resolved to Evacuation.handle"
+                      )
+                    )
+            }
 
         /** Find an ada-only collateral utxo at the own peer's address. */
         def getCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
@@ -759,8 +895,11 @@ final case class RuleBasedActor(
     /** Query the dispute address utxos, parse each into a [[BallotBox]], and classify the set into
       * the appropriate [[DisputeUtxos]] case. Traces each phase (Querying / Parsing / Parsed*).
       */
-    private def getDisputeUtxos: EitherT[IO, Error.RecoverableErrors, DisputeUtxos] = {
-        val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
+    /** Query and parse the dispute address's utxos into a flat list of `BallotBox[VoteStatus]`,
+      * emitting the shared `Dispute.Parsing` trace. Head and coil paths classify on top.
+      */
+    private def parseDisputeUtxos
+        : EitherT[IO, Error.RecoverableErrors, List[BallotBox[VoteStatus]]] =
         for {
             utxos <- Backend.utxosAtDispute
             _ <- traceRight(RuleBasedActorEvent.Dispute.Parsing)
@@ -768,6 +907,12 @@ final case class RuleBasedActor(
             parsed <- EitherT.liftF[IO, Error.RecoverableErrors, List[BallotBox[VoteStatus]]](
               IO.fromEither(utxos.toList.traverse((i, o) => BallotBox.parse(Utxo(i, o))))
             )
+        } yield parsed
+
+    private def getDisputeUtxos: EitherT[IO, Error.RecoverableErrors, DisputeUtxos] = {
+        val ownPkhHash = config.ownWallet.exportVerificationKey.pubKeyHash.hash
+        for {
+            parsed <- parseDisputeUtxos
             ownAwaiting = parsed.collectFirst {
                 case v if v.ballotBoxOutput.status match {
                         case AwaitingVote(peer) => peer.hash == ownPkhHash
@@ -777,17 +922,17 @@ final case class RuleBasedActor(
             }
             result <- ownAwaiting match {
                 case Some(own) =>
-                    traceRight(RuleBasedActorEvent.Dispute.ParsedCastVote)
+                    traceRight(RuleBasedActorEvent.Dispute.ParsingCastVote)
                         .as(DisputeUtxos.CastVote(own): DisputeUtxos)
                 case None =>
                     parsed match {
                         case Nil =>
-                            traceRight(RuleBasedActorEvent.Dispute.ParsedEmptyVotes)
+                            traceRight(RuleBasedActorEvent.Dispute.ParsingEmptyVotes)
                                 .as(DisputeUtxos.EmptyVotes: DisputeUtxos)
                         case x :: Nil =>
                             x.ballotBoxOutput.status match {
                                 case _: Voted =>
-                                    traceRight(RuleBasedActorEvent.Dispute.ParsedResolve)
+                                    traceRight(RuleBasedActorEvent.Dispute.ParsingResolve)
                                         .as(
                                           DisputeUtxos.Resolve(
                                             x.asInstanceOf[BallotBox[Voted]]
@@ -796,7 +941,7 @@ final case class RuleBasedActor(
                                 case _ => raiseError(Error.NonVotedUtxoAtResolve(x))
                             }
                         case xs =>
-                            traceRight(RuleBasedActorEvent.Dispute.ParsedTally)
+                            traceRight(RuleBasedActorEvent.Dispute.ParsingTally)
                                 .as(DisputeUtxos.Tally(xs): DisputeUtxos)
                     }
             }
@@ -975,6 +1120,10 @@ object RuleBasedActor {
         sealed trait BuildError extends Throwable
         object BuildError {
             case class Vote(wrapped: VoteTx.Build.Error) extends Unrecoverable {
+                override def getMessage: String = wrapped.getMessage
+            }
+
+            case class RatchetVote(wrapped: RatchetVoteTx.Build.Error) extends Unrecoverable {
                 override def getMessage: String = wrapped.getMessage
             }
 
