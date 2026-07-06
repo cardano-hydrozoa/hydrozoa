@@ -8,11 +8,12 @@ import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
@@ -91,10 +92,17 @@ object DisputeActorTestHelpers {
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
         pure(mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline))
 
+    /** Default actor NodeConfig: first head peer. Coil tests override via `actorConfig`. */
+    def defaultActorConfig: MultiNodeConfigTestM[NodeConfig] =
+        for env <- ask yield env.nodeConfigs.head._2
+
     /** Given a pre-initialized TestM with a TestHeadConfig environment and an initial L2 UTxO set,
       * create a (pure) DisputeActor.
       *
       * Automatically adds an ada-only collateral utxo and the reference utxos from the config.
+      * @param actorConfig
+      *   which NodeConfig to use for the RBA. Defaults to the first head peer; coil tests pass
+      *   [[coilActorConfig]] to run the coil ratchet path.
       * @param versionMajor
       *   the major version to vote for
       * @param versionMinor
@@ -109,9 +117,11 @@ object DisputeActorTestHelpers {
         versionMinor: BigInt,
         additionalL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
+        actorConfig: MultiNodeConfigTestM[NodeConfig] = defaultActorConfig
     ): MultiNodeConfigTestM[RuleBasedActor] =
         for {
             env <- ask
+            actorNodeConfig <- actorConfig
 
             // If you happen to have reference utxos with the same tx id as other utxos, this will screw things up
             refUtxoIds = env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.input)
@@ -120,11 +130,10 @@ object DisputeActorTestHelpers {
               refUtxoIds.forall(id => !additionalL1Utxos.contains(id)),
               "Reference utxos from head config conflict with utxos from mkDisputeActor"
             )
-            _ = env.nodePrivateConfigs.head
 
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
-                env.nodePrivateConfigs.head._2.ownWallet.exportVerificationKey.addrKeyHash
+                actorNodeConfig.ownWallet.exportVerificationKey.addrKeyHash
               )(using env.headConfig)
                   .label("collateral utxo")
             )
@@ -170,8 +179,11 @@ object DisputeActorTestHelpers {
                     )
               )
             )
+            // The event formatter labels traces with a HeadPeerNumber; for coil peers the label
+            // is cosmetic (peer 0 by default).
+            tracerPeerNum = env.nodeConfigs.headOption.map(_._1).getOrElse(HeadPeerNumber(0))
             tracer = Slf4jTracer.sink.contramap(
-              RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+              RuleBasedActorEventFormat.humanFormat(tracerPeerNum)
             )
 
             persistence <- lift(
@@ -188,8 +200,53 @@ object DisputeActorTestHelpers {
               persistence = persistence,
               cardanoBackend = cardanoBackend,
               tracer = tracer
-            )(using env.nodeConfigs.head._2)
+            )(using actorNodeConfig)
         } yield disputeActor
+
+    /** Coil NodeConfig for the actor: uses `env.coilWallets.head` as the ownWallet, reusing the
+      * head peer's operation-config sections (they don't depend on head-vs-coil). Requires the test
+      * to run under `runWithCoil(nCoil >= 1)`.
+      */
+    def coilActorConfig: MultiNodeConfigTestM[NodeConfig] = for {
+        env <- ask
+        template = env.nodePrivateConfigs.head._2
+        coilWallet <- lift(env.coilWallets.headOption match {
+            case Some(w) => IO.pure(w)
+            case None =>
+                IO.raiseError(
+                  new IllegalStateException(
+                    "coilActorConfig requires runWithCoil(nCoil >= 1)"
+                  )
+                )
+        })
+        // The rule-based actor signs its own txs with `config.ruleBasedWallet`; the coil
+        // ratchet path also declares `ownWallet`'s addr key hash as a required signer for
+        // collateral. Point ruleBasedWallet at the coil wallet so signer and required-signer
+        // match.
+        coilEvacConfig = template.nodeOperationEvacuationConfig.copy(ruleBasedWallet = coilWallet)
+        coilNodeConfig <- lift(
+          NodeConfig.mkCoilConfig(
+            headConfig = env.headConfig,
+            ownCoilWallet = coilWallet,
+            nodeOperationEvacuationConfig = coilEvacConfig,
+            nodeOperationMultisigConfig = template.nodeOperationMultisigConfig,
+            blockfrostApiKey = template.blockfrostApiKey,
+            sugarRushUri = template.sugarRushUri,
+            adminUsername = template.adminUsername,
+            adminPassword = template.adminPassword,
+            httpHost = template.httpHost,
+            httpPort = template.httpPort,
+          ) match {
+              case Some(c) => IO.pure(c)
+              case None =>
+                  IO.raiseError(
+                    new IllegalStateException(
+                      "coil wallet is not registered among headConfig.coilPeerVKeys"
+                    )
+                  )
+          }
+        )
+    } yield coilNodeConfig
 
     /** Seed a persistence-backed InMemoryBackendStore with a single hard-confirmed stack whose
       * Minor partition carries a [[StandaloneEvacuationCommitment.MultiSigned]] matching

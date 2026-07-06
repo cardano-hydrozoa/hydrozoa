@@ -228,17 +228,7 @@ final case class RuleBasedActor(
       */
     private def loadAction(treasuryVersionMajor: BigInt): IO[DisputeAction] =
         for {
-            ownHeadPeerNum <- config.ownPeerId match {
-                case PeerId.Head(n) => IO.pure(n)
-                case PeerId.Coil(_) =>
-                    IO.raiseError(
-                      new IllegalStateException(
-                        "rule-based recovery via Markers.derive is head-only " +
-                            "(coil recovery deferred)"
-                      )
-                    )
-            }
-            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
+            markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
@@ -282,17 +272,7 @@ final case class RuleBasedActor(
       */
     private def loadEvacuationInputs: IO[EvacuationInputs] =
         for {
-            ownHeadPeerNum <- config.ownPeerId match {
-                case PeerId.Head(n) => IO.pure(n)
-                case PeerId.Coil(_) =>
-                    IO.raiseError(
-                      new IllegalStateException(
-                        "rule-based recovery via Markers.derive is head-only " +
-                            "(coil recovery deferred)"
-                      )
-                    )
-            }
-            markers <- Markers.derive(persistence.backend, PeerId.Head(ownHeadPeerNum))
+            markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
