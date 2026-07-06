@@ -130,16 +130,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         // → InitWindowElapsed. Stage4 uses the same trick (Suite.scala:847-853).
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        // Under WS (real wall-clock) mode we MUST anchor the initial block's creation-end-time
-        // to `takeoffTime` — otherwise the default generator picks a random Jan-1-2026 +
-        // 100-day offset that has already elapsed relative to real time, so the init tx
-        // validity window closes before CL ever wakes up. Stage4 does the same trick.
-        // Materialised via `IO.realTimeInstant` inside the PropertyM chain so nothing reads
-        // the wall clock at property-construction time.
         val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] = for {
             takeoffTime <- org.scalacheck.PropertyM.run(
-              if transportMode.useTestControl then IO.pure(None)
-              else IO.realTimeInstant.map(t => Some(t.plusSeconds(2)))
+              MultiPeerHeadHarness.mkTakeoffTime(transportMode.useTestControl, 2.seconds)
             )
             mnc <- org.scalacheck.PropertyM.pick[IO, MultiNodeConfig](
               MultiNodeConfig
@@ -165,21 +158,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                                 .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](
                                   bootstrap
                                 ),
-                            generateBlockCreationEndTime = ReaderT { tp =>
-                                takeoffTime match {
-                                    case Some(t) =>
-                                        Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                                    case None =>
-                                        val anchorTime = 1767225600L // Jan 1 2026, GMT
-                                        val range      = 86_400 * 100L
-                                        for offset <- Gen.choose(0L, range)
-                                        yield BlockCreationEndTime(
-                                          java.time.Instant
-                                              .ofEpochSecond(anchorTime + offset)
-                                              .quantize(tp.slotConfig)
-                                        )
-                                }
-                            },
+                            generateBlockCreationEndTime =
+                                MultiPeerHeadHarness.generateHeadStartTime(takeoffTime),
                           ),
                     ),
                     // Default evacuationBotPollingPeriod is 1-10 MINUTES — RuleBasedActor's Tick

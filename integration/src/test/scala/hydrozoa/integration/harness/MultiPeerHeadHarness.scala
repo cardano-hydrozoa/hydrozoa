@@ -1,12 +1,15 @@
 package hydrozoa.integration.harness
 
+import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.CardanoLiaison
@@ -23,9 +26,11 @@ import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
+import org.scalacheck.Gen
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
+import test.{GenWithTestPeers, TestPeers}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
   * mock L1.
@@ -40,6 +45,48 @@ object MultiPeerHeadHarness:
     // ===================================
     // Public surface
     // ===================================
+
+    /** Wall-clock alignment for the head's initial-block end-time.
+      *
+      *   - `useTestControl = true`: return `None`. The head-config generator falls back to the
+      *     deterministic Jan-1-2026 + 100-day random anchor (see [[generateHeadStartTime]]),
+      *     which is stable across TestControl seeds; reading `IO.realTimeInstant` there would
+      *     defeat reproducibility.
+      *   - `useTestControl = false`: return `Some(now + offset)`, materialised via
+      *     [[IO.realTimeInstant]] so no wall-clock read happens at property-construction time.
+      *     `offset` gives the scenario room to spawn actors before the initial block's
+      *     validity window opens; each test tunes it against its actor-spawn budget.
+      */
+    def mkTakeoffTime(
+        useTestControl: Boolean,
+        offset: FiniteDuration,
+    ): IO[Option[Instant]] =
+        if useTestControl then IO.pure(None)
+        else IO.realTimeInstant.map(t => Some(t.plusSeconds(offset.toSeconds)))
+
+    /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime`
+      * is `Some`, quantize it to the peer's slot config. When `None`, generate a random
+      * Jan-1-2026 + 100-day offset — deterministic per ScalaCheck seed, safe under TestControl.
+      * Feed to `hydrozoa.config.head.initialization.generateInitialBlock`'s
+      * `generateBlockCreationEndTime` parameter.
+      */
+    def generateHeadStartTime(
+        takeoffTime: Option[Instant]
+    ): GenWithTestPeers[BlockCreationEndTime] =
+        ReaderT { (tp: TestPeers) =>
+            takeoffTime match {
+                case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                case None    =>
+                    val anchorTime = 1767225600L // Jan 1 2026 00:00:00 UTC
+                    val range      = 86_400 * 100L // 100 days in seconds
+                    for offset <- Gen.choose(0L, range)
+                    yield BlockCreationEndTime(
+                      java.time.Instant
+                          .ofEpochSecond(anchorTime + offset)
+                          .quantize(tp.slotConfig)
+                    )
+            }
+        }
 
     case class Config(
         label: String,

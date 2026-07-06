@@ -805,31 +805,22 @@ object Stage4Suite:
         val coilWallets: List[PeerWallet] = testPeers.coilWallets
         val coilPeers: CoilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
-        // For non-TestControl runs we need the head's initial block end-time anchored at a
-        // small wall-clock offset in the future, so `sutResource` can sleep until that anchor
-        // and have the model clock and the wall clock coincide at command 1. 60s matches
-        // stage 1's budget; if 20-peer setup overruns it the test aborts (see sutResource).
-        // Under TestControl we keep the deterministic Jan-1-2026 + 100-day random distribution
-        // — `Instant.now()` would defeat seed-based reproducibility.
+        // Non-TestControl runs anchor the initial block's end-time to a wall-clock offset in
+        // the future so `sutResource` can sleep until that anchor and have the model clock
+        // and the wall clock coincide at command 1. 60s matches stage 1's budget; if 20-peer
+        // setup overruns it the test aborts (see sutResource). Under TestControl the head-config
+        // generator falls back to the deterministic Jan-1-2026 + 100-day random distribution
+        // — reading the wall clock there would defeat seed-based reproducibility.
+        //
+        // TODO: `genInitialState` returns a pure `Gen[ModelState]` so we can't thread
+        // [[MultiPeerHeadHarness.mkTakeoffTime]] (which returns `IO[Option[Instant]]`) here
+        // without lifting the whole model construction into an IO/PropertyM. Callers under
+        // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
             else Some(java.time.Instant.now().plusSeconds(60))
 
-        val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            takeoffTime match {
-                case Some(t) =>
-                    Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                case None =>
-                    // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
-                    val anchorTime = 1767225600L
-                    // 100 day range, seconds
-                    val range = 86_400 * 100L
-                    for offset <- Gen.choose(0L, range)
-                    yield BlockCreationEndTime(
-                      java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
-                    )
-            }
-        )
+        val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
           generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
