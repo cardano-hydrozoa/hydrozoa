@@ -1,46 +1,24 @@
 package hydrozoa.integration.fallbackhandoff
 
-import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{
-  QuantizedInstant,
-  quantize
-}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{
-  CardanoLiaisonEvent,
-  RequestSequencer,
-  SlowConsensusActorEvent,
-  UserRequest,
-  UserRequestBody,
-  UserRequestHeader
-}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
-import hydrozoa.multisig.{
-  CoilMultisigRegimeManagerEventFormat,
-  CommonChildEvent,
-  HeadMultisigRegimeManagerEventFormat,
-  RuleBasedOnlyChildEvent
-}
+import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{
-  Gen,
-  Prop,
-  Properties
-}
+import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers}
@@ -88,29 +66,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
         val coilWallets = testPeers.coilWallets
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
-        // Fast timing knobs stolen from stage4/Suite.scala so blocks progress within our budget:
-        // halve the CL polling period and shorten the two rate-limiter periods (see
-        // docs/rate-limiter.md).
-        // Static fast TxTiming so `Action.FallbackToRuleBased` (case 3 at CardanoLiaison.scala:940)
-        // fires within our budget — settlement/fallback windows are seconds, not hours.
-        val fastTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
-            Gen.const(
-              TxTiming(
-                minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
-                // Init tx window: initEndTime = bcet + minSettlementDuration +
-                // inactivityMarginDuration = 5s. Actor bring-up + stack-0 hard-confirmation +
-                // CL's first poll all have to fit inside that or `InitWindowElapsed` fires.
-                // `inactivityMarginDuration` also gates the Minor→Major deadman: majors fire
-                // every ~inactivityMarginDuration after the previous major's bcet.
-                inactivityMarginDuration = InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
-                silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
-                depositSubmissionDuration = DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
-                depositMaturityDuration = DepositMaturityDuration(1.second.quantize(network.slotConfig)),
-                depositAbsorptionDuration = DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
-              )
-            )
-        }
-
         // Pin the head-bootstrap's genesis UTxOs to the SAME map the harness seeds into the mock
         // backend below (`preinitPeerUtxosL1`). The default BottomUp generator randomises them
         // independently, so the init tx tries to spend inputs the mock doesn't have → invalid tx
@@ -122,7 +77,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 2.seconds,
-          fastTxTiming = fastTxTiming,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
             buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)

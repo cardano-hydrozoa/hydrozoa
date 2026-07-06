@@ -10,6 +10,7 @@ import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
@@ -96,6 +97,30 @@ object MultiPeerHeadHarness:
             }
         }
 
+    /** Static fast [[TxTiming]] so `Action.FallbackToRuleBased` fires within a wall-clock
+      * scenario budget (settlement/fallback windows are seconds, not hours). Shared by the
+      * dispute-flow tests via [[mkResource]]'s default.
+      */
+    val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        Gen.const(
+          TxTiming(
+            minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
+            // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
+            // = 5s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
+            inactivityMarginDuration =
+                InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
+            silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
+            depositSubmissionDuration =
+                DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+            depositMaturityDuration =
+                DepositMaturityDuration(1.second.quantize(network.slotConfig)),
+            depositAbsorptionDuration =
+                DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
+          )
+        )
+    }
+
     /** Shared `PropertyM[IO, Resource[IO, Ctx]]` shell for dispute-flow integration tests: takeoff
       * time, yaci-genesis-pinned MNC, initial block anchored on `takeoffTime`, coil peers in the
       * bootstrap. Pins the 100ms evacuation polling + 500ms/250ms rate-limits both callers need;
@@ -106,7 +131,7 @@ object MultiPeerHeadHarness:
         testPeers: TestPeers,
         testPeerToUtxos: Map[TestPeerName, Utxos],
         takeoffOffset: FiniteDuration,
-        fastTxTiming: GenWithTestPeers[TxTiming],
+        fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
         disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
             generateDisputeResolutionConfig,
         coilPeers: CoilPeers = CoilPeers.empty,

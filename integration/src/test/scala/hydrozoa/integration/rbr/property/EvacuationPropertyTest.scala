@@ -4,8 +4,6 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -13,7 +11,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -61,18 +59,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     private def testProperty(transportMode: TransportMode): Prop =
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
-        val fastTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
-            Gen.const(
-              TxTiming(
-                minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
-                inactivityMarginDuration = InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
-                silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
-                depositSubmissionDuration = DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
-                depositMaturityDuration = DepositMaturityDuration(1.second.quantize(network.slotConfig)),
-                depositAbsorptionDuration = DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
-              )
-            )
-        }
 
         // Fast voting deadline so TallyTx becomes valid within our scenario budget. The default
         // generator picks 1h..5d — way beyond our reach. `deadlineVoting` is
@@ -96,7 +82,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 2.seconds,
-          fastTxTiming = fastTxTiming,
           disputeResolutionConfig = fastDisputeResolutionConfig,
         ) { (takeoffTime, mnc) =>
             buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
