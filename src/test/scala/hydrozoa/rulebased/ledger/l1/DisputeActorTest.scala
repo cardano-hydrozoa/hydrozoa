@@ -387,12 +387,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
     // Own uncast vote utxo and other uncast vote utxo exist -- Vote is cast
     def votingHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
-        treasuryToken =
-            Value.asset(
-              env.headConfig.headMultisigScript.policyId,
-              env.headConfig.headTokenNames.treasuryTokenName,
-              1
-            )
+        treasuryToken = env.headConfig.treasuryToken
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 1000))
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))
@@ -565,12 +560,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     def resolutionHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
-        treasuryToken =
-            Value.asset(
-              env.headConfig.headMultisigScript.policyId,
-              env.headConfig.headTokenNames.treasuryTokenName,
-              1
-            )
+        treasuryToken = env.headConfig.treasuryToken
 
         nEvacs <- pick(Gen.choose(0, 1000))
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))

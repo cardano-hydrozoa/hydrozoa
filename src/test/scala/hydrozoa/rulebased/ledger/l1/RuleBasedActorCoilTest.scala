@@ -31,11 +31,7 @@ object RuleBasedActorCoilTest extends Properties("Rule-Based Actor (Coil) Test")
       */
     def coilRatchetHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
-        treasuryToken = Value.asset(
-          env.headConfig.headMultisigScript.policyId,
-          env.headConfig.headTokenNames.treasuryTokenName,
-          1
-        )
+        treasuryToken = env.headConfig.treasuryToken
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 100))
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))

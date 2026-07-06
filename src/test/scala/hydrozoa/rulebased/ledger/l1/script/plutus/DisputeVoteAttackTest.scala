@@ -112,11 +112,7 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
     def voteAttacks: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
 
-        treasuryToken = Value.asset(
-          env.headConfig.headMultisigScript.policyId,
-          env.headConfig.headTokenNames.treasuryTokenName,
-          1
-        )
+        treasuryToken = env.headConfig.treasuryToken
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 10))
         evacMap <- pick(test.Generators.Hydrozoa.genEvacuationMap(nEvacs)(using env))
