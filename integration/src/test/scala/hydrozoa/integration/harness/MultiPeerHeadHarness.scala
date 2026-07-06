@@ -6,8 +6,16 @@ import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
+import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -26,11 +34,11 @@ import org.http4s.client.websocket.WSClient
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
-import org.scalacheck.Gen
+import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
-import test.{GenWithTestPeers, TestPeers}
+import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
   * mock L1.
@@ -87,6 +95,75 @@ object MultiPeerHeadHarness:
                     )
             }
         }
+
+    /** Shared `PropertyM[IO, Resource[IO, Ctx]]` shell for dispute-flow integration tests: takeoff
+      * time, yaci-genesis-pinned MNC, initial block anchored on `takeoffTime`, coil peers in the
+      * bootstrap. Pins the 100ms evacuation polling + 500ms/250ms rate-limits both callers need;
+      * `buildCtx` owns everything test-specific.
+      */
+    def mkResource[Ctx](
+        transportMode: Transport.Mode,
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        takeoffOffset: FiniteDuration,
+        fastTxTiming: GenWithTestPeers[TxTiming],
+        disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+            generateDisputeResolutionConfig,
+        coilPeers: CoilPeers = CoilPeers.empty,
+        coilQuorum: Int = 0,
+    )(
+        buildCtx: (Option[Instant], MultiNodeConfig) => Resource[IO, Ctx]
+    ): PropertyM[IO, Resource[IO, Ctx]] =
+        for {
+            takeoffTime <- PropertyM.run(
+              mkTakeoffTime(transportMode.useTestControl, takeoffOffset)
+            )
+            mnc <- PropertyM.pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generateWith(testPeers)(
+                    generateHeadConfig = generateHeadConfig(
+                      genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                        generateHeadParams = generateHeadParameters(
+                          generateTxTiming = fastTxTiming,
+                          generateDisputeResolutionConfig = disputeResolutionConfig,
+                        ).map(_.copy(coilQuorum = coilQuorum)),
+                        generateInitializationParameters = InitParamsType.TopDown(
+                          InitializationParametersGenTopDown.GenWithDeps(
+                            generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
+                                Gen.const(
+                                  testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
+                                )
+                            )
+                          )
+                        ),
+                        coilPeers = coilPeers,
+                      ),
+                      generateInitialBlock = bootstrap =>
+                          generateInitialBlock(
+                            genHeadConfigBootstrap = ReaderT
+                                .pure[Gen, TestPeers, HeadConfig.Bootstrap](bootstrap),
+                            generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
+                          ),
+                    ),
+                    generateNodeOperationEvacuationConfig = w =>
+                        Gen.const(
+                          NodeOperationEvacuationConfig(
+                            evacuationBotPollingPeriod = 100.millis,
+                            ruleBasedWallet = w,
+                          )
+                        ),
+                    generateNodeOperationMultisigConfig = hc =>
+                        generateNodeOperationMultisigConfig(
+                          maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                          rateLimits = RateLimits(
+                            softBlockMinPeriod = 500.millis,
+                            hardStackMinPeriod = 250.millis,
+                          ),
+                        )
+                  )
+                  .label("MultiNodeConfig")
+            )
+        } yield buildCtx(takeoffTime, mnc)
 
     case class Config(
         label: String,

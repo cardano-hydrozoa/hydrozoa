@@ -4,15 +4,11 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
@@ -29,7 +25,7 @@ import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
-import test.{SeedPhrase, TestPeers, given}
+import test.{SeedPhrase, TestPeers}
 
 /** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
   * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
@@ -64,10 +60,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         testProperty(TransportMode.WebSocket)
 
     private def testProperty(transportMode: TransportMode): Prop =
-        import org.scalacheck.util.Pretty
-
-        given (MultiNodeConfig => Pretty) = _ => Pretty(_ => "MultiNodeConfig (too long)")
-
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
         val fastTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
             Gen.const(
@@ -99,60 +91,16 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        val resource: org.scalacheck.PropertyM[IO, Resource[IO, Ctx]] = for {
-            takeoffTime <- org.scalacheck.PropertyM.run(
-              MultiPeerHeadHarness.mkTakeoffTime(transportMode.useTestControl, 2.seconds)
-            )
-            mnc <- org.scalacheck.PropertyM.pick[IO, MultiNodeConfig](
-              MultiNodeConfig
-                  .generateWith(testPeers)(
-                    generateHeadConfig = generateHeadConfig(
-                      genHeadConfigBootstrap = generateHeadConfigBootstrap(
-                        generateHeadParams = generateHeadParameters(
-                          generateTxTiming = fastTxTiming,
-                          generateDisputeResolutionConfig = fastDisputeResolutionConfig,
-                        ),
-                        generateInitializationParameters = InitParamsType.TopDown(
-                          InitializationParametersGenTopDown.GenWithDeps(
-                            generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
-                                Gen.const(
-                                  testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
-                                )
-                            )
-                          )
-                        ),
-                      ),
-                      generateInitialBlock = bootstrap =>
-                          generateInitialBlock(
-                            genHeadConfigBootstrap = ReaderT
-                                .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](
-                                  bootstrap
-                                ),
-                            generateBlockCreationEndTime =
-                                MultiPeerHeadHarness.generateHeadStartTime(takeoffTime),
-                          ),
-                    ),
-                    generateNodeOperationEvacuationConfig = w =>
-                        Gen.const(
-                          hydrozoa.config.node.operation.evacuation
-                              .NodeOperationEvacuationConfig(
-                                evacuationBotPollingPeriod = 100.millis,
-                                ruleBasedWallet = w,
-                              )
-                        ),
-                    generateNodeOperationMultisigConfig = hc =>
-                        hydrozoa.config.node.operation.multisig
-                            .generateNodeOperationMultisigConfig(
-                              maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
-                              rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                                softBlockMinPeriod = 500.millis,
-                                hardStackMinPeriod = 250.millis,
-                              ),
-                            )
-                  )
-                  .label("MultiNodeConfig")
-            )
-        } yield buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
+        val resource = MultiPeerHeadHarness.mkResource(
+          transportMode = transportMode,
+          testPeers = testPeers,
+          testPeerToUtxos = testPeerToUtxos,
+          takeoffOffset = 2.seconds,
+          fastTxTiming = fastTxTiming,
+          disputeResolutionConfig = fastDisputeResolutionConfig,
+        ) { (takeoffTime, mnc) =>
+            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
+        }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
 
