@@ -624,12 +624,12 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    // `runDefault` uses `HeadParametersGen`'s default `coilQuorum = 0`. The previous
-    // `runWithCoil()` (quorum=3) was passable only because the loader lambda mocked in real
-    // coil signatures; the persistence-backed loader now returns `coilSignatures = Nil` (per
-    // RRM's original 'coil-side recovery is deferred' comment), so any non-zero quorum trips
-    // the Plutus `coilMultisig must contain at least coilQuorum valid signatures` check.
-    val _ = property("dispute actor (no actor system)") = runDefault(
+    // `runWithCoil(quorum = 0)` seeds the treasury's `coilPeerVKeys` from generated coil
+    // wallets while keeping `coilQuorum = 0` — the persistence-backed `loadAction` returns
+    // `coilSignatures = Nil` (coil-side recovery is deferred), so any non-zero quorum would
+    // trip the Plutus `coilMultisig must contain at least coilQuorum valid signatures` check.
+    // Quorum-0 exercises the head path under a treasury shape that carries coil metadata.
+    val _ = property("dispute actor (no actor system)") = runWithCoil(nCoil = 5, quorum = 0)(
       for {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow

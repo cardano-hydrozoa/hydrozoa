@@ -134,7 +134,7 @@ object TallyTxTest extends Properties("Tally Tx Test") {
 
     import MultiNodeConfig.*
 
-    val _ = property("Tally Tx happy path") = runDefault(
+    val _ = property("Tally Tx happy path") = runWithCoil(nCoil = 5, quorum = 0)(
       for {
           env <- ask
           _ <- {
