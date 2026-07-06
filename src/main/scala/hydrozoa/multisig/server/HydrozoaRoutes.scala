@@ -1,11 +1,13 @@
 package hydrozoa.multisig.server
 
+import cats.data.Validated.Invalid
 import cats.effect.IO
 import fs2.Stream
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest}
+import hydrozoa.multisig.ledger.l2.L2LedgerReader
 import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
@@ -14,6 +16,9 @@ import org.http4s.circe.*
 import org.http4s.dsl.io.*
 import org.http4s.headers.Authorization
 import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
+import scala.util.Try
+import scalus.cardano.address.Address
+import scalus.cardano.ledger.Utxo
 
 /** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
   * proxy -- load-balancer, unified api).
@@ -21,11 +26,26 @@ import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
 class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
+    l2LedgerReader: L2LedgerReader[IO],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
     private given HeadConfig = headConfig
+
+    /** Optional `?count=` on `GET /api/l2/transactions`; absent ⇒ [[defaultRecentTxCount]], present
+      * but non-integer ⇒ a 400 (like a malformed address), rather than falling through to a 404.
+      */
+    private object CountQueryParam extends OptionalValidatingQueryParamDecoderMatcher[Int]("count")
+
+    /** How many recent L2 transactions to return when `?count=` is omitted. */
+    private val defaultRecentTxCount = 50
+
+    /** Parse a bech32 address from the request path, or a message describing why it is malformed.
+      */
+    private def parseAddress(bech32: String): Either[String, Address] =
+        Try(Address.fromBech32(bech32)).toEither.left
+            .map(err => s"Invalid bech32 address '$bech32': ${err.getMessage}")
 
     /** Check if the provided credentials match the configured admin credentials */
     private def checkAuth(req: org.http4s.Request[IO]): Boolean =
@@ -145,6 +165,43 @@ class HydrozoaRoutes(
                 InternalServerError(Error(error = err.getMessage).asJson)
             }
 
+        // GET /api/l2/utxos/{address} - current L2 utxos controlled by an address, CIP-0116-style.
+        // Returns data only on an EUTXO-backed node; empty otherwise (see L2LedgerReader).
+        case GET -> Root / "api" / "l2" / "utxos" / address =>
+            parseAddress(address) match {
+                case Left(err) => BadRequest(Error(error = err).asJson)
+                case Right(addr) =>
+                    l2LedgerReader
+                        .utxosByAddress(addr)
+                        .flatMap(utxos =>
+                            Ok(utxos.toList.map((input, output) => Utxo(input, output)).asJson)
+                        )
+                        .handleErrorWith(err =>
+                            InternalServerError(Error(error = err.getMessage).asJson)
+                        )
+            }
+
+        // GET /api/l2/transactions?count=N - recent applied L2 transactions, newest first.
+        // Returns data only on an EUTXO-backed node; empty otherwise (see L2LedgerReader).
+        case GET -> Root / "api" / "l2" / "transactions" :? CountQueryParam(count) =>
+            count match {
+                case Some(Invalid(errs)) =>
+                    BadRequest(
+                      Error(error =
+                          s"Invalid 'count' parameter: ${errs.toList.map(_.sanitized).mkString(", ")}"
+                      ).asJson
+                    )
+                case validated =>
+                    l2LedgerReader
+                        .recentTransactions(
+                          validated.flatMap(_.toOption).getOrElse(defaultRecentTxCount)
+                        )
+                        .flatMap(summaries => Ok(summaries.asJson))
+                        .handleErrorWith(err =>
+                            InternalServerError(Error(error = err.getMessage).asJson)
+                        )
+            }
+
         // GET /health - Health check endpoint
         case GET -> Root / "health" =>
             Ok(io.circe.Json.obj("status" -> "ok".asJson))
@@ -183,9 +240,19 @@ object HydrozoaRoutes {
     def apply(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        l2LedgerReader: L2LedgerReader[IO],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[HydrozoaRoutes] =
-        IO.pure(new HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, serverConfig, tracer))
+        IO.pure(
+          new HydrozoaRoutes(
+            requestSequencer,
+            blockWeaver,
+            l2LedgerReader,
+            headConfig,
+            serverConfig,
+            tracer
+          )
+        )
 }

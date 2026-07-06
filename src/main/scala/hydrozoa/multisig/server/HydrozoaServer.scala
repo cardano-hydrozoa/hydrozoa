@@ -5,6 +5,7 @@ import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.ledger.l2.L2LedgerReader
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
@@ -30,6 +31,8 @@ object HydrozoaServer {
       *   Handle to the RequestSequencer actor
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
+      * @param l2LedgerReader
+      *   Read-only L2-ledger queries behind `GET /api/l2/utxos` and `/api/l2/transactions`
       * @param headConfig
       *   Head configuration
       * @param config
@@ -42,13 +45,21 @@ object HydrozoaServer {
     def create(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        l2LedgerReader: L2LedgerReader[IO],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): Resource[IO, Server] =
         for {
             hydrozoaRoutes <- Resource.eval(
-              HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, config, tracer)
+              HydrozoaRoutes(
+                requestSequencer,
+                blockWeaver,
+                l2LedgerReader,
+                headConfig,
+                config,
+                tracer
+              )
             )
             server <- EmberServerBuilder
                 .default[IO]
@@ -66,11 +77,12 @@ object HydrozoaServer {
     def run(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        l2LedgerReader: L2LedgerReader[IO],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[Nothing] = {
-        create(requestSequencer, blockWeaver, headConfig, config, tracer)
+        create(requestSequencer, blockWeaver, l2LedgerReader, headConfig, config, tracer)
             .use(_ => IO.never)
     }
 }

@@ -23,6 +23,7 @@ import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.collection.immutable.TreeMap
 import scala.util.Try
+import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
 import scalus.uplc.builtin.ByteString
 
@@ -258,6 +259,45 @@ case class EutxoL2Ledger private (
         commitReal(req).void
 
     override def currentCommandNumber: IO[L2CommandNumber] = state.get.map(_.commandNumber)
+
+    /** The committed L2 utxos this address controls — a live filter over `activeUtxos`. Concurrent
+      * with the JointLedger-driven command path (a plain `Ref` read), so it observes the state as
+      * of the last committed command.
+      */
+    override def utxosByAddress(address: Address): IO[Utxos] =
+        state.get.map(_.activeUtxos.filter((_, output) => output.address == address))
+
+    /** The most recent `limit` applied L2 transactions, newest first, projected to
+      * [[L2TxSummary]]s. Reads the tail of the store's own command log, so it needs no separate
+      * history: for the EUTXO ledger the logged command *is* the record of what happened.
+      *
+      * `limit` counts returned summaries, not commands scanned — one command can expand to several
+      * summaries and a no-op deposit decision to none — so the log window is widened backward until
+      * `limit` summaries are collected or the log is exhausted. Each earlier batch is strictly
+      * older, so accumulating preserves newest-first order.
+      */
+    override def recentTransactions(limit: Int): IO[Vector[L2TxSummary]] =
+        if limit <= 0 then IO.pure(Vector.empty)
+        else
+            state.get.map(_.commandNumber).flatMap { current =>
+                def collect(
+                    upTo: L2CommandNumber,
+                    acc: Vector[L2TxSummary]
+                ): IO[Vector[L2TxSummary]] =
+                    if acc.sizeIs >= limit || upTo.value <= 0L then IO.pure(acc)
+                    else
+                        val fromExclusive =
+                            L2CommandNumber(math.max(0L, upTo.value - limit.toLong))
+                        store
+                            .logRange(fromExclusive, upTo)
+                            .flatMap(commands =>
+                                collect(
+                                  fromExclusive,
+                                  acc ++ commands.reverse.flatMap(L2TxSummary.fromCommand)
+                                )
+                            )
+                collect(current, Vector.empty).map(_.take(limit))
+            }
 
     /** Read the full in-memory state — package-private, for recovery tests that assert a restored
       * ledger matches the live one. Not part of the [[L2Ledger]] interface.
