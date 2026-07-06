@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -60,7 +60,7 @@ object MultiPeerHeadHarness:
       */
     enum Event:
         case Head(peerNum: HeadPeerNumber, event: HeadRegimeManagerEvent)
-        case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
+        case Coil(coilNum: CoilPeerNumber, event: CoilRegimeManagerEvent)
 
     /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
      * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
@@ -721,14 +721,14 @@ object MultiPeerHeadHarness:
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             uplink: Transport.ContextFn[CoilTransport],
-            callerTracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         ): Resource[IO, Coil] =
             val nHeadPeers = multiNodeConfig.nHeadPeers
             // Synthetic `HeadPeerNumber` label so coil log lines stay distinguishable from head
             // ones in the same run; passes through `CoilMultisigRegimeManagerEventFormat` which
             // still delegates to the head per-actor formatters (per the TODO inside that object).
             val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
-            val slf4jMrm: ContraTracer[IO, CoilMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, CoilRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
                 )

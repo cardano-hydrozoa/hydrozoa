@@ -1,7 +1,9 @@
 package hydrozoa.multisig
 
-import cats.effect.{Deferred, IO, Resource}
+import cats.effect.{Deferred, IO, Ref, Resource}
+import cats.syntax.all.*
 import com.suprnation.actor.ActorContext
+import com.suprnation.actor.ActorRef.NoSendActorRef
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager.*
@@ -14,6 +16,7 @@ import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
 import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
+import hydrozoa.rulebased.RuleBasedRegimeManager
 
 /** Coil-peer counterpart to [[HeadMultisigRegimeManager]]. A coil runs the same multisig-regime
   * actor set as a head follower — the leadership / soft-ack / hard-ack-author behavior is gated
@@ -31,12 +34,18 @@ trait CoilMultisigRegimeManager(
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
     persistence: Persistence[IO],
-    override protected val tracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+    override protected val tracer: ContraTracer[IO, CoilRegimeManagerEvent],
     /** Coil-uplink transport toward this coil peer's single hub. */
     coilTransport: ActorContext[IO, Request, Any] => CoilTransport,
-) extends MultisigRegimeManagerBase[CoilMultisigRegimeManagerEvent] {
+) extends MultisigRegimeManagerBase[CoilRegimeManagerEvent] {
 
     override protected lazy val tracers: CoilMrmTracers = CoilMrmTracers.fromRoot(tracer)
+
+    /** Children stopped at handoff time; CL is deliberately excluded — it stays alive to process
+      * refunds and finish rollouts (mirrors [[HeadMultisigRegimeManager]]).
+      */
+    private val nonClChildren: Ref[IO, List[NoSendActorRef[IO]]] =
+        Ref.unsafe(List.empty)
 
     override protected def preStartLocal: IO[Unit] =
         for {
@@ -130,17 +139,37 @@ trait CoilMultisigRegimeManager(
               core.stackComposer -> Actors.StackComposer,
               core.slowConsensusActor -> Actors.SlowConsensus,
             )
+
+            _ <- nonClChildren.set(
+              List[NoSendActorRef[IO]](
+                core.blockWeaver,
+                core.consensusActor,
+                core.jointLedger,
+                core.stackComposer,
+                core.slowConsensusActor,
+                hubLiaison,
+                remoteHubProxy,
+              )
+            )
         } yield ()
 
-    // TODO(coil-handoff): coil-side rule-based regime not yet implemented. Raising here on
-    // purpose so the gap is loud — a silent no-op would drop the handoff signal from CL.
+    /** Coil-peer handoff: mirrors [[HeadMultisigRegimeManager.onHandoffToRuleBased]]. Stops the
+      * multisig-side children (leaving CL up for refunds/rollouts) and spawns
+      * [[RuleBasedRegimeManager]], whose actor will run the coil ratchet path (see
+      * `RuleBasedActor.Dispute.handleCoil`).
+      */
     override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
-        IO.raiseError(
-          new NotImplementedError(
-            s"CoilMultisigRegimeManager.onHandoffToRuleBased(${fallback.tx.id}) — " +
-                "coil-side handoff to the rule-based regime is not yet wired"
-          )
-        )
+        for {
+            refs <- nonClChildren.getAndSet(Nil)
+            _ <- refs.traverse_(context.stop)
+            _ <- context.actorOf(
+              RuleBasedRegimeManager(
+                cardanoBackend = cardanoBackend,
+                persistence = persistence,
+                tracer = tracers.ruleBasedActor,
+              )(using config)
+            )
+        } yield ()
 }
 
 object CoilMultisigRegimeManager {
@@ -149,7 +178,7 @@ object CoilMultisigRegimeManager {
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
         persistence: Persistence[IO],
-        tracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+        tracer: ContraTracer[IO, CoilRegimeManagerEvent],
         coilTransport: Resource[IO, ActorContext[IO, Request, Any] => CoilTransport],
     ): Resource[IO, CoilMultisigRegimeManager] =
         coilTransport.flatMap { factory =>
