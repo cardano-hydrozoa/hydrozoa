@@ -53,19 +53,23 @@ import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers, given}
 
-/** Demonstrates the vote-version mismatch bug in [[RuleBasedRegimeManager.loadAction]].
+/** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain
+  * treasury lags behind the latest hard-confirmed stack, the RBA must vote with the SEC whose
+  * `versionMajor` matches the on-chain treasury (not the newest SEC in persistence), so the
+  * built Vote passes the Plutus dispute-script's `versionMajor field must match` check.
   *
   * Scenario:
-  *   1. Set up a 2-peer head. Per-peer [[FirewalledCardanoBackend]] uses a static predicate:
-  *      "drop any [[FallbackTx]] whose produced treasury datum has `versionMajor == 2`". Major-1's
-  *      fallback still lands normally.
-  *   2. Let both peers hard-confirm through major-2 off-chain.
-  *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, the firewall drops the submit
-  *      (returns `Right(())`), so `FallbackToRuleBasedDispatched` still fires and HMRM auto-spawns
-  *      [[RuleBasedRegimeManager]].
-  *   4. RRM's `loadAction` reads the latest hard-confirmed stack (major-2) and constructs a Vote
-  *      whose SEC references major-2. The Vote submission reaches the mock (not a FallbackTx, not
-  *      dropped); the mock rejects it because on-chain treasury still reflects major-1.
+  *   1. 2-peer head. Per-peer [[FirewalledCardanoBackend]] drops any [[SettlementTx]] whose
+  *      `majorVersionProduced == 2` so the on-chain treasury stays pinned at major-1 while the
+  *      off-chain view advances.
+  *   2. Both peers hard-confirm through major-2 off-chain.
+  *   3. CL notices the on-chain treasury is stale and dispatches
+  *      `Action.FallbackToRuleBased`; HMRM auto-spawns
+  *      [[hydrozoa.rulebased.RuleBasedRegimeManager]], which spawns
+  *      [[hydrozoa.rulebased.RuleBasedActor]].
+  *   4. `loadAction(treasuryVersionMajor)` walks backward through hard-confirmed stacks and
+  *      picks the last SEC matching `versionMajor = 1` (the on-chain treasury's). The Vote it
+  *      builds and submits passes Plutus and lands on chain.
   */
 object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
@@ -85,7 +89,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // follow-up.
     private val nCoilPeers: Int = 0
     // Real wall-clock budget. Head config's minSettlementDuration + our fast-timing knobs
-    // determine major-block cadence; two majors + RRM handoff + Plutus rejection fit in ~60s.
+    // determine major-block cadence; two majors + RRM handoff + accepted Vote submission fit
+    // in ~60s.
     private val scenarioTimeout: FiniteDuration = 90.seconds
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
@@ -327,13 +332,13 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
-    /** After the loader-move fix: the RBA's `loadAction` walks backward through hard-confirmed
-      * stacks and picks the SEC matching the on-chain treasury's `versionMajor` (major-1 here),
-      * so the built Vote passes the Plutus dispute-script check and submits successfully. Assert
-      * both: the actor attempted a Vote (proves handoff + persistence load), the Vote submitted
-      * OK (proves the version match worked), and `sutErrors` does NOT contain the old
-      * "versionMajor field must match" text (would indicate a regression to the pre-fix
-      * behavior).
+    /** RBA's `loadAction` walks backward through hard-confirmed stacks and picks the SEC
+      * matching the on-chain treasury's `versionMajor` (major-1 here), so the built Vote
+      * passes the Plutus dispute-script check and submits successfully. Assert that the actor
+      * attempted a Vote (proves handoff + persistence load), that the Vote submitted OK
+      * (proves the version match worked), and that `sutErrors` does not contain
+      * `"versionMajor field must match"` — presence would signal a regression where
+      * `loadAction` picked the newest SEC instead of the version-matching one.
       */
     private def step4_assertVoteAccepted: test.TestM[Ctx, Unit] =
         for
