@@ -45,7 +45,7 @@ case class TestPeers private (
     seedPhrase: SeedPhrase,
     override val cardanoNetwork: CardanoNetwork,
     peersNumber: Int,
-    coilPeersNumber: Int = 0,
+    coilPeersNumber: Int,
 ) extends CardanoNetwork.Section,
       HeadPeers.Section {
     import TestPeerName.maxPeers
