@@ -3,7 +3,7 @@ package hydrozoa.integration.stage4
 import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
-import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
@@ -796,26 +796,14 @@ object Stage4Suite:
         useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
+        // TestPeers provisions head + coil wallets from the same seed under stable ordinals.
+        // Coil peers are hubbed by head 0 (single-hub topology); their vkeys land in the head
+        // bootstrap so the threshold script requires `coilQuorum` of them, and
+        // `mkCoilNodeConfigs` (below) derives each coil's own node config from the MNC.
+        val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nPeers, nCoilPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-
-        // Coil wallets are extra keys from the same seed, beyond the head set; each coil peer is hubbed
-        // by head 0. Empty for a pure-head run. Their vkeys go into the head bootstrap so the
-        // threshold script requires `coilQuorum` of them, and `mkCoilConfig` (below) derives each
-        // coil's own node config from the shared head config.
-        val coilWallets: List[PeerWallet] =
-            if nCoilPeers == 0 then Nil
-            else {
-                val withCoils =
-                    TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoilPeers)
-                (0 until nCoilPeers).toList.map(i =>
-                    withCoils.walletFor(HeadPeerNumber(nPeers + i))
-                )
-            }
-        val coilPeers: CoilPeers =
-            CoilPeers.indexed(
-              coilWallets.map(w => CoilPeerData(w.exportVerificationKey, HeadPeerNumber(0)))
-            )
+        val coilWallets: List[PeerWallet] = testPeers.coilWallets
+        val coilPeers: CoilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
         // For non-TestControl runs we need the head's initial block end-time anchored at a
         // small wall-clock offset in the future, so `sutResource` can sleep until that anchor
@@ -893,27 +881,7 @@ object Stage4Suite:
             )
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
-
-            // Each coil's own node config: the shared head config plus the coil identity seam. The
-            // coil is a read-only follower, so it reuses head 0's operational sub-configs (polling
-            // period etc.); none of head 0's wallet-derived fields are exercised on the coil path.
-            head0Private = config.nodePrivateConfigs(HeadPeerNumber(0))
-            coilNodeConfigs = coilWallets.map { w =>
-                NodeConfig
-                    .mkCoilConfig(
-                      headConfig = config.headConfig,
-                      ownCoilWallet = w,
-                      nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
-                      nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      blockfrostApiKey = "not-a-real-key",
-                      sugarRushUri = "ws://localhost:3001/ws",
-                      adminUsername = "admin",
-                      adminPassword = "welcome",
-                      httpHost = "0.0.0.0",
-                      httpPort = "8080",
-                    )
-                    .get
-            }
+            coilNodeConfigs = config.mkCoilNodeConfigs(coilWallets)
 
             initTx = config.headConfig.initializationTx.tx
             spentInputs = initTx.body.value.inputs.toSet

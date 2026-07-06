@@ -78,19 +78,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
     private val nHeadPeers: Int = 2
-    // Coil peer(s) run [[hydrozoa.multisig.CoilMultisigRegimeManager]] and, post-handoff, a
-    // coil-mode [[hydrozoa.rulebased.RuleBasedActor]] via
-    // [[hydrozoa.rulebased.RuleBasedRegimeManager]] (see
-    // `CoilMultisigRegimeManager.onHandoffToRuleBased`). Flip to 1 to exercise step5's coil
-    // ratchet assertion; the wiring (coil NodeConfig build, harness passthrough, observer)
-    // is in place. Left at 0 today because the head major-2 window closes before the
-    // scenario can observe `bothPeersConfirmedMajor2` when a coil peer is in the cluster —
-    // a timing tune-up (`scenarioTimeout` or the fast-timing knobs) can unblock it as
-    // follow-up.
     private val nCoilPeers: Int = 0
-    // Real wall-clock budget. Head config's minSettlementDuration + our fast-timing knobs
-    // determine major-block cadence; two majors + RRM handoff + accepted Vote submission fit
-    // in ~60s.
     private val scenarioTimeout: FiniteDuration = 90.seconds
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
@@ -109,31 +97,10 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
         given (MultiNodeConfig => Pretty) = _ => Pretty(_ => "MultiNodeConfig (too long)")
 
-        // Head + coil peer wallets — mirrors `stage4/Suite.scala:806-818`. `testPeers` covers the
-        // head range [0, nHeadPeers); the extra wallets past that are used to spawn coil peers
-        // (via `NodeConfig.mkCoilConfig`) and their yaci-genesis UTxOs stay available on the mock
-        // backend as collateral for the coil RBA. `coilQuorum = 0` — the persistence-backed
-        // `loadAction` returns `coilSignatures = Nil` (coil-side recovery is deferred), so any
-        // non-zero quorum would trip the Plutus coil multisig check.
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
-        val coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet] =
-            if nCoilPeers == 0 then Nil
-            else {
-                val withCoils =
-                    TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers + nCoilPeers)
-                (0 until nCoilPeers).toList.map(i =>
-                    withCoils.walletFor(HeadPeerNumber(nHeadPeers + i))
-                )
-            }
-        val coilPeersConfig: hydrozoa.config.head.coil.CoilPeers =
-            hydrozoa.config.head.coil.CoilPeers.indexed(
-              coilWallets.map(w =>
-                  hydrozoa.config.head.coil.CoilPeerData(
-                    verificationKey = w.exportVerificationKey,
-                    hubHeadPeerNumber = HeadPeerNumber(0),
-                  )
-              )
-            )
+
+        val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
+        val coilWallets = testPeers.coilWallets
+        val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
         // Under WS (real wall-clock) mode we MUST anchor the initial block's creation-end-time to
         // `takeoffTime` — otherwise the default generator picks a random Jan-1-2026 + 100-day
         // offset that has already elapsed relative to `Instant.now()`, so the init tx validity
@@ -396,27 +363,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
                 .convert.instant.toEpochMilli
 
-            // Coil NodeConfigs — mirrors `stage4/Suite.scala:900-916`. Reuses head 0's operational
-            // sub-configs (evacuation polling period, cardano-liaison polling period, etc.) since
-            // the coil path doesn't exercise their head-specific fields.
-            head0Private = multiNodeConfig.nodePrivateConfigs(HeadPeerNumber(0))
-            coilNodeConfigs = coilWallets.map { w =>
-                hydrozoa.config.node.NodeConfig
-                    .mkCoilConfig(
-                      headConfig = multiNodeConfig.headConfig,
-                      ownCoilWallet = w,
-                      nodeOperationEvacuationConfig =
-                          head0Private.nodeOperationEvacuationConfig.copy(ruleBasedWallet = w),
-                      nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      blockfrostApiKey = "not-a-real-key",
-                      sugarRushUri = "ws://localhost:3001/ws",
-                      adminUsername = "admin",
-                      adminPassword = "welcome",
-                      httpHost = "0.0.0.0",
-                      httpPort = "8080",
-                    )
-                    .get
-            }
+            coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
             hooks = MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
               tracer = humanFormatTracer |+| observerTracer(
