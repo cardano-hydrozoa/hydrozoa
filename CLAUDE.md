@@ -90,6 +90,10 @@ Working design and reference docs live in `docs/`:
 - [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
   cycles without changing consensus logic.
 
+**API**
+- [`l2-query-endpoints.md`](docs/l2-query-endpoints.md) — the user-facing server's read-only L2
+  queries: `GET /api/l2/utxos/{address}` and `GET /api/l2/transactions` (EUTXO-only).
+
 **Testing**
 - [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
   levels: what each exercises and where to add a test.
