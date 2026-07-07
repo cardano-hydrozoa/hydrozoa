@@ -2,6 +2,7 @@ package hydrozoa.rulebased
 
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import scalus.cardano.address.ShelleyAddress
 
 sealed trait RuleBasedActorEvent
 
@@ -24,9 +25,9 @@ object RuleBasedActorEvent:
         case object ParsedResolved extends RuleBasedActorEvent
 
     object Collateral:
-        final case class Querying(addr: String) extends RuleBasedActorEvent
+        final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
         case object Found extends RuleBasedActorEvent
-        final case class NotFound(peerLabel: String) extends RuleBasedActorEvent
+        final case class NotFound(address: ShelleyAddress) extends RuleBasedActorEvent
         case object NoFeeCollateralUtxo extends RuleBasedActorEvent
 
     object Dispute:

@@ -39,7 +39,7 @@ import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionOutput, Utxo, Utxos}
+import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
@@ -109,7 +109,7 @@ final case class RuleBasedActor(
 
         def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
-              before = RuleBasedActorEvent.Collateral.Querying(addr.toString),
+              before = RuleBasedActorEvent.Collateral.Querying(addr),
               action = cardanoBackend.utxosAt(addr),
               onError = RuleBasedActorEvent.Backend.ErrorPeerUtxos(_)
             )
@@ -531,7 +531,14 @@ final case class RuleBasedActor(
                 ) match {
                     case x if x.nonEmpty =>
                         pure(x.toList.maxBy(_._2.value.coin.value))
-                    case _ => raiseError(NoSuitableCollateralUtxosFound)
+                    case _ =>
+                        EitherT.left[(TransactionInput, TransactionOutput)](
+                          tracer.traceWith(
+                            RuleBasedActorEvent.Collateral.NotFound(peerAddr)
+                          ) >> IO.pure(
+                            NoSuitableCollateralUtxosFound(peerAddr): Error.RecoverableErrors
+                          )
+                        )
                 }
                 collateralOutput <- collateralUtxoTuple._2 match {
                     case TransactionOutput.Babbage(
@@ -550,12 +557,12 @@ final case class RuleBasedActor(
                           )
                         )
                     case _ =>
-                        EitherT.liftF(
-                          tracer
-                              .traceWith(
-                                RuleBasedActorEvent.Collateral.NotFound(config.ownPeerLabel)
-                              )
-                              .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
+                        EitherT.left[CollateralOutput](
+                          tracer.traceWith(
+                            RuleBasedActorEvent.Collateral.NotFound(peerAddr)
+                          ) >> IO.pure(
+                            NoSuitableCollateralUtxosFound(peerAddr): Error.RecoverableErrors
+                          )
                         )
                 }
                 _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
@@ -1077,11 +1084,7 @@ object RuleBasedActor {
             override val getMessage: String = wrapped.getMessage
             override def toString: String = getMessage
         }
-        case object NoSuitableCollateralUtxosFound extends Unrecoverable {
-            override def getMessage: String =
-                "Needed at least one ada-only utxo to use for plutus script collateral" +
-                    " at the peer's head address, but found none."
-        }
+        final case class NoSuitableCollateralUtxosFound(address: ShelleyAddress) extends Recoverable
 
         // Evacuation side
         final case class UnknownResolvedKzg(resolvedKzg: KzgCommitment) extends Unrecoverable {
