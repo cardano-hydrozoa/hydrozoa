@@ -38,8 +38,6 @@ object RuleBasedActorEventFormat:
                   s"No ADA-only utxo found at $address. " +
                       "Please send an ADA-only utxo for collateral to this address."
                 )
-            case Collateral.NoFeeCollateralUtxo =>
-                debug("No fee/collateral UTxO found at wallet address, retrying")
 
             case Dispute.Querying          => debug("Querying dispute utxos")
             case Dispute.Parsing           => debug("Parsing dispute utxos")

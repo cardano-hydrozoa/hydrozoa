@@ -154,6 +154,13 @@ final case class RuleBasedActor(
     private object Trace {
         def traceRight(event: RuleBasedActorEvent): EitherT[IO, Error.RecoverableErrors, Unit] =
             EitherT.right(tracer.traceWith(event))
+
+        /** Emit `event`, then short-circuit the pipeline with the recoverable `err`. */
+        def traceLeft[A](
+            event: RuleBasedActorEvent,
+            err: Error.RecoverableErrors
+        ): EitherT[IO, Error.RecoverableErrors, A] =
+            EitherT.left[A](tracer.traceWith(event) >> IO.pure(err))
     }
     import Trace.*
 
@@ -532,12 +539,9 @@ final case class RuleBasedActor(
                     case x if x.nonEmpty =>
                         pure(x.toList.maxBy(_._2.value.coin.value))
                     case _ =>
-                        EitherT.left[(TransactionInput, TransactionOutput)](
-                          tracer.traceWith(
-                            RuleBasedActorEvent.Collateral.NotFound(peerAddr)
-                          ) >> IO.pure(
-                            NoSuitableCollateralUtxosFound(peerAddr): Error.RecoverableErrors
-                          )
+                        traceLeft[(TransactionInput, TransactionOutput)](
+                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
+                          NoSuitableCollateralUtxosFound(peerAddr)
                         )
                 }
                 collateralOutput <- collateralUtxoTuple._2 match {
@@ -557,12 +561,9 @@ final case class RuleBasedActor(
                           )
                         )
                     case _ =>
-                        EitherT.left[CollateralOutput](
-                          tracer.traceWith(
-                            RuleBasedActorEvent.Collateral.NotFound(peerAddr)
-                          ) >> IO.pure(
-                            NoSuitableCollateralUtxosFound(peerAddr): Error.RecoverableErrors
-                          )
+                        traceLeft[CollateralOutput](
+                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
+                          NoSuitableCollateralUtxosFound(peerAddr)
                         )
                 }
                 _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
@@ -694,11 +695,9 @@ final case class RuleBasedActor(
                 _ <-
                     if toEvacuate.isEmpty
                     then
-                        EitherT.left[Unit](
-                          tracer.traceWith(RuleBasedActorEvent.Evacuation.NoMore) >>
-                              IO.pure(
-                                Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
-                              )
+                        traceLeft[Unit](
+                          RuleBasedActorEvent.Evacuation.NoMore,
+                          Error.QueryError.NoEvacuateesRemaining
                         )
                     else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
 
@@ -821,21 +820,19 @@ final case class RuleBasedActor(
                 feeUtxos <- Backend.utxosAtFee(walletAddress)
                 collateralUtxo <- feeUtxos.headOption match {
                     case None =>
-                        EitherT.left[CollateralUtxo](
-                          tracer.traceWith(
-                            RuleBasedActorEvent.Collateral.NoFeeCollateralUtxo
-                          ) >>
-                              IO.pure(
-                                Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
-                              )
+                        traceLeft[CollateralUtxo](
+                          RuleBasedActorEvent.Collateral.NotFound(walletAddress),
+                          NoSuitableCollateralUtxosFound(walletAddress)
                         )
                     case Some((input, output)) =>
-                        EitherT.fromEither[IO](
-                          CollateralUtxo
-                              .parse(Utxo(input, output))
-                              .left
-                              .map(_ => Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
-                        )
+                        CollateralUtxo.parse(Utxo(input, output)) match {
+                            case Right(c) => pure(c)
+                            case Left(_) =>
+                                traceLeft[CollateralUtxo](
+                                  RuleBasedActorEvent.Collateral.NotFound(walletAddress),
+                                  NoSuitableCollateralUtxosFound(walletAddress)
+                                )
+                        }
                 }
             } yield (feeUtxos, collateralUtxo)
         }

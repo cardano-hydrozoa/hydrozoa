@@ -28,7 +28,6 @@ object RuleBasedActorEvent:
         final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
         case object Found extends RuleBasedActorEvent
         final case class NotFound(address: ShelleyAddress) extends RuleBasedActorEvent
-        case object NoFeeCollateralUtxo extends RuleBasedActorEvent
 
     object Dispute:
         case object Querying extends RuleBasedActorEvent
