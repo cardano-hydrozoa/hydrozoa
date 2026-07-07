@@ -25,10 +25,9 @@ object RuleBasedActorEvent:
         case object ParsedResolved extends RuleBasedActorEvent
 
     object Collateral:
-        final case class Querying(addr: String) extends RuleBasedActorEvent
+        final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
         case object Found extends RuleBasedActorEvent
-        final case class NotFound(peerLabel: String) extends RuleBasedActorEvent
-        case object NoFeeCollateralUtxo extends RuleBasedActorEvent
+        final case class NotFound(address: ShelleyAddress) extends RuleBasedActorEvent
 
     object Fee:
         final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
