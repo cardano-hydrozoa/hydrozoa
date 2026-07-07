@@ -36,7 +36,7 @@ final case class VoteTx(
     ballotBoxProduced: BallotBox[VoteStatus.Voted],
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[VoteTx] {}
 
 object VoteTx {
@@ -176,7 +176,8 @@ private object VoteTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

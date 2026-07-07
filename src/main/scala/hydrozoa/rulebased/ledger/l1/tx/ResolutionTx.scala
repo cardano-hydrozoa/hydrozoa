@@ -27,7 +27,7 @@ final case class ResolutionTx(
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[ResolutionTx, Transaction] = Focus[ResolutionTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[ResolutionTx] {}
 
 object ResolutionTx {
@@ -153,7 +153,8 @@ private object ResolutionTxOps {
               talliedBallotBox = talliedBallotBox,
               treasuryUnresolvedUtxoSpent = treasuryUtxo,
               treasuryResolvedUtxoProduced = newTreasuryUtxo,
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

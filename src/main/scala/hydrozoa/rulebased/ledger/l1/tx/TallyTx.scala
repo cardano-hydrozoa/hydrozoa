@@ -26,7 +26,7 @@ final case class TallyTx(
     treasuryUtxo: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[TallyTx, Transaction] = Focus[TallyTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[TallyTx] {}
 
 object TallyTx {
@@ -160,7 +160,8 @@ object TallyTxOps {
               continuingBallotBox = continuingBallotBox,
               removedBallotBox = removedBallotBox,
               treasuryUtxo = treasuryUtxo,
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }
