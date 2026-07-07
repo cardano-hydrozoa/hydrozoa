@@ -36,7 +36,7 @@ final case class RatchetVoteTx(
     ballotBoxProduced: BallotBox[Voted],
     override val tx: Transaction,
     override val txLens: Lens[RatchetVoteTx, Transaction] = Focus[RatchetVoteTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[RatchetVoteTx] {}
 
 object RatchetVoteTx {
@@ -139,7 +139,8 @@ private object RatchetVoteTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

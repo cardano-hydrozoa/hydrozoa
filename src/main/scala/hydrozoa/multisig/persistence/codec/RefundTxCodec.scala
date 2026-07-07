@@ -2,14 +2,17 @@ package hydrozoa.multisig.persistence.codec
 
 import cats.syntax.functor.*
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{quantizedInstantDecoder, quantizedInstantEncoder}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizedInstantDecoder, quantizedInstantEncoder}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{transactionDecoder, transactionEncoder}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
+import hydrozoa.multisig.ledger.l2.Destination
 import hydrozoa.multisig.persistence.codec.DestinationCodec.given
-import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
-import io.circe.{Decoder, Encoder}
+import io.circe.syntax.EncoderOps
+import io.circe.{Decoder, Encoder, Json}
 import scala.annotation.unused
+import scalus.cardano.ledger.Transaction
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 /** Persistence-layer JSON codec for [[RefundTx.PostDated]] — the simplest EnrichedTx wrapper (4
   * fields, no `MultisigTreasuryUtxo` chain).
@@ -24,18 +27,40 @@ import scala.annotation.unused
   *     shape so the on-disk `requestId` field is a plain number, matching the SugarRush `u64`
   *     expectation.
   *
-  * `txLens` and `resolvedUtxos = ResolvedUtxos.empty` are derived from the case-class body, not
-  * stored in JSON; on decode the case-class default values restore them.
+  * `txLens` is derived from the case-class body, not stored in JSON. `resolvedUtxos` isn't
+  * persisted either — on decode we restore an empty `ResolvedUtxos`, since the ledger context isn't
+  * available at read time.
   */
 object RefundTxCodec:
 
     given postDatedEncoder(using @unused ev: CardanoNetwork.Section): Encoder[RefundTx.PostDated] =
         import RequestId.i64.given
-        deriveEncoder[RefundTx.PostDated]
+        Encoder.instance { pd =>
+            Json.obj(
+              "tx" -> pd.tx.asJson,
+              "refundStart" -> pd.refundStart.asJson,
+              "refundDestination" -> pd.refundDestination.asJson,
+              "requestId" -> pd.requestId.asJson
+            )
+        }
 
     given postDatedDecoder(using CardanoNetwork.Section): Decoder[RefundTx.PostDated] =
         import RequestId.i64.given
-        deriveDecoder[RefundTx.PostDated]
+        Decoder
+            .forProduct4[RefundTx.PostDated, Transaction, QuantizedInstant, Destination, RequestId](
+              "tx",
+              "refundStart",
+              "refundDestination",
+              "requestId"
+            )((tx, refundStart, refundDestination, requestId) =>
+                RefundTx.PostDated(
+                  tx = tx,
+                  refundStart = refundStart,
+                  refundDestination = refundDestination,
+                  requestId = requestId,
+                  resolvedUtxos = ResolvedUtxos.empty
+                )
+            )
 
     given refundTxEncoder(using CardanoNetwork.Section): Encoder[RefundTx] = Encoder.instance {
         case pd: RefundTx.PostDated => postDatedEncoder(using summon).apply(pd)
