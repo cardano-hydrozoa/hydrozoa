@@ -69,7 +69,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 2.seconds,
+          takeoffOffset = 10.seconds,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
             buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
