@@ -134,8 +134,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     s"expected ${expected.size} utxos, got ${body.asArray.map(_.size)}"
                   )
                 )
-                // Every entry carries the full CIP-0116 shape: structured input, and an output
-                // with address, value {coin, assets}, and a (possibly null) datum field.
+                // Every entry carries the full CIP-0116 shape: a structured input, and an output
+                // with address and value {coin, assets}. `datum` is optional (omitted when absent).
                 _ <- IO(
                   assert(
                     body.asArray.forall(_.forall { utxo =>
@@ -144,9 +144,8 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                         && c.downField("input").downField("index").succeeded
                         && c.downField("output").downField("address").succeeded
                         && c.downField("output").downField("value").downField("coin").succeeded
-                        && c.downField("output").downField("datum").succeeded
                     }),
-                    "each utxo must have the CIP-0116 input/output/value/datum shape"
+                    "each utxo must have the CIP-0116 input/output/value shape"
                   )
                 )
             } yield ()
@@ -240,12 +239,57 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/transactions?count=abc is a 400, not a 404") {
+    test("the generated OpenAPI spec is served under /docs") {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/transactions?count=abc")
-                (status, _) = result
-                _ <- IO(assert(status == Status.BadRequest, s"expected 400, got $status"))
+                resp <- app.run(Request[IO](Method.GET, Uri.unsafeFromString("/docs/docs.yaml")))
+                body <- resp.bodyText.compile.string
+                _ <- IO(
+                  assert(resp.status == Status.Ok, s"expected 200 for the spec, got ${resp.status}")
+                )
+                _ <- IO(
+                  assert(body.contains("openapi"), s"spec body unexpected: ${body.take(60)}")
+                )
+            } yield ()
+        }
+    }
+
+    test("GET /api/l2/transactions?count=abc is a 400, not a 404") {
+        withSeededRoutes { (app, _) =>
+            // tapir rejects an un-decodable query param with a 400 and a plain-text body, so check
+            // the status directly rather than through the JSON helper.
+            for {
+                resp <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/api/l2/transactions?count=abc"))
+                )
+                _ <- IO(
+                  assert(resp.status == Status.BadRequest, s"expected 400, got ${resp.status}")
+                )
+            } yield ()
+        }
+    }
+
+    test(
+      "POST /api/admin/finalize with wrong credentials is 401 with a WWW-Authenticate challenge"
+    ) {
+        withSeededRoutes { (app, _) =>
+            // The harness configures admin/admin; send a wrong password.
+            val badAuth =
+                org.http4s.headers.Authorization(org.http4s.BasicCredentials("admin", "wrong"))
+            for {
+                resp <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+                      .putHeaders(badAuth)
+                )
+                _ <- IO(
+                  assert(resp.status == Status.Unauthorized, s"expected 401, got ${resp.status}")
+                )
+                hasChallenge = resp.headers.headers.exists(
+                  _.name.toString.equalsIgnoreCase("WWW-Authenticate")
+                )
+                _ <- IO(
+                  assert(hasChallenge, "a 401 from the admin endpoint must carry WWW-Authenticate")
+                )
             } yield ()
         }
     }

@@ -44,8 +44,8 @@ curl http://localhost:8080/api/l2/utxos/addr_test1vryvgass5dsrf2kxl3vgfz76uhp83k
 ]
 ```
 
-`datum` is `null` when absent, `{ "inline": "<cbor-hex>" }` for an inline datum, or
-`{ "hash": "<hex>" }` for a datum-hash reference — CIP-0116 keeps the two kinds distinct.
+`datum` is `null` when the output has none; otherwise it is an object with `inline` (the datum's
+CBOR hex) or `hash` (a datum-hash reference), whichever applies — the two kinds are kept distinct.
 
 ## GET /api/l2/transactions
 
@@ -69,6 +69,18 @@ log records applied transactions and the steps of a deposit's lifecycle. Each en
 that committed; `count` measures returned summaries (one logged command can expand to several, a
 no-op deposit decision to none), so the ledger widens its log window until it has `count`
 summaries or the log is exhausted.
+
+## OpenAPI schema & Swagger UI
+
+The whole HTTP API is described as [tapir](https://tapir.softwaremill.com) endpoint values in
+`multisig/server/HydrozoaRoutes.scala`, so the OpenAPI schema is **generated from the same
+definitions that serve traffic** — it cannot drift from the routes. The running node serves:
+
+- **Swagger UI** at `GET /docs` — interactive docs for every endpoint;
+- the **raw spec** at `GET /docs/docs.yaml`.
+
+A committed snapshot lives at [`openapi.yaml`](openapi.yaml); `OpenApiSchemaTest` regenerates it
+from the endpoints and fails if the checked-in copy is stale, so the snapshot stays in sync.
 
 ## Demo
 

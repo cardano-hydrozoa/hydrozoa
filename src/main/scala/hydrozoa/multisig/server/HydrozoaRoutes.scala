@@ -1,27 +1,34 @@
 package hydrozoa.multisig.server
 
-import cats.data.Validated.Invalid
 import cats.effect.IO
-import fs2.Stream
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.L2LedgerReader
-import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
-import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
-import io.circe.syntax.*
-import org.http4s.circe.*
-import org.http4s.dsl.io.*
-import org.http4s.headers.Authorization
-import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
+import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
+import hydrozoa.multisig.server.TapirJson.*
+import org.http4s.HttpRoutes
 import scala.util.Try
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.Utxo
+import sttp.apispec.openapi.circe.yaml.*
+import sttp.model.StatusCode
+import sttp.model.headers.WWWAuthenticateChallenge
+import sttp.tapir.*
+import sttp.tapir.docs.openapi.{OpenAPIDocsInterpreter, OpenAPIDocsOptions}
+import sttp.tapir.generic.auto.*
+import sttp.tapir.model.UsernamePassword
+import sttp.tapir.server.ServerEndpoint
+import sttp.tapir.server.http4s.Http4sServerInterpreter
+import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-/** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
-  * proxy -- load-balancer, unified api).
+/** The Hydrozoa node's user-facing HTTP API, described as tapir endpoint values.
+  *
+  * Endpoints-as-data is what makes the OpenAPI schema (and Swagger UI) genuinely *generated* from
+  * the same definitions that serve traffic — there is one source of truth, so the docs cannot drift
+  * from the routes. The tapir http4s interpreter stays inside cats-effect: handlers are `IO`, the
+  * result is a plain `HttpRoutes[IO]`, and it mounts on the same Ember server.
   */
 class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
@@ -31,212 +38,248 @@ class HydrozoaRoutes(
     serverConfig: HydrozoaServer.Config,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
-    private given HeadConfig = headConfig
+    import HydrozoaRoutes.{apiTitle, apiVersion}
 
-    /** Optional `?count=` on `GET /api/l2/transactions`; absent ⇒ [[defaultRecentTxCount]], present
-      * but non-integer ⇒ a 400 (like a malformed address), rather than falling through to a 404.
-      */
-    private object CountQueryParam extends OptionalValidatingQueryParamDecoderMatcher[Int]("count")
+    private given HeadConfig = headConfig
 
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
 
-    /** Parse a bech32 address from the request path, or a message describing why it is malformed.
+    /** The COSE-validating decoder for user requests (deposit registrations and L2 transactions).
       */
+    private val userRequestDecoder: UserRequestDecoder = UserRequestDecoder()
+
+    /** The shared error output: an HTTP status plus an `{ error }` body. */
+    private val errorOut: EndpointOutput[(StatusCode, ErrorResponse)] =
+        statusCode.and(jsonBody[ErrorResponse])
+
+    private def fail(code: StatusCode, message: String): (StatusCode, ErrorResponse) =
+        (code, ErrorResponse(message))
+
+    /** The admin realm advertised on a `401` from the finalize endpoint. */
+    private val adminChallenge: WWWAuthenticateChallenge =
+        WWWAuthenticateChallenge.basic("Hydrozoa Admin")
+
+    /** Finalize's error output — like [[errorOut]], but carrying an optional `WWW-Authenticate`
+      * header so a `401` re-advertises the Basic challenge (as the old route did).
+      */
+    private val finalizeErrorOut: EndpointOutput[(StatusCode, Option[String], ErrorResponse)] =
+        statusCode.and(header[Option[String]]("WWW-Authenticate")).and(jsonBody[ErrorResponse])
+
+    // ---- Endpoint definitions (the single source of truth for routes + schema) ----
+
+    private val submitEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.post
+            .in("api" / "l2" / "submit")
+            .in(stringJsonBody)
+            .out(jsonBody[RequestAcceptedResponse])
+            .errorOut(errorOut)
+            .description(
+              "Submit a signed L2 transaction (a JSON UserRequest with a COSE signature)."
+            )
+            .serverLogic(body => acceptUserRequest("POST /api/l2/submit", body))
+
+    private val registerDepositEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.post
+            .in("api" / "deposit" / "register")
+            .in(stringJsonBody)
+            .out(jsonBody[RequestAcceptedResponse])
+            .errorOut(errorOut)
+            .description("Register an L1 deposit (a JSON UserRequest with a COSE signature).")
+            .serverLogic(body => acceptUserRequest("POST /api/deposit/register", body))
+
+    private val headInfoEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("api" / "head-info")
+            .out(jsonBody[HeadInfoResponse])
+            .errorOut(errorOut)
+            .description("Head parameters plus the current node time.")
+            .serverLogic(_ =>
+                IO.realTimeInstant
+                    .map(_.getEpochSecond)
+                    .map(now => Right(ApiDto.mkHeadInfoResponse(headConfig, now)))
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val l2UtxosEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("api" / "l2" / "utxos" / path[String]("address"))
+            .out(jsonBody[List[L2UtxoView]])
+            .errorOut(errorOut)
+            .description(
+              "Current L2 utxos controlled by a bech32 address (EUTXO ledger only; empty otherwise)."
+            )
+            .serverLogic(address =>
+                parseAddress(address) match {
+                    case Left(message) => IO.pure(Left(fail(StatusCode.BadRequest, message)))
+                    case Right(addr) =>
+                        l2LedgerReader
+                            .utxosByAddress(addr)
+                            .map(utxos =>
+                                Right(utxos.toList.map((in, out) => ApiDto.mkL2UtxoView(in, out)))
+                            )
+                            .handleError(err =>
+                                Left(fail(StatusCode.InternalServerError, err.getMessage))
+                            )
+                }
+            )
+
+    private val l2TransactionsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("api" / "l2" / "transactions")
+            .in(query[Option[Int]]("count"))
+            .out(jsonBody[List[L2TxSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Recent applied L2 transactions, newest first (EUTXO ledger only; empty otherwise)."
+            )
+            .serverLogic(count =>
+                l2LedgerReader
+                    .recentTransactions(count.getOrElse(defaultRecentTxCount))
+                    .map(summaries => Right(summaries.map(ApiDto.mkL2TxSummaryView).toList))
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val healthEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("health")
+            .out(jsonBody[HealthResponse])
+            .description("Liveness — always 200 while the process is serving HTTP.")
+            .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
+
+    private val finalizeEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.post
+            // Optional credentials so the security logic runs (and logs) even when the header is
+            // absent, rather than tapir short-circuiting the missing-header case.
+            .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
+            .in("api" / "admin" / "finalize")
+            .out(jsonBody[FinalizeResponse])
+            .errorOut(finalizeErrorOut)
+            .description("Trigger head finalization (admin only).")
+            .serverSecurityLogic {
+                case Some(credentials)
+                    if credentials.username == serverConfig.adminUsername
+                        && credentials.password.contains(serverConfig.adminPassword) =>
+                    IO.pure(Right(()))
+                case _ =>
+                    tracer
+                        .traceWith(UnauthorizedAdmin("POST /api/admin/finalize"))
+                        .as(
+                          Left(
+                            (
+                              StatusCode.Unauthorized,
+                              Some(adminChallenge.toString),
+                              ErrorResponse("Unauthorized")
+                            )
+                          )
+                        )
+            }
+            .serverLogic(_ =>
+                _ =>
+                    (for {
+                        _ <- tracer.traceWith(FinalizeTriggered)
+                        _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
+                        _ <- tracer.traceWith(FinalizeSignalSent)
+                    } yield Right(
+                      FinalizeResponse("success", "Head finalization triggered")
+                    )).handleErrorWith(err =>
+                        tracer
+                            .traceWith(RequestFailed("POST /api/admin/finalize", err))
+                            .as(
+                              Left(
+                                (
+                                  StatusCode.InternalServerError,
+                                  None,
+                                  ErrorResponse(err.getMessage)
+                                )
+                              )
+                            )
+                    )
+            )
+
+    /** Every API endpoint, in the order they appear in the docs. */
+    private val apiEndpoints: List[ServerEndpoint[Any, IO]] =
+        List(
+          submitEndpoint,
+          registerDepositEndpoint,
+          headInfoEndpoint,
+          l2UtxosEndpoint,
+          l2TransactionsEndpoint,
+          healthEndpoint,
+          finalizeEndpoint
+        )
+
+    /** Don't auto-document a body/param decode-failure response: our JSON bodies are raw strings
+      * whose codec never fails, so tapir's default would advertise an unreachable `text/plain` 400
+      * that contradicts the real JSON `ErrorResponse`. The genuine errors are on each endpoint's
+      * declared error output.
+      */
+    private val docsOptions: OpenAPIDocsOptions =
+        OpenAPIDocsOptions.default.copy(defaultDecodeFailureOutput = _ => None)
+
+    /** Swagger UI (served at `/docs`) + the raw OpenAPI document, derived from [[apiEndpoints]]. */
+    private val docsEndpoints: List[ServerEndpoint[Any, IO]] =
+        SwaggerInterpreter(openAPIInterpreterOptions = docsOptions)
+            .fromServerEndpoints[IO](apiEndpoints, apiTitle, apiVersion)
+
+    /** The full route set: the API plus the self-generated docs. */
+    val routes: HttpRoutes[IO] =
+        Http4sServerInterpreter[IO]().toRoutes(apiEndpoints ++ docsEndpoints)
+
+    /** The generated OpenAPI document as YAML — the artifact the golden test pins. */
+    def openApiYaml: String =
+        OpenAPIDocsInterpreter(docsOptions)
+            .toOpenAPI(apiEndpoints.map(_.endpoint), apiTitle, apiVersion)
+            .toYaml
+
+    // ---- Handlers ----
+
+    /** Parse + COSE-validate a user request, forward it to the sequencer, and return the assigned
+      * id — preserving the body / decode-error / failure tracing. Any failure is a 400.
+      */
+    private def acceptUserRequest(
+        path: String,
+        bodyText: String
+    ): IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
+        val handled =
+            for {
+                _ <- tracer.traceWith(RequestBody(path, bodyText))
+                json <- io.circe.parser.parse(bodyText) match {
+                    case Left(parseError) =>
+                        tracer.traceWith(JsonParseError(path, parseError)) *>
+                            IO.raiseError(parseError)
+                    case Right(json) => IO.pure(json)
+                }
+                userRequest <- userRequestDecoder.decodeJson(json) match {
+                    case Left(decodeError) =>
+                        tracer.traceWith(JsonDecodeError(path, decodeError)) *>
+                            tracer.traceWith(
+                              JsonDecodeErrorHistory(path, decodeError.history.toString)
+                            ) *> IO.raiseError(decodeError)
+                    case Right(request) => IO.pure(request)
+                }
+                _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
+                requestId <- requestSequencer ?: userRequest
+            } yield ApiDto.mkRequestAcceptedResponse(requestId)
+
+        handled
+            .map(Right(_))
+            .handleErrorWith(err =>
+                tracer
+                    .traceWith(RequestFailed(path, err))
+                    .as(Left(fail(StatusCode.BadRequest, err.getMessage)))
+            )
+
+    /** Parse a bech32 address, or a message describing why it is malformed. */
     private def parseAddress(bech32: String): Either[String, Address] =
         Try(Address.fromBech32(bech32)).toEither.left
             .map(err => s"Invalid bech32 address '$bech32': ${err.getMessage}")
-
-    /** Check if the provided credentials match the configured admin credentials */
-    private def checkAuth(req: org.http4s.Request[IO]): Boolean =
-        req.headers.get[Authorization] match {
-            case Some(Authorization(BasicCredentials(username, password))) =>
-                username == serverConfig.adminUsername && password == serverConfig.adminPassword
-            case _ => false
-        }
-
-    // Implicit decoders for request bodies
-    given depositRequestEntityDecoder(using
-        CardanoNetwork.Section
-    ): EntityDecoder[IO, UserRequest] =
-        jsonOf[IO, UserRequest]
-
-    private val userRequestDecoder: JsonCodecs.UserRequestDecoder = UserRequestDecoder()
-
-    val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
-
-        // POST /api/l2/submit - Submit an L2 transaction
-        case req @ POST -> Root / "api" / "l2" / "submit" =>
-            val path = "POST /api/l2/submit"
-            val result: IO[org.http4s.Response[IO]] = for {
-                bodyText <- req.bodyText.compile.string
-                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
-                _ <- tracer.traceWith(RequestBody(path, bodyText))
-                // Try to parse as JSON to get better error messages
-                _ <- io.circe.parser.parse(bodyText) match {
-                    case Left(parseError) =>
-                        tracer.traceWith(JsonParseError(path, parseError))
-                    case Right(json) =>
-                        userRequestDecoder.decodeJson(json) match {
-                            case Left(decodeError) =>
-                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
-                                    tracer.traceWith(
-                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
-                                    )
-                            case Right(_) =>
-                                IO.unit
-                        }
-                }
-                // Re-create request with the body we just read
-                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
-                transactionRequest <- newReq.as[UserRequest]
-                _ <- tracer.traceWith(RequestDecoded(path, transactionRequest.toString))
-                // Send synchronous request to RequestSequencer and get back RequestId
-                requestId <- requestSequencer ?: transactionRequest
-                response = RequestAccepted(requestId = requestId)
-                resp <- Ok(response.asJson)
-            } yield resp
-
-            result.handleErrorWith { err =>
-                tracer.traceWith(RequestFailed(path, err)) *>
-                    BadRequest(Error(error = err.getMessage).asJson)
-            }
-
-        // POST /api/deposit/register - Register a deposit
-        case req @ POST -> Root / "api" / "deposit" / "register" =>
-            val path = "POST /api/deposit/register"
-            val result: IO[org.http4s.Response[IO]] = for {
-                bodyText <- req.bodyText.compile.string
-                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
-                _ <- tracer.traceWith(RequestBody(path, bodyText))
-                _ <- io.circe.parser.parse(bodyText) match {
-                    case Left(parseError) =>
-                        tracer.traceWith(JsonParseError(path, parseError))
-                    case Right(json) =>
-                        io.circe.Decoder[UserRequest].decodeJson(json) match {
-                            case Left(decodeError) =>
-                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
-                                    tracer.traceWith(
-                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
-                                    )
-                            case Right(_) =>
-                                IO.unit
-                        }
-                }
-                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
-                depositRequest <- newReq.as[UserRequest]
-                _ <- tracer.traceWith(RequestDecoded(path, depositRequest.toString))
-                requestId <- requestSequencer ?: depositRequest
-                response = RequestAccepted(requestId)
-                resp <- Ok(response.asJson)
-            } yield resp
-
-            result.handleErrorWith { err =>
-                tracer.traceWith(RequestFailed(path, err)) *>
-                    BadRequest(Error(error = err.getMessage).asJson)
-            }
-
-        // GET /api/head-info
-        case GET -> Root / "api" / "head-info" =>
-            val result: IO[org.http4s.Response[IO]] = for {
-                currentTimePosixSeconds <- IO.realTimeInstant.map(_.getEpochSecond)
-                resp <- Ok(
-                  HeadInfo(
-                    headId = headConfig.headId,
-                    headAddress = headConfig.headMultisigAddress,
-                    multisigRegimeUtxo = headConfig.multisigRegimeUtxo.input,
-                    treasuryBeaconToken = CardanoNativeToken(
-                      headConfig.headMultisigScript.policyId,
-                      headConfig.headTokenNames.treasuryTokenName
-                    ),
-                    submissionDurationSeconds =
-                        headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
-                    absorptionStartOffsetSeconds =
-                        headConfig.txTiming.absorptionStartOffsetDuration.finiteDuration.toSeconds,
-                    refundStartOffsetSeconds =
-                        headConfig.txTiming.refundStartOffsetDuration.finiteDuration.toSeconds,
-                    currentTimePosixSeconds = currentTimePosixSeconds,
-                    maxNonPlutusTxFee = headConfig.maxNonPlutusTxFee
-                  ).asJson
-                )
-            } yield resp
-
-            result.handleErrorWith { err =>
-                InternalServerError(Error(error = err.getMessage).asJson)
-            }
-
-        // GET /api/l2/utxos/{address} - current L2 utxos controlled by an address, CIP-0116-style.
-        // Returns data only on an EUTXO-backed node; empty otherwise (see L2LedgerReader).
-        case GET -> Root / "api" / "l2" / "utxos" / address =>
-            parseAddress(address) match {
-                case Left(err) => BadRequest(Error(error = err).asJson)
-                case Right(addr) =>
-                    l2LedgerReader
-                        .utxosByAddress(addr)
-                        .flatMap(utxos =>
-                            Ok(utxos.toList.map((input, output) => Utxo(input, output)).asJson)
-                        )
-                        .handleErrorWith(err =>
-                            InternalServerError(Error(error = err.getMessage).asJson)
-                        )
-            }
-
-        // GET /api/l2/transactions?count=N - recent applied L2 transactions, newest first.
-        // Returns data only on an EUTXO-backed node; empty otherwise (see L2LedgerReader).
-        case GET -> Root / "api" / "l2" / "transactions" :? CountQueryParam(count) =>
-            count match {
-                case Some(Invalid(errs)) =>
-                    BadRequest(
-                      Error(error =
-                          s"Invalid 'count' parameter: ${errs.toList.map(_.sanitized).mkString(", ")}"
-                      ).asJson
-                    )
-                case validated =>
-                    l2LedgerReader
-                        .recentTransactions(
-                          validated.flatMap(_.toOption).getOrElse(defaultRecentTxCount)
-                        )
-                        .flatMap(summaries => Ok(summaries.asJson))
-                        .handleErrorWith(err =>
-                            InternalServerError(Error(error = err.getMessage).asJson)
-                        )
-            }
-
-        // GET /health - Health check endpoint
-        case GET -> Root / "health" =>
-            Ok(io.circe.Json.obj("status" -> "ok".asJson))
-
-        // POST /api/admin/finalize - Trigger head finalization (admin only)
-        case req @ POST -> Root / "api" / "admin" / "finalize" =>
-            val path = "POST /api/admin/finalize"
-            if !checkAuth(req) then
-                tracer.traceWith(UnauthorizedAdmin(path)) *>
-                    Unauthorized(
-                      org.http4s.headers.`WWW-Authenticate`(
-                        org.http4s.Challenge("Basic", "Hydrozoa Admin")
-                      )
-                    )
-            else
-                val result: IO[org.http4s.Response[IO]] = for {
-                    _ <- tracer.traceWith(FinalizeTriggered)
-                    _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
-                    _ <- tracer.traceWith(FinalizeSignalSent)
-                    resp <- Ok(
-                      io.circe.Json.obj(
-                        "status" -> "success".asJson,
-                        "message" -> "Head finalization triggered".asJson
-                      )
-                    )
-                } yield resp
-
-                result.handleErrorWith { err =>
-                    tracer.traceWith(RequestFailed(path, err)) *>
-                        InternalServerError(Error(error = err.getMessage).asJson)
-                }
-    }
 }
 
 object HydrozoaRoutes {
+    val apiTitle: String = "Hydrozoa node API"
+    val apiVersion: String = "0.1.0"
+
     def apply(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
