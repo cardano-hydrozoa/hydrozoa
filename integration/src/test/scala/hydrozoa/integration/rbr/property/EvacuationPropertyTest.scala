@@ -18,10 +18,14 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
+import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.lib.classification.Histogram
 import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.*
+import scalus.cardano.ledger.{Utxo, Utxos}
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers}
 
@@ -102,6 +106,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             _ <- step1b_startPeriodicRequestLoop
             _ <- step2_awaitFallbackToRuleBasedHandoff
             _ <- step3_awaitResolutionSubmitted
+            _ <- step4_assertTerminalHistogram
         yield true
 
     /** State + handles threaded between steps. */
@@ -111,6 +116,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
+        periodicRequestFiber: Ref[IO, Option[FiberIO[Nothing]]],
     )
 
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
@@ -126,10 +132,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       */
     private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
-            ctx <- ask
-            _ <- lift(
-              (IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void
-            )
+            ctx   <- ask
+            fiber <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start)
+            _     <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
         yield ()
 
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
@@ -144,6 +149,28 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             _   <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
         yield ()
 
+    /** After resolution lands, cancel the periodic-request loop, wait a beat for any in-flight
+      * tx to settle, snapshot the shared mock L1, and check the UTxO distribution matches the
+      * expected terminal buckets.
+      */
+    private def step4_assertTerminalHistogram: test.TestM[Ctx, Unit] =
+        for
+            ctx    <- ask
+            _      <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
+            _      <- lift(IO.sleep(quiescenceDelay))
+            utxos  <- lift(ctx.harness.l1Snapshot)
+            actual <- lift(runClassifier(utxos)(using ctx.multiNodeConfig))
+            expected = expectedCardinalities
+            _ <- assertWith(
+              actual == expected,
+              s"Cardinality mismatch:\n  expected: $expected\n  actual:   $actual",
+            )
+        yield ()
+
+    // Time to wait after cancelling the periodic loop for any in-flight tx to reach the mock.
+    // 2s covers a full CL polling period + tx submission at the fast harness timing.
+    private val quiescenceDelay: FiniteDuration = 2.seconds
+
     // ------------------------------------------------------------------
     // Ctx bring-up
     // ------------------------------------------------------------------
@@ -155,8 +182,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
-            fallbackDispatched  <- Resource.eval(Deferred[IO, Unit])
-            resolutionSubmitted <- Resource.eval(Deferred[IO, Unit])
+            fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
+            resolutionSubmitted  <- Resource.eval(Deferred[IO, Unit])
+            periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
@@ -202,6 +230,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           harness = harness,
           fallbackDispatched = fallbackDispatched,
           resolutionSubmitted = resolutionSubmitted,
+          periodicRequestFiber = periodicRequestFiber,
         )
 
     // ------------------------------------------------------------------
@@ -300,3 +329,50 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
             case MultiPeerHeadHarness.Event.Coil(_, _) => IO.unit
         }
+
+    // ------------------------------------------------------------------
+    // Terminal-state classifier
+    // ------------------------------------------------------------------
+
+    /** Bucket every UTxO in the shared L1 snapshot via [[RBRClassifier]]. Raises on ambiguity —
+      * classifier fns are meant to be disjoint. Returns a total map keyed by every place id so
+      * comparisons against `expectedCardinalities` see missing buckets as 0.
+      */
+    private def runClassifier(
+        utxos: Utxos
+    )(using MultiNodeConfig): IO[Map[RBRPlaceId, Int]] =
+        val classifier = new RBRClassifier
+        Histogram.empty(classifier).addAll(utxos.toList.map { case (i, o) => Utxo(i, o) }).toEither match
+            case Left(errs) =>
+                IO.raiseError(
+                  new RuntimeException(s"Ambiguous UTxO classification: ${errs.toList}")
+                )
+            case Right(hist) =>
+                IO.pure(RBRPlaceId.values.toList.map(k => k -> hist(k)).toMap)
+
+    /** Expected terminal cardinalities: init → settle-v1 → fallback → vote → tally → resolve on
+      * the happy path (no evacuation — blocked by the KZG G2 TODO in [[FallbackTx]]).
+      *   - `CollateralPlaceId -> 0`: the [[RBRClassifier]] identifies collateral by the
+      *     `"collateral"` datum sentinel, which only exists in the synthetic
+      *     [[InitialDisputeUtxos]] fixture — the real tx builders draw collateral from plain
+      *     Ada wallet UTxOs (no datum). Preserved collateral therefore lands in
+      *     [[AmbientPlaceId]] here. TODO: the right way to bucket collateral in an end-to-end
+      *     scenario is to walk the tx graph and mark any output that is later consumed as a
+      *     `collateral_input` of some downstream tx — i.e. classify by role in tx history
+      *     rather than by content sentinel.
+      *   - `AmbientPlaceId -> 4`: `nHeadPeers = 2` (2 collateral + 2 change/genesis leftovers);
+      *     fixed for this scenario, observed via instrumentation run.
+      */
+    private val expectedCardinalities: Map[RBRPlaceId, Int] =
+        Map(
+          TreasuryRefPlaceId        -> 1,
+          DisputeRefPlaceId         -> 1,
+          ResolvedTreasuryPlaceId   -> 1,
+          UnresolvedTreasuryPlaceId -> 0,
+          VotedPlaceId              -> 0,
+          UnvotedPlaceId            -> 0,
+          CollateralPlaceId         -> 0,
+          EvacuationOutputPlaceId   -> 0,
+          PayoutObligationsPlaceId  -> 0,
+          AmbientPlaceId            -> 4,
+        )
