@@ -29,7 +29,7 @@ final case class DeploymentTx(
     refScriptUtxo: TransactionInput,
     override val tx: Transaction,
     override val txLens: Lens[DeploymentTx, Transaction] = Focus[DeploymentTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[DeploymentTx] {}
 
 object DeploymentTx {

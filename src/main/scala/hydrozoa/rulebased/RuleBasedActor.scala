@@ -39,7 +39,7 @@ import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
-import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionOutput, Utxo, Utxos}
+import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
@@ -109,7 +109,7 @@ final case class RuleBasedActor(
 
         def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
-              before = RuleBasedActorEvent.Collateral.Querying(addr.toString),
+              before = RuleBasedActorEvent.Collateral.Querying(addr),
               action = cardanoBackend.utxosAt(addr),
               onError = RuleBasedActorEvent.Backend.ErrorPeerUtxos(_)
             )
@@ -154,6 +154,13 @@ final case class RuleBasedActor(
     private object Trace {
         def traceRight(event: RuleBasedActorEvent): EitherT[IO, Error.RecoverableErrors, Unit] =
             EitherT.right(tracer.traceWith(event))
+
+        /** Emit `event`, then short-circuit the pipeline with the recoverable `err`. */
+        def traceLeft[A](
+            event: RuleBasedActorEvent,
+            err: Error.RecoverableErrors
+        ): EitherT[IO, Error.RecoverableErrors, A] =
+            EitherT.left[A](tracer.traceWith(event) >> IO.pure(err))
     }
     import Trace.*
 
@@ -538,7 +545,11 @@ final case class RuleBasedActor(
                 ) match {
                     case x if x.nonEmpty =>
                         pure(x.toList.maxBy(_._2.value.coin.value))
-                    case _ => raiseError(NoSuitableCollateralUtxosFound)
+                    case _ =>
+                        traceLeft[(TransactionInput, TransactionOutput)](
+                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
+                          NoSuitableCollateralUtxosFound(peerAddr)
+                        )
                 }
                 collateralOutput <- collateralUtxoTuple._2 match {
                     case TransactionOutput.Babbage(
@@ -557,12 +568,9 @@ final case class RuleBasedActor(
                           )
                         )
                     case _ =>
-                        EitherT.liftF(
-                          tracer
-                              .traceWith(
-                                RuleBasedActorEvent.Collateral.NotFound(config.ownPeerLabel)
-                              )
-                              .flatMap(_ => IO.raiseError(NoSuitableCollateralUtxosFound))
+                        traceLeft[CollateralOutput](
+                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
+                          NoSuitableCollateralUtxosFound(peerAddr)
                         )
                 }
                 _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
@@ -694,11 +702,9 @@ final case class RuleBasedActor(
                 _ <-
                     if toEvacuate.isEmpty
                     then
-                        EitherT.left[Unit](
-                          tracer.traceWith(RuleBasedActorEvent.Evacuation.NoMore) >>
-                              IO.pure(
-                                Error.QueryError.NoEvacuateesRemaining: Error.RecoverableErrors
-                              )
+                        traceLeft[Unit](
+                          RuleBasedActorEvent.Evacuation.NoMore,
+                          Error.QueryError.NoEvacuateesRemaining
                         )
                     else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
 
@@ -821,21 +827,19 @@ final case class RuleBasedActor(
                 feeUtxos <- Backend.utxosAtFee(walletAddress)
                 collateralUtxo <- feeUtxos.headOption match {
                     case None =>
-                        EitherT.left[CollateralUtxo](
-                          tracer.traceWith(
-                            RuleBasedActorEvent.Collateral.NoFeeCollateralUtxo
-                          ) >>
-                              IO.pure(
-                                Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
-                              )
+                        traceLeft[CollateralUtxo](
+                          RuleBasedActorEvent.Collateral.NotFound(walletAddress),
+                          NoSuitableCollateralUtxosFound(walletAddress)
                         )
                     case Some((input, output)) =>
-                        EitherT.fromEither[IO](
-                          CollateralUtxo
-                              .parse(Utxo(input, output))
-                              .left
-                              .map(_ => Error.QueryError.NoTreasuryFound: Error.RecoverableErrors)
-                        )
+                        CollateralUtxo.parse(Utxo(input, output)) match {
+                            case Right(c) => pure(c)
+                            case Left(_) =>
+                                traceLeft[CollateralUtxo](
+                                  RuleBasedActorEvent.Collateral.NotFound(walletAddress),
+                                  NoSuitableCollateralUtxosFound(walletAddress)
+                                )
+                        }
                 }
             } yield (feeUtxos, collateralUtxo)
         }
@@ -1084,11 +1088,7 @@ object RuleBasedActor {
             override val getMessage: String = wrapped.getMessage
             override def toString: String = getMessage
         }
-        case object NoSuitableCollateralUtxosFound extends Unrecoverable {
-            override def getMessage: String =
-                "Needed at least one ada-only utxo to use for plutus script collateral" +
-                    " at the peer's head address, but found none."
-        }
+        final case class NoSuitableCollateralUtxosFound(address: ShelleyAddress) extends Recoverable
 
         // Evacuation side
         final case class UnknownResolvedKzg(resolvedKzg: KzgCommitment) extends Unrecoverable {
