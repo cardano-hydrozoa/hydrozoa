@@ -183,14 +183,18 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
             coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
-            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
-              tracer = humanFormatTracer |+| observerTracer(
+            observer <- Resource.eval(
+              observerTracer(
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
                 allHeadsBuildingVote,
                 allHeadsVoteSubmittedOk,
                 allCoilsHandledDispute,
-              ),
+              )
+            )
+
+            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
+              tracer = humanFormatTracer |+| observer,
               handle = {
                   case (PeerId.Head(peerNum), conns) =>
                       IO.fromOption(conns.requestSequencer)(
@@ -340,12 +344,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         allHeadsBuildingVote: Deferred[IO, Unit],
         allHeadsVoteSubmittedOk: Deferred[IO, Unit],
         allCoilsHandledDispute: Deferred[IO, Unit],
-    ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        val peersAtMajor2: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
-        val headsBuildingVote: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
-        val headsVoteSubmittedOk: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
-        val coilsHandledDispute: Ref[IO, Set[Int]] = Ref.unsafe(Set.empty)
-
+    ): IO[ContraTracer[IO, MultiPeerHeadHarness.Event]] =
         def lastMajorVersion(effects: StackEffects.HardConfirmed): Option[Int] =
             effects match {
                 case _: StackEffects.HardConfirmed.Initial => None
@@ -358,7 +357,12 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                     }
             }
 
-        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+        for
+            peersAtMajor2       <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            headsBuildingVote   <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            headsVoteSubmittedOk <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            coilsHandledDispute <- Ref[IO].of(Set.empty[Int])
+        yield ContraTracer[IO, MultiPeerHeadHarness.Event] {
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
                 evt match {
                     case CommonChildEvent.SlowConsensusActor(
