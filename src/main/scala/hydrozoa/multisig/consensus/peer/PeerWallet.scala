@@ -74,12 +74,10 @@ final class PeerWallet(
 
     /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1. Returns `(coseKeyCborHex,
       * coseSignatureCborHex)` — the shape the request-side JSON codec unpacks in
-      * [[hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder.validateCoseSignature]]. The
-      * "address" bytes required by CIP-30 are stubbed with the exported 32-byte public key, which
-      * the server-side verifier doesn't check against a Cardano address anyway.
+      * [[hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder.validateCoseSignature]].
       */
     def signCoseCip30(payload: Array[Byte]): (String, String) =
-        walletModule.signCoseCip30(payload, exportVerificationKey.bytes, verificationKey, signingKey)
+        walletModule.signCoseCip30(payload, verificationKey, signingKey)
 }
 
 object PeerWallet:

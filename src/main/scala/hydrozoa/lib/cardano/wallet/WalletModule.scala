@@ -1,6 +1,8 @@
 package hydrozoa.lib.cardano.wallet
 
+import com.bloxbean.cardano.client.address.{AddressProvider, Credential}
 import com.bloxbean.cardano.client.cip.cip30.CIP30DataSigner
+import com.bloxbean.cardano.client.common.model.Networks
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
 import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
@@ -69,12 +71,12 @@ trait WalletModule:
 
     /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1, returning the (coseKey, coseSignature)
       * pair as CBOR-encoded hex strings — the shape [[hydrozoa.multisig.server.JsonCodecs]] expects
-      * on the request wire. The `addressBytes` argument goes into the COSE protected headers and is
-      * not otherwise validated by the server-side verifier.
+      * on the request wire. The COSE "address" header is derived internally as an enterprise
+      * address of `verificationKey`'s payment credential; bloxbean's `CIP30DataSigner.verify` walks
+      * back to that credential when validating the signature.
       */
     def signCoseCip30(
         payload: Array[Byte],
-        addressBytes: Array[Byte],
         verificationKey: VerificationKey,
         signingKey: SigningKey
     ): (String, String)
@@ -122,10 +124,13 @@ object WalletModule {
 
         override def signCoseCip30(
             payload: Array[Byte],
-            addressBytes: Array[Byte],
             verificationKey: VerificationKey,
             signingKey: SigningKey
         ): (String, String) =
+            val keyHash = Blake2bUtil.blake2bHash224(verificationKey.getKeyData)
+            val addressBytes = AddressProvider
+                .getEntAddress(Credential.fromKey(keyHash), Networks.testnet())
+                .getBytes
             val ds = CIP30DataSigner.INSTANCE.signData(
               addressBytes,
               payload,
@@ -157,10 +162,13 @@ object WalletModule {
 
         override def signCoseCip30(
             payload: Array[Byte],
-            addressBytes: Array[Byte],
             verificationKey: VerificationKey,
             signingKey: SigningKey
         ): (String, String) =
+            val keyHash = Blake2bUtil.blake2bHash224(verificationKey.bytes)
+            val addressBytes = AddressProvider
+                .getEntAddress(Credential.fromKey(keyHash), Networks.testnet())
+                .getBytes
             val ds = CIP30DataSigner.INSTANCE.signData(
               addressBytes,
               payload,
