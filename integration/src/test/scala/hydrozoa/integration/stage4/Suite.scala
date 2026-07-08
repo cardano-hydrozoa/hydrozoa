@@ -28,7 +28,6 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import hydrozoa.multisig.persistence.{BackendStore, Cf}
-import hydrozoa.multisig.server.SubmissionClient
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -133,7 +132,9 @@ case class Stage4Suite(
             // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
             submittedRequestIds <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
 
-            hooks = MultiPeerHeadHarness.Hooks[Option[Stage4PeerHandle]](
+            // Hooks.handle is unused now — each head peer's SubmissionClient is built by the
+            // harness against its in-process HydrozoaRoutes and exposed on Peer[H].submissionClient.
+            hooks = MultiPeerHeadHarness.Hooks[Unit](
                       tracer = Plugin.tracerOf(
                         perPeer,
                         perCoil,
@@ -143,21 +144,7 @@ case class Stage4Suite(
                         effectsLandedSignal,
                         fallbackEnteredSignal,
                       ),
-                      handle = {
-                          case (PeerId.Head(peerNum), conns) =>
-                              IO.pure(
-                                Some(
-                                  Stage4PeerHandle(
-                                    SubmissionClient.direct(
-                                      conns.requestSequencer.getOrElse(
-                                        sys.error(s"head peer $peerNum missing RequestSequencer")
-                                      )
-                                    )
-                                  )
-                                )
-                              )
-                          case (_: PeerId.Coil, _) => IO.pure(None)
-                      },
+                      handle = (_, _) => IO.unit,
                     )
             harness <- MultiPeerHeadHarness.resource(
                            MultiPeerHeadHarness.Inputs(
@@ -175,13 +162,7 @@ case class Stage4Suite(
           static = Stage4SutStatic(
             system = harness.system,
             cardanoBackend = harness.cardanoBackend,
-            // Head peers always yield `Some` (see the `Hooks.handle` above); crash loudly if the
-            // invariant is violated so downstream doesn't silently drop peers.
-            peers = harness.peers.map { case (n, p) =>
-                n -> p.handle.getOrElse(
-                  sys.error(s"head peer $n missing Stage4PeerHandle after harness bring-up")
-                )
-            },
+            peers = harness.peers.map { case (n, p) => n -> p.submissionClient },
             backendStores = harness.peers.map { case (n, p) => n -> p.backendStore },
             log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
           ),
