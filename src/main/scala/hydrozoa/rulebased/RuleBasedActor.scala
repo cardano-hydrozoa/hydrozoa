@@ -257,12 +257,19 @@ final case class RuleBasedActor(
                         RuleBasedActor
                             .lastSecMatchingVersion(r.partitions, treasuryVersionMajor) match {
                             case Some(multiSec) =>
+                                // `HardAckAggregator.collectSecSignatures` stores sigs in
+                                // `secSigners` order = `allHeadPeers.sorted ++
+                                // coilPeers.sorted.take(coilQuorum)`. Head sigs occupy the
+                                // first `nHeadPeers` positions; the tail is the coil quorum,
+                                // dense (only signers appear — no `None` slots).
+                                val (head, coil) = multiSec.headerMultiSigned
+                                    .splitAt(config.nHeadPeers.convert)
                                 IO.pure(
                                   Right(
                                     DisputeAction.Vote(
                                       sec = RuleBasedActor.toOnchain(multiSec.commitment),
-                                      signatures = multiSec.headerMultiSigned,
-                                      coilSignatures = Nil // coil-side recovery deferred
+                                      signatures = head,
+                                      coilSignatures = coil.map(Some(_))
                                     )
                                   )
                                 )

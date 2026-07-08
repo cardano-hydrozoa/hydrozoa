@@ -735,10 +735,6 @@ trait CardanoLiaison(
                         )
                     }
 
-                    fallbackAction = actionsToSubmit.collectFirst {
-                        case a: Action.FallbackToRuleBased => a
-                    }
-
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
@@ -757,25 +753,24 @@ trait CardanoLiaison(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
 
-                    // Post-submission: fire FallbackToRuleBasedDispatched and signal the regime
-                    // manager only after the fallback tx was accepted by the backend. "Dispatched"
-                    // denotes confirmed submission, not intent — pre-effect intent is logged
-                    // earlier as ActionsDispatched.
-                    _ <- fallbackAction match {
-                        case None => IO.unit
-                        case Some(action) =>
-                            val id = action.tx.tx.id
-                            val submittedOk = submitRet.exists { case (etx, ret) =>
-                                etx.tx.id == id && ret.isRight
+                    // Every peer that sees a known fallback tx on L1 hands off — not just the
+                    // submitter. MRM handler is idempotent so re-fires are safe.
+                    _ <- state.fallbackEffects.values.toList
+                        .traverse { ft =>
+                            cardanoBackend.isTxKnown(ft.tx.id).map {
+                                case Right(true) => Some(ft)
+                                case _           => None
                             }
-                            IO.whenA(submittedOk)(
-                              tracer.traceWith(
-                                CardanoLiaisonEvent.FallbackToRuleBasedDispatched(id)
-                              ) >> (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased(
-                                action.tx
-                              ))
-                            )
-                    }
+                        }
+                        .map(_.flatten.headOption)
+                        .flatMap {
+                            case None => IO.unit
+                            case Some(ft) =>
+                                tracer.traceWith(
+                                  CardanoLiaisonEvent.FallbackToRuleBasedDispatched(ft.tx.id)
+                                ) >>
+                                    (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased(ft))
+                        }
 
                 } yield ()
         }

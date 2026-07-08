@@ -215,16 +215,20 @@ object MultiPeerHeadHarness:
      * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
       * `connectionsDeferred` resolves.
       */
-    case class Hooks[H, C](
+    /** Test-side wiring — one `PeerId`-keyed hook per concern. Callers that only need a head-side
+      * handle can use `H = Option[HeadHandle]` and return `None` from the coil branch; likewise
+      * `wrapBackend` can pattern-match on `PeerId.Head` / `PeerId.Coil` when the wrap differs
+      * (e.g. only head peers get firewalled).
+      */
+    case class Hooks[H](
         tracer: ContraTracer[IO, Event],
-        peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
-        coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
+        handle: (PeerId, HeadMultisigRegimeManager.Connections) => IO[H],
         // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
-        wrapPeerBackend: (HeadPeerNumber, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
+        wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
-    /** Per-peer artifacts exposed to callers: resolved connections, persistence backend, and the
-      * caller-derived handle.
+    /** Per-node artifacts exposed to callers: resolved connections, persistence backend, and the
+      * caller-derived handle. Used for both head peers and coil peers.
       */
     case class Peer[H](
         connections: HeadMultisigRegimeManager.Connections,
@@ -232,30 +236,30 @@ object MultiPeerHeadHarness:
         handle: H,
     )
 
-    case class Coil[C](
+    case class Coil[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
-        handle: C,
+        handle: H,
     )
 
     /** Everything the harness yields. `sutErrors` is appended to by the error drainer (one entry
       * per uncaught actor exception); callers read it post-run.
       */
-    case class Harness[H, C](
+    case class Harness[H](
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
         peers: Map[HeadPeerNumber, Peer[H]],
-        coils: Map[CoilPeerNumber, Coil[C]],
+        coils: Map[CoilPeerNumber, Coil[H]],
         sutErrors: Ref[IO, List[String]],
     )
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns
       * everything; release cancels the CL tick fibers and the error drainer.
       */
-    def resource[H, C](
+    def resource[H](
         inputs: Inputs,
-        hooks: Hooks[H, C],
-    ): Resource[IO, Harness[H, C]] =
+        hooks: Hooks[H],
+    ): Resource[IO, Harness[H]] =
         import inputs.*
         import inputs.config.*
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
@@ -287,7 +291,7 @@ object MultiPeerHeadHarness:
                                     .buildPeer(
                                       peerNum,
                                       system,
-                                      hooks.wrapPeerBackend(peerNum, cardanoBackend),
+                                      hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
@@ -304,7 +308,7 @@ object MultiPeerHeadHarness:
                                       coilConfig,
                                       coilNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                                       multiNodeConfig,
                                       transports.coilUplinks(coilNum),
                                       hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -350,7 +354,7 @@ object MultiPeerHeadHarness:
                  )
             peerEntries <- Resource.eval(
                                peerConnections.toList.traverse { case (peerNum, conns) =>
-                                   hooks.peerHandle(peerNum, conns).map { h =>
+                                   hooks.handle(PeerId.Head(peerNum), conns).map { h =>
                                        peerNum -> Peer(
                                          connections = conns,
                                          backendStore = peerMrms(peerNum).backendStore,
@@ -361,7 +365,7 @@ object MultiPeerHeadHarness:
                            )
             coilEntries <- Resource.eval(
                                coilConnections.toList.traverse { case (coilNum, conns) =>
-                                   hooks.coilHandle(coilNum, conns).map { h =>
+                                   hooks.handle(PeerId.Coil(coilNum), conns).map { h =>
                                        coilNum -> Coil(
                                          connections = conns,
                                          backendStore = coilMrms(coilNum).backendStore,
