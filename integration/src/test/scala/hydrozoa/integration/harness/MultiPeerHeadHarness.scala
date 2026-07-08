@@ -253,6 +253,7 @@ object MultiPeerHeadHarness:
     case class Harness[H](
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
+        l1Snapshot: IO[Utxos],
         peers: Map[HeadPeerNumber, Peer[H]],
         coils: Map[CoilPeerNumber, Coil[H]],
         sutErrors: Ref[IO, List[String]],
@@ -276,14 +277,15 @@ object MultiPeerHeadHarness:
                      PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
                  )
 
-            system         <- ActorSystem[IO](label)
-            cardanoBackend <- Resource.eval(
-                                  CardanoBackend.mkMock(
-                                    preinitPeerUtxosL1,
-                                    multiNodeConfig.headConfig.scriptReferenceUtxos,
-                                    multiNodeConfig.headConfig.cardanoInfo,
-                                  )
-                              )
+            system                     <- ActorSystem[IO](label)
+            backendAndSnapshot         <- Resource.eval(
+                                              CardanoBackend.mkMock(
+                                                preinitPeerUtxosL1,
+                                                multiNodeConfig.headConfig.scriptReferenceUtxos,
+                                                multiNodeConfig.headConfig.cardanoInfo,
+                                              )
+                                          )
+            (cardanoBackend, l1Snapshot) = backendAndSnapshot
             transports <- Transport.setup(
                               transportMode,
                               multiNodeConfig,
@@ -388,6 +390,7 @@ object MultiPeerHeadHarness:
         yield Harness(
           system = system,
           cardanoBackend = cardanoBackend,
+          l1Snapshot = l1Snapshot,
           peers = peerEntries.toMap,
           coils = coilEntries.toMap,
           sutErrors = sutErrors,
@@ -463,11 +466,11 @@ object MultiPeerHeadHarness:
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
             scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
-        ): IO[L1Backend[IO]] =
+        ): IO[(L1Backend[IO], IO[Utxos])] =
             val genesisUtxos: Utxos =
                 preinitPeerUtxosL1.values.reduce(_ ++ _) ++
                     scriptReferenceUtxos.toList.map(_.toTuple).toMap
-            CardanoBackendMock.mockIO(
+            CardanoBackendMock.mockIOWithSnapshot(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
                   Context(
