@@ -69,17 +69,18 @@ trait WalletModule:
         signingKey: SigningKey
     ): IArray[Byte]
 
-    /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1, returning the (coseKey, coseSignature)
-      * pair as CBOR-encoded hex strings — the shape [[hydrozoa.multisig.server.JsonCodecs]] expects
-      * on the request wire. The COSE "address" header is derived internally as an enterprise
-      * address of `verificationKey`'s payment credential; bloxbean's `CIP30DataSigner.verify` walks
-      * back to that credential when validating the signature.
+    /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1, returning a [[Cip30SignedData]] wrapping
+      * the (coseKey, coseSignature) CBOR-hex pair — the shape
+      * [[hydrozoa.multisig.server.JsonCodecs]] expects on the request wire. The COSE "address"
+      * header is derived internally as an enterprise address of `verificationKey`'s payment
+      * credential; bloxbean's `CIP30DataSigner.verify` walks back to that credential when
+      * validating the signature.
       */
     def signCoseCip30(
         payload: Array[Byte],
         verificationKey: VerificationKey,
         signingKey: SigningKey
-    ): (String, String)
+    ): Cip30SignedData
 
 object WalletModule {
     // TODO: this may be moved to test
@@ -126,7 +127,7 @@ object WalletModule {
             payload: Array[Byte],
             verificationKey: VerificationKey,
             signingKey: SigningKey
-        ): (String, String) =
+        ): Cip30SignedData =
             val keyHash = Blake2bUtil.blake2bHash224(verificationKey.getKeyData)
             val addressBytes = AddressProvider
                 .getEntAddress(Credential.fromKey(keyHash), Networks.testnet())
@@ -137,7 +138,7 @@ object WalletModule {
               signingKey.getKeyData,
               verificationKey.getKeyData
             )
-            (ds.key(), ds.signature())
+            Cip30SignedData(coseKeyCborHex = ds.key(), coseSignatureCborHex = ds.signature())
 
     object Scalus extends WalletModule:
         override type VerificationKey = ScalusVerificationKey
@@ -164,7 +165,7 @@ object WalletModule {
             payload: Array[Byte],
             verificationKey: VerificationKey,
             signingKey: SigningKey
-        ): (String, String) =
+        ): Cip30SignedData =
             val keyHash = Blake2bUtil.blake2bHash224(verificationKey.bytes)
             val addressBytes = AddressProvider
                 .getEntAddress(Credential.fromKey(keyHash), Networks.testnet())
@@ -175,5 +176,5 @@ object WalletModule {
               signingKey.bytes,
               verificationKey.bytes
             )
-            (ds.key(), ds.signature())
+            Cip30SignedData(coseKeyCborHex = ds.key(), coseSignatureCborHex = ds.signature())
 }

@@ -76,7 +76,7 @@ final class PeerWallet(
       * coseSignatureCborHex)` — the shape the request-side JSON codec unpacks in
       * [[hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder.validateCoseSignature]].
       */
-    def signCoseCip30(payload: Array[Byte]): (String, String) =
+    def signCoseCip30(payload: Array[Byte]): Cip30SignedData =
         walletModule.signCoseCip30(payload, verificationKey, signingKey)
 }
 

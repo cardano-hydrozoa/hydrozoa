@@ -1,6 +1,7 @@
 package hydrozoa.multisig.server
 
 import cats.effect.IO
+import hydrozoa.lib.cardano.wallet.Cip30SignedData
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -42,8 +43,8 @@ object SubmissionClient:
     ): SubmissionClient =
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
-                val (coseKey, coseSignature) = wallet.signCoseCip30(userRequest.header.bytes)
-                val bodyJson = signedRequestJson(userRequest, coseKey, coseSignature)
+                val signed = wallet.signCoseCip30(userRequest.header.bytes)
+                val bodyJson = signedRequestJson(userRequest, signed)
                 val path = pathFor(userRequest)
                 val req = Http4sRequest[IO](Method.POST, baseUri.withPath(path))
                     .withEntity(bodyJson)
@@ -56,8 +57,7 @@ object SubmissionClient:
 
     private def signedRequestJson(
         request: UserRequest,
-        coseKey: String,
-        coseSignature: String,
+        signed: Cip30SignedData,
     ): Json =
         val bodyField: (String, Json) = request.body match
             case b: UserRequestBody.DepositRequestBody     => "deposit" -> b.asJson
@@ -65,6 +65,6 @@ object SubmissionClient:
         Json.obj(
           "header" -> request.header.asJson,
           bodyField,
-          "coseKey" -> Json.fromString(coseKey),
-          "coseSignature" -> Json.fromString(coseSignature),
+          "coseKey" -> Json.fromString(signed.coseKeyCborHex),
+          "coseSignature" -> Json.fromString(signed.coseSignatureCborHex),
         )
