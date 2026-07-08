@@ -158,18 +158,22 @@ trait CoilMultisigRegimeManager(
       * [[RuleBasedRegimeManager]], whose actor will run the coil ratchet path (see
       * `RuleBasedActor.Dispute.handleCoil`).
       */
+    // Idempotent — mirrors HMRM.onHandoffToRuleBased.
     override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
-        for {
-            refs <- nonClChildren.getAndSet(Nil)
-            _ <- refs.traverse_(context.stop)
-            _ <- context.actorOf(
-              RuleBasedRegimeManager(
-                cardanoBackend = cardanoBackend,
-                persistence = persistence,
-                tracer = tracers.ruleBasedActor,
-              )(using config)
-            )
-        } yield ()
+        nonClChildren.getAndSet(Nil).flatMap {
+            case Nil => IO.unit
+            case refs =>
+                refs.traverse_(context.stop) >>
+                    context
+                        .actorOf(
+                          RuleBasedRegimeManager(
+                            cardanoBackend = cardanoBackend,
+                            persistence = persistence,
+                            tracer = tracers.ruleBasedActor,
+                          )(using config)
+                        )
+                        .void
+        }
 }
 
 object CoilMultisigRegimeManager {

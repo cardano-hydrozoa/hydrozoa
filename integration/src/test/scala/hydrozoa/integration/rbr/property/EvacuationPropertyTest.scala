@@ -14,7 +14,7 @@ import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as Trans
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
@@ -113,7 +113,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private final case class Ctx(
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
-        harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
+        harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
         periodicRequestFiber: Ref[IO, Option[FiberIO[Nothing]]],
@@ -192,24 +192,29 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
                 .convert.instant.toEpochMilli
 
-            hooks = MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
+            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
               tracer = humanFormatTracer |+| observerTracer(
                 fallbackDispatched,
                 resolutionSubmitted,
               ),
-              peerHandle = (peerNum, conns) =>
-                  IO.fromOption(conns.requestSequencer)(
-                    new NoSuchElementException(
-                      s"peer $peerNum has no RequestSequencer.Handle in its Connections"
-                    )
-                  ),
-              coilHandle = (_, _) => IO.unit,
-              wrapPeerBackend = wrapPeerBackend,
+              handle = {
+                  case (PeerId.Head(peerNum), conns) =>
+                      IO.fromOption(conns.requestSequencer)(
+                        new NoSuchElementException(
+                          s"peer $peerNum has no RequestSequencer.Handle in its Connections"
+                        )
+                      ).map(Some(_))
+                  case (_: PeerId.Coil, _) => IO.pure(None)
+              },
+              wrapBackend = {
+                  case (PeerId.Head(peerNum), backend) => wrapPeerBackend(peerNum, backend)
+                  case (_: PeerId.Coil, backend)       => backend
+              },
             )
 
             label = s"RBREvacuation-${transportMode.toString.toLowerCase}"
 
-            harness <- MultiPeerHeadHarness.resource[RequestSequencer.Handle, Unit](
+            harness <- MultiPeerHeadHarness.resource[Option[RequestSequencer.Handle]](
               MultiPeerHeadHarness.Inputs(
                 config = MultiPeerHeadHarness.Config(
                   label = label,
@@ -259,7 +264,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               bodyHash = body.hash,
             )
             userRequest = UserRequest.TransactionRequest(header, body, userVk)
-            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).map(_.handle))(
+            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peerNum missing in harness")
             )
             _ <- sequencer ?: userRequest

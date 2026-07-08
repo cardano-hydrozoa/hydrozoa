@@ -52,10 +52,12 @@ case class TestPeers private (
 
     private val peerNumbers: List[Int] = List.range(0, peersNumber)
 
+    // Head peers occupy ordinals `[0, peersNumber)`; coil peers occupy
+    // `[peersNumber, peersNumber + coilPeersNumber)`.
     private def _require(peer: TestPeerName): Unit =
         require(
-          peer.ordinal < peersNumber,
-          s"Can't access peer $peer there is only $peersNumber is the head"
+          peer.ordinal < peersNumber + coilPeersNumber,
+          s"Can't access peer $peer; head=$peersNumber, coil=$coilPeersNumber"
         )
 
     require(

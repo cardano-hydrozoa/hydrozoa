@@ -30,7 +30,7 @@ final case class EvacuationTx(
     evacuatedOutputs: List[TransactionOutput],
     override val tx: Transaction,
     override val txLens: Lens[EvacuationTx, Transaction] = Focus[EvacuationTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[EvacuationTx] {}
 
 object EvacuationTx {
@@ -230,10 +230,11 @@ private object EvacuationTxOps {
                 )
 
                 evacuationTx = EvacuationTx(
-                  inputTreasuryUtxo,
-                  newTreasuryUtxo,
-                  evacuationOutputs,
-                  finalized.transaction
+                  treasuryUtxoSpent = inputTreasuryUtxo,
+                  treasuryUtxoProduced = newTreasuryUtxo,
+                  evacuatedOutputs = evacuationOutputs,
+                  tx = finalized.transaction,
+                  resolvedUtxos = finalized.resolvedUtxos
                 )
             } yield evacuationTx) match {
                 case Right(w) => Right(w)
