@@ -1,5 +1,6 @@
 package hydrozoa.lib.cardano.wallet
 
+import com.bloxbean.cardano.client.cip.cip30.CIP30DataSigner
 import com.bloxbean.cardano.client.crypto.Blake2bUtil
 import com.bloxbean.cardano.client.crypto.api.SigningProvider
 import com.bloxbean.cardano.client.crypto.bip32.key.{HdPrivateKey, HdPublicKey}
@@ -66,6 +67,18 @@ trait WalletModule:
         signingKey: SigningKey
     ): IArray[Byte]
 
+    /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1, returning the (coseKey, coseSignature)
+      * pair as CBOR-encoded hex strings — the shape [[hydrozoa.multisig.server.JsonCodecs]] expects
+      * on the request wire. The `addressBytes` argument goes into the COSE protected headers and is
+      * not otherwise validated by the server-side verifier.
+      */
+    def signCoseCip30(
+        payload: Array[Byte],
+        addressBytes: Array[Byte],
+        verificationKey: VerificationKey,
+        signingKey: SigningKey
+    ): (String, String)
+
 object WalletModule {
     // TODO: this may be moved to test
     object BloxBean extends WalletModule:
@@ -107,6 +120,20 @@ object WalletModule {
             )
             IArray.from(signature)
 
+        override def signCoseCip30(
+            payload: Array[Byte],
+            addressBytes: Array[Byte],
+            verificationKey: VerificationKey,
+            signingKey: SigningKey
+        ): (String, String) =
+            val ds = CIP30DataSigner.INSTANCE.signData(
+              addressBytes,
+              payload,
+              signingKey.getKeyData,
+              verificationKey.getKeyData
+            )
+            (ds.key(), ds.signature())
+
     object Scalus extends WalletModule:
         override type VerificationKey = ScalusVerificationKey
         override type SigningKey = ScalusSigningKey
@@ -127,4 +154,18 @@ object WalletModule {
             val msgBs = ByteString.fromArray(IArray.genericWrapArray(msg).toArray)
             IArray.from(signEd25519(signingKey, msgBs).bytes)
         }
+
+        override def signCoseCip30(
+            payload: Array[Byte],
+            addressBytes: Array[Byte],
+            verificationKey: VerificationKey,
+            signingKey: SigningKey
+        ): (String, String) =
+            val ds = CIP30DataSigner.INSTANCE.signData(
+              addressBytes,
+              payload,
+              signingKey.bytes,
+              verificationKey.bytes
+            )
+            (ds.key(), ds.signature())
 }
