@@ -228,3 +228,19 @@ object Stage4Diagnostics extends YetAnotherProperties("Integration Stage 4 Diagn
 
     val _ = property("Two-peers 1 command") =
         Stage4Suite(label = "diag-1", nPeers = 2, nCommands = 1).property()
+
+// ===================================
+// Tuning: WS 2-peer, 3 seeds, real clock
+// ===================================
+
+object Stage4WsTune extends YetAnotherProperties("Integration Stage 4 WS Tune"):
+
+    override def overrideParameters(p: Test.Parameters): Test.Parameters =
+        p.withWorkers(1).withMinSuccessfulTests(3)
+
+    val _ = property("WS two-peers tune") = Stage4Suite(
+      label = "stage4-ws-tune",
+      nPeers = 2,
+      transportMode = TransportMode.WebSocket,
+      backendMode = BackendMode.RocksDb()
+    ).property()

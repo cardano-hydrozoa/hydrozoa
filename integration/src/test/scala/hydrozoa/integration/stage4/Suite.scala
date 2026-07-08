@@ -5,7 +5,10 @@ import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
+import test.GenWithTestPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
@@ -796,11 +799,17 @@ case class Stage4Suite(
 
 object Stage4Suite:
 
+    // Tuning overrides read from -D system properties (see Stage4WsTune in Runner.scala).
+    // Only affects WS runs; TestControl runs use virtual time so wall-clock is insensitive.
+    private def ms(key: String, default: Long): FiniteDuration =
+        FiniteDuration(Option(System.getProperty(key)).map(_.toLong).getOrElse(default), "milliseconds")
+
     def genInitialState(
         nPeers: Int = 2,
         nCoilPeers: Int = 0,
-        absorptionSlack: FiniteDuration = 60.seconds,
-        meanInterArrivalTime: HeadPeerNumber => FiniteDuration = _ => 12.seconds,
+        absorptionSlack: FiniteDuration = ms("stage4.absorptionSlackMs", 60 * 1000),
+        meanInterArrivalTime: HeadPeerNumber => FiniteDuration =
+            _ => ms("stage4.meanInterArrivalMs", 12 * 1000),
         useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
@@ -826,12 +835,27 @@ object Stage4Suite:
         // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
-            else Some(java.time.Instant.now().plusSeconds(60))
+            else Some(java.time.Instant.now().plusMillis(ms("stage4.takeoffOffsetMs", 60 * 1000).toMillis))
 
         val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
+        // Tuned TxTiming: yaci defaults, but each field can be overridden via -D for bisecting.
+        val generateTunedTxTiming: GenWithTestPeers[TxTiming] = ReaderT { network =>
+            val sc = network.slotConfig
+            Gen.const(
+              TxTiming(
+                MinSettlementDuration(ms("stage4.minSettlementMs", 10 * 60 * 1000).quantize(sc)),
+                InactivityMarginDuration(ms("stage4.inactivityMarginMs", 60 * 1000).quantize(sc)),
+                SilenceDuration(ms("stage4.silenceMs", 10 * 60 * 1000).quantize(sc)),
+                DepositSubmissionDuration(ms("stage4.depositSubmissionMs", 1000).quantize(sc)),
+                DepositMaturityDuration(ms("stage4.depositMaturityMs", 1000).quantize(sc)),
+                DepositAbsorptionDuration(ms("stage4.depositAbsorptionMs", 2 * 60 * 1000).quantize(sc)),
+              )
+            )
+        }
+
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
-          generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
+          generateHeadParams = generateHeadParameters(generateTxTiming = generateTunedTxTiming)
               .map(_.copy(coilQuorum = nCoilPeers)),
           generateInitializationParameters = InitParamsType.TopDown(
             InitializationParametersGenTopDown.GenWithDeps(
@@ -873,8 +897,8 @@ object Stage4Suite:
                     // `hardStackMinPeriod`'s 3-minute production value would likewise starve
                     // CardanoLiaison of PushResults within the budget; 2s preserves batching too.
                     rateLimits = hydrozoa.config.node.operation.multisig.RateLimits(
-                      softBlockMinPeriod = 5.seconds,
-                      hardStackMinPeriod = 2.seconds
+                      softBlockMinPeriod = ms("stage4.softBlockMinPeriodMs", 5000),
+                      hardStackMinPeriod = ms("stage4.hardStackMinPeriodMs", 2000)
                     )
                   )
             )
