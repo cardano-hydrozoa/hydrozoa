@@ -28,6 +28,16 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Script reference UTxOs are identified by their known [[scalus.cardano.ledger.TransactionInput]] keys
   *   - Everything else falls into the [[AmbientPlaceId]] default bucket
   *
+  * TODO: the `"collateral"` sentinel only exists in the synthetic `InitialDisputeUtxos`
+  * fixture — the real rule-based tx builders (`VoteTx`, `TallyTx`, `ResolutionTx`,
+  * `AbstainTx`, `RatchetVoteTx`, `EvacuationTx`) draw collateral from plain Ada wallet
+  * UTxOs whose `datumOption` is `None`, so content-based detection fails in end-to-end
+  * scenarios and collateral outputs land in [[AmbientPlaceId]]. The right fix is to bucket
+  * collateral by role in the tx graph — mark any output that is later consumed as a
+  * `collateral_input` of some downstream tx — rather than by a content sentinel. That
+  * requires shifting the classifier from `Utxo => Option[Bucket]` to a form that has
+  * access to the surrounding tx history.
+  *
   * Usage: `Histogram.empty(RBRClassifier(using env)).addAll(utxos.map(Utxo(_, _)))`
   */
 class RBRClassifier(using env: MultiNodeConfig)
