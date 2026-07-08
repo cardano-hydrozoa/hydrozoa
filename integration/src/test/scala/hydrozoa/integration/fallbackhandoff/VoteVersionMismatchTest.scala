@@ -1,14 +1,16 @@
 package hydrozoa.integration.fallbackhandoff
 
+import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -18,7 +20,7 @@ import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
 import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{Prop, Properties}
+import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers}
@@ -65,11 +67,28 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
+        // Fast voting deadline so the deadline-gated tally path in RuleBasedActor unblocks well
+        // inside `scenarioTimeout`. The default generator picks 1h..5d; the coil peer's RBA
+        // would sit on `TallyBlockedByAwaitingVote` for that entire window and time the scenario
+        // out. Same pattern as `EvacuationPropertyTest.fastDisputeResolutionConfig`.
+        val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
+            ReaderT { network =>
+                Gen.const(
+                  DisputeResolutionConfig(
+                    votingDuration = QuantizedFiniteDuration(
+                      slotConfig = network.slotConfig,
+                      finiteDuration = 5.seconds,
+                    )
+                  )
+                )
+            }
+
         val resource = MultiPeerHeadHarness.mkResource(
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 10.seconds,
+          disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
             buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
