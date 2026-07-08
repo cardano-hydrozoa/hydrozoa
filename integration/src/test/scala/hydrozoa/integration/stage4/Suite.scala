@@ -28,6 +28,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects}
 import hydrozoa.multisig.persistence.{BackendStore, Cf}
+import hydrozoa.multisig.server.SubmissionClient
 import org.scalacheck.commands.{AnyCommand, ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
@@ -147,8 +148,10 @@ case class Stage4Suite(
                               IO.pure(
                                 Some(
                                   Stage4PeerHandle(
-                                    conns.requestSequencer.getOrElse(
-                                      sys.error(s"head peer $peerNum missing RequestSequencer")
+                                    SubmissionClient.direct(
+                                      conns.requestSequencer.getOrElse(
+                                        sys.error(s"head peer $peerNum missing RequestSequencer")
+                                      )
                                     )
                                   )
                                 )
