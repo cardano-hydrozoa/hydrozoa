@@ -43,15 +43,15 @@ object SubmissionClient:
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
                 val (coseKey, coseSignature) = wallet.signCoseCip30(userRequest.header.bytes)
-                val bodyJson                 = signedRequestJson(userRequest, coseKey, coseSignature)
-                val path                     = pathFor(userRequest)
+                val bodyJson = signedRequestJson(userRequest, coseKey, coseSignature)
+                val path = pathFor(userRequest)
                 val req = Http4sRequest[IO](Method.POST, baseUri.withPath(path))
                     .withEntity(bodyJson)
                 client.expect[RequestAccepted](req).map(_.requestId)
 
     private def pathFor(request: UserRequest): Uri.Path =
         request match
-            case _: UserRequest.DepositRequest     => Uri.Path.unsafeFromString("/api/deposit/register")
+            case _: UserRequest.DepositRequest => Uri.Path.unsafeFromString("/api/deposit/register")
             case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/api/l2/submit")
 
     private def signedRequestJson(
@@ -60,11 +60,11 @@ object SubmissionClient:
         coseSignature: String,
     ): Json =
         val bodyField: (String, Json) = request.body match
-            case b: UserRequestBody.DepositRequestBody     => "deposit"     -> b.asJson
+            case b: UserRequestBody.DepositRequestBody     => "deposit" -> b.asJson
             case b: UserRequestBody.TransactionRequestBody => "transaction" -> b.asJson
         Json.obj(
-          "header"        -> request.header.asJson,
+          "header" -> request.header.asJson,
           bodyField,
-          "coseKey"       -> Json.fromString(coseKey),
+          "coseKey" -> Json.fromString(coseKey),
           "coseSignature" -> Json.fromString(coseSignature),
         )
