@@ -86,8 +86,8 @@ private object EvacuationTxOps {
       *   The map of all evacuations that still need to be processed
       * @param collateralUtxo
       *   Wallet UTxO used both as Plutus collateral and as the fee-paying regular input; the
-      *   returned collateral output absorbs the fee via the diff handler, matching the
-      *   pattern used by [[VoteTx]], [[ResolutionTx]], [[DeinitTx]] et al.
+      *   returned collateral output absorbs the fee via the diff handler, matching the pattern used
+      *   by [[VoteTx]], [[ResolutionTx]], [[DeinitTx]] et al.
       */
     final case class Build(
         inputTreasuryUtxo: RuleBasedTreasuryUtxo,

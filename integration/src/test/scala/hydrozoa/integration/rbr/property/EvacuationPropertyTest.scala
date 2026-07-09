@@ -13,6 +13,7 @@ import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import scala.annotation.unused
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
@@ -410,6 +411,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       * cardinality shifts. Toggle by uncommenting the `logAmbientUtxos(...)` call site in
       * [[runClassifier]]. Not on the happy path so callers pay nothing when commented out.
       */
+    @unused
     private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
         val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
         val lines = ambient.zipWithIndex.map { case (u, idx) =>
