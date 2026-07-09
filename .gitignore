@@ -7,6 +7,8 @@
 .idea/
 .metals
 .bloop
+# Metals auto-generates these to inject sbt-bloop; not for commit (Metals uses the sbt BSP server)
+**/metals.sbt
 project/project
 project/target
 target/

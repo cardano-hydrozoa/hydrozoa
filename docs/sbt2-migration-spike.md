@@ -88,12 +88,22 @@ fully reversible.
     / `skipSimpleDefinitions`) if the team prefers to defer.
 - **`target/` layout changed** → `target/out/jvm/scala-<ver>/<project>/…`. Check `.gitignore`
   (`target/` still covers it), CI cache keys, and any doc/tooling that hard-codes `target/…`.
-- **Nix:** no launcher change needed. The `flake.nix` pre-commit hook was **fixed**: sbt 2
-  concatenates multiple program args into one command line, so `sbt "scalafixAll --check"
-  scalafmtCheck` was parsed as a single command (`scalafmtCheck` became a scalafix rule name →
-  `Unknown rule 'scalafmtCheck'`). Changed to a single `;`-separated command
-  `sbt "; scalafixAll --check ; scalafmtCheck"`. Still open (minor): the stale bloop comment;
-  confirm `sbtn` thin-client (nix 1.11.7) vs the sbt-2 server or switch scripts to `sbt`.
+- **Nix — cleaned up.** No launcher change needed: the nixpkgs sbt 1.x launcher bootstraps sbt 2
+  from `build.properties`. Done:
+  - Pre-commit hook **fixed** — sbt 2 concatenates multiple program args into one command line,
+    so `sbt "scalafixAll --check" scalafmtCheck` was parsed as a single command (`scalafmtCheck`
+    became a scalafix rule → `Unknown rule 'scalafmtCheck'`). Now `sbt "; scalafixAll --check ;
+    scalafmtCheck"`.
+  - Stale `GraalVM … metals and bloop only` comment removed (the jdk is `openjdk25`, not GraalVM).
+  - **`sbtn` caveat documented** — the nix-bundled `sbtn` is the sbt **1.x** native thin client
+    and cannot drive an sbt 2 server (it loops on `unknown event: sbt/exec` and never returns).
+    Use `sbt`, not `sbtn`, under sbt 2 until nixpkgs ships an sbt 2 package. *(Follow-up for
+    landing: update the CLAUDE.md "use sbtn for faster execution" note accordingly.)*
+- **Metals — cleaned up.** Metals runs on the sbt BSP server (`.bsp/sbt.json`), so it should not
+  regenerate the `sbt-bloop`-injecting `project/**/metals.sbt` files. Those (now `**/metals.sbt`)
+  are **gitignored** so they can't be committed or break the sbt 2 build. If a dev's Metals is set
+  to the *Bloop* build server it will re-create them with the sbt-2-incompatible `sbt-bloop
+  2.0.19` — keep Metals on the sbt build server.
 - **Cached tasks (sbt 2):** side-effecting tasks may need `Def.uncached`. Nothing hit in this
   spike, but worth a scan of any custom tasks before landing.
 - **Docs:** CLAUDE.md `sbtn` references, `just build-werror` path, and target-path mentions.
