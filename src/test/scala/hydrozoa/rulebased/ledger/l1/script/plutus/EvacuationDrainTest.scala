@@ -44,8 +44,8 @@ import test.Generators.Hydrozoa.genEvacuationMap
   * or breaking evacuation liveness is a separate, genuinely adversarial scenario test.)
   *
   * Each `EvacuationTx` pays its fee from the collateral utxo (returned fee-subtracted at output
-  * index 0), and the drain loop threads that returned collateral into the next step. Evacuation
-  * has no time-validity bound, so no deadline/sleep is involved.
+  * index 0), and the drain loop threads that returned collateral into the next step. Evacuation has
+  * no time-validity bound, so no deadline/sleep is involved.
   */
 class EvacuationDrainTest extends AnyFunSuite {
 
