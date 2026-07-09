@@ -136,8 +136,7 @@ class EvacuationDrainTest extends AnyFunSuite {
                   inputTreasuryUtxo = treasury,
                   evacuateesToTryNext = subset,
                   allRemainingEvacuatees = remaining,
-                  collateralUtxo = collateral,
-                  feeUtxos = Map(feeUtxos(depth).toTuple)
+                  collateralUtxo = collateral
                 )
                 .result(using config) match {
                 case Right(e)  => e

@@ -27,8 +27,6 @@ import scalus.cardano.onchain.plutus.prelude
 import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.uplc.builtin.bls12_381.{G1Element, G2Element}
 import supranational.blst.Scalar
-import test.*
-import test.Generators.Hydrozoa.genPubKeyUtxo
 
 /** Generator for resolved treasury UTXO with resolved datum */
 def genResolvedTreasuryUtxo(
@@ -124,19 +122,12 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
         addr = config.nodeConfigs.head._2.ownWallet.exportVerificationKey
             .shelleyAddress()(using config.headConfig)
 
-        feeUtxo <-
-            genPubKeyUtxo(
-              address = addr,
-              genValue = Gen.const(Value.ada(100))
-            )
-
         collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)(using config)
 
     } yield EvacuationTx.Build(
       inputTreasuryUtxo = adjustedTreasuryUtxo,
       evacuateesToTryNext = evacuatees,
       allRemainingEvacuatees = evacMap,
-      feeUtxos = Map(feeUtxo.toTuple),
       collateralUtxo = collateralUtxo
     )
 
