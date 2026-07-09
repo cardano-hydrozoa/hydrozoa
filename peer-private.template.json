@@ -1,0 +1,30 @@
+{
+  "ownPeerPrivate": {
+    "ownHeadWallet": {
+      "verificationKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "signingKey": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "nodeOperationEvacuationConfig": {
+    "evacuationBotPollingPeriod": 10000,
+    "ruleBasedWallet": {
+      "verificationKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "signingKey": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "nodeOperationMultisigConfig": {
+    "cardanoLiaisonPollingPeriod": 10000,
+    "peerLiaisonMaxRequestsPerBatch": 42,
+    "peerLiaisonResendInterval": 5000,
+    "rateLimits": {
+      "softBlockMinPeriod": 20000,
+      "hardStackMinPeriod": 180000
+    }
+  },
+  "blockfrostApiKey": "previewQQFamFAznFQgz0uRG9OntxgqJczreq9z",
+  "sugarRushUri": "ws://127.0.0.1:3001/ws",
+  "adminUsername": "admin",
+  "adminPassword": "welcome",
+  "httpHost": "0.0.0.0",
+  "httpPort": "8080"
+}

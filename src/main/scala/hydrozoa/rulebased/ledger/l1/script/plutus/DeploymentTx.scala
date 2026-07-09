@@ -34,7 +34,7 @@ final case class DeploymentTx(
 
 object DeploymentTx {
     given TxFamily[DeploymentTx] = TxFamily.of("DeploymentTx")
-    export DeploymentTxOps.Config
+    export DeploymentTxOps.{Build, Config}
 }
 
 private object DeploymentTxOps {
