@@ -168,7 +168,9 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       label = "stage4-ws-two-peers",
       nPeers = 2,
       transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
+      backendMode = BackendMode.RocksDb(),
+      absorptionSlack = 500.millis,
+      takeoffOffset = 1.second
     ).property()
 
     // Extended variants: large command sequences or high peer counts
@@ -194,7 +196,9 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
       nPeers = 2,
       nCommands = 500,
       transportMode = TransportMode.WebSocket,
-      backendMode = BackendMode.RocksDb()
+      backendMode = BackendMode.RocksDb(),
+      absorptionSlack = 500.millis,
+      takeoffOffset = 1.second
     ).property()
 
     val _ = property("Ten-peers head works WS (extended)") = Stage4Suite(

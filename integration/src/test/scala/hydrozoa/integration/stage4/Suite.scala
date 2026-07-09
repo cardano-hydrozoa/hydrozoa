@@ -49,6 +49,8 @@ case class Stage4Suite(
     nCommands: Int = 10,
     transportMode: TransportMode = TransportMode.Direct,
     backendMode: BackendMode = BackendMode.InMemory,
+    absorptionSlack: FiniteDuration = Stage4Suite.ms("stage4.absorptionSlackMs", 60 * 1000),
+    takeoffOffset: FiniteDuration = Stage4Suite.ms("stage4.takeoffOffsetMs", 60 * 1000),
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -88,7 +90,9 @@ case class Stage4Suite(
           Stage4Suite.genInitialState(
             nPeers = nPeers,
             nCoilPeers = nCoilPeers,
-            useTestControl = useTestControl
+            useTestControl = useTestControl,
+            absorptionSlack = absorptionSlack,
+            takeoffOffset = takeoffOffset,
           )
         )
 
@@ -801,13 +805,14 @@ object Stage4Suite:
 
     // Tuning overrides read from -D system properties (see Stage4WsTune in Runner.scala).
     // Only affects WS runs; TestControl runs use virtual time so wall-clock is insensitive.
-    private def ms(key: String, default: Long): FiniteDuration =
+    def ms(key: String, default: Long): FiniteDuration =
         FiniteDuration(Option(System.getProperty(key)).map(_.toLong).getOrElse(default), "milliseconds")
 
     def genInitialState(
         nPeers: Int = 2,
         nCoilPeers: Int = 0,
         absorptionSlack: FiniteDuration = ms("stage4.absorptionSlackMs", 60 * 1000),
+        takeoffOffset: FiniteDuration = ms("stage4.takeoffOffsetMs", 60 * 1000),
         meanInterArrivalTime: HeadPeerNumber => FiniteDuration =
             _ => ms("stage4.meanInterArrivalMs", 12 * 1000),
         useTestControl: Boolean = true,
@@ -835,7 +840,7 @@ object Stage4Suite:
         // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
-            else Some(java.time.Instant.now().plusMillis(ms("stage4.takeoffOffsetMs", 60 * 1000).toMillis))
+            else Some(java.time.Instant.now().plusMillis(takeoffOffset.toMillis))
 
         val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
