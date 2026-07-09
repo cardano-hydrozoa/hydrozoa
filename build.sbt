@@ -1,41 +1,10 @@
-enablePlugins(
-  JavaAppPackaging,
-  DockerPlugin
-)
-
-Compile / mainClass := Some("hydrozoa.app.Main")
-
-// Docker settings
-Docker / packageName := "cardano-hydrozoa/hydrozoa"
-Docker / version := version.value
-Docker / daemonUser := "hydrozoa"
-Docker / daemonGroup := "hydrozoa"
-dockerBaseImage := "eclipse-temurin:21-jre-jammy" // Use Debian-based image for better compatibility
-dockerExposedPorts ++= Seq(8080)
-
-// Skip documentation generation for Docker
-Compile / packageDoc / mappings := Seq()
-Compile / doc / sources := Seq()
+// NB (sbt 2): bare settings written at the top level of build.sbt are applied to *every*
+// subproject, not just the root. Anything specific to the root application (Docker packaging,
+// mainClass) therefore lives inside the `core` project's `.settings(...)` block below, not here.
+import com.typesafe.sbt.packager.docker._
 
 Global / excludeLintKeys += Docker / dockerLabels
 Global / excludeLintKeys += Docker / dockerEnvVars
-
-Docker / dockerLabels := Map(
-  "org.opencontainers.image.title" -> "Hydrozoa",
-  "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
-  "org.opencontainers.image.version" -> version.value
-)
-
-Docker / dockerEnvVars := Map(
-  "JAVA_OPTS" -> "-Xmx2g -Xms512m"
-)
-
-// Ensure proper signal handling for graceful shutdown
-import com.typesafe.sbt.packager.docker._
-dockerCommands := dockerCommands.value.flatMap {
-    case cmd @ Cmd("FROM", _) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
-    case other                => List(other)
-}
 
 val scalusVersion = "0.18.1"
 val bloxbeanVersion = "0.7.1"
@@ -50,25 +19,54 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
       resolvers += Resolver.defaultLocal,
       libraryDependencies ++= Seq(
-        "org.scalus" %% "scalus" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
+        ("org.scalus" %% "scalus" % scalusVersion).withSources(),
+        ("org.scalus" %% "scalus-cardano-ledger" % scalusVersion).withSources(),
         "org.typelevel" %% "cats-core" % "2.13.0",
       ),
-      addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
+      // NB (sbt 2): the top-level `addCompilerPlugin` below is a bare setting and is applied to
+      // every subproject (including this one), so no per-project addition is needed here.
     )
 
 // Main application
 lazy val core: Project = (project in file("."))
+    .enablePlugins(JavaAppPackaging, DockerPlugin)
     .dependsOn(cardanoOnchain)
     .settings(
+      Compile / mainClass := Some("hydrozoa.app.Main"),
+      // Docker settings
+      Docker / packageName := "cardano-hydrozoa/hydrozoa",
+      Docker / version := version.value,
+      Docker / daemonUser := "hydrozoa",
+      Docker / daemonGroup := "hydrozoa",
+      // Use Debian-based image for better compatibility
+      dockerBaseImage := "eclipse-temurin:21-jre-jammy",
+      dockerExposedPorts ++= Seq(8080),
+      // Skip documentation generation for Docker
+      Compile / packageDoc / mappings := Seq(),
+      Compile / doc / sources := Seq(),
+      Docker / dockerLabels := Map(
+        "org.opencontainers.image.title" -> "Hydrozoa",
+        "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
+        "org.opencontainers.image.version" -> version.value
+      ),
+      Docker / dockerEnvVars := Map(
+        "JAVA_OPTS" -> "-Xmx2g -Xms512m"
+      ),
+      // Ensure proper signal handling for graceful shutdown.
+      // NB: native-packager emits multi-stage `FROM <img> AS <stage>` (several args), so match
+      // `Cmd("FROM", _*)` rather than the single-arg `Cmd("FROM", _)`.
+      dockerCommands := dockerCommands.value.flatMap {
+          case cmd @ Cmd("FROM", _*) => List(cmd, Cmd("STOPSIGNAL", "SIGTERM"))
+          case other                 => List(other)
+      },
       resolvers +=
           "Sonatype OSS New Snapshots" at "https://central.sonatype.com/repository/maven-snapshots/",
       resolvers += Resolver.defaultLocal,
       resolvers += "jitpack" at "https://jitpack.io",
       libraryDependencies ++= Seq(
         // Scalus
-        "org.scalus" %% "scalus" % scalusVersion withSources (),
-        "org.scalus" %% "scalus-cardano-ledger" % scalusVersion withSources (),
+        ("org.scalus" %% "scalus" % scalusVersion).withSources(),
+        ("org.scalus" %% "scalus-cardano-ledger" % scalusVersion).withSources(),
         // Cardano Client library
         "com.bloxbean.cardano" % "cardano-client-backend-blockfrost" % bloxbeanVersion,
         // Logging
@@ -204,7 +202,7 @@ lazy val benchmark: Project = (project in file("benchmark"))
     )
 
 // An attempt in exclude some folder
-excludeFilter in Global := {
-    val default = (excludeFilter in Global).value
+Global / excludeFilter := {
+    val default = (Global / excludeFilter).value
     default || ".direnv" || ".bloop" || ".metals" || ".idea" || ".vscode"
 }
