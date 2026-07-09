@@ -93,7 +93,7 @@ given ppMultiNodeConfig: (MultiNodeConfig => Pretty) = nodeConfig =>
   */
 object JointLedgerTestHelpers {
     type JLTest[A] = TestM[TestR, A]
-    val jlTest = TestMFixedEnv[TestR]()
+    val jlTest: TestMFixedEnv[TestR] = TestMFixedEnv[TestR]()
     import jlTest.*
 
     /** An agent of this test, pretending to be a [[FastConsensusActor]] for [[JointLedger]]. */

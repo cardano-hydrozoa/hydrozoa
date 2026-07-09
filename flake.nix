@@ -32,7 +32,9 @@
             precommit = {
               enable = true;
               name = "lint fmt check";
-              entry = "${pkgs.bash}/bin/bash -c '${sbt0}/bin/sbt \"scalafixAll --check\" scalafmtCheck && ${pkgs.nixfmt}/bin/nixfmt flake.nix --check'";
+              # sbt 2 concatenates multiple program args into one command line, so pass a single
+              # `;`-separated command instead of two args (`"scalafixAll --check" scalafmtCheck`).
+              entry = "${pkgs.bash}/bin/bash -c '${sbt0}/bin/sbt \"; scalafixAll --check ; scalafmtCheck\" && ${pkgs.nixfmt}/bin/nixfmt flake.nix --check'";
               pass_filenames = false;
             };
           };

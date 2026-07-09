@@ -307,7 +307,8 @@ case class TestPeersSpec(
     network: CardanoNetwork,
     peersNumberSpec: PeersNumberSpec
 ) {
-    def withPeersNumberSpec(spec: PeersNumberSpec) = this.copy(peersNumberSpec = spec)
+    def withPeersNumberSpec(spec: PeersNumberSpec): TestPeersSpec =
+        this.copy(peersNumberSpec = spec)
 }
 
 object TestPeersSpec:

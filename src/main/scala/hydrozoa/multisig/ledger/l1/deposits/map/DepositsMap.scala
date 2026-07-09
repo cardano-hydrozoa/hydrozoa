@@ -48,7 +48,7 @@ final case class DepositsMap private[map] (
 
     lazy val isEmpty: Boolean = treeMap.isEmpty
 
-    lazy val numberOfDeposits = treeMap.values.map(_.size).sum
+    lazy val numberOfDeposits: Int = treeMap.values.map(_.size).sum
 
     /** Request-deposit tuples traversed in order of absorption start time, with ties broken
       * according to the order in which they were added to the DepositsMap (which should correspond
@@ -169,7 +169,7 @@ object DepositsMap {
         enum Compartment:
             case Immature, Eligible, Expired, NotInPollResults
 
-        val empty =
+        val empty: Partition =
             Partition(DepositsMap.empty, DepositsMap.empty, DepositsMap.empty, DepositsMap.empty)
     }
 
@@ -182,7 +182,7 @@ object DepositsMap {
     ) {
         lazy val eligible: DepositsMap = absorbed.concat(unabsorbed)
         val surviving: DepositsMap = unabsorbed.concat(immature)
-        val decisions = Decisions(
+        val decisions: Decisions = Decisions(
           absorbed = absorbed.unzip,
           refunded = DepositsMap(notInPollResults.treeMap ++ expired.treeMap).unzip,
           mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
