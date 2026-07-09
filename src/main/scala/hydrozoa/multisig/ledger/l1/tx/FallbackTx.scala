@@ -156,7 +156,8 @@ private object FallbackTxOps {
 
                     // TODO: Partial, hacked in during a refactor
                     private val output = {
-                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                            Value(config.collectiveContingency.minAdaForTreasury)
                         RuleBasedTreasuryOutput(
                           value = v,
                           datum = datum,
@@ -185,7 +186,6 @@ private object FallbackTxOps {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
-                                  + config.collectiveContingency.minAdaForTreasury
                             )
                         }
                     }
@@ -248,7 +248,8 @@ private object FallbackTxOps {
                 // FIXME: Partial, introduced during a refactor where RuleBasedTreasuryOutput began to verify
                 // that the constructed output did indeed have a valid treasury token
                 val treasuryOutputProduced = {
-                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                        Value(config.collectiveContingency.minAdaForTreasury)
                     RuleBasedTreasuryOutput(
                       datum = Steps.Sends.Treasury.datum,
                       value = value

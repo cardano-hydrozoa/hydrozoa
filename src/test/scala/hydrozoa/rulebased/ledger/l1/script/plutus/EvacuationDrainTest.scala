@@ -6,6 +6,7 @@ import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, shelleyAddress}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
@@ -123,6 +124,7 @@ class EvacuationDrainTest extends AnyFunSuite {
     private def evacuateAll(
         remaining: EvacuationMap,
         treasury: RuleBasedTreasuryUtxo,
+        collateral: CollateralUtxo,
         emulator: ImmutableEmulator,
         depth: Int,
         evacuated: List[TransactionOutput]
@@ -151,9 +153,13 @@ class EvacuationDrainTest extends AnyFunSuite {
             // real treasury input from the emulator before chaining.
             val newTreasury =
                 evac.treasuryUtxoProduced.copy(utxoId = currentTreasuryInput(nextEmulator))
+            // The collateral is spent and re-sent (minus the fee it absorbs) at output index 0, so
+            // thread the fresh collateral forward rather than reusing the now-spent input.
+            val newCollateral = currentCollateral(nextEmulator, evac.tx.id)
             evacuateAll(
               remaining.removed(key),
               newTreasury,
+              newCollateral,
               nextEmulator,
               depth + 1,
               evacuated ++ evac.evacuatedOutputs
@@ -165,7 +171,8 @@ class EvacuationDrainTest extends AnyFunSuite {
 
     test("evacuation drains the full evacuation map to exactly M") {
         val emulator0 = mkEmulator(initialUtxos, now.toSlot)
-        val (finalTreasury, evacuated) = evacuateAll(evacMap, treasury, emulator0, 0, Nil)
+        val (finalTreasury, evacuated) =
+            evacuateAll(evacMap, treasury, collateral, emulator0, 0, Nil)
 
         val _ = assert(
           bag(evacuated) == bag(evacMap.outputsCooked.toList),
@@ -196,4 +203,19 @@ class EvacuationDrainTest extends AnyFunSuite {
     /** The current treasury input in the emulator (the single utxo at the treasury address). */
     private def currentTreasuryInput(emu: ImmutableEmulator): TransactionInput =
         emu.utxos.collectFirst { case (i, o) if o.address == treasuryAddr => i }.get
+
+    /** The re-sent collateral produced by an evacuation tx. EvacuationTx returns collateral at
+      * output index 0 (its diff handler absorbs the fee there), so read `(txId, 0)` and re-parse
+      * it.
+      */
+    private def currentCollateral(emu: ImmutableEmulator, txId: TransactionHash): CollateralUtxo = {
+        val input = TransactionInput(txId, 0)
+        val output = emu.utxos
+            .collectFirst { case (i, o) if i == input => o }
+            .getOrElse(fail(s"collateral output not found at $input"))
+        CollateralUtxo.parse(Utxo(input, output)) match {
+            case Right(c)  => c
+            case Left(err) => fail(s"collateral parse failed: $err")
+        }
+    }
 }
