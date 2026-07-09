@@ -248,7 +248,10 @@ object JsonCodecs {
             Json.obj("requestId" -> ra.requestId.asJson)
         }
 
-//    given requestAcceptedDecoder: Decoder[RequestAccepted] = deriveDecoder[RequestAccepted]
+    given requestAcceptedDecoder: Decoder[RequestAccepted] = c => {
+        import RequestId.i64.given
+        c.downField("requestId").as[RequestId].map(RequestAccepted.apply)
+    }
 
     given errorEncoder: Encoder[Error] = deriveEncoder[Error]
 
