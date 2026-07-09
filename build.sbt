@@ -139,7 +139,11 @@ lazy val integration: Project = (project in file("integration"))
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
 
-ThisBuild / scalacOptions ++= Seq(
+// NB (sbt 2): a bare setting is added to every subproject. Written as `ThisBuild / scalacOptions
+// ++=`, each of those per-subproject additions would append to the *shared* ThisBuild scope, so the
+// flags accumulate once per subproject (4×) and `-Werror` then fails on "flag set repeatedly".
+// Keep it bare (no `ThisBuild /`): each subproject gets exactly one copy.
+scalacOptions ++= Seq(
   "-feature",
   "-deprecation",
   "-unchecked",
@@ -168,8 +172,9 @@ addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ")
 addCommandAlias("lintAll", ";core/scalafixAll ")
 addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;")
 
-// Test dependencies
-ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
+// Test dependencies. Bare (not `ThisBuild /`) for the same reason as scalacOptions above: a
+// `ThisBuild / … +=` bare statement accumulates once per subproject on the shared scope.
+testFrameworks += new TestFramework("org.scalatest.tools.Framework")
 
 inThisBuild(
   List(
