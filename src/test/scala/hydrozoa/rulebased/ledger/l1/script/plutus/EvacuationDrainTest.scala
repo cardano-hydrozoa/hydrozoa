@@ -5,7 +5,7 @@ import hydrozoa.*
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
-import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, shelleyAddress}
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.commitment.TrustedSetup
@@ -24,7 +24,7 @@ import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{CardanoMutator, State, UtxoEnv}
 import scalus.testing.ImmutableEmulator
 import scalus.uplc.builtin.bls12_381.G2Element
-import test.Generators.Hydrozoa.{genEvacuationMap, genPubKeyUtxo}
+import test.Generators.Hydrozoa.genEvacuationMap
 
 /** Evacuation-map drain test for the rule-based regime (test "B").
   *
@@ -43,9 +43,9 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPubKeyUtxo}
   * choices here, hence no `Scenario`. (A peer redirecting the residual treasury to its own address
   * or breaking evacuation liveness is a separate, genuinely adversarial scenario test.)
   *
-  * Each `EvacuationTx` **spends its fee utxo** (and re-sends collateral rather than spending it),
-  * so every step gets its own fee utxo; one collateral is reused. Evacuation has no time-validity
-  * bound, so no deadline/sleep is involved.
+  * Each `EvacuationTx` pays its fee from the collateral utxo (returned fee-subtracted at output
+  * index 0), and the drain loop threads that returned collateral into the next step. Evacuation has
+  * no time-validity bound, so no deadline/sleep is involved.
   */
 class EvacuationDrainTest extends AnyFunSuite {
 
@@ -60,7 +60,6 @@ class EvacuationDrainTest extends AnyFunSuite {
     private val config: NodeConfig = env.nodeConfigs.head._2
     private val ownWallet: PeerWallet = env.nodePrivateConfigs.head._2.ownWallet
     private val ownKeyHash = ownWallet.exportVerificationKey.addrKeyHash
-    private val ownAddr = ownWallet.exportVerificationKey.shelleyAddress()(using env.headConfig)
     private val treasuryAddr = HydrozoaBlueprint.mkTreasuryAddress(env.headConfig.network)
 
     // Small on purpose: each step is an on-chain KZG membership check. Larger maps belong to the
@@ -94,17 +93,8 @@ class EvacuationDrainTest extends AnyFunSuite {
           RuleBasedTreasuryOutput(resolvedDatum, treasuryBaseValue + evacMap.totalValue)
     )
 
-    // One fee utxo per evacuation step (each EvacuationTx spends its fee utxo); one shared
-    // collateral (evacuation re-sends collateral rather than spending it).
-    private val feeUtxos: List[Utxo] =
-        (0 until numEvacuees).toList.map(i =>
-            fixed(
-              genPubKeyUtxo(address = ownAddr, genValue = Gen.const(Value.ada(100)))(using
-                env.headConfig
-              ),
-              20L + i
-            )
-        )
+    // One collateral utxo, threaded through the drain loop: each EvacuationTx spends it as its
+    // fee-paying input and returns it (fee-subtracted) at index 0 for the next step to consume.
     private val collateral = fixed(genCollateralUtxo(ownKeyHash)(using env.headConfig), 4)
 
     private val initialUtxos: Utxos = (
@@ -112,7 +102,6 @@ class EvacuationDrainTest extends AnyFunSuite {
         (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
         (collateral.input, collateral.collateralOutput.toOutput(using env))
       )
-          ++ feeUtxos.map(_.toTuple)
           ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
     )
 
@@ -153,9 +142,15 @@ class EvacuationDrainTest extends AnyFunSuite {
             // real treasury input from the emulator before chaining.
             val newTreasury =
                 evac.treasuryUtxoProduced.copy(utxoId = currentTreasuryInput(nextEmulator))
-            // The collateral is spent and re-sent (minus the fee it absorbs) at output index 0, so
-            // thread the fresh collateral forward rather than reusing the now-spent input.
-            val newCollateral = currentCollateral(nextEmulator, evac.tx.id)
+            // The returned collateral (fee-subtracted) sits at output index 0 of the just-submitted
+            // evacuation tx; parse it back into a CollateralUtxo for the next step.
+            val newCollateralInput = TransactionInput(evac.tx.id, 0)
+            val newCollateral = CollateralUtxo
+                .parse(Utxo(newCollateralInput, nextEmulator.utxos(newCollateralInput)))
+                .fold(
+                  err => fail(s"parsing returned collateral at step $depth failed: $err"),
+                  identity
+                )
             evacuateAll(
               remaining.removed(key),
               newTreasury,
@@ -203,19 +198,4 @@ class EvacuationDrainTest extends AnyFunSuite {
     /** The current treasury input in the emulator (the single utxo at the treasury address). */
     private def currentTreasuryInput(emu: ImmutableEmulator): TransactionInput =
         emu.utxos.collectFirst { case (i, o) if o.address == treasuryAddr => i }.get
-
-    /** The re-sent collateral produced by an evacuation tx. EvacuationTx returns collateral at
-      * output index 0 (its diff handler absorbs the fee there), so read `(txId, 0)` and re-parse
-      * it.
-      */
-    private def currentCollateral(emu: ImmutableEmulator, txId: TransactionHash): CollateralUtxo = {
-        val input = TransactionInput(txId, 0)
-        val output = emu.utxos
-            .collectFirst { case (i, o) if i == input => o }
-            .getOrElse(fail(s"collateral output not found at $input"))
-        CollateralUtxo.parse(Utxo(input, output)) match {
-            case Right(c)  => c
-            case Left(err) => fail(s"collateral parse failed: $err")
-        }
-    }
 }
