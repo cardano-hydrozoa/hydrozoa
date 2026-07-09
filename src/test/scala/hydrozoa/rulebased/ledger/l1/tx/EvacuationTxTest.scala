@@ -136,7 +136,6 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
       inputTreasuryUtxo = adjustedTreasuryUtxo,
       evacuateesToTryNext = evacuatees,
       allRemainingEvacuatees = evacMap,
-      feeUtxos = Map(feeUtxo.toTuple),
       collateralUtxo = collateralUtxo
     )
 

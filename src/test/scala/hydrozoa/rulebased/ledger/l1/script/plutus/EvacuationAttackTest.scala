@@ -139,8 +139,7 @@ class EvacuationAttackTest extends AnyFunSuite {
               inputTreasuryUtxo = treasuryUtxo,
               evacuateesToTryNext = subset,
               allRemainingEvacuatees = allRemaining,
-              collateralUtxo = collateral,
-              feeUtxos = Map(feeUtxo.toTuple)
+              collateralUtxo = collateral
             )
             .result(using config)
     }

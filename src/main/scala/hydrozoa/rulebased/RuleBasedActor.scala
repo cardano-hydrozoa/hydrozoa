@@ -708,13 +708,12 @@ final case class RuleBasedActor(
                         )
                     else traceRight(RuleBasedActorEvent.Evacuation.PayoutsLeft(toEvacuate.size))
 
-                feeAndCollateral <- getFeeAndCollateral
+                collateralUtxo <- getEvacuationCollateral
                 evacBuilder = EvacuationTx.Build(
                   inputTreasuryUtxo = treasuryUtxo,
                   evacuateesToTryNext = toEvacuate,
                   allRemainingEvacuatees = toEvacuate,
-                  feeUtxos = feeAndCollateral._1,
-                  collateralUtxo = feeAndCollateral._2
+                  collateralUtxo = collateralUtxo
                 )
                 // NoEvacuatees is recoverable (poll-then-retry), not a fatal build failure — peel
                 // it off before delegating to the generic buildAndSubmit which raises on Left.
@@ -821,7 +820,7 @@ final case class RuleBasedActor(
             }
 
         /** Query the evacuation wallet's utxos and derive collateral from the first one. */
-        def getFeeAndCollateral: EitherT[IO, Error.RecoverableErrors, (Utxos, CollateralUtxo)] = {
+        def getEvacuationCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
             val walletAddress = config.ruleBasedWallet.exportVerificationKey.shelleyAddress()
             for {
                 feeUtxos <- Backend.utxosAtFee(walletAddress)
@@ -841,7 +840,7 @@ final case class RuleBasedActor(
                                 )
                         }
                 }
-            } yield (feeUtxos, collateralUtxo)
+            } yield collateralUtxo
         }
     }
 
