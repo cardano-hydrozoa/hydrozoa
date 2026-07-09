@@ -14,6 +14,7 @@ import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.syntax.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
+import scalus.crypto.ed25519.VerificationKey
 
 object ConfigurationCodecTest extends Properties("Configuration Codec Properties") {
     import MultiNodeConfig.*
@@ -76,6 +77,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             mnc <- ask
             _ <- {
                 given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
+                given List[VerificationKey] = mnc.headConfig.coilPeerVKeys
                 val npc = mnc.nodePrivateConfigs.head._2
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson

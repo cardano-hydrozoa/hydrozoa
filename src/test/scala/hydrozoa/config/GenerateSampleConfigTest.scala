@@ -9,13 +9,14 @@ import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
-import hydrozoa.config.node.{MultiNodeConfig, NodePrivateConfig}
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig, NodePrivateConfig}
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.dummySigningKey
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.parser
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
+import scalus.crypto.ed25519.VerificationKey
 
 object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
     import MultiNodeConfig.*
@@ -69,6 +70,7 @@ object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
         // NodePrivateConfig round-trip for each peer
         _ <- lift {
             given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
+            given List[VerificationKey] = mnc.headConfig.coilPeerVKeys
             mnc.nodePrivateConfigs.toList.foldLeft(IO.unit) { case (acc, (peerNum, npc)) =>
                 acc >> (for {
                     npcJson <-
@@ -91,6 +93,19 @@ object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
                 } yield ())
             }
         }
+
+        // Full NodeConfig.fromJson path — exercises the head-config pre-parses (network /
+        // headPeers / coilPeers) exactly as Main does, which the direct decoder round-trips
+        // above bypass.
+        npc0Json <- lift(
+          Fs2Files[IO]
+              .readAll(tmpFsDir / s"peer-${mnc.nodePrivateConfigs.head._1}" / "private.json")
+              .through(text.utf8.decode)
+              .compile
+              .string
+        )
+        decodedNode <- lift(NodeConfig.fromJson(headJson, npc0Json, Some(cardanoBackend)).value)
+        _ <- failLeft(decodedNode)
     } yield true
 
     val _ = property("round-trips through disk") = runDefault(writeAllRoundTrip)

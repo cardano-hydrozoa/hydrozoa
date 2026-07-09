@@ -82,7 +82,7 @@ object CoilPeers {
     given Encoder[CoilPeers] =
         Encoder.encodeMap[CoilPeerNumber, CoilPeerData].contramap(_.coilPeerData)
 
-    given Decoder[CoilPeers] =
+    given coilPeersDecoder: Decoder[CoilPeers] =
         Decoder
             .decodeMap[CoilPeerNumber, CoilPeerData]
             .emap(m =>

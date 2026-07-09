@@ -8,6 +8,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import io.circe.*
 import io.circe.generic.semiauto.*
 import scala.annotation.unused
+import scalus.crypto.ed25519.VerificationKey
 
 final case class NodePrivateConfig(
     override val ownPeerPrivate: OwnPeerPrivate,
@@ -56,6 +57,7 @@ object NodePrivateConfig {
 
     given nodePrivateConfigDecoder(using
         headPeers: HeadPeers.Section,
+        coilPeerVKeys: List[VerificationKey],
         @unused network: CardanoNetwork.Section
     ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
 }

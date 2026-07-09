@@ -5,6 +5,8 @@ import cats.effect.*
 import cats.syntax.contravariant.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.peers.HeadPeers
@@ -18,6 +20,7 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 import java.nio.file.{Files, Path}
+import scalus.crypto.ed25519.VerificationKey
 
 final case class NodeConfig private (
     override val headConfig: HeadConfig,
@@ -64,9 +67,17 @@ object NodeConfig {
                 )
                 parser.decode(headConfigStr)
             }
+            coilPeers <- EitherT.fromEither[IO] {
+                given onlyCoilPeers: Decoder[CoilPeers] =
+                    Decoder.instance(c =>
+                        c.downField("coilPeers").as[CoilPeers](using coilPeersDecoder)
+                    )
+                parser.decode(headConfigStr)
+            }
 
             privateConfig <- EitherT.fromEither[IO] {
                 given HeadPeers = headPeers
+                given List[VerificationKey] = coilPeers.verificationKeys
                 given CardanoNetwork = network
                 io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
             }
