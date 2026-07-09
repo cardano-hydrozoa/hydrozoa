@@ -27,11 +27,14 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
+import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import org.http4s.client.Client as Http4sClient
 import org.http4s.client.websocket.WSClient
+import org.http4s.implicits.*
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
@@ -227,12 +230,14 @@ object MultiPeerHeadHarness:
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
-    /** Per-node artifacts exposed to callers: resolved connections, persistence backend, and the
-      * caller-derived handle. Used for both head peers and coil peers.
+    /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
+      * in-process [[SubmissionClient]] (bound to this peer's [[HydrozoaRoutes]] via
+      * `Client.fromHttpApp`), and the caller-derived handle.
       */
     case class Peer[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
+        submissionClient: SubmissionClient,
         handle: H,
     )
 
@@ -356,13 +361,19 @@ object MultiPeerHeadHarness:
                  )
             peerEntries <- Resource.eval(
                                peerConnections.toList.traverse { case (peerNum, conns) =>
-                                   hooks.handle(PeerId.Head(peerNum), conns).map { h =>
-                                       peerNum -> Peer(
-                                         connections = conns,
-                                         backendStore = peerMrms(peerNum).backendStore,
-                                         handle = h,
-                                       )
-                                   }
+                                   for
+                                       submissionClient <- Http.mkPeerSubmissionClient(
+                                                               peerNum,
+                                                               conns,
+                                                               multiNodeConfig,
+                                                           )
+                                       h <- hooks.handle(PeerId.Head(peerNum), conns)
+                                   yield peerNum -> Peer(
+                                     connections = conns,
+                                     backendStore = peerMrms(peerNum).backendStore,
+                                     submissionClient = submissionClient,
+                                     handle = h,
+                                   )
                                }
                            )
             coilEntries <- Resource.eval(
@@ -909,6 +920,49 @@ object MultiPeerHeadHarness:
                            )
                     _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
                 yield Coil(mrm, backendStore, coilConfig)
+            }
+
+    // ===================================
+    // Http — per-peer in-memory HydrozoaRoutes + SubmissionClient
+    // ===================================
+
+    object Http:
+        /** Placeholder authority for the in-process HTTP client. `Client.fromHttpApp` dispatches
+          * by path against the wrapped `HttpApp`, so the authority never hits a socket.
+          */
+        private val InProcBaseUri: Uri = uri"http://harness"
+
+        /** Build a peer's [[HydrozoaRoutes]] and wrap it in an in-memory http4s
+          * [[org.http4s.client.Client]] via `Client.fromHttpApp`, then return a
+          * [[SubmissionClient]] that signs each request with the peer's own wallet.
+          */
+        def mkPeerSubmissionClient(
+            peerNum: HeadPeerNumber,
+            conns: HeadMultisigRegimeManager.Connections,
+            multiNodeConfig: MultiNodeConfig,
+        ): IO[SubmissionClient] =
+            val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
+            val requestSequencer = conns.requestSequencer.getOrElse(
+              throw new IllegalStateException(
+                s"head peer $peerNum missing RequestSequencer; cannot build SubmissionClient"
+              )
+            )
+            val serverConfig = HydrozoaServer.Config(
+              adminUsername = "harness-admin",
+              adminPassword = "harness-admin",
+            )
+            val httpTracer: ContraTracer[IO, HydrozoaHttpEvent] =
+                Slf4jTracer.sink.contramap(HydrozoaHttpEventFormat.humanFormat)
+            HydrozoaRoutes(
+              requestSequencer,
+              conns.blockWeaver,
+              nodeConfig.headConfig,
+              serverConfig,
+              httpTracer,
+            ).map { hydrozoaRoutes =>
+                val client: Http4sClient[IO] =
+                    Http4sClient.fromHttpApp(hydrozoaRoutes.routes.orNotFound)
+                SubmissionClient.http(client, InProcBaseUri, nodeConfig.ownWallet)
             }
 
     // ===================================

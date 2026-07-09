@@ -9,13 +9,14 @@ import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.stack.Stack
 import hydrozoa.multisig.persistence.BackendStore
+import hydrozoa.multisig.server.SubmissionClient
 import org.scalacheck.commands.SutCommand
 import scalus.cardano.ledger.TransactionHash
 
@@ -23,18 +24,17 @@ import scalus.cardano.ledger.TransactionHash
 // Stage 4 SUT
 // ===================================
 
-/** Per-peer actor handles exposed to SUT commands. */
-case class Stage4PeerHandle(
-    requestSequencer: RequestSequencer.Handle,
-)
-
 /** Immutable, set-once resources of a running stage4 SUT. Allocated during `sutResource`,
   * referenced from anywhere thereafter — no field on this case class ever changes.
+  *
+  * `peers` holds each head peer's [[SubmissionClient]] — built by the harness against that peer's
+  * in-process [[hydrozoa.multisig.server.HydrozoaRoutes]] via `Client.fromHttpApp`, so submissions
+  * exercise the real HTTP/JSON codec surface without binding a socket.
   */
 case class Stage4SutStatic(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
-    peers: Map[HeadPeerNumber, Stage4PeerHandle],
+    peers: Map[HeadPeerNumber, SubmissionClient],
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
@@ -147,25 +147,26 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's RequestSequencer.
-    // Result is always Valid (trivial); oracle check in shutdownSut compares model
-    // predictions against actual block-brief outcomes.
+    // L2 tx: submit via the peer's SubmissionClient (in-memory http4s round-trip through the
+    // harness's HydrozoaRoutes). Result is always Valid (trivial); oracle check in shutdownSut
+    // compares model predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
                 _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
-    // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
+    // Deposit: submit via the peer's SubmissionClient (in-memory http4s round-trip) AND submit
+    // the signed deposit tx to the shared mock L1 backend so CardanoLiaison can observe it
+    // on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
                 _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.static.cardanoBackend.submitTx(RawTx(cmd.depositTxBytesSigned))

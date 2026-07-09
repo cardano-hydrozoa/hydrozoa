@@ -327,9 +327,10 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
             props.append(
               "rules-based treasury has no more than multisig treasury " +
-                  "+ extra from fallback tx fee" |:
+                  "+ extra from fallback tx fee + min-ada carried in for the treasury" |:
                   fbTx.treasuryProduced.treasuryOutput.toOutput(using config).value.coin.value <=
-                  fbTx.treasurySpent.value.coin.value + config.maxNonPlutusTxFee.value
+                  fbTx.treasurySpent.value.coin.value + config.maxNonPlutusTxFee.value +
+                  config.headParameters.fallbackContingency.collectiveContingency.minAdaForTreasury.value
             )
 
             props.append(
@@ -340,8 +341,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                     Babbage(
                       address = disputeResolutionAddress,
                       value = Value(
-                        config.headParameters.fallbackContingency.collectiveContingency.publicVoteDeposit
-                            + config.headParameters.fallbackContingency.collectiveContingency.minAdaForTreasury,
+                        config.headParameters.fallbackContingency.collectiveContingency.publicVoteDeposit,
                         MultiAsset(
                           SortedMap(
                             expectedHeadNativeScript.policyId -> SortedMap(

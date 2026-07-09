@@ -13,6 +13,7 @@ import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import scala.annotation.unused
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
@@ -41,12 +42,9 @@ import test.{SeedPhrase, TestPeers}
   *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the
   *      on-chain treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
   *   5. Voting deadline elapses → TallyTx → ResolutionTx.
-  *   6. Test asserts a ResolutionTx submitted successfully (i.e. the dispute resolved).
-  *
-  * Full evacuation (`RuleBasedActorEvent.Evacuation.NoMore`) is not asserted: the EvacuationTx
-  * builder trips the treasury validator's `Trusted setup in the treasury is not big enough`
-  * check because [[FallbackTx.scala]] sets `setupG2 = SList.empty` (TODO there). Wiring the
-  * KZG G2 trusted setup through fallback construction is separate follow-up work.
+  *   6. Every peer's RBA builds and submits an [[EvacuationTx]] until its `Evacuation.NoMore`
+  *      terminal event fires.
+  *   7. Test asserts the shared-L1 UTxO histogram matches the expected terminal cardinalities.
   */
 object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
@@ -55,10 +53,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
     private val nHeadPeers: Int              = 2
-    private val scenarioTimeout: FiniteDuration = 3.minutes
+    private val scenarioTimeout: FiniteDuration = 5.minutes
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
-    val _ = property("ws: fallback→RRM→vote→tally→resolve dispute completes") =
+    val _ = property("ws: fallback→RRM→vote→tally→resolve→evacuate happy path") =
         testProperty(TransportMode.WebSocket)
 
     private def testProperty(transportMode: TransportMode): Prop =
@@ -106,7 +104,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             _ <- step1b_startPeriodicRequestLoop
             _ <- step2_awaitFallbackToRuleBasedHandoff
             _ <- step3_awaitResolutionSubmitted
-            _ <- step4_assertTerminalHistogram
+            _ <- step4_awaitEvacuationDone
+            _ <- step5_assertTerminalHistogram
         yield true
 
     /** State + handles threaded between steps. */
@@ -116,6 +115,15 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
+        // Set of peers whose RBA has fired `Evacuation.NoMore`. `evacuationDone` is only
+        // completed once every head peer has fired — waiting for the first NoMore is racy: the
+        // winning-drain peer fires while others may still be mid-submission.
+        peersEvacuationDone: Ref[IO, Set[HeadPeerNumber]],
+        evacuationDone: Deferred[IO, Unit],
+        // First `PayoutsLeft(n)` observed on any peer — the KZG-committed evacuation count at
+        // the RBA's read of the resolved treasury. Subsequent PayoutsLeft values are strictly
+        // smaller as drain progresses; taking the first captures the pre-drain total.
+        firstPayoutsLeft: Ref[IO, Option[Int]],
         periodicRequestFiber: Ref[IO, Option[FiberIO[Nothing]]],
     )
 
@@ -149,18 +157,31 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             _   <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
         yield ()
 
-    /** After resolution lands, cancel the periodic-request loop, wait a beat for any in-flight
-      * tx to settle, snapshot the shared mock L1, and check the UTxO distribution matches the
-      * expected terminal buckets.
+    private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _   <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+        yield ()
+
+    /** After evacuation completes, cancel the periodic-request loop, wait a beat for any
+      * in-flight tx to settle, snapshot the shared mock L1, and check the UTxO distribution
+      * matches the expected terminal buckets.
       */
-    private def step4_assertTerminalHistogram: test.TestM[Ctx, Unit] =
+    private def step5_assertTerminalHistogram: test.TestM[Ctx, Unit] =
         for
             ctx    <- ask
             _      <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
             _      <- lift(IO.sleep(quiescenceDelay))
             utxos  <- lift(ctx.harness.l1Snapshot)
             actual <- lift(runClassifier(utxos)(using ctx.multiNodeConfig))
-            expected = expectedCardinalities
+            expectedEvacCount <- lift(ctx.firstPayoutsLeft.get.flatMap(
+              IO.fromOption(_)(
+                new IllegalStateException(
+                  "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
+                )
+              )
+            ))
+            expected = expectedCardinalities(expectedEvacCount)
             _ <- assertWith(
               actual == expected,
               s"Cardinality mismatch:\n  expected: $expected\n  actual:   $actual",
@@ -184,6 +205,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         for
             fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
             resolutionSubmitted  <- Resource.eval(Deferred[IO, Unit])
+            peersEvacuationDone  <- Resource.eval(Ref[IO].of(Set.empty[HeadPeerNumber]))
+            evacuationDone       <- Resource.eval(Deferred[IO, Unit])
+            firstPayoutsLeft     <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
@@ -196,6 +220,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
               tracer = humanFormatTracer |+| observerTracer(
                 fallbackDispatched,
                 resolutionSubmitted,
+                peersEvacuationDone,
+                evacuationDone,
+                firstPayoutsLeft,
               ),
               handle = {
                   case (PeerId.Head(peerNum), conns) =>
@@ -235,6 +262,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           harness = harness,
           fallbackDispatched = fallbackDispatched,
           resolutionSubmitted = resolutionSubmitted,
+          peersEvacuationDone = peersEvacuationDone,
+          evacuationDone = evacuationDone,
+          firstPayoutsLeft = firstPayoutsLeft,
           periodicRequestFiber = periodicRequestFiber,
         )
 
@@ -315,9 +345,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private def observerTracer(
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
+        peersEvacuationDone: Ref[IO, Set[HeadPeerNumber]],
+        evacuationDone: Deferred[IO, Unit],
+        firstPayoutsLeft: Ref[IO, Option[Int]],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         ContraTracer[IO, MultiPeerHeadHarness.Event] {
-            case MultiPeerHeadHarness.Event.Head(_, evt) =>
+            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
                 evt match {
                     case CommonChildEvent.CardanoLiaison(
                           _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
@@ -328,6 +361,22 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                           RuleBasedActorEvent.Tx.SubmitSuccess(tx)
                         ) if tx.transactionFamily == "Resolution" =>
                         resolutionSubmitted.complete(()).void
+
+                    case RuleBasedOnlyChildEvent.RuleBasedActor(
+                          RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
+                        ) =>
+                        firstPayoutsLeft.update(_.orElse(Some(n)))
+
+                    case RuleBasedOnlyChildEvent.RuleBasedActor(
+                          RuleBasedActorEvent.Evacuation.NoMore
+                        ) =>
+                        peersEvacuationDone
+                            .updateAndGet(_ + peerNum)
+                            .flatMap { seen =>
+                                IO.whenA(seen.size == nHeadPeers)(
+                                  evacuationDone.complete(()).void
+                                )
+                            }
 
                     case _ => IO.unit
                 }
@@ -347,16 +396,43 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         utxos: Utxos
     )(using MultiNodeConfig): IO[Map[RBRPlaceId, Int]] =
         val classifier = new RBRClassifier
-        Histogram.empty(classifier).addAll(utxos.toList.map { case (i, o) => Utxo(i, o) }).toEither match
+        val allUtxos   = utxos.toList.map { case (i, o) => Utxo(i, o) }
+        Histogram.empty(classifier).addAll(allUtxos).toEither match
             case Left(errs) =>
                 IO.raiseError(
                   new RuntimeException(s"Ambiguous UTxO classification: ${errs.toList}")
                 )
             case Right(hist) =>
+                // logAmbientUtxos(classifier, allUtxos) *>
                 IO.pure(RBRPlaceId.values.toList.map(k => k -> hist(k)).toMap)
 
-    /** Expected terminal cardinalities: init → settle-v1 → fallback → vote → tally → resolve on
-      * the happy path (no evacuation — blocked by the KZG G2 TODO in [[FallbackTx]]).
+    /** Diagnostic helper: emit each ambient-bucket UTxO (input / address / value / datum) via
+      * Slf4j so the composition of [[AmbientPlaceId]] can be identified when the terminal
+      * cardinality shifts. Toggle by uncommenting the `logAmbientUtxos(...)` call site in
+      * [[runClassifier]]. Not on the happy path so callers pay nothing when commented out.
+      */
+    @unused
+    private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
+        val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
+        val lines = ambient.zipWithIndex.map { case (u, idx) =>
+            s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
+        }.mkString("\n")
+        Slf4jTracer.sink.traceWith(
+          hydrozoa.lib.logging.LogEvent
+              .From(Map.empty, "AmbientDiagnostic")
+              .info(s"AmbientPlaceId utxos (${ambient.size}):\n$lines")
+        )
+
+    /** Expected terminal cardinalities: init → settle-v1 → fallback → vote → tally → resolve →
+      * evacuate on the happy path. `evacuationCount` is the first `PayoutsLeft(n)` observed
+      * from any peer's RBA — exactly the size of the resolved treasury's evacuation map before
+      * drain begins (see `RuleBasedActor.Evacuation.handle`).
+      *   - `EvacuationOutputPlaceId -> evacuationCount`: every L2 output was drained to L1 via
+      *     the RBA's `EvacuationTx` loop; each output carries the `"evacuation"` inline-datum
+      *     sentinel stamped by [[InitializationParametersGen.generatePeerContribution]], which
+      *     survives the KZG membership hash and so appears on the L1 evacuation outputs.
+      *   - `PayoutObligationsPlaceId -> 0`: no in-flight payout obligations remain on the
+      *     resolved treasury.
       *   - `CollateralPlaceId -> 0`: the [[RBRClassifier]] identifies collateral by the
       *     `"collateral"` datum sentinel, which only exists in the synthetic
       *     [[InitialDisputeUtxos]] fixture — the real tx builders draw collateral from plain
@@ -365,10 +441,14 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       *     scenario is to walk the tx graph and mark any output that is later consumed as a
       *     `collateral_input` of some downstream tx — i.e. classify by role in tx history
       *     rather than by content sentinel.
-      *   - `AmbientPlaceId -> 4`: `nHeadPeers = 2` (2 collateral + 2 change/genesis leftovers);
-      *     fixed for this scenario, observed via instrumentation run.
+      *   - `AmbientPlaceId -> nHeadPeers * 2`: each peer maintains two parallel wallet-ADA
+      *     streams at their shelley address — an [[InitializationTx]] change output and a
+      *     [[FallbackTx]] equity payout. Every RBR-side script tx that pays its fee from
+      *     collateral (Vote/Resolution/Evacuation) picks one of these as its collateral
+      *     input and returns it (fee-subtracted) at the same address, so no utxo is
+      *     destroyed — the two streams persist for the full flow.
       */
-    private val expectedCardinalities: Map[RBRPlaceId, Int] =
+    private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
         Map(
           TreasuryRefPlaceId        -> 1,
           DisputeRefPlaceId         -> 1,
@@ -377,7 +457,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           VotedPlaceId              -> 0,
           UnvotedPlaceId            -> 0,
           CollateralPlaceId         -> 0,
-          EvacuationOutputPlaceId   -> 0,
+          EvacuationOutputPlaceId   -> evacuationCount,
           PayoutObligationsPlaceId  -> 0,
-          AmbientPlaceId            -> 4,
+          AmbientPlaceId            -> nHeadPeers * 2,
         )

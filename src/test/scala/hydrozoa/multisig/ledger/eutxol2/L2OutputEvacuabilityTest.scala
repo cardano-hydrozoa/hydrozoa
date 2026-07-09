@@ -171,8 +171,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
               inputTreasuryUtxo = treasury,
               evacuateesToTryNext = m,
               allRemainingEvacuatees = m,
-              collateralUtxo = collateral,
-              feeUtxos = Map(fee.toTuple)
+              collateralUtxo = collateral
             )
             .result(using config) match {
             case Left(e) => Left(s"build: $e")
