@@ -10,7 +10,9 @@ import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, Transact
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import io.bullet.borer.Cbor
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
@@ -290,4 +292,62 @@ object JsonCodecs {
     given headInfoEncoder: Encoder[HeadInfo] = deriveEncoder[HeadInfo]
 
     given headInfoDecoder: Decoder[HeadInfo] = deriveDecoder[HeadInfo]
+
+    // ---- L2 query endpoints (GET /api/l2/utxos, /api/l2/transactions) ----
+    // CIP-0116-structured utxo encoding. `transactionInputEncoder` and `valueEncoder` come from the
+    // CIP-0116 givens imported above; only the output object is assembled here, since CIP-0116
+    // defines no `TransactionOutput` encoder.
+
+    /** One L2 output as `{ address, value, datum }`: bech32 address, CIP-0116 value, and a tagged
+      * datum — `{ "inline": <cbor-hex> }`, `{ "hash": <hex> }`, or `null` when absent — so a
+      * consumer can tell an inline datum from a datum-hash reference (CIP-0116 keeps them
+      * distinct).
+      */
+    private def encodeL2Output(output: TransactionOutput): Json =
+        val addressJson = output.address match
+            case shelley: ShelleyAddress =>
+                Json.fromString(shelley.toBech32.getOrElse(shelley.toHex))
+            case other => Json.fromString(other.toString)
+        def datumHashJson(hash: DataHash): Json = Json.obj("hash" -> Json.fromString(hash.toHex))
+        val datumJson = output match
+            case TransactionOutput.Shelley(_, _, datumHash) =>
+                datumHash.fold(Json.Null)(datumHashJson)
+            case TransactionOutput.Babbage(_, _, datumOption, _) =>
+                datumOption match
+                    case Some(DatumOption.Inline(data)) =>
+                        Json.obj(
+                          "inline" -> Json.fromString(
+                            ByteString.fromArray(Cbor.encode(data).toByteArray).toHex
+                          )
+                        )
+                    case Some(DatumOption.Hash(hash)) => datumHashJson(hash)
+                    case None                         => Json.Null
+        Json.obj(
+          "address" -> addressJson,
+          "value" -> output.value.asJson,
+          "datum" -> datumJson
+        )
+
+    given l2UtxoEncoder: Encoder[Utxo] =
+        (utxo: Utxo) =>
+            Json.obj(
+              "input" -> utxo.input.asJson,
+              "output" -> encodeL2Output(utxo.output)
+            )
+
+    given l2TxKindEncoder: Encoder[L2TxKind] =
+        Encoder.encodeString.contramap {
+            case L2TxKind.Transaction       => "transaction"
+            case L2TxKind.DepositRegistered => "depositRegistered"
+            case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
+            case L2TxKind.DepositRefunded   => "depositRefunded"
+        }
+
+    given l2TxSummaryEncoder: Encoder[L2TxSummary] =
+        (summary: L2TxSummary) =>
+            Json.obj(
+              "requestId" -> summary.requestId.asJson,
+              "blockNumber" -> summary.blockNumber.asJson,
+              "kind" -> summary.kind.asJson
+            )
 }

@@ -40,6 +40,7 @@ dockerCommands := dockerCommands.value.flatMap {
 val scalusVersion = "0.18.1"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
+val tapirVersion = "1.13.25"
 
 // Cardano on-chain validators and shared on-chain types
 lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
@@ -90,6 +91,12 @@ lazy val core: Project = (project in file("."))
         "org.http4s" %% "http4s-dsl" % http4sVersion,
         "org.http4s" %% "http4s-circe" % http4sVersion,
         "com.comcast" %% "ip4s-core" % "3.6.0",
+        // tapir - endpoints-as-values, self-documenting REST API + Swagger UI (CE3 / http4s 0.23)
+        "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % tapirVersion,
+        "com.softwaremill.sttp.tapir" %% "tapir-json-circe" % tapirVersion,
+        "com.softwaremill.sttp.tapir" %% "tapir-swagger-ui-bundle" % tapirVersion,
+        "com.softwaremill.sttp.tapir" %% "tapir-openapi-docs" % tapirVersion,
+        "com.softwaremill.sttp.apispec" %% "openapi-circe-yaml" % "0.11.10",
         // circe for JSON
         "io.circe" %% "circe-core" % "0.14.10",
         "io.circe" %% "circe-generic" % "0.14.10",

@@ -956,6 +956,8 @@ object MultiPeerHeadHarness:
             HydrozoaRoutes(
               requestSequencer,
               conns.blockWeaver,
+              // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
+              None,
               nodeConfig.headConfig,
               serverConfig,
               httpTracer,

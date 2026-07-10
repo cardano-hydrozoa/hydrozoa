@@ -372,6 +372,9 @@ object Main
                             sys.error("RequestSequencer required on head peers")
                           ),
                           connections.blockWeaver,
+                          // TODO(l2ledger): pass Some(reader) once the head-config l2ledger field
+                          // selects cardano-eutxo; a remote-ledger node serves no L2-query endpoints.
+                          None,
                           nodeConfig.headConfig,
                           serverConfig,
                           httpTracer,
@@ -396,7 +399,9 @@ object Main
 
     private sealed trait NodeRun
     private object NodeRun {
-        final case class HeadNode(mrm: HeadMultisigRegimeManager) extends NodeRun
+        final case class HeadNode(
+            mrm: HeadMultisigRegimeManager
+        ) extends NodeRun
         final case class CoilNode(mrm: CoilMultisigRegimeManager) extends NodeRun
     }
 }
