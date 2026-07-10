@@ -76,7 +76,7 @@ object CoilLiaisonTest extends Properties("Coil liaison plumbing") {
                   nodeOperationEvacuationConfig = hubPrivate.nodeOperationEvacuationConfig,
                   nodeOperationMultisigConfig = hubPrivate.nodeOperationMultisigConfig,
                   blockfrostApiKey = "not-a-real-key",
-                  sugarRushUri = "ws://localhost:3001/ws",
+                  remoteLedgerUri = "ws://localhost:3001/ws",
                   adminUsername = "admin",
                   adminPassword = "welcome",
                   httpHost = "0.0.0.0",

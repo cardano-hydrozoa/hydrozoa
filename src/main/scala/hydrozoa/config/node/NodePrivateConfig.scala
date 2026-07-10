@@ -13,7 +13,7 @@ final case class NodePrivateConfig(
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
     override val blockfrostApiKey: String,
-    override val sugarRushUri: String,
+    override val remoteLedgerUri: String,
     override val adminUsername: String,
     override val adminPassword: String,
     override val httpHost: String,
@@ -39,7 +39,7 @@ object NodePrivateConfig {
 
         def blockfrostApiKey: String = nodePrivateConfig.blockfrostApiKey
 
-        def sugarRushUri: String = nodePrivateConfig.sugarRushUri
+        def remoteLedgerUri: String = nodePrivateConfig.remoteLedgerUri
 
         def adminUsername: String = nodePrivateConfig.adminUsername
 

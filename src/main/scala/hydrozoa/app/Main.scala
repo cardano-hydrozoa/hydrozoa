@@ -34,9 +34,9 @@ import org.http4s.server.websocket.WebSocketBuilder2
   * }}}
   *
   * Both files are produced by `GenerateSampleConfig` (or, eventually, a real bootstrap tool). All
-  * settings the node needs at runtime — Blockfrost API key, wallet keys, bind host/port, Sugar Rush
-  * WS URI, HTTP admin credentials — live in those files; the process reads no environment
-  * variables.
+  * settings the node needs at runtime — Blockfrost API key, wallet keys, bind host/port,
+  * remote-ledger WS URI, HTTP admin credentials — live in those files; the process reads no
+  * environment variables.
   */
 object Main
     extends CommandIOApp(
@@ -99,12 +99,14 @@ object Main
             result <- Resource.eval(setupIO)
             (backend, nodeConfig) = result
 
-            _ <- Resource.eval(log.info(s"Connecting to L2 ledger at ${nodeConfig.sugarRushUri}"))
+            _ <- Resource.eval(
+              log.info(s"Connecting to L2 ledger at ${nodeConfig.remoteLedgerUri}")
+            )
             remoteL2LedgerTracer = Slf4jTracer.sink
                 .contramap(RemoteL2LedgerEventFormat.humanFormat)
             remoteL2Ledger <- Resource.eval(
               RemoteL2Ledger.create(
-                wsUri = nodeConfig.sugarRushUri,
+                wsUri = nodeConfig.remoteLedgerUri,
                 config = nodeConfig,
                 tracer = remoteL2LedgerTracer,
               )
