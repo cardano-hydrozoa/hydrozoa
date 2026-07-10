@@ -153,7 +153,7 @@ object Generators {
               MultiAsset(
                 SortedMap(
                   config.headMultisigScript.policyId -> SortedMap(
-                    config.headTokenNames.multisigRegimeTokenName -> 1L
+                    config.headTokenNames.regimeWitnessTokenName -> 1L
                   )
                 )
               )

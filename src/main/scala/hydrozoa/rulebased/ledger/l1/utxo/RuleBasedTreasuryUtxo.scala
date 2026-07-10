@@ -2,8 +2,8 @@ package hydrozoa.rulebased.ledger.l1.utxo
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, RuleBasedTreasuryDatumOnchain}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryStateConversions.{toOffchain, toOnchain}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.given
 import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryOutput.{Config, *}
 import scala.collection.immutable.SortedMap
 import scala.util.{Failure, Success, Try}
@@ -30,7 +30,7 @@ final case class RuleBasedTreasuryUtxo(
     // but we'd still have to parse at some point due to type erasure. But we could parse at the boundary instead.
     def parseVotingDeadline(using config: Config): Either[ParseError, Slot] =
         treasuryOutput.datum match {
-            case RuleBasedTreasuryDatum.Unresolved(deadlineVoting, _, _) =>
+            case RuleBasedTreasuryDatum.Unresolved(_, deadlineVoting, _) =>
                 Try(Slot(config.slotConfig.timeToSlot(deadlineVoting.toLong))).toEither.left
                     .map(TreasuryDatumContainsInvalidDeadline(_))
             case _ => Left(TreasuryDatumResolved)
@@ -109,7 +109,7 @@ final case class RuleBasedTreasuryOutput(datum: RuleBasedTreasuryDatum, value: V
         Babbage(
           address = config.ruleBasedTreasuryAddress,
           value = value,
-          datumOption = Some(Inline(datum.toOnchain.toData)),
+          datumOption = Some(Inline(datum.toData)),
           scriptRef = None
         )
 
@@ -152,15 +152,20 @@ object RuleBasedTreasuryOutput {
                 case _         => Left(TreasuryDatumNotInline(output))
             }
 
-            datum <- Try(fromData[RuleBasedTreasuryDatumOnchain](d2.data)) match {
-                case Success(d) if d.toOffchain.nonEmpty => Right(d.toOffchain.get)
-                case Success(_) =>
-                    Left(
-                      TreasuryDatumDeserializationError(
-                        output,
-                        Left("Onchain-to-offchain parsing of the treasury datum failed")
-                      )
-                    )
+            datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
+                case Success(d) =>
+                    val headMp = d match {
+                        case RuleBasedTreasuryDatum.Unresolved(mp, _, _) => mp
+                        case RuleBasedTreasuryDatum.Resolved(mp, _, _)   => mp
+                    }
+                    if headMp == config.headMultisigScript.policyId then Right(d)
+                    else
+                        Left(
+                          TreasuryDatumDeserializationError(
+                            output,
+                            Left("Treasury datum headMp does not match the head multisig policy")
+                          )
+                        )
                 case Failure(e) => Left(TreasuryDatumDeserializationError(output, Right(e)))
             }
 

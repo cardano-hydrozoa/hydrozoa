@@ -69,6 +69,7 @@ private object VoteTxOps {
     final case class Build(
         uncastBallotBox: BallotBox[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -157,6 +158,7 @@ private object VoteTxOps {
                     // Send back to the vote contract address with updated datum
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
+                    regimeUtxo.referenceOutput,
                     ValidityEndSlot(votingDeadline.slot)
                   )
                 )

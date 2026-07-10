@@ -15,7 +15,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.SomeBuildError
@@ -66,6 +66,7 @@ private object ResolutionTxOps {
     final case class Build(
         talliedBallotBox: BallotBox[Voted],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
         def result: Either[Build.Error, ResolutionTx] =
@@ -98,9 +99,9 @@ private object ResolutionTxOps {
             voteDetails: VoteStatus.Voted
         ): RuleBasedTreasuryDatum = {
             Resolved(
+              headMp = unresolved.headMp,
               evacuationActive = voteDetails._1,
-              version = (unresolved.versionMajor, voteDetails._2),
-              setupG2 = unresolved.setupG2
+              version = (unresolved.versionMajor, voteDetails._2)
             )
         }
 
@@ -123,6 +124,9 @@ private object ResolutionTxOps {
                       List(
                         config.referenceTreasury,
                         config.referenceDispute,
+                        // The treasury validator reads the immutable head-identity fields from
+                        // the regime utxo
+                        regimeUtxo.referenceOutput,
                         // Spend the tallied ballot box
                         talliedBallotBox.spend(voteRedeemer),
                         // Spend the treasury utxo and update its datum to resolved state

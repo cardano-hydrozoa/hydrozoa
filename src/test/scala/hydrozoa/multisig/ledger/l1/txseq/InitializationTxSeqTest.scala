@@ -72,7 +72,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             val expectedHeadTokenName =
                 CIP67.HeadTokenNames(config.seedUtxo.input).treasuryTokenName
             val expectedMulitsigRegimeTokenName =
-                CIP67.HeadTokenNames(config.seedUtxo.input).multisigRegimeTokenName
+                CIP67.HeadTokenNames(config.seedUtxo.input).regimeWitnessTokenName
             val expectedHeadNativeScript = config.headMultisigScript
             val iTxOutputs: Seq[TransactionOutput] = iTx.tx.body.value.outputs.map(_.value)
             val hns = expectedHeadNativeScript
@@ -248,7 +248,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 //                        )
 //                  ),
 //                  multisigRegimeUtxo = MultisigRegimeUtxo(
-//                    multisigRegimeTokenName = expectedMulitsigRegimeTokenName,
+//                    regimeWitnessTokenName = expectedMulitsigRegimeTokenName,
 //                    utxoId = TransactionInput(iTx.tx.id, 1),
 //                    address = expectedHeadNativeScript.mkAddress(testNetwork),
 //                    value = multisigRegimeUtxo.output.value,
@@ -289,7 +289,7 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
             )
 
             props.append(
-              "hmrw utxo spent" |: fbTxBody.inputs.toSeq.contains(multisigRegimeUtxo.input)
+              "hrwt utxo spent" |: fbTxBody.inputs.toSeq.contains(multisigRegimeUtxo.input)
             )
 
             props.append(
@@ -297,13 +297,12 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                   fbTxBody.inputs.toSeq.contains(iTx.multisigRegimeProduced.input)
             )
 
-            props.append("multisig regime token burned and vote tokens minted" |: {
+            props.append("only vote tokens minted (HRWT moves to the regime output, not burned)" |: {
                 val expectedMint = Some(
                   Mint(
                     MultiAsset(
                       SortedMap(
                         hns.policyId -> SortedMap(
-                          expectedMulitsigRegimeTokenName -> -1L,
                           config.headTokenNames.voteTokenName -> (config.headPeerIds.length.toLong + 1L)
                         )
                       )
@@ -312,6 +311,15 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                 )
                 expectedMint == fbTxBody.mint
             })
+
+            props.append(
+              "rule-based regime output carries the HRWT and the head-identity datum" |: {
+                  val regimeIdx = 2 + config.headPeerIds.length * 2
+                  fbTx.regimeUtxoProduced.input.index == regimeIdx
+                  && fbTxBody.outputs(regimeIdx).value ==
+                      hydrozoa.rulebased.ledger.l1.utxo.RuleBasedRegimeOutput.toOutput(using config)
+              }
+            )
 
             props.append(
               "rules-based treasury utxo has at least as much coin as multisig treasury (minus equity)" |: {
@@ -356,7 +364,8 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
                       scriptRef = None
                     ).ensureMinAda(config)
                   )
-                  fbTxBody.outputs.last.value == publicBallotBox.output
+                  // Second-to-last: the regime output follows the public ballot box
+                  fbTxBody.outputs(fbTxBody.outputs.size - 2).value == publicBallotBox.output
               }
             )
 
@@ -402,21 +411,21 @@ object InitializationTxSeqTest extends Properties("InitializationTxSeq"):
 
 //            props.append(
 //                "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
-//                    val expectedHMRWCoin: Coin =
+//                    val expectedHRWTCoin: Coin =
 //                        config.maxNonPlutusTxFee
 //                            + Coin(fbTxBody.outputs.drop(1).map(_.value.value.coin.value).sum)
-//                    iTx.multisigRegimeProduced.output.value.coin == expectedHMRWCoin
+//                    iTx.multisigRegimeProduced.output.value.coin == expectedHRWTCoin
 //                }
 //            )
 
             props.append(
               "multsig regime utxo contains at exactly enough ada to cover tx fee and all non-treasury outputs" |: {
-                  val expectedHMRWCoin: Coin = config.totalFallbackContingency
+                  val expectedHRWTCoin: Coin = config.totalFallbackContingency
                   iTx.multisigRegimeProduced
                       .toUtxo(using config)
                       .output
                       .value
-                      .coin == expectedHMRWCoin
+                      .coin == expectedHRWTCoin
               }
             )
 

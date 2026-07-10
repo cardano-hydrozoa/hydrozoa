@@ -50,7 +50,7 @@ class DeploymentTxTest extends AnyFunSuite {
         // 3. Build deploy transaction
         val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
-          scriptToDeploy = scriptRef
+          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.DeployedScript(scriptRef))
         )
 
         given CardanoNetwork.Section = network
@@ -76,13 +76,14 @@ class DeploymentTxTest extends AnyFunSuite {
         val finalState = finalStateResult.toOption.get
 
         // 6. Get the ref UTXO and parse it into ScriptReferenceUtxos
-        val refUtxoOutput = finalState.utxos.get(deployTx.refScriptUtxo)
+        val refScriptUtxoId = deployTx.deployedUtxos.head
+        val refUtxoOutput = finalState.utxos.get(refScriptUtxoId)
         assert(
           refUtxoOutput.isDefined,
-          s"Reference script UTXO not found at ${deployTx.refScriptUtxo}"
+          s"Reference script UTXO not found at $refScriptUtxoId"
         )
 
-        val refUtxo = Utxo(deployTx.refScriptUtxo, refUtxoOutput.get)
+        val refUtxo = Utxo(refScriptUtxoId, refUtxoOutput.get)
         val treasuryRefUtxoResult = ScriptReferenceUtxos.TreasuryScriptUtxo(network, refUtxo)
         assert(
           treasuryRefUtxoResult.isRight,
@@ -132,7 +133,7 @@ class DeploymentTxTest extends AnyFunSuite {
         // 3. Build deploy transaction
         val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
-          scriptToDeploy = scriptRef
+          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.DeployedScript(scriptRef))
         )
 
         given CardanoNetwork.Section = network
@@ -158,13 +159,14 @@ class DeploymentTxTest extends AnyFunSuite {
         val finalState = finalStateResult.toOption.get
 
         // 6. Get the ref UTXO and parse it into ScriptReferenceUtxos
-        val refUtxoOutput = finalState.utxos.get(deployTx.refScriptUtxo)
+        val refScriptUtxoId = deployTx.deployedUtxos.head
+        val refUtxoOutput = finalState.utxos.get(refScriptUtxoId)
         assert(
           refUtxoOutput.isDefined,
-          s"Reference script UTXO not found at ${deployTx.refScriptUtxo}"
+          s"Reference script UTXO not found at $refScriptUtxoId"
         )
 
-        val refUtxo = Utxo(deployTx.refScriptUtxo, refUtxoOutput.get)
+        val refUtxo = Utxo(refScriptUtxoId, refUtxoOutput.get)
         val disputeRefUtxoResult = ScriptReferenceUtxos.DisputeScriptUtxo(network, refUtxo)
         assert(
           disputeRefUtxoResult.isRight,

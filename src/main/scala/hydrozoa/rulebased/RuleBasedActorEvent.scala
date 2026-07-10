@@ -11,6 +11,7 @@ object RuleBasedActorEvent:
     object Backend:
         final case class ErrorDisputeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
+        final case class ErrorRegimeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorPeerUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorFeeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorContinuingTxs(e: CardanoBackend.Error) extends RuleBasedActorEvent
@@ -23,6 +24,11 @@ object RuleBasedActorEvent:
         case object Parsing extends RuleBasedActorEvent
         case object ParsedUnresolved extends RuleBasedActorEvent
         case object ParsedResolved extends RuleBasedActorEvent
+
+    object Regime:
+        case object Querying extends RuleBasedActorEvent
+        case object Found extends RuleBasedActorEvent
+        case object NotFound extends RuleBasedActorEvent
 
     object Collateral:
         final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent

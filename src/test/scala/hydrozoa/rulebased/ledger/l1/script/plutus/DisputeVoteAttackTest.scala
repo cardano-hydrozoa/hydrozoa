@@ -6,6 +6,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.rulebased.ledger.l1.DisputeActorTestHelpers.{mkBallotBoxUtxo, mkRuleBasedTreasury}
+import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.mkRegimeUtxoPure
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
@@ -150,6 +151,10 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
 
         collateralUtxo <- pick(genCollateralUtxo(ownKeyHash)(using env.headConfig))
 
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the vote txs
+        regimeTxId <- pick(Arbitrary.arbitrary[TransactionHash].suchThat(_ != fallbackTxId))
+        regimeUtxo = mkRegimeUtxoPure(TransactionInput(regimeTxId, 0))
+
         sec = StandaloneEvacuationCommitmentOnchain(
           headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
           versionMajor = versionMajor,
@@ -175,6 +180,7 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
                 .Build(
                   uncastBallotBox = box,
                   treasuryUtxo = ruleBasedTreasury,
+                  regimeUtxo = regimeUtxo,
                   collateralUtxo = collateralUtxo,
                   sec = sec,
                   signatures = signatures,
@@ -189,7 +195,8 @@ object DisputeVoteAttackTest extends Properties("Dispute Vote Attack") {
           (ruleBasedTreasury.utxoId, ruleBasedTreasury.treasuryOutput.toOutput(using config)),
           (ownVoteUtxo.input, ownVoteUtxo.output),
           (otherVoteUtxo.input, otherVoteUtxo.output),
-          (collateralUtxo.input, collateralUtxo.collateralOutput.toOutput(using env))
+          (collateralUtxo.input, collateralUtxo.collateralOutput.toOutput(using env)),
+          regimeUtxo.toUtxo(using env.headConfig).toTuple
         ) ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
 
         // The validator runs in CardanoMutator.transit under EvaluateAndComputeCost. Both attacks

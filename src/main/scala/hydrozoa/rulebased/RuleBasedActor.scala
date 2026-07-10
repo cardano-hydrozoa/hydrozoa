@@ -108,6 +108,19 @@ final case class RuleBasedActor(
               onError = RuleBasedActorEvent.Backend.ErrorTreasuryUtxos(_)
             )
 
+        def utxosAtRegime: EitherT[IO, Error.RecoverableErrors, Utxos] =
+            traced(
+              before = RuleBasedActorEvent.Regime.Querying,
+              action = cardanoBackend.utxosAt(
+                address = config.headMultisigAddress,
+                asset = (
+                  config.headMultisigScript.policyId,
+                  config.headTokenNames.regimeWitnessTokenName
+                )
+              ),
+              onError = RuleBasedActorEvent.Backend.ErrorRegimeUtxos(_)
+            )
+
         def utxosAtPeer(addr: ShelleyAddress): EitherT[IO, Error.RecoverableErrors, Utxos] =
             traced(
               before = RuleBasedActorEvent.Collateral.Querying(addr),
@@ -228,6 +241,36 @@ final case class RuleBasedActor(
                     traceRight(RuleBasedActorEvent.Treasury.ParsedResolved)
             }
         } yield treasuryUtxo
+
+    /** Read the regime utxo (by HRWT beacon at the head multisig address) and parse it. The
+      * rule-based txs reference it for the immutable head-identity fields. Missing or datum-less is
+      * recoverable — the HRWT still sits in the datum-less multisig regime utxo until the fallback
+      * tx lands (or it was rolled back); other parse failures throw.
+      */
+    private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
+        for {
+            utxos <- Backend.utxosAtRegime
+            regimeUtxo <- utxos.toList match {
+                case (i, o) :: Nil =>
+                    RuleBasedRegimeUtxo.parse(Utxo(i, o)) match {
+                        case Right(u) => pure(u)
+                        case Left(_: RuleBasedRegimeOutput.ParseError.RegimeDatumMissing) =>
+                            traceRight(RuleBasedActorEvent.Regime.NotFound) >>
+                                EitherT.leftT[IO, RuleBasedRegimeUtxo](
+                                  Error.ParseError.Regime.RegimeMissing: Error.RecoverableErrors
+                                )
+                        case Left(e) =>
+                            raiseError(Error.ParseError.Regime.WrappedRegimeParseError(e))
+                    }
+                case Nil =>
+                    traceRight(RuleBasedActorEvent.Regime.NotFound) >>
+                        EitherT.leftT[IO, RuleBasedRegimeUtxo](
+                          Error.ParseError.Regime.RegimeMissing: Error.RecoverableErrors
+                        )
+                case _ => raiseError(Error.ParseError.Regime.MultipleRegimeUtxos(utxos))
+            }
+            _ <- traceRight(RuleBasedActorEvent.Regime.Found)
+        } yield regimeUtxo
 
     /** Determine this peer's dispute action, scoped to the on-chain treasury's `versionMajor`. The
       * dispute-resolution script pins `sec.versionMajor` to the treasury reference input's, so a
@@ -387,29 +430,31 @@ final case class RuleBasedActor(
           * classification when their peer-specific vote path is inapplicable.
           */
         def handle(
-            treasuryUtxo: RuleBasedTreasuryUtxo
+            treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             config.ownPeerId match {
-                case PeerId.Head(_) => handleHead(treasuryUtxo)
-                case PeerId.Coil(_) => handleCoil(treasuryUtxo)
+                case PeerId.Head(_) => handleHead(treasuryUtxo, regimeUtxo)
+                case PeerId.Coil(_) => handleCoil(treasuryUtxo, regimeUtxo)
             }
 
         /** Head-peer dispute flow. Classifies the dispute address's utxos and dispatches to
           * [[castVote]] / [[tally]] / [[resolve]].
           */
         private def handleHead(
-            treasuryUtxo: RuleBasedTreasuryUtxo
+            treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
                 disputeUtxos <- getDisputeUtxos
                 collateralUtxo <- getCollateral
                 _ <- disputeUtxos match {
                     case DisputeUtxos.CastVote(ownBallotBox) =>
-                        castVote(ownBallotBox, treasuryUtxo, collateralUtxo)
+                        castVote(ownBallotBox, treasuryUtxo, regimeUtxo, collateralUtxo)
                     case DisputeUtxos.Tally(otherUtxos) =>
-                        tally(otherUtxos, treasuryUtxo, collateralUtxo)
+                        tally(otherUtxos, treasuryUtxo, regimeUtxo, collateralUtxo)
                     case DisputeUtxos.Resolve(finalVoteUtxo) =>
-                        resolve(finalVoteUtxo, treasuryUtxo, collateralUtxo)
+                        resolve(finalVoteUtxo, treasuryUtxo, regimeUtxo, collateralUtxo)
                     // Treasury was Unresolved but the dispute address holds no vote utxos. Per
                     // the spec this state is unreachable, so escalate.
                     case DisputeUtxos.EmptyVotes =>
@@ -427,7 +472,8 @@ final case class RuleBasedActor(
           *     Tally/Resolve/EmptyVotes classification so the coil peer still helps finalize.
           */
         private def handleCoil(
-            treasuryUtxo: RuleBasedTreasuryUtxo
+            treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
                 versionMajor <- extractTreasuryVersionMajor(treasuryUtxo)
@@ -456,6 +502,7 @@ final case class RuleBasedActor(
                                               .Build(
                                                 openBallotBox = openBox,
                                                 treasuryUtxo = treasuryUtxo,
+                                                regimeUtxo = regimeUtxo,
                                                 collateralUtxo = collateralUtxo,
                                                 sec = v.sec,
                                                 signatures = v.signatures,
@@ -467,11 +514,16 @@ final case class RuleBasedActor(
                                 case None =>
                                     traceRight(
                                       RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget
-                                    ) >> dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
+                                    ) >> dispatchResidual(
+                                      parsed,
+                                      treasuryUtxo,
+                                      regimeUtxo,
+                                      collateralUtxo
+                                    )
                             }
                     case DisputeAction.Abstain =>
                         traceRight(RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget) >>
-                            dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
+                            dispatchResidual(parsed, treasuryUtxo, regimeUtxo, collateralUtxo)
                 }
             } yield ()
 
@@ -503,6 +555,7 @@ final case class RuleBasedActor(
         private def dispatchResidual(
             parsed: List[BallotBox[VoteStatus]],
             treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             parsed match {
@@ -516,6 +569,7 @@ final case class RuleBasedActor(
                                 resolve(
                                   x.asInstanceOf[BallotBox[Voted]],
                                   treasuryUtxo,
+                                  regimeUtxo,
                                   collateralUtxo
                                 )
                         case _ =>
@@ -525,7 +579,7 @@ final case class RuleBasedActor(
                     }
                 case x :: y :: rest =>
                     traceRight(RuleBasedActorEvent.Dispute.ParsingTally) >>
-                        tally(NonEmptyList(x, y :: rest), treasuryUtxo, collateralUtxo)
+                        tally(NonEmptyList(x, y :: rest), treasuryUtxo, regimeUtxo, collateralUtxo)
             }
 
         /** Parse the treasury's `versionMajor` from an Unresolved datum. `Dispute.handle` is only
@@ -537,7 +591,7 @@ final case class RuleBasedActor(
             treasuryUtxo: RuleBasedTreasuryUtxo
         ): EitherT[IO, Error.RecoverableErrors, BigInt] =
             treasuryUtxo.treasuryOutput.datum match {
-                case RuleBasedTreasuryDatum.Unresolved(_, v, _) => pure(v)
+                case RuleBasedTreasuryDatum.Unresolved(_, _, v) => pure(v)
                 case _: RuleBasedTreasuryDatum.Resolved =>
                     raiseError(
                       new IllegalStateException(
@@ -598,11 +652,12 @@ final case class RuleBasedActor(
         def castVote(
             ownBallotBox: BallotBox[AwaitingVote],
             treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
                 treasuryVersionMajor <- treasuryUtxo.treasuryOutput.datum match {
-                    case RuleBasedTreasuryDatum.Unresolved(_, v, _) => pure(v)
+                    case RuleBasedTreasuryDatum.Unresolved(_, _, v) => pure(v)
                     case _: RuleBasedTreasuryDatum.Resolved =>
                         raiseError(
                           new IllegalStateException(
@@ -627,6 +682,7 @@ final case class RuleBasedActor(
                               .Build(
                                 uncastBallotBox = ownBallotBox,
                                 treasuryUtxo = treasuryUtxo,
+                                regimeUtxo = regimeUtxo,
                                 collateralUtxo = collateralUtxo,
                                 sec = sec,
                                 signatures = signatures,
@@ -657,6 +713,7 @@ final case class RuleBasedActor(
         def tally(
             otherUtxos: NonEmptyList[BallotBox[VoteStatus]],
             treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] = {
             val hasAwaitingVote = otherUtxos.exists(_.ballotBoxOutput.status match {
@@ -682,6 +739,7 @@ final case class RuleBasedActor(
                         continuingBallotBox = continuing,
                         removedBallotBox = removed,
                         treasuryUtxo = treasuryUtxo,
+                        regimeUtxo = regimeUtxo,
                         collateralUtxo = collateralUtxo
                       )
                       .result,
@@ -721,6 +779,7 @@ final case class RuleBasedActor(
         def resolve(
             finalVoteUtxo: BallotBox[Voted],
             treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             buildAndSubmit(
@@ -728,6 +787,7 @@ final case class RuleBasedActor(
                   .Build(
                     talliedBallotBox = finalVoteUtxo,
                     treasuryUtxo = treasuryUtxo,
+                    regimeUtxo = regimeUtxo,
                     collateralUtxo = collateralUtxo
                   )
                   .result,
@@ -742,7 +802,8 @@ final case class RuleBasedActor(
           * [[EvacuationTx]] for whatever is left.
           */
         def handle(
-            treasuryUtxo: RuleBasedTreasuryUtxo
+            treasuryUtxo: RuleBasedTreasuryUtxo,
+            regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
                 toEvacuate <- getEvacuationMap
@@ -758,6 +819,7 @@ final case class RuleBasedActor(
                 collateralUtxo <- getEvacuationCollateral
                 evacBuilder = EvacuationTx.Build(
                   inputTreasuryUtxo = treasuryUtxo,
+                  regimeUtxo = regimeUtxo,
                   evacuateesToTryNext = toEvacuate,
                   allRemainingEvacuatees = toEvacuate,
                   collateralUtxo = collateralUtxo
@@ -836,12 +898,12 @@ final case class RuleBasedActor(
                             }
                         }
                         kzg <- Try(
-                          fromData[TreasuryState.RuleBasedTreasuryDatumOnchain](resolutionDatum)
+                          fromData[TreasuryState.RuleBasedTreasuryDatum](resolutionDatum)
                         ) match {
                             case Failure(t) =>
                                 raiseError(Error.ParseError.TreasuryResolveRedeemerParseError(t))
                             case Success(
-                                  r: TreasuryState.RuleBasedTreasuryDatumOnchain.ResolvedOnchain
+                                  r: TreasuryState.RuleBasedTreasuryDatum.Resolved
                                 ) =>
                                 pure(r.evacuationActive)
                             case Success(_) =>
@@ -892,8 +954,10 @@ final case class RuleBasedActor(
         val et: EitherT[IO, Error.RecoverableErrors, Unit] = for {
             treasuryUtxo <- getTreasury
             _ <- treasuryUtxo.treasuryOutput.datum match {
-                case _: RuleBasedTreasuryDatum.Unresolved => Dispute.handle(treasuryUtxo)
-                case _: RuleBasedTreasuryDatum.Resolved   => Evacuation.handle(treasuryUtxo)
+                case _: RuleBasedTreasuryDatum.Unresolved =>
+                    getRegime.flatMap(Dispute.handle(treasuryUtxo, _))
+                case _: RuleBasedTreasuryDatum.Resolved =>
+                    getRegime.flatMap(Evacuation.handle(treasuryUtxo, _))
             }
         } yield ()
         et.value
@@ -1179,6 +1243,16 @@ object RuleBasedActor {
                   */
                 case object TreasuryMissing extends Recoverable
                 case object TreasuryResolved extends Recoverable
+            }
+
+            object Regime {
+                case class WrappedRegimeParseError(wrapped: RuleBasedRegimeOutput.ParseError)
+                    extends Unrecoverable
+
+                /** Recoverable: the fallback tx may not be visible yet, or a rollback removed it.
+                  */
+                case object RegimeMissing extends Recoverable
+                case class MultipleRegimeUtxos(utxos: Utxos) extends Unrecoverable
             }
 
             case object TreasuryDeinitialized extends Recoverable
