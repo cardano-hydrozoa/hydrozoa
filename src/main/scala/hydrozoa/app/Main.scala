@@ -372,6 +372,7 @@ object Main
                             sys.error("RequestSequencer required on head peers")
                           ),
                           connections.blockWeaver,
+                          mrm.nodeStatus.get,
                           // TODO(l2ledger): pass Some(reader) once the head-config l2ledger field
                           // selects cardano-eutxo; a remote-ledger node serves no L2-query endpoints.
                           None,
