@@ -9,8 +9,8 @@ object CIP67 {
     object Tags {
         val head: Int = 4937 // "HYDR" (hydrozoa) on the phone pad
         val vote: Int = 8683 // "VOTE" (vote) on the phone pad
-        val multiSigRegime: Int =
-            4679 // "HMRW" (hydrozoa multisig regime witness) on the phone pad
+        val regimeWitness: Int =
+            4798 // "HRWT" (Hydrozoa regime witness token) on the phone pad
     }
 
     def prefix(cip67Tag: Int): ByteString =
@@ -27,8 +27,8 @@ object CIP67 {
 
         val voteTokenName: AssetName = AssetName(prefix(CIP67.Tags.vote) ++ suffix)
 
-        val multisigRegimeTokenName: AssetName = AssetName(
-          prefix(CIP67.Tags.multiSigRegime) ++ suffix
+        val regimeWitnessTokenName: AssetName = AssetName(
+          prefix(CIP67.Tags.regimeWitness) ++ suffix
         )
     }
 
@@ -44,6 +44,6 @@ object PrintPrefixes {
         println("Prefixes:")
         println(s"head = ${CIP67.prefix(CIP67.Tags.head)}")
         println(s"vote = ${CIP67.prefix(CIP67.Tags.vote)}")
-        println(s"multisig regime = ${CIP67.prefix(CIP67.Tags.multiSigRegime)}")
+        println(s"regime witness = ${CIP67.prefix(CIP67.Tags.regimeWitness)}")
     }
 }
