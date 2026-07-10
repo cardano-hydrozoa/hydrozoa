@@ -21,8 +21,10 @@
       let
         pkgs = import nixpkgs { inherit system; };
         jdk = pkgs.openjdk25;
-        # GraalVM is an advanced JDK. We use it for  metals and bloop only.
-        # https://www.graalvm.org/
+        # The nixpkgs sbt launcher (1.x) reads project/build.properties and bootstraps whatever
+        # sbt version it names — including sbt 2.x — so no launcher pin is needed here.
+        # NB: the bundled `sbtn` thin client is sbt 1.x and cannot drive an sbt 2 server
+        # (it reports `unknown event: sbt/exec`); use `sbt`, not `sbtn`, until nixpkgs ships sbt 2.
         sbt0 = pkgs.sbt.override { jre = jdk; };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
@@ -32,7 +34,9 @@
             precommit = {
               enable = true;
               name = "lint fmt check";
-              entry = "${pkgs.bash}/bin/bash -c '${sbt0}/bin/sbt \"scalafixAll --check\" scalafmtCheck && ${pkgs.nixfmt}/bin/nixfmt flake.nix --check'";
+              # sbt 2 concatenates multiple program args into one command line, so pass a single
+              # `;`-separated command instead of two args (`"scalafixAll --check" scalafmtCheck`).
+              entry = "${pkgs.bash}/bin/bash -c '${sbt0}/bin/sbt \"; scalafixAll --check ; scalafmtCheck\" && ${pkgs.nixfmt}/bin/nixfmt flake.nix --check'";
               pass_filenames = false;
             };
           };

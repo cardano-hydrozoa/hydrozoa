@@ -32,7 +32,7 @@ import test.{PeersNumberSpec, TestM, TestMFixedEnv, TestPeersSpec}
 
 object BlockWeaverTestHelpers {
     type BWTest[A] = TestM[TestR, A]
-    val bwTest = TestMFixedEnv[TestR]()
+    val bwTest: TestMFixedEnv[TestR] = TestMFixedEnv[TestR]()
     import bwTest.*
 
     case class TestR(

@@ -95,17 +95,19 @@ private object FallbackTxOps {
                 def apply(): List[TransactionBuilderStep] =
                     List(modifyAuxiliaryData, validityStartSlot)
 
-                val modifyAuxiliaryData =
+                val modifyAuxiliaryData: ModifyAuxiliaryData =
                     ModifyAuxiliaryData(_ => Some(Fallback().asAuxData(config.headId)))
 
-                val validityStartSlot = ValidityStartSlot(validityStartTime.toSlot.slot)
+                val validityStartSlot: ValidityStartSlot = ValidityStartSlot(
+                  validityStartTime.toSlot.slot
+                )
             }
 
             object Spends {
                 def apply(): List[Spend] = List(MultisigRegime(), Treasury())
 
                 object Treasury {
-                    def apply() = Spend(
+                    def apply(): Spend = Spend(
                       treasuryUtxoSpent.asUtxo,
                       config.headMultisigScript.witnessAttached
                     )
@@ -114,7 +116,7 @@ private object FallbackTxOps {
                 }
 
                 object MultisigRegime {
-                    def apply() =
+                    def apply(): Spend =
                         Spend(multisigRegimeUtxo.toUtxo, config.headMultisigScript.witnessAttached)
                 }
             }
@@ -124,7 +126,7 @@ private object FallbackTxOps {
                     List(MultisigRegimeOutput.burnMultisigRegimeTokens, MintVotes())
 
                 private object MintVotes {
-                    def apply() = Mint(
+                    def apply(): Mint = Mint(
                       hns.policyId,
                       assetName = config.headTokenNames.voteTokenName,
                       amount = hns.numSigners + 1L,
@@ -180,7 +182,7 @@ private object FallbackTxOps {
                         )
 
                     private object Public {
-                        def apply() = Send(utxo)
+                        def apply(): Send = Send(utxo)
 
                         private val utxo = {
                             mkBallotBox(

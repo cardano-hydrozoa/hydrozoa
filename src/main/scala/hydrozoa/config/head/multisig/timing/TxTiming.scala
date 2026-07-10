@@ -256,7 +256,7 @@ object TxTiming {
     )
 
     // TODO: move to integration
-    def yaci(slotConfig: SlotConfig) = TxTiming(
+    def yaci(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(10.minutes.quantize(slotConfig)),
       InactivityMarginDuration(60.seconds.quantize(slotConfig)),
       SilenceDuration(10.minutes.quantize(slotConfig)),
@@ -265,7 +265,7 @@ object TxTiming {
       DepositAbsorptionDuration(2.minutes.quantize(slotConfig)),
     )
 
-    def demo(slotConfig: SlotConfig) = TxTiming(
+    def demo(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
       InactivityMarginDuration(2.hours.quantize(slotConfig)),
       SilenceDuration(2.minutes.quantize(slotConfig)),
@@ -275,7 +275,7 @@ object TxTiming {
     )
 
     // TODO: move to integration
-    def testnet(slotConfig: SlotConfig) = TxTiming(
+    def testnet(slotConfig: SlotConfig): TxTiming = TxTiming(
       MinSettlementDuration(1.hour.quantize(slotConfig)),
       InactivityMarginDuration(2.hours.quantize(slotConfig)),
       SilenceDuration(2.minutes.quantize(slotConfig)),

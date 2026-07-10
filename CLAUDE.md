@@ -10,48 +10,54 @@ Hydrozoa is a lightweight multi-party state channels implementation for Cardano,
 
 ### Building and Testing
 ```bash
-# Enter sbt shell (use sbtn for faster execution)
-sbtn
+# Enter the sbt shell
+sbt
 
 # Compile the project
-sbtn compile
+sbt compile
 
 # Run tests
-sbtn test
+sbt test
 
 # Run specific test suites
-sbtn "testOnly *SpecificTestSuite*"
+sbt "testOnly *SpecificTestSuite*"
 ```
 
-**Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbtn` and other tools are available directly — no `nix develop --command` prefix needed.
+**Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbt` and other tools are available directly — no `nix develop --command` prefix needed.
+
+**sbt 2 / `sbtn`**: this project targets **sbt 2** (`project/build.properties`). Use the `sbt`
+launcher — **not** `sbtn`. The Nix-provided `sbtn` is the sbt 1.x native thin client and cannot
+drive an sbt 2 server (it loops on `unknown event: sbt/exec`); the `sbt` launcher bootstraps sbt 2
+correctly from `build.properties`. Note also that sbt 2 concatenates multiple CLI command args into
+one line, so chain commands with a single `;`-separated string, e.g. `sbt "; compile ; test"`.
 
 ### Code Quality
 ```bash
 # Format code
 just fmt
 # or
-sbtn scalafmtAll
+sbt scalafmtAll
 
 # Check formatting
 just fmt-check
 # or
-sbtn scalafmtCheck
+sbt scalafmtCheck
 
 # Apply linting fixes
 just lint
 # or
-sbtn scalafixAll
+sbt scalafixAll
 
 # Check linting
 just lint-check
 # or
-sbtn scalafixAll --check
+sbt scalafixAll --check
 ```
 
 ### Benchmarks
 ```bash
 # Run JMH benchmarks
-sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
+sbt "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ```
 
 ### Specification
@@ -109,7 +115,7 @@ Working design and reference docs live in `docs/`:
 ## Development Environment
 
 ### Using Nix
-The project uses a Nix flake for a reproducible dev environment. Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbtn`, `just`, etc.) are on `PATH`:
+The project uses a Nix flake for a reproducible dev environment. Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbt`, `just`, etc.) are on `PATH`:
 ```bash
 nix develop
 # then launch your editor from here

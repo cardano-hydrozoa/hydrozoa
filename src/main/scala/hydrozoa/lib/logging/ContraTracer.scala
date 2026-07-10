@@ -121,7 +121,7 @@ case class ContraTracer[M[_], A](runTracer: TracerA[M, A, Unit]) {
     /** Use a natural transformation to change the @m@ type. This is useful, for instance, to use
       * concrete IO tracers in monad transformer stacks that have IO as their base.
       */
-    def natTracer[N[_], S](h: M ~> N) = ContraTracer(TracerA.nat(h)(this.use))
+    def natTracer[N[_], S](h: M ~> N): ContraTracer[N, A] = ContraTracer(TracerA.nat(h)(this.use))
 }
 
 object ContraTracer {

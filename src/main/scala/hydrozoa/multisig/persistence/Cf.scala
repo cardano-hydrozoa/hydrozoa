@@ -88,11 +88,11 @@ object Cf:
     // ---- Per-author satellite CFs (one per author). --------------------------------------------
     /** One head peer's request journal, keyed by `requestNum`. */
     final case class Request(peer: HeadPeerNumber) extends Cf:
-        def name = s"Request:${peer: Int}"
+        def name: String = s"Request:${peer: Int}"
 
     /** One head peer's soft-ack journal, keyed by `softAckNum`. */
     final case class SoftAck(peer: HeadPeerNumber) extends Cf:
-        def name = s"SoftAck:${peer: Int}"
+        def name: String = s"SoftAck:${peer: Int}"
 
     /** One peer's hard-ack journal (head peer own; coil peer own + a hub's receive copy), keyed by
       * `hardAckNum`. The author is a [[PeerId]] — head and coil peers share one journal type, one
@@ -101,11 +101,11 @@ object Cf:
       * journals never collide on the same number.
       */
     final case class HardAck(peer: PeerId) extends Cf:
-        def name = s"HardAck:${peer.toWireInt}"
+        def name: String = s"HardAck:${peer.toWireInt}"
 
     /** One hub's re-sequenced coil-ack journal, keyed by `hubHardAckNum`. */
     final case class HubHardAck(hub: HeadPeerNumber) extends Cf:
-        def name = s"HubHardAck:${hub: Int}"
+        def name: String = s"HubHardAck:${hub: Int}"
 
     /** The fixed-shape CFs, present on every store regardless of membership. */
     val fixed: List[Cf] = List(

@@ -11,7 +11,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.token.CIP67
-import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
+import hydrozoa.multisig.ledger.l1.token.CIP67.{HasTokenNames, HeadTokenNames}
 import io.circe.generic.semiauto.*
 import io.circe.{Decoder, Encoder}
 import scala.annotation.unused
@@ -75,7 +75,7 @@ object InitializationParameters {
 
         final def initialEquityContributed: Coin =
             initialEquityContributions.toSortedMap.values.fold(Coin.zero)(_ + _)
-        final def headTokenNames = CIP67.HeadTokenNames(seedUtxo.input)
+        final def headTokenNames: HeadTokenNames = CIP67.HeadTokenNames(seedUtxo.input)
 
         final def headId: HeadId = HeadId(headTokenNames.treasuryTokenName)
         final def initialFundingValue: Value =
