@@ -1,52 +1,38 @@
 package hydrozoa.rulebased.ledger.l1.state
 
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
 import scalus.compiler.Compile
-import scalus.cardano.onchain.plutus.prelude.List
 import scalus.cardano.onchain.plutus.v3.*
-import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
+import scalus.uplc.builtin.{ByteString, FromData, ToData}
 
 @Compile
 // TODO: shall we move it to object RuleBasedTreasuryUtxo?
 object TreasuryState:
 
-    // Datum
+    /** Treasury datum, used both on- and off-chain.
+      *
+      * `headMp` is the induction anchor for reference-input lookups: written by the
+      * all-peers-signed FallbackTx and preserved across Resolve/Evacuate, it lets validators
+      * locate the rule-based regime utxo (HRWT beacon under `headMp`) without trusting tokens in
+      * the treasury's own value, which holds arbitrary L2 assets.
+      *
+      * The immutable head-identity fields live in the regime utxo ([[RegimeState]]); the KZG G2
+      * setup lives in the deployed setup-ladder utxos.
+      */
     enum RuleBasedTreasuryDatum:
         case Unresolved(
+            headMp: PolicyId,
             deadlineVoting: PosixTime,
-            versionMajor: BigInt,
-            setupG2: List[ByteString]
+            versionMajor: BigInt
         )
         case Resolved(
-            evacuationActive: MembershipProof,
-            // FIXME: missing in the refactored version
-            version: (BigInt, BigInt),
-            // FIXME: missing in the refactored version
-            setupG2: List[ByteString]
-        )
-
-    enum RuleBasedTreasuryDatumOnchain:
-        case UnresolvedOnchain(
-            headMp: PolicyId,
-            disputeId: TokenName,
-            headPeers: List[VerificationKey],
-            headPeersN: BigInt,
-            coilPeers: List[VerificationKey],
-            coilQuorum: BigInt,
-            deadlineVoting: PosixTime,
-            versionMajor: BigInt,
-            setupG2: List[ByteString]
-        )
-        case ResolvedOnchain(
             headMp: PolicyId,
             evacuationActive: MembershipProof,
-            version: (BigInt, BigInt),
-            setupG2: List[ByteString]
+            version: (BigInt, BigInt)
         )
 
-    given FromData[RuleBasedTreasuryDatumOnchain] = FromData.derived
+    given FromData[RuleBasedTreasuryDatum] = FromData.derived
 
-    given ToData[RuleBasedTreasuryDatumOnchain] = ToData.derived
+    given ToData[RuleBasedTreasuryDatum] = ToData.derived
 
     // EdDSA / ed25519 Cardano verification key
     type VerificationKey = ByteString
