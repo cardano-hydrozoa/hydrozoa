@@ -270,25 +270,16 @@ object InitializationParametersGenTopDown {
                         for {
                             next <- generateCappedValue(cardanoNetwork)(capValue = rest)
                             address <- Gen.oneOf(peerAddresses)
-                            // The datum bumps the output's min-ADA above what generateCappedValue
-                            // budgeted for `next`; top up here and advance the loop using the
-                            // actually-consumed value.
-                            output = Babbage(
+                            acc_ = acc :+ Babbage(
                               address = address,
                               value = next,
                               datumOption =
                                   Some(Inline(toData(ByteString.fromString("evacuation")))),
-                            ).ensureMinAda(cardanoNetwork)
+                            )
                         } yield
-                            if (rest - output.value).coin.value < 0L
-                            then Right(acc)
-                            else {
-                                val acc_ = acc :+ output
-                                val newRest = rest - output.value
-                                if next == rest || newRest.coin.value == 0L
-                                then Right(acc_)
-                                else Left(acc_ -> newRest)
-                            }
+                            if next == rest
+                            then Right(acc_)
+                            else Left(acc_ -> (rest - next))
                     )
                 else Gen.const(List.empty)
 
