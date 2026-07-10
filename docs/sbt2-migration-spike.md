@@ -119,6 +119,34 @@ fully reversible.
 | Clean `-Werror` CI run + GH Actions validation | 0.25–0.5 d |
 | **Total** | **~2–4 focused days**, mostly low-risk mechanical + team rollout |
 
+## CI verification (PR #526)
+
+CI on the branch surfaced two failures; both are understood:
+
+1. **Unit tests — real sbt-2 bug, fixed.** `cardanoOnchain` failed under `-Werror` with 27
+   "Flag … set repeatedly" errors. Cause: `ThisBuild / scalacOptions ++=` (and `ThisBuild /
+   testFrameworks +=`) written as bare top-level statements — sbt 2 injects each bare statement
+   into *every* subproject, so the `++=` accumulated on the shared `ThisBuild` scope once per
+   subproject (`-feature` ×4). Fixed by dropping the `ThisBuild /` prefix so each subproject gets
+   one copy; verified via `show <proj>/Compile/scalacOptions` (×4 → ×1) and a real `-Werror`
+   compile (cache disabled with `set Global / cacheStores := Nil`). *(This was masked in the spike
+   because sbt 2's disk action cache restored the compile instead of recompiling.)*
+
+2. **Integration tests — pre-existing flake, not the migration.** `VoteVersionMismatchTest` hit
+   `TimeoutException: 90 seconds` on one run and hung on the re-run. It is **not** sbt-2-caused:
+   - Test-execution model is identical between sbt 1 and 2 (`Test/fork=false`,
+     `Test/parallelExecution=true` in both; `testForkedParallel` differs but is inert without
+     forking) — sbt 2 does not change how these suites run.
+   - The test **passes locally on this branch in ~58 s** (genuine actor-system execution). The
+     scenario's own cap is 90 s, so on slower/loaded CI runners it drifts over — a test sitting on
+     the edge of its timeout.
+   - The integration suite flakes repo-wide (other branches' CI pass one run, fail another).
+   Bumping/de-flaking the 90 s cap belongs with the fallback-handoff work (`481fb4e9`), not this
+   migration.
+
+Net: lint, unit tests, and packaging pass deterministically under sbt 2; the only migration-caused
+failure is fixed.
+
 ## Recommendation
 
 **GO — technically feasible now, low risk, not urgent.** Nothing is blocking; the migration diff
