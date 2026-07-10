@@ -11,11 +11,15 @@ import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
 import com.suprnation.actor.{ActorContext, ActorSystem}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.config.node.NodeConfig
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
+import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
@@ -99,18 +103,12 @@ object Main
             result <- Resource.eval(setupIO)
             (backend, nodeConfig) = result
 
-            _ <- Resource.eval(
-              log.info(s"Connecting to L2 ledger at ${nodeConfig.remoteLedgerUri}")
-            )
-            remoteL2LedgerTracer = Slf4jTracer.sink
-                .contramap(RemoteL2LedgerEventFormat.humanFormat)
-            remoteL2Ledger <- Resource.eval(
-              RemoteL2Ledger.create(
-                wsUri = nodeConfig.remoteLedgerUri,
-                config = nodeConfig,
-                tracer = remoteL2LedgerTracer,
-              )
-            )
+            // Select the L2 ledger the peers agreed on (HeadParameters.l2Ledger): the built-in
+            // in-process EUTXO ledger, or a remote black box reached over this node's
+            // `remoteLedgerUri`. Only the EUTXO ledger is also an EutxoL2LedgerReader, so only it
+            // yields a reader for the server's L2-query endpoints (a remote node hands it None).
+            l2 <- mkL2Ledger(nodeConfig, dataDir)
+            (l2Ledger, l2QueryReader) = l2
 
             // Per-peer persistence store. Default path; later milestones will surface this
             // through NodeConfig (P1 skeleton; see design §7). Open the RocksDB-backed
@@ -143,7 +141,8 @@ object Main
                     buildHeadNode(
                       nodeConfig,
                       backend,
-                      remoteL2Ledger,
+                      l2Ledger,
+                      l2QueryReader,
                       persistence,
                       headTracer,
                       wsClient,
@@ -160,7 +159,7 @@ object Main
                     buildCoilNode(
                       nodeConfig,
                       backend,
-                      remoteL2Ledger,
+                      l2Ledger,
                       persistence,
                       coilTracer,
                       wsClient,
@@ -171,13 +170,48 @@ object Main
 
         resource.use { case (nodeConfig, system, nodeRun) =>
             nodeRun match {
-                case NodeRun.HeadNode(mrm) =>
-                    runHeadNode(nodeConfig, system, mrm, httpExtraTracer)
+                case NodeRun.HeadNode(mrm, l2QueryReader) =>
+                    runHeadNode(nodeConfig, system, mrm, l2QueryReader, httpExtraTracer)
                 case NodeRun.CoilNode(mrm) =>
                     runCoilNode(system, mrm)
             }
         }
     }
+
+    /** Instantiate the head-agreed L2 ledger and, when it is the built-in EUTXO ledger, the
+      * read-only view the user-facing server exposes over the `GET /api/l2/...` endpoints. A node
+      * wired to a remote ledger has no such reader, so the server is handed `None` and mounts no
+      * L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence, separate from the
+      * consensus store.
+      */
+    private def mkL2Ledger(
+        nodeConfig: NodeConfig,
+        dataDir: Path,
+    ): Resource[IO, (L2Ledger[IO], Option[EutxoL2LedgerReader[IO]])] =
+        nodeConfig.headConfig.l2Ledger match {
+            case L2LedgerKind.CardanoEutxo =>
+                for {
+                    _ <- Resource.eval(log.info("L2 ledger: built-in cardano-eutxo"))
+                    store <- RocksDbL2Store.open(
+                      dataDir.resolve(s"peer-${nodeConfig.ownPeerLabel}/l2-rocksdb")
+                    )
+                    ledger <- Resource.eval(EutxoL2Ledger(nodeConfig, store))
+                } yield (ledger, Some(ledger))
+            case L2LedgerKind.AnyRemote =>
+                val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
+                for {
+                    _ <- Resource.eval(
+                      log.info(s"L2 ledger: remote at ${nodeConfig.remoteLedgerUri}")
+                    )
+                    ledger <- Resource.eval(
+                      RemoteL2Ledger.create(
+                        wsUri = nodeConfig.remoteLedgerUri,
+                        config = nodeConfig,
+                        tracer = tracer,
+                      )
+                    )
+                } yield (ledger, Option.empty[EutxoL2LedgerReader[IO]])
+        }
 
     /** Build the head-node transports (mesh + optional hub-coil), bind one shared `NodeWsServer`,
       * start dialers, and allocate the [[HeadMultisigRegimeManager]].
@@ -185,7 +219,8 @@ object Main
     private def buildHeadNode(
         nodeConfig: NodeConfig,
         backend: CardanoBackend[IO],
-        remoteL2Ledger: RemoteL2Ledger,
+        l2Ledger: L2Ledger[IO],
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         persistence: Persistence[IO],
         mrmTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
@@ -275,13 +310,13 @@ object Main
             mrm <- HeadMultisigRegimeManager.resource(
               nodeConfig,
               backend,
-              remoteL2Ledger,
+              l2Ledger,
               persistence,
               mrmTracer,
               peerFactory,
               hubFactory,
             )
-        } yield NodeRun.HeadNode(mrm)
+        } yield NodeRun.HeadNode(mrm, l2QueryReader)
     }
 
     /** Build the coil-node uplink dialer (no inbound server) and allocate the
@@ -290,7 +325,7 @@ object Main
     private def buildCoilNode(
         nodeConfig: NodeConfig,
         backend: CardanoBackend[IO],
-        remoteL2Ledger: RemoteL2Ledger,
+        l2Ledger: L2Ledger[IO],
         persistence: Persistence[IO],
         mrmTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         wsClient: org.http4s.client.websocket.WSClient[IO],
@@ -325,7 +360,7 @@ object Main
             mrm <- CoilMultisigRegimeManager.resource(
               nodeConfig,
               backend,
-              remoteL2Ledger,
+              l2Ledger,
               persistence,
               mrmTracer,
               coilFactory,
@@ -337,6 +372,7 @@ object Main
         nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: HeadMultisigRegimeManager,
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
@@ -374,9 +410,9 @@ object Main
                             sys.error("RequestSequencer required on head peers")
                           ),
                           connections.blockWeaver,
-                          // TODO(l2ledger): pass Some(reader) once the head-config l2ledger field
-                          // selects cardano-eutxo; a remote-ledger node serves no L2-query endpoints.
-                          None,
+                          // Some(reader) for a cardano-eutxo node (mounts GET /api/l2/...); None for
+                          // a remote-ledger node, which serves no L2-query endpoints.
+                          l2QueryReader,
                           nodeConfig.headConfig,
                           serverConfig,
                           httpTracer,
@@ -402,7 +438,8 @@ object Main
     private sealed trait NodeRun
     private object NodeRun {
         final case class HeadNode(
-            mrm: HeadMultisigRegimeManager
+            mrm: HeadMultisigRegimeManager,
+            l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         ) extends NodeRun
         final case class CoilNode(mrm: CoilMultisigRegimeManager) extends NodeRun
     }
