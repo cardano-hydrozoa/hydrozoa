@@ -6,6 +6,7 @@ import fs2.io.file.Files as Fs2Files
 import fs2.text
 import hydrozoa.config.GenerateSampleConfig.{defaultSpec, writeAll}
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
@@ -16,7 +17,6 @@ import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.parser
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
-import scalus.crypto.ed25519.VerificationKey
 
 object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
     import MultiNodeConfig.*
@@ -70,7 +70,7 @@ object GenerateSampleConfigTest extends Properties("GenerateSampleConfig") {
         // NodePrivateConfig round-trip for each peer
         _ <- lift {
             given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
-            given List[VerificationKey] = mnc.headConfig.coilPeerVKeys
+            given CoilPeers = mnc.headConfig.coilPeers
             mnc.nodePrivateConfigs.toList.foldLeft(IO.unit) { case (acc, (peerNum, npc)) =>
                 acc >> (for {
                     npcJson <-

@@ -2,7 +2,7 @@ package hydrozoa.app
 
 import cats.data.NonEmptyMap
 import hydrozoa.app.GenerateKeyPair.Role
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.node.NodePrivateConfig
 import hydrozoa.config.node.NodePrivateConfig.nodePrivateConfigDecoder
@@ -40,7 +40,12 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
       )
     ).get
 
-    private val coilPeerVKeys: List[VerificationKey] = List(vkey('2'), vkey('3'))
+    private val coilPeers: CoilPeers = CoilPeers.indexed(
+      List(
+        CoilPeerData(vkey('2'), HeadPeerNumber(0)),
+        CoilPeerData(vkey('3'), HeadPeerNumber(0))
+      )
+    )
 
     private val template =
         parser
@@ -87,8 +92,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
     test("a head-filled template decodes into an OwnHeadPeerPrivate identity") {
         given HeadPeers = headPeers
-        given List[VerificationKey] = coilPeerVKeys
-        given CardanoNetwork = CardanoNetwork.Preview
+        given CoilPeers = coilPeers
 
         val filled = GenerateKeyPair
             .fillPrivateConfig(template, Role.Head, hex('1'), hex('a'), hex('b'), hex('c'))
@@ -111,8 +115,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
     test("a coil-filled template decodes into an OwnCoilPeerPrivate identity") {
         given HeadPeers = headPeers
-        given List[VerificationKey] = coilPeerVKeys
-        given CardanoNetwork = CardanoNetwork.Preview
+        given CoilPeers = coilPeers
 
         val filled = GenerateKeyPair
             .fillPrivateConfig(template, Role.Coil, hex('3'), hex('a'), hex('b'), hex('c'))

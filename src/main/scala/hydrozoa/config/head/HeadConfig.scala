@@ -281,9 +281,7 @@ object HeadConfig {
                 privateConfig <- EitherT.fromEither[IO] {
                     given HeadPeers = headPeers
 
-                    given List[VerificationKey] = coilPeers.verificationKeys
-
-                    given CardanoNetwork = network
+                    given CoilPeers = coilPeers
 
                     io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
                 }

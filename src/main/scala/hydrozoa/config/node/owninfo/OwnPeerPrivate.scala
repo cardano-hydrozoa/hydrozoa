@@ -1,12 +1,12 @@
 package hydrozoa.config.node.owninfo
 
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnCoilPeerPrivate.dummyOwnCoilPeerPrivateEncoder
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate.dummyOwnHeadPeerPrivateEncoder
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.*
 import io.circe.syntax.*
-import scalus.crypto.ed25519.VerificationKey
 
 /** The private own-peer surface shared by head and coil nodes: the [[OwnPeerPublic]] identity plus
   * a signing wallet. Concrete implementations: [[OwnHeadPeerPrivate]] / [[OwnCoilPeerPrivate]].
@@ -33,12 +33,11 @@ object OwnPeerPrivate {
 
     /** Decode either peer identity, dispatching on which wallet field is present: `ownHeadWallet`
       * decodes an [[OwnHeadPeerPrivate]] (vkey located among the head peers), `ownCoilWallet` an
-      * [[OwnCoilPeerPrivate]] (vkey located among the coil peers, whose vkeys the caller supplies
-      * in coil-peer-number order).
+      * [[OwnCoilPeerPrivate]] (vkey located among the coil peers supplied via [[CoilPeers]]).
       */
     given ownPeerPrivateDecoder(using
         headPeers: HeadPeers.Section,
-        coilPeerVKeys: List[VerificationKey]
+        coilPeers: CoilPeers
     ): Decoder[OwnPeerPrivate] =
         Decoder.instance { c =>
             if c.downField("ownHeadWallet").succeeded then

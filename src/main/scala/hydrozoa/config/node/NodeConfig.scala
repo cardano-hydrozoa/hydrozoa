@@ -20,7 +20,6 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.{parser, *}
 import java.nio.file.{Files, Path}
-import scalus.crypto.ed25519.VerificationKey
 
 final case class NodeConfig private (
     override val headConfig: HeadConfig,
@@ -77,8 +76,7 @@ object NodeConfig {
 
             privateConfig <- EitherT.fromEither[IO] {
                 given HeadPeers = headPeers
-                given List[VerificationKey] = coilPeers.verificationKeys
-                given CardanoNetwork = network
+                given CoilPeers = coilPeers
                 io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
             }
 
@@ -151,7 +149,7 @@ object NodeConfig {
         httpHost: String,
         httpPort: String,
     ): Option[NodeConfig] = for {
-        ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeerVKeys)
+        ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownCoilPeerPrivate,
           nodeOperationEvacuationConfig,

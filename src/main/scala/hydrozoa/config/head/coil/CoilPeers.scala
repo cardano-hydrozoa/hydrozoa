@@ -42,6 +42,11 @@ final case class CoilPeers private (coilPeerData: SortedMap[CoilPeerNumber, Coil
     def verificationKey(p: CoilPeerNumber): Option[VerificationKey] =
         coilPeerData.get(p).map(_.verificationKey)
 
+    /** The [[CoilPeerNumber]] whose verification key is `vkey`, or `None` if no coil peer has it.
+      */
+    def coilPeerNumberOf(vkey: VerificationKey): Option[CoilPeerNumber] =
+        coilPeerData.collectFirst { case (n, d) if d.verificationKey == vkey => n }
+
     /** The hub head peer for the given coil peer, or `None` if the number is out of range. */
     def hubHeadPeerNumber(p: CoilPeerNumber): Option[HeadPeerNumber] =
         coilPeerData.get(p).map(_.hubHeadPeerNumber)

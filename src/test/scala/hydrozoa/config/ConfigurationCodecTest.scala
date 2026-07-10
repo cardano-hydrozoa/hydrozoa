@@ -4,6 +4,7 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.given
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
@@ -14,7 +15,6 @@ import hydrozoa.multisig.consensus.peer.PeerWallet
 import io.circe.syntax.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
-import scalus.crypto.ed25519.VerificationKey
 
 object ConfigurationCodecTest extends Properties("Configuration Codec Properties") {
     import MultiNodeConfig.*
@@ -77,7 +77,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             mnc <- ask
             _ <- {
                 given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
-                given List[VerificationKey] = mnc.headConfig.coilPeerVKeys
+                given CoilPeers = mnc.headConfig.coilPeers
                 val npc = mnc.nodePrivateConfigs.head._2
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson
