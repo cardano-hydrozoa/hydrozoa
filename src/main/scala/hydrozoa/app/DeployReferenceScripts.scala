@@ -12,7 +12,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.l1.tx.RawTx
-import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DeploymentTx, SetupLadder}
 import io.circe.parser
 import io.circe.syntax.*
 import java.nio.file.{Files, Path}
@@ -21,7 +21,8 @@ import scalus.cardano.ledger.{ScriptRef, TransactionInput, Utxo}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 
-/** Deploy the rule-based treasury and dispute validators as reference scripts on L1.
+/** Deploy the rule-based treasury and dispute validators as reference scripts, and the G2 setup
+  * ladder as inline-datum utxos, on L1.
   *
   * Usage:
   * {{{
@@ -29,11 +30,11 @@ import scalus.uplc.builtin.ByteString
   *     --wallet config/demo/head-0/private.json [--out script-refs.json]"
   * }}}
   *
-  * Builds and submits two chained [[DeploymentTx]]s funded from the wallet carried by the given
-  * keygen private config (change returns to the wallet, so the head funding survives): each locks
-  * one script at the unspendable burn address. Waits until both reference UTxOs are visible on L1,
-  * then writes their inputs as `--out` in the shape [[BuildHeadConfig]] consumes via
-  * `--script-refs`.
+  * Builds and submits three chained [[DeploymentTx]]s funded from the wallet carried by the given
+  * keygen private config (change returns to the wallet, so the head funding survives): one per
+  * script, plus one carrying all seven [[SetupLadder]] rungs at outputs 0-6, all locked at the
+  * unspendable burn address. Waits until every reference UTxO is visible on L1, then writes their
+  * inputs as `--out` in the shape [[BuildHeadConfig]] consumes via `--script-refs`.
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
@@ -102,11 +103,18 @@ object DeployReferenceScripts
               NonEmptyList.fromList(utxosMap.toList.map(Utxo(_, _)))
             )(RuntimeException(s"No UTxOs at ${address.toBech32.get}; fund the wallet first"))
 
-            // Treasury deployment spends the wallet UTxOs; the dispute deployment chains off
-            // its change output (index 1; index 0 is the reference script).
+            // Treasury deployment spends the wallet UTxOs; the dispute deployment chains off its
+            // change output, and the setup-ladder deployment off the dispute tx's change (a
+            // deployment tx's change is its last output, after the payload outputs).
             treasuryTx <- IO.fromEither(
               DeploymentTx
-                  .Build(fundingUtxos, ScriptRef(HydrozoaBlueprint.treasuryScript))
+                  .Build(
+                    fundingUtxos,
+                    NonEmptyList.one(
+                      DeploymentTx.DeployedPayload
+                          .DeployedScript(ScriptRef(HydrozoaBlueprint.treasuryScript))
+                    )
+                  )
                   .result
                   .left
                   .map(e => RuntimeException(s"Failed to build treasury deployment tx: $e"))
@@ -120,26 +128,48 @@ object DeployReferenceScripts
               DeploymentTx
                   .Build(
                     NonEmptyList.one(treasuryChange),
-                    ScriptRef(HydrozoaBlueprint.disputeScript)
+                    NonEmptyList.one(
+                      DeploymentTx.DeployedPayload
+                          .DeployedScript(ScriptRef(HydrozoaBlueprint.disputeScript))
+                    )
                   )
                   .result
                   .left
                   .map(e => RuntimeException(s"Failed to build dispute deployment tx: $e"))
             )
             disputeSigned = wallet.signTx(disputeTx.tx)
+            disputeChange = Utxo(
+              TransactionInput(disputeSigned.id, 1),
+              disputeSigned.body.value.outputs(1).value
+            )
+            ladderTx <- IO.fromEither(
+              DeploymentTx
+                  .Build(
+                    NonEmptyList.one(disputeChange),
+                    SetupLadder.rungDatums.map(DeploymentTx.DeployedPayload.InlineData(_))
+                  )
+                  .result
+                  .left
+                  .map(e => RuntimeException(s"Failed to build setup-ladder deployment tx: $e"))
+            )
+            ladderSigned = wallet.signTx(ladderTx.tx)
 
             _ <- log.info(s"Submitting treasury deployment tx: ${treasurySigned.id}")
             _ <- submit(backend, RawTx(treasurySigned))
             _ <- log.info(s"Submitting dispute deployment tx: ${disputeSigned.id}")
             _ <- submit(backend, RawTx(disputeSigned))
+            _ <- log.info(s"Submitting setup-ladder deployment tx: ${ladderSigned.id}")
+            _ <- submit(backend, RawTx(ladderSigned))
 
             _ <- log.info("Waiting for the reference UTxOs to appear on L1...")
-            _ <- awaitUtxo(backend, treasuryTx.refScriptUtxo)
-            _ <- awaitUtxo(backend, disputeTx.refScriptUtxo)
+            _ <- awaitUtxo(backend, treasuryTx.deployedUtxos.head)
+            _ <- awaitUtxo(backend, disputeTx.deployedUtxos.head)
+            _ <- ladderTx.deployedUtxos.traverse_(awaitUtxo(backend, _))
 
             unresolved = ScriptReferenceUtxos.Unresolved(
-              rulebasedTreasuryScriptInput = treasuryTx.refScriptUtxo,
-              disputeResolutionScriptInput = disputeTx.refScriptUtxo
+              rulebasedTreasuryScriptInput = treasuryTx.deployedUtxos.head,
+              disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
+              setupLadderInputs = ladderTx.deployedUtxos.toList
             )
             _ <- IO.blocking {
                 Option(outPath.getParent).foreach(Files.createDirectories(_))
@@ -147,7 +177,7 @@ object DeployReferenceScripts
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
             _ <- log.info(
-              s"Explorer: https://preview.cexplorer.io/tx/${treasuryTx.refScriptUtxo.transactionId.toHex}"
+              s"Explorer: https://preview.cexplorer.io/tx/${treasuryTx.deployedUtxos.head.transactionId.toHex}"
             )
         } yield ExitCode.Success
     }

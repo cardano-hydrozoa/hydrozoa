@@ -2,32 +2,41 @@ package hydrozoa.config
 
 import cats.*
 import cats.data.*
+import cats.syntax.all.*
 import hydrozoa.config
 import hydrozoa.config.ScriptReferenceUtxos.Error.UnresolvableScriptUtxo
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder
 import io.circe.*
 import io.circe.generic.semiauto.*
-import scalus.cardano.ledger.{TransactionInput, Utxo}
+import scalus.cardano.ledger.{DatumOption, TransactionInput, Utxo}
 import scalus.cardano.txbuilder.TransactionBuilderStep.ReferenceOutput
 
 final case class ScriptReferenceUtxos(
     override val rulebasedTreasuryScriptUtxo: ScriptReferenceUtxos.TreasuryScriptUtxo,
-    override val disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo
+    override val disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo,
+    override val setupLadderUtxos: ScriptReferenceUtxos.SetupLadderUtxos
 ) extends ScriptReferenceUtxos.Section {
     override val scriptReferenceUtxos: ScriptReferenceUtxos = this
     def toList: List[Utxo] =
         List(rulebasedTreasuryScriptUtxo.utxo, disputeResolutionScriptUtxo.utxo)
+            ++ setupLadderUtxos.utxos
 
     def unresolved: ScriptReferenceUtxos.Unresolved =
-        ScriptReferenceUtxos.Unresolved(rulebasedTreasuryScriptInput, disputeResolutionScriptInput)
+        ScriptReferenceUtxos.Unresolved(
+          rulebasedTreasuryScriptInput,
+          disputeResolutionScriptInput,
+          setupLadderInputs
+        )
 }
 
 object ScriptReferenceUtxos {
     case class Unresolved(
         override val rulebasedTreasuryScriptInput: TransactionInput,
-        override val disputeResolutionScriptInput: TransactionInput
+        override val disputeResolutionScriptInput: TransactionInput,
+        override val setupLadderInputs: List[TransactionInput]
     ) extends Unresolved.Section {
         override val scriptReferenceUtxosUnresolved: Unresolved = this
 
@@ -52,7 +61,9 @@ object ScriptReferenceUtxos {
                 treasuryUtxo <- EitherT.fromEither(TreasuryScriptUtxo(network, treasury))
                 dispute <- r(disputeResolutionScriptInput)
                 disputeUtxo <- EitherT.fromEither(DisputeScriptUtxo(network, dispute))
-            } yield ScriptReferenceUtxos(treasuryUtxo, disputeUtxo)
+                ladder <- setupLadderInputs.traverse(r)
+                ladderUtxos <- EitherT.fromEither(SetupLadderUtxos(network, ladder))
+            } yield ScriptReferenceUtxos(treasuryUtxo, disputeUtxo, ladderUtxos)
         }.value
 
         def isValidResolution(scriptReferenceUtxos: ScriptReferenceUtxos): Boolean =
@@ -64,6 +75,7 @@ object ScriptReferenceUtxos {
             def scriptReferenceUtxosUnresolved: Unresolved
             def rulebasedTreasuryScriptInput: TransactionInput
             def disputeResolutionScriptInput: TransactionInput
+            def setupLadderInputs: List[TransactionInput]
         }
     }
 
@@ -74,6 +86,8 @@ object ScriptReferenceUtxos {
             scriptReferenceUtxos.rulebasedTreasuryScriptUtxo
         def disputeResolutionScriptUtxo: ScriptReferenceUtxos.DisputeScriptUtxo =
             scriptReferenceUtxos.disputeResolutionScriptUtxo
+        def setupLadderUtxos: ScriptReferenceUtxos.SetupLadderUtxos =
+            scriptReferenceUtxos.setupLadderUtxos
 
         final def referenceTreasury: ReferenceOutput = ReferenceOutput(
           rulebasedTreasuryScriptUtxo.utxo
@@ -82,10 +96,24 @@ object ScriptReferenceUtxos {
           disputeResolutionScriptUtxo.utxo
         )
 
+        /** The setup-ladder utxo for the smallest rung covering `k` evacuations. The caller needs
+          * the utxo (not just a ReferenceOutput) to compute the `setupRefInputIdx` redeemer field.
+          */
+        final def setupRungUtxo(
+            k: Int
+        ): Either[SetupLadder.UncoveredEvacuationCount, Utxo] =
+            SetupLadder.rungForEvacuations(k).map(setupLadderUtxos.utxos(_))
+
+        /** Rung 0's outRef — the single anchor the regime datum records to authenticate the ladder
+          * on-chain (rungs are outputs 0-6 of its transaction).
+          */
+        final def setupLadderAnchor: TransactionInput = setupLadderInputs.head
+
         override transparent inline def scriptReferenceUtxosUnresolved: Unresolved =
             Unresolved(
               rulebasedTreasuryScriptInput,
-              disputeResolutionScriptInput
+              disputeResolutionScriptInput,
+              setupLadderInputs
             )
 
         override transparent inline def rulebasedTreasuryScriptInput: TransactionInput =
@@ -93,25 +121,32 @@ object ScriptReferenceUtxos {
 
         override transparent inline def disputeResolutionScriptInput: TransactionInput =
             scriptReferenceUtxos.disputeResolutionScriptUtxo.utxo.input
+
+        override transparent inline def setupLadderInputs: List[TransactionInput] =
+            scriptReferenceUtxos.setupLadderUtxos.utxos.map(_.input)
     }
 
     enum Error extends Throwable:
         case InvalidTreasuryScriptUtxo
         case InvalidDisputeScriptUtxo
+        case InvalidSetupLadderUtxo(detail: String)
         case UnresolvableScriptUtxo(ti: TransactionInput)
         case CardanoBackendError(e: CardanoBackend.Error)
 
         override def toString: String = this match
-            case InvalidTreasuryScriptUtxo  => "InvalidTreasuryScriptUtxo"
-            case InvalidDisputeScriptUtxo   => "InvalidDisputeScriptUtxo"
-            case UnresolvableScriptUtxo(ti) => s"UnresolvableScriptUtxo($ti)"
-            case CardanoBackendError(e)     => s"CardanoBackendError: $e"
+            case InvalidTreasuryScriptUtxo      => "InvalidTreasuryScriptUtxo"
+            case InvalidDisputeScriptUtxo       => "InvalidDisputeScriptUtxo"
+            case InvalidSetupLadderUtxo(detail) => s"InvalidSetupLadderUtxo($detail)"
+            case UnresolvableScriptUtxo(ti)     => s"UnresolvableScriptUtxo($ti)"
+            case CardanoBackendError(e)         => s"CardanoBackendError: $e"
 
         override def getMessage: String = this match
             case InvalidTreasuryScriptUtxo =>
                 "The provided UTXO is not a valid treasury script reference UTXO"
             case InvalidDisputeScriptUtxo =>
                 "The provided UTXO is not a valid dispute resolution script reference UTXO"
+            case InvalidSetupLadderUtxo(detail) =>
+                s"The provided UTXOs are not a valid G2 setup ladder: $detail"
             case UnresolvableScriptUtxo(ti) =>
                 s"ScriptRefUtxo with TransactionInput $ti does not currently exist according to " +
                     "the CardanoBackend. These utxos should be deployed prior to running a node. If they " +
@@ -180,6 +215,75 @@ object ScriptReferenceUtxos {
             } yield DisputeScriptUtxo(utxo)
     }
 
+    case class SetupLadderUtxos private (utxos: List[Utxo])
+
+    object SetupLadderUtxos {
+
+        /** Validates that `utxos` are the G2 setup ladder in rung order: one utxo per rung, each on
+          * the right network with an inline datum equal to the locally computed rung datum (this is
+          * where the ladder's authenticity is established offchain).
+          */
+        def apply(
+            network: CardanoNetwork.Section,
+            utxos: List[Utxo]
+        ): Either[ScriptReferenceUtxos.Error, SetupLadderUtxos] =
+            for {
+                _ <- Either.cond(
+                  utxos.size == SetupLadder.rungCount,
+                  (),
+                  ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                    s"expected ${SetupLadder.rungCount} rungs, got ${utxos.size}"
+                  )
+                )
+                // The on-chain authentication anchors on a single deployment tx: the regime
+                // datum records rung 0's outRef and validators accept outputs 0-6 of its tx.
+                _ <- Either.cond(
+                  utxos.map(_.input) == utxos.headOption.toList.flatMap(head =>
+                      List.tabulate(SetupLadder.rungCount)(i =>
+                          TransactionInput(head.input.transactionId, i)
+                      )
+                  ),
+                  (),
+                  ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                    s"rungs must be outputs 0-${SetupLadder.rungCount - 1} of a single " +
+                        "deployment transaction"
+                  )
+                )
+                _ <- utxos.zipWithIndex.traverse_ { (utxo, i) =>
+                    for {
+                        actualNetwork <- utxo.output.address.getNetwork.toRight(
+                          ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                            s"rung $i has no network in its address"
+                          )
+                        )
+                        _ <- Either.cond(
+                          actualNetwork == network.network,
+                          (),
+                          ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                            s"rung $i is on network $actualNetwork"
+                          )
+                        )
+                        datum <- utxo.output.datumOption match {
+                            case Some(DatumOption.Inline(d)) => Right(d)
+                            case _ =>
+                                Left(
+                                  ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                                    s"rung $i has no inline datum"
+                                  )
+                                )
+                        }
+                        _ <- Either.cond(
+                          datum == SetupLadder.rungDatum(i),
+                          (),
+                          ScriptReferenceUtxos.Error.InvalidSetupLadderUtxo(
+                            s"rung $i datum does not match the local trusted setup"
+                          )
+                        )
+                    } yield ()
+                }
+            } yield SetupLadderUtxos(utxos)
+    }
+
     given Encoder[ScriptReferenceUtxos] = deriveEncoder[ScriptReferenceUtxos]
 
     given scriptReferenceUtxos(using
@@ -199,6 +303,19 @@ object ScriptReferenceUtxos {
         )
 
     given Encoder[DisputeScriptUtxo] = transactionInputAlternateEncoder.contramap(_.utxo.input)
+
+    given Encoder[SetupLadderUtxos] =
+        Encoder.encodeList(using transactionInputAlternateEncoder).contramap(_.utxos.map(_.input))
+
+    given setupLadderUtxosDecoder(using
+        network: CardanoNetwork.Section
+    ): Decoder[SetupLadderUtxos] =
+        Decoder
+            .decodeList(using utxoDecoder)
+            .emap(utxos =>
+                SetupLadderUtxos(network, utxos).left
+                    .map(e => s"Failed to construct the G2 setup ladder utxos. Failure: $e")
+            )
 
     given disputeScriptUtxoDecoder(using
         network: CardanoNetwork.Section
