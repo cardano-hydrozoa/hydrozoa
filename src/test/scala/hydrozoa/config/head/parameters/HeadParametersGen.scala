@@ -17,7 +17,8 @@ def generateHeadParameters(
     generateDisputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
-    generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32]
+    generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32],
+    generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo)
 ): GenWithTestPeers[HeadParameters] = {
     for {
         txTiming <- generateTxTiming
@@ -25,6 +26,7 @@ def generateHeadParameters(
         disputeResolutionConfig <- generateDisputeResolutionConfig
         settlementConfig <- ReaderT.liftF(generateSettlementConfig)
         l2ParamsHash <- ReaderT.liftF(generateL2ParamsHash)
+        l2Ledger <- ReaderT.liftF(generateL2Ledger)
     } yield HeadParameters(
       txTiming = txTiming,
       fallbackContingency = fallbackContingency.fallbackContingency,
@@ -32,6 +34,7 @@ def generateHeadParameters(
       settlementConfig = settlementConfig,
       // TODO: Generate
       coilQuorum = 0,
-      l2ParamsHash = l2ParamsHash
+      l2ParamsHash = l2ParamsHash,
+      l2Ledger = l2Ledger
     )
 }

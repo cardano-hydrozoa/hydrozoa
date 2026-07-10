@@ -15,7 +15,7 @@ import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
-import hydrozoa.config.head.parameters.HeadParameters
+import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
@@ -121,6 +121,8 @@ object Bootstrap:
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
+          // The demo build targets the built-in EUTXO ledger. TODO: surface via a --l2-ledger flag.
+          l2Ledger = L2LedgerKind.CardanoEutxo,
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA
