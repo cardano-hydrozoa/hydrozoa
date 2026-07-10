@@ -1,24 +1,26 @@
 package hydrozoa.integration.fallbackhandoff
 
+import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody, UserRequestHeader}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
 import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{Prop, Properties}
+import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers}
@@ -48,7 +50,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
     private val nHeadPeers: Int = 2
-    private val nCoilPeers: Int = 0
+    private val nCoilPeers: Int = 1
     private val scenarioTimeout: FiniteDuration = 90.seconds
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
@@ -65,11 +67,28 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
+        // Fast voting deadline so the deadline-gated tally path in RuleBasedActor unblocks well
+        // inside `scenarioTimeout`. The default generator picks 1h..5d; the coil peer's RBA
+        // would sit on `TallyBlockedByAwaitingVote` for that entire window and time the scenario
+        // out. Same pattern as `EvacuationPropertyTest.fastDisputeResolutionConfig`.
+        val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
+            ReaderT { network =>
+                Gen.const(
+                  DisputeResolutionConfig(
+                    votingDuration = QuantizedFiniteDuration(
+                      slotConfig = network.slotConfig,
+                      finiteDuration = 5.seconds,
+                    )
+                  )
+                )
+            }
+
         val resource = MultiPeerHeadHarness.mkResource(
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 2.seconds,
+          takeoffOffset = 10.seconds,
+          disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
             buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
@@ -103,13 +122,10 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             // `Action.FallbackToRuleBased`; HMRM auto-spawns RRM/RBA.
             _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
 
-            // 4. RBA's `loadAction` walks backward through hard-confirmed stacks and picks the
-            // SEC matching the on-chain treasury's `versionMajor` (major-1 here). Assert that:
-            // - the actor attempted a Vote (proves handoff + persistence load)
-            // - the Vote submitted OK (proves the version match worked)
-            // - `sutErrors` does not contain `"versionMajor field must match"` 
-            _    <- lift(ctx.voteBuildAttempted.get.timeout(scenarioTimeout))
-            _    <- lift(ctx.voteSubmittedOk.get.timeout(scenarioTimeout))
+            // 4. Every head peer's RBA finds the SEC matching the on-chain treasury's
+            // versionMajor and submits a Vote that passes Plutus.
+            _    <- lift(ctx.allHeadsBuildingVote.get.timeout(scenarioTimeout))
+            _    <- lift(ctx.allHeadsVoteSubmittedOk.get.timeout(scenarioTimeout))
             errs <- lift(ctx.harness.sutErrors.get)
             _ <- assertWith(
               !errs.exists(_.contains("versionMajor field must match")),
@@ -117,13 +133,11 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                   "loadAction is voting with an SEC ahead of the on-chain treasury version",
             )
 
-            // 5. Coil peer runs the same RBA as head peers (spawned by
-            // `CoilMultisigRegimeManager.onHandoffToRuleBased`) but its `Dispute.handle` routes
-            // into `handleCoil`: it picks an Open-phase ballot box and submits a
-            // `RatchetVoteTx`. Skipped when `nCoilPeers == 0`.
+            // 5. Every coil peer runs `handleCoil` (proves the CL handoff routed each coil into
+            // the rule-based regime). Skipped when `nCoilPeers == 0`.
             _ <-
                 if nCoilPeers > 0
-                then lift(ctx.coilRatchetSubmitted.get.timeout(scenarioTimeout))
+                then lift(ctx.allCoilsHandledDispute.get.timeout(scenarioTimeout))
                 else pure(())
         yield true
 
@@ -136,22 +150,22 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
         firewall: FirewallState,
-        harness: MultiPeerHeadHarness.Harness[RequestSequencer.Handle, Unit],
+        harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
         fallbackDispatched: Deferred[IO, Unit],
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
-        voteBuildAttempted: Deferred[IO, Unit],
-        voteSubmittedOk: Deferred[IO, Unit],
-        coilRatchetSubmitted: Deferred[IO, Unit],
+        allHeadsBuildingVote: Deferred[IO, Unit],
+        allHeadsVoteSubmittedOk: Deferred[IO, Unit],
+        allCoilsHandledDispute: Deferred[IO, Unit],
     )
 
     private final case class FirewallState(
         dropped: Ref[
           IO,
-          Map[HeadPeerNumber, List[FirewalledCardanoBackendEvent.DroppedOutboundTx]],
+          Map[PeerId, List[FirewalledCardanoBackendEvent.DroppedOutboundTx]],
         ],
         submitted: Ref[
           IO,
-          Map[HeadPeerNumber, List[FirewalledCardanoBackendEvent.SubmittedTx]],
+          Map[PeerId, List[FirewalledCardanoBackendEvent.SubmittedTx]],
         ],
     )
 
@@ -173,9 +187,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             firewall <- Resource.eval(newFirewallState)
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             bothPeersConfirmedMajor2 <- Resource.eval(Deferred[IO, Unit])
-            voteBuildAttempted <- Resource.eval(Deferred[IO, Unit])
-            voteSubmittedOk    <- Resource.eval(Deferred[IO, Unit])
-            coilRatchetSubmitted <- Resource.eval(Deferred[IO, Unit])
+            allHeadsBuildingVote <- Resource.eval(Deferred[IO, Unit])
+            allHeadsVoteSubmittedOk    <- Resource.eval(Deferred[IO, Unit])
+            allCoilsHandledDispute <- Resource.eval(Deferred[IO, Unit])
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
@@ -188,27 +202,35 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
             coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
-            hooks = MultiPeerHeadHarness.Hooks[RequestSequencer.Handle, Unit](
-              tracer = humanFormatTracer |+| observerTracer(
+            observer <- Resource.eval(
+              observerTracer(
                 bothPeersConfirmedMajor2,
                 fallbackDispatched,
-                voteBuildAttempted,
-                voteSubmittedOk,
-                coilRatchetSubmitted,
-              ),
-              peerHandle = (peerNum, conns) =>
-                  IO.fromOption(conns.requestSequencer)(
-                    new NoSuchElementException(
-                      s"peer $peerNum has no RequestSequencer.Handle in its Connections"
-                    )
-                  ),
-              coilHandle = (_, _) => IO.unit,
-              wrapPeerBackend = wrapPeerBackend(firewall),
+                allHeadsBuildingVote,
+                allHeadsVoteSubmittedOk,
+                allCoilsHandledDispute,
+              )
+            )
+
+            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
+              tracer = humanFormatTracer |+| observer,
+              handle = {
+                  case (PeerId.Head(peerNum), conns) =>
+                      IO.fromOption(conns.requestSequencer)(
+                        new NoSuchElementException(
+                          s"peer $peerNum has no RequestSequencer.Handle in its Connections"
+                        )
+                      ).map(Some(_))
+                  case (_: PeerId.Coil, _) => IO.pure(None)
+              },
+              // Firewall every node — coil CL would otherwise submit the head-dropped v2
+              // settlement out-of-band, suppressing the fallback path.
+              wrapBackend = (peerId, backend) => wrapNodeBackend(firewall)(peerId, backend),
             )
 
             label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}"
 
-            harness <- MultiPeerHeadHarness.resource[RequestSequencer.Handle, Unit](
+            harness <- MultiPeerHeadHarness.resource[Option[RequestSequencer.Handle]](
               MultiPeerHeadHarness.Inputs(
                 config = MultiPeerHeadHarness.Config(
                   label = label,
@@ -230,9 +252,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           harness = harness,
           fallbackDispatched = fallbackDispatched,
           bothPeersConfirmedMajor2 = bothPeersConfirmedMajor2,
-          voteBuildAttempted = voteBuildAttempted,
-          voteSubmittedOk = voteSubmittedOk,
-          coilRatchetSubmitted = coilRatchetSubmitted,
+          allHeadsBuildingVote = allHeadsBuildingVote,
+          allHeadsVoteSubmittedOk = allHeadsVoteSubmittedOk,
+          allCoilsHandledDispute = allCoilsHandledDispute,
         )
 
     // ------------------------------------------------------------------
@@ -267,7 +289,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
               bodyHash = body.hash,
             )
             userRequest = UserRequest.TransactionRequest(header, body, userVk)
-            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).map(_.handle))(
+            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peerNum missing in harness")
             )
             _ <- sequencer ?: userRequest
@@ -276,10 +298,10 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     private def newFirewallState: IO[FirewallState] =
         for
             dropped <- Ref[IO].of(
-              Map.empty[HeadPeerNumber, List[FirewalledCardanoBackendEvent.DroppedOutboundTx]]
+              Map.empty[PeerId, List[FirewalledCardanoBackendEvent.DroppedOutboundTx]]
             )
             submitted <- Ref[IO].of(
-              Map.empty[HeadPeerNumber, List[FirewalledCardanoBackendEvent.SubmittedTx]]
+              Map.empty[PeerId, List[FirewalledCardanoBackendEvent.SubmittedTx]]
             )
         yield FirewallState(dropped, submitted)
 
@@ -299,28 +321,28 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                 )
         }
 
-    /** Static drop predicate + per-peer event capture. */
-    private def wrapPeerBackend(state: FirewallState)(
-        peerNum: HeadPeerNumber,
+    /** Static drop predicate + per-node event capture. */
+    private def wrapNodeBackend(state: FirewallState)(
+        peerId: PeerId,
         underlying: L1Backend[IO],
     ): L1Backend[IO] =
         val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
             Slf4jTracer.sink.contramap {
                 case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
                     hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .From(Map("peer" -> peerId.toString), "FirewalledCardanoBackend")
                         .warn(s"firewall DROPPED tx $hash")
                 case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
                     hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .From(Map("peer" -> peerId.toString), "FirewalledCardanoBackend")
                         .info(s"firewall passed tx $hash result=$result")
             }
-        val perPeerTracer: ContraTracer[IO, FirewalledCardanoBackendEvent] =
+        val perNodeTracer: ContraTracer[IO, FirewalledCardanoBackendEvent] =
             slf4jSink |+| ContraTracer[IO, FirewalledCardanoBackendEvent] {
                 case e: FirewalledCardanoBackendEvent.DroppedOutboundTx =>
-                    state.dropped.update(m => m.updated(peerNum, m.getOrElse(peerNum, Nil) :+ e))
+                    state.dropped.update(m => m.updated(peerId, m.getOrElse(peerId, Nil) :+ e))
                 case e: FirewalledCardanoBackendEvent.SubmittedTx =>
-                    state.submitted.update(m => m.updated(peerNum, m.getOrElse(peerNum, Nil) :+ e))
+                    state.submitted.update(m => m.updated(peerId, m.getOrElse(peerId, Nil) :+ e))
             }
         FirewalledCardanoBackend(
           underlying = underlying,
@@ -329,19 +351,19 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                   case s: SettlementTx => s.majorVersionProduced.convert == 2
                   case _               => false
               }),
-          firewallTracer = perPeerTracer,
+          firewallTracer = perNodeTracer,
         )
 
-    /** Observer tracer wiring — see class-level Ctx doc for what each signal represents. */
+    /** Observer tracer wiring — vote/build signals fire when **every** head peer hits the
+      * milestone (not just the first), so a regression in the CL handoff would surface.
+      */
     private def observerTracer(
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
         fallbackDispatched: Deferred[IO, Unit],
-        voteBuildAttempted: Deferred[IO, Unit],
-        voteSubmittedOk: Deferred[IO, Unit],
-        coilRatchetSubmitted: Deferred[IO, Unit],
-    ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        val peersAtMajor2: Ref[IO, Set[HeadPeerNumber]] = Ref.unsafe(Set.empty)
-
+        allHeadsBuildingVote: Deferred[IO, Unit],
+        allHeadsVoteSubmittedOk: Deferred[IO, Unit],
+        allCoilsHandledDispute: Deferred[IO, Unit],
+    ): IO[ContraTracer[IO, MultiPeerHeadHarness.Event]] =
         def lastMajorVersion(effects: StackEffects.HardConfirmed): Option[Int] =
             effects match {
                 case _: StackEffects.HardConfirmed.Initial => None
@@ -354,7 +376,12 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                     }
             }
 
-        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+        for
+            peersAtMajor2       <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            headsBuildingVote   <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            headsVoteSubmittedOk <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            coilsHandledDispute <- Ref[IO].of(Set.empty[Int])
+        yield ContraTracer[IO, MultiPeerHeadHarness.Event] {
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
                 evt match {
                     case CommonChildEvent.SlowConsensusActor(
@@ -376,22 +403,37 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
                     case RuleBasedOnlyChildEvent.RuleBasedActor(
                           RuleBasedActorEvent.Tx.Building("VoteTx")
                         ) =>
-                        voteBuildAttempted.complete(()).void
+                        headsBuildingVote.updateAndGet(_ + peerNum).flatMap { s =>
+                            if s.size >= nHeadPeers
+                            then allHeadsBuildingVote.complete(()).void
+                            else IO.unit
+                        }
 
                     case RuleBasedOnlyChildEvent.RuleBasedActor(
                           RuleBasedActorEvent.Tx.SubmitSuccess(tx)
                         ) if tx.transactionFamily == "VoteTx" =>
-                        voteSubmittedOk.complete(()).void
+                        headsVoteSubmittedOk.updateAndGet(_ + peerNum).flatMap { s =>
+                            if s.size >= nHeadPeers
+                            then allHeadsVoteSubmittedOk.complete(()).void
+                            else IO.unit
+                        }
 
                     case _ => IO.unit
                 }
 
-            case MultiPeerHeadHarness.Event.Coil(_, evt) =>
+            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
                 evt match {
+                    // Any of the three coil-side terminal events proves `handleCoil` ran.
                     case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          RuleBasedActorEvent.Tx.SubmitSuccess(tx)
-                        ) if tx.transactionFamily == "RatchetVoteTx" =>
-                        coilRatchetSubmitted.complete(()).void
+                          _: RuleBasedActorEvent.Dispute.Coil.ParsingRatchet.type |
+                          _: RuleBasedActorEvent.Dispute.Coil.AlreadyAtTarget.type |
+                          _: RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget.type
+                        ) =>
+                        coilsHandledDispute.updateAndGet(_ + coilNum.convert).flatMap { s =>
+                            if s.size >= nCoilPeers
+                            then allCoilsHandledDispute.complete(()).void
+                            else IO.unit
+                        }
                     case _ => IO.unit
                 }
         }

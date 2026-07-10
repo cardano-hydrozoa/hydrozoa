@@ -2,6 +2,7 @@ package hydrozoa.rulebased
 
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import scalus.cardano.address.ShelleyAddress
 
 sealed trait RuleBasedActorEvent
 
@@ -24,10 +25,12 @@ object RuleBasedActorEvent:
         case object ParsedResolved extends RuleBasedActorEvent
 
     object Collateral:
-        final case class Querying(addr: String) extends RuleBasedActorEvent
+        final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
         case object Found extends RuleBasedActorEvent
-        final case class NotFound(peerLabel: String) extends RuleBasedActorEvent
-        case object NoFeeCollateralUtxo extends RuleBasedActorEvent
+        final case class NotFound(address: ShelleyAddress) extends RuleBasedActorEvent
+
+    object Fee:
+        final case class Querying(address: ShelleyAddress) extends RuleBasedActorEvent
 
     object Dispute:
         case object Querying extends RuleBasedActorEvent
@@ -36,6 +39,11 @@ object RuleBasedActorEvent:
         case object ParsingTally extends RuleBasedActorEvent
         case object ParsingResolve extends RuleBasedActorEvent
         case object ParsingEmptyVotes extends RuleBasedActorEvent
+
+        /** Residual set still contains an AwaitingVote ballot and the voting deadline has not
+          * elapsed; tally is deferred until on-chain time crosses the deadline.
+          */
+        case object WaitingForVotesBeforeDeadline extends RuleBasedActorEvent
 
         /** Coil-peer classifier outcomes for the coil ratchet path (see
           * [[RuleBasedActor.Dispute.handleCoil]]).

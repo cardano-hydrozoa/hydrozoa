@@ -13,7 +13,12 @@ def mkGenesis(setup: List[(String, TestPeerName)])(@unused network: Network)(
     testPeers: TestPeers
 ): Map[TestPeerName, Utxos] = {
 
-    val peerNames = testPeers.headPeerIds.map(id => TestPeerName.fromOrdinal(id._1)).toList
+    // Include coil peer names too — coil-side RBAs need ADA-only wallet UTxOs for collateral.
+    val headNames = testPeers.headPeerIds.map(id => TestPeerName.fromOrdinal(id._1)).toList
+    val coilNames = (0 until testPeers.coilPeersNumber)
+        .map(i => TestPeerName.fromOrdinal(testPeers.peersNumber + i))
+        .toList
+    val peerNames = headNames ++ coilNames
 
     setup
         // filtering out unneeded elements from the setup

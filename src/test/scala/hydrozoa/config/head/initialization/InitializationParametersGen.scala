@@ -26,7 +26,10 @@ import scala.collection.immutable.{SortedMap, TreeMap}
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
+import scalus.uplc.builtin.ByteString
+import scalus.uplc.builtin.Data.toData
 import scalus.|>
 import spire.math.{Rational, SafeLong}
 import test.Generators.Hydrozoa.*
@@ -258,16 +261,34 @@ object InitializationParametersGenTopDown {
             l2TransactionOutputs <-
                 if rest == ensureMinAdaLenient(cardanoNetwork)(rest)
                 then
-                    // Generate L2 utxos from the rest (if present)
+                    // Generate L2 utxos from the rest (if present). Each output carries an
+                    // "evacuation" inline-datum sentinel so `RBRClassifier` can bucket the
+                    // eventual L1 evacuation outputs by content — the sentinel is committed
+                    // to the KZG at obligation-creation time, so `RuleBasedTreasuryScript`'s
+                    // membership check reproduces the same hash and accepts the L1 output.
                     Gen.tailRecM(List.empty[Babbage] -> rest)((acc, rest) =>
                         for {
                             next <- generateCappedValue(cardanoNetwork)(capValue = rest)
                             address <- Gen.oneOf(peerAddresses)
-                            acc_ = acc :+ Babbage(address, next)
+                            // The datum bumps the output's min-ADA above what generateCappedValue
+                            // budgeted for `next`; top up here and advance the loop using the
+                            // actually-consumed value.
+                            output = Babbage(
+                              address = address,
+                              value = next,
+                              datumOption =
+                                  Some(Inline(toData(ByteString.fromString("evacuation")))),
+                            ).ensureMinAda(cardanoNetwork)
                         } yield
-                            if next == rest
-                            then Right(acc_)
-                            else Left(acc_ -> (rest - next))
+                            if (rest - output.value).coin.value < 0L
+                            then Right(acc)
+                            else {
+                                val acc_ = acc :+ output
+                                val newRest = rest - output.value
+                                if next == rest || newRest.coin.value == 0L
+                                then Right(acc_)
+                                else Left(acc_ -> newRest)
+                            }
                     )
                 else Gen.const(List.empty)
 
