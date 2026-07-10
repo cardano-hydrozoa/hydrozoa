@@ -65,7 +65,7 @@ object L2LedgerState:
   *   A monad in which the "transport" runs. This will be IO for most implementations (for network
   *   or unix socket access, etc), but can also be something like [[State]] for pure implementations
   */
-trait L2Ledger[F[_]] extends L2LedgerReader[F] {
+trait L2Ledger[F[_]] {
     implicit def monadF: Monad[F]
 
     /** See:

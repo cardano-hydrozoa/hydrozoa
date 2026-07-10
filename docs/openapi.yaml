@@ -67,59 +67,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/l2/utxos/{address}:
-    get:
-      description: Current L2 utxos controlled by a bech32 address (EUTXO ledger only;
-        empty otherwise).
-      operationId: getApiL2UtxosAddress
-      parameters:
-      - name: address
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/L2UtxoView'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /api/l2/transactions:
-    get:
-      description: Recent applied L2 transactions, newest first (EUTXO ledger only;
-        empty otherwise).
-      operationId: getApiL2Transactions
-      parameters:
-      - name: count
-        in: query
-        required: false
-        schema:
-          type: integer
-          format: int32
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/L2TxSummaryView'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
   /health:
     get:
       description: Liveness — always 200 while the process is serving HTTP.
@@ -158,14 +105,6 @@ paths:
       - httpAuth: []
 components:
   schemas:
-    DatumView:
-      title: DatumView
-      type: object
-      properties:
-        inline:
-          type: string
-        hash:
-          type: string
     ErrorResponse:
       title: ErrorResponse
       type: object
@@ -229,55 +168,6 @@ components:
       properties:
         status:
           type: string
-    L2OutputView:
-      title: L2OutputView
-      type: object
-      required:
-      - address
-      - value
-      properties:
-        address:
-          type: string
-        value:
-          $ref: '#/components/schemas/ValueView'
-        datum:
-          $ref: '#/components/schemas/DatumView'
-    L2TxSummaryView:
-      title: L2TxSummaryView
-      type: object
-      required:
-      - requestId
-      - blockNumber
-      - kind
-      properties:
-        requestId:
-          $ref: '#/components/schemas/RequestIdView'
-        blockNumber:
-          type: integer
-          format: int32
-        kind:
-          type: string
-    L2UtxoView:
-      title: L2UtxoView
-      type: object
-      required:
-      - input
-      - output
-      properties:
-        input:
-          $ref: '#/components/schemas/TxInputView'
-        output:
-          $ref: '#/components/schemas/L2OutputView'
-    Map_Map_String_String:
-      title: Map_Map_String_String
-      type: object
-      additionalProperties:
-        $ref: '#/components/schemas/Map_String'
-    Map_String:
-      title: Map_String
-      type: object
-      additionalProperties:
-        type: string
     RequestAcceptedResponse:
       title: RequestAcceptedResponse
       type: object
@@ -285,19 +175,6 @@ components:
       - requestId
       properties:
         requestId:
-          type: integer
-          format: int64
-    RequestIdView:
-      title: RequestIdView
-      type: object
-      required:
-      - headPeerNumber
-      - requestNumber
-      properties:
-        headPeerNumber:
-          type: integer
-          format: int32
-        requestNumber:
           type: integer
           format: int64
     TxInputView:
@@ -312,17 +189,6 @@ components:
         index:
           type: integer
           format: int32
-    ValueView:
-      title: ValueView
-      type: object
-      required:
-      - coin
-      - assets
-      properties:
-        coin:
-          type: string
-        assets:
-          $ref: '#/components/schemas/Map_Map_String_String'
   securitySchemes:
     httpAuth:
       type: http

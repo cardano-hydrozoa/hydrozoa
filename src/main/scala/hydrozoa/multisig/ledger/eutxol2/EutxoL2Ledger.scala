@@ -117,7 +117,8 @@ case class EutxoL2Ledger private (
     // go away in the future, so...
     private val state: Ref[IO, EutxoL2Ledger.State],
     private val store: L2Store[IO]
-) extends L2Ledger[IO] {
+) extends L2Ledger[IO],
+      EutxoL2LedgerReader[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
     /** Apply one **real** (state-mutating) command to `s`, returning the next state with

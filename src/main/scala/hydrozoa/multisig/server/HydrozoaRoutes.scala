@@ -4,7 +4,7 @@ import cats.effect.IO
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
-import hydrozoa.multisig.ledger.l2.L2LedgerReader
+import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
@@ -33,12 +33,12 @@ import sttp.tapir.swagger.bundle.SwaggerInterpreter
 class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
-    l2LedgerReader: L2LedgerReader[IO],
+    l2QueryReader: Option[EutxoL2LedgerReader[IO]],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
-    import HydrozoaRoutes.{apiTitle, apiVersion}
+    import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
 
     private given HeadConfig = headConfig
 
@@ -101,44 +101,55 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
-    private val l2UtxosEndpoint: ServerEndpoint[Any, IO] =
+    // The two EUTXO L2-query endpoints are defined apart from their handlers so their schema
+    // (openapi-eutxo-l2.yaml) can be generated even on a node with no reader (a remote-ledger node),
+    // and the routes are mounted only when the EUTXO reader is present. See [[l2QueryReader]].
+
+    private val l2UtxosDef
+        : PublicEndpoint[String, (StatusCode, ErrorResponse), List[L2UtxoView], Any] =
         endpoint.get
             .in("api" / "l2" / "utxos" / path[String]("address"))
             .out(jsonBody[List[L2UtxoView]])
             .errorOut(errorOut)
-            .description(
-              "Current L2 utxos controlled by a bech32 address (EUTXO ledger only; empty otherwise)."
-            )
-            .serverLogic(address =>
-                parseAddress(address) match {
-                    case Left(message) => IO.pure(Left(fail(StatusCode.BadRequest, message)))
-                    case Right(addr) =>
-                        l2LedgerReader
-                            .utxosByAddress(addr)
-                            .map(utxos =>
-                                Right(utxos.toList.map((in, out) => ApiDto.mkL2UtxoView(in, out)))
-                            )
-                            .handleError(err =>
-                                Left(fail(StatusCode.InternalServerError, err.getMessage))
-                            )
-                }
-            )
+            .description("Current L2 utxos controlled by a bech32 address (EUTXO ledger only).")
 
-    private val l2TransactionsEndpoint: ServerEndpoint[Any, IO] =
+    private val l2TransactionsDef
+        : PublicEndpoint[Option[Int], (StatusCode, ErrorResponse), List[L2TxSummaryView], Any] =
         endpoint.get
             .in("api" / "l2" / "transactions")
             .in(query[Option[Int]]("count"))
             .out(jsonBody[List[L2TxSummaryView]])
             .errorOut(errorOut)
-            .description(
-              "Recent applied L2 transactions, newest first (EUTXO ledger only; empty otherwise)."
-            )
-            .serverLogic(count =>
-                l2LedgerReader
-                    .recentTransactions(count.getOrElse(defaultRecentTxCount))
-                    .map(summaries => Right(summaries.map(ApiDto.mkL2TxSummaryView).toList))
-                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
-            )
+            .description("Recent applied L2 transactions, newest first (EUTXO ledger only).")
+
+    /** The EUTXO L2-query endpoints wired to `reader` — mounted only when the node runs the EUTXO
+      * ledger.
+      */
+    private def l2ServerEndpoints(
+        reader: EutxoL2LedgerReader[IO]
+    ): List[ServerEndpoint[Any, IO]] =
+        List(
+          l2UtxosDef.serverLogic(address =>
+              parseAddress(address) match {
+                  case Left(message) => IO.pure(Left(fail(StatusCode.BadRequest, message)))
+                  case Right(addr) =>
+                      reader
+                          .utxosByAddress(addr)
+                          .map(utxos =>
+                              Right(utxos.toList.map((in, out) => ApiDto.mkL2UtxoView(in, out)))
+                          )
+                          .handleError(err =>
+                              Left(fail(StatusCode.InternalServerError, err.getMessage))
+                          )
+              }
+          ),
+          l2TransactionsDef.serverLogic(count =>
+              reader
+                  .recentTransactions(count.getOrElse(defaultRecentTxCount))
+                  .map(summaries => Right(summaries.map(ApiDto.mkL2TxSummaryView).toList))
+                  .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+          )
+        )
 
     private val healthEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -197,14 +208,12 @@ class HydrozoaRoutes(
                     )
             )
 
-    /** Every API endpoint, in the order they appear in the docs. */
-    private val apiEndpoints: List[ServerEndpoint[Any, IO]] =
+    /** The core API endpoints, in the order they appear in the docs — always served. */
+    private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
         List(
           submitEndpoint,
           registerDepositEndpoint,
           headInfoEndpoint,
-          l2UtxosEndpoint,
-          l2TransactionsEndpoint,
           healthEndpoint,
           finalizeEndpoint
         )
@@ -217,19 +226,32 @@ class HydrozoaRoutes(
     private val docsOptions: OpenAPIDocsOptions =
         OpenAPIDocsOptions.default.copy(defaultDecodeFailureOutput = _ => None)
 
-    /** Swagger UI (served at `/docs`) + the raw OpenAPI document, derived from [[apiEndpoints]]. */
-    private val docsEndpoints: List[ServerEndpoint[Any, IO]] =
+    /** Swagger UI (served at `/docs`) + the raw OpenAPI document for the core API. */
+    private val coreDocsEndpoints: List[ServerEndpoint[Any, IO]] =
         SwaggerInterpreter(openAPIInterpreterOptions = docsOptions)
-            .fromServerEndpoints[IO](apiEndpoints, apiTitle, apiVersion)
+            .fromServerEndpoints[IO](coreEndpoints, apiTitle, apiVersion)
 
-    /** The full route set: the API plus the self-generated docs. */
+    /** The EUTXO L2-query routes, mounted only when the node runs the EUTXO ledger. */
+    private val l2Routes: List[ServerEndpoint[Any, IO]] =
+        l2QueryReader.fold(List.empty)(l2ServerEndpoints)
+
+    /** The full route set: the core API + its docs, plus the EUTXO L2-query routes when present. */
     val routes: HttpRoutes[IO] =
-        Http4sServerInterpreter[IO]().toRoutes(apiEndpoints ++ docsEndpoints)
+        Http4sServerInterpreter[IO]().toRoutes(coreEndpoints ++ coreDocsEndpoints ++ l2Routes)
 
-    /** The generated OpenAPI document as YAML — the artifact the golden test pins. */
+    /** The core OpenAPI document as YAML — pinned by the golden test (docs/openapi.yaml). */
     def openApiYaml: String =
         OpenAPIDocsInterpreter(docsOptions)
-            .toOpenAPI(apiEndpoints.map(_.endpoint), apiTitle, apiVersion)
+            .toOpenAPI(coreEndpoints.map(_.endpoint), apiTitle, apiVersion)
+            .toYaml
+
+    /** The EUTXO L2-ledger OpenAPI document as YAML — pinned by the golden test
+      * (docs/openapi-eutxo-l2.yaml). Generated from the endpoint definitions, so it exists whether
+      * or not the L2 routes are mounted on this node.
+      */
+    def l2OpenApiYaml: String =
+        OpenAPIDocsInterpreter(docsOptions)
+            .toOpenAPI(List(l2UtxosDef, l2TransactionsDef), l2ApiTitle, apiVersion)
             .toYaml
 
     // ---- Handlers ----
@@ -278,12 +300,13 @@ class HydrozoaRoutes(
 
 object HydrozoaRoutes {
     val apiTitle: String = "Hydrozoa node API"
+    val l2ApiTitle: String = "Hydrozoa EUTXO L2 ledger API"
     val apiVersion: String = "0.1.0"
 
     def apply(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
-        l2LedgerReader: L2LedgerReader[IO],
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
@@ -292,7 +315,7 @@ object HydrozoaRoutes {
           new HydrozoaRoutes(
             requestSequencer,
             blockWeaver,
-            l2LedgerReader,
+            l2QueryReader,
             headConfig,
             serverConfig,
             tracer

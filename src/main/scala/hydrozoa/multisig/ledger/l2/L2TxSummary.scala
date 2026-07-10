@@ -4,8 +4,8 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
 
 /** A lightweight record of one applied L2 command, as surfaced by
-  * [[L2LedgerReader.recentTransactions]]. Derived from the L2 ledger's own command log, so every
-  * summary corresponds to a command that committed.
+  * [[EutxoL2LedgerReader.recentTransactions]]. Derived from the L2 ledger's own command log, so
+  * every summary corresponds to a command that committed.
   */
 final case class L2TxSummary(
     requestId: RequestId,

@@ -12,13 +12,13 @@ read counterpart to the existing write path (`POST /api/l2/submit`, `POST /api/d
 
 ## EUTXO-only
 
-These queries are served by the **EUTXO reference ledger** (`EutxoL2Ledger`), which holds its
-state locally. A node wired to the **remote** L2 ledger (`RemoteL2Ledger`, the SugarRush
-WebSocket) owns its state behind the black box and exposes no query channel, so on such a node
-both endpoints return an **empty array** (a valid, non-error response). This mirrors how the
-ledger already stubs its other read/recovery methods on the remote path. The queries live on
-the shared `L2LedgerReader` trait (a narrow, read-only view of `L2Ledger`), so the HTTP layer
-can read L2 state without being able to issue ledger commands.
+These queries exist only for the **EUTXO reference ledger** (`EutxoL2Ledger`), which holds its
+state locally and implements the read-only `EutxoL2LedgerReader` trait. A node wired to the
+**remote** L2 ledger (`RemoteL2Ledger`, the SugarRush WebSocket) owns its state behind the black
+box and exposes no query channel, so it has no such reader: the server is handed `None` and
+**these two endpoints are not mounted at all** (a request to them is a `404`). Handing the server
+only this narrow reader lets the HTTP layer read L2 state without being able to issue ledger
+commands.
 
 ## GET /api/l2/utxos/{address}
 
@@ -70,17 +70,18 @@ that committed; `count` measures returned summaries (one logged command can expa
 no-op deposit decision to none), so the ledger widens its log window until it has `count`
 summaries or the log is exhausted.
 
-## OpenAPI schema & Swagger UI
+## OpenAPI schema
 
-The whole HTTP API is described as [tapir](https://tapir.softwaremill.com) endpoint values in
+The HTTP API is described as [tapir](https://tapir.softwaremill.com) endpoint values in
 `multisig/server/HydrozoaRoutes.scala`, so the OpenAPI schema is **generated from the same
-definitions that serve traffic** — it cannot drift from the routes. The running node serves:
+definitions that serve traffic** — it cannot drift from the routes. Because the L2 query endpoints
+are EUTXO-only, they get their **own** document, separate from the core API:
 
-- **Swagger UI** at `GET /docs` — interactive docs for every endpoint;
-- the **raw spec** at `GET /docs/docs.yaml`.
+- [`openapi.yaml`](openapi.yaml) — the core node API (always served); Swagger UI at `GET /docs`.
+- [`openapi-eutxo-l2.yaml`](openapi-eutxo-l2.yaml) — these two EUTXO L2-query endpoints.
 
-A committed snapshot lives at [`openapi.yaml`](openapi.yaml); `OpenApiSchemaTest` regenerates it
-from the endpoints and fails if the checked-in copy is stale, so the snapshot stays in sync.
+Both committed snapshots are pinned by `OpenApiSchemaTest`, which regenerates each from the
+endpoint definitions and fails if the checked-in copy is stale, so they stay in sync.
 
 ## Demo
 

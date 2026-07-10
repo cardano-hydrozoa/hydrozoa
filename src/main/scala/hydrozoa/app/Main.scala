@@ -16,7 +16,6 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransport, CoilPeerWsTransportEventFormat, CoilTransport, HubTransport, HubWsTransport, NodeWsServer, WsPeerTransport}
-import hydrozoa.multisig.ledger.l2.L2LedgerReader
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
@@ -170,8 +169,8 @@ object Main
 
         resource.use { case (nodeConfig, system, nodeRun) =>
             nodeRun match {
-                case NodeRun.HeadNode(mrm, l2LedgerReader) =>
-                    runHeadNode(nodeConfig, system, mrm, l2LedgerReader, httpExtraTracer)
+                case NodeRun.HeadNode(mrm) =>
+                    runHeadNode(nodeConfig, system, mrm, httpExtraTracer)
                 case NodeRun.CoilNode(mrm) =>
                     runCoilNode(system, mrm)
             }
@@ -280,7 +279,7 @@ object Main
               peerFactory,
               hubFactory,
             )
-        } yield NodeRun.HeadNode(mrm, remoteL2Ledger)
+        } yield NodeRun.HeadNode(mrm)
     }
 
     /** Build the coil-node uplink dialer (no inbound server) and allocate the
@@ -336,7 +335,6 @@ object Main
         nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: HeadMultisigRegimeManager,
-        l2LedgerReader: L2LedgerReader[IO],
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
         for {
@@ -374,7 +372,9 @@ object Main
                             sys.error("RequestSequencer required on head peers")
                           ),
                           connections.blockWeaver,
-                          l2LedgerReader,
+                          // TODO(l2ledger): pass Some(reader) once the head-config l2ledger field
+                          // selects cardano-eutxo; a remote-ledger node serves no L2-query endpoints.
+                          None,
                           nodeConfig.headConfig,
                           serverConfig,
                           httpTracer,
@@ -400,8 +400,7 @@ object Main
     private sealed trait NodeRun
     private object NodeRun {
         final case class HeadNode(
-            mrm: HeadMultisigRegimeManager,
-            l2LedgerReader: L2LedgerReader[IO],
+            mrm: HeadMultisigRegimeManager
         ) extends NodeRun
         final case class CoilNode(mrm: CoilMultisigRegimeManager) extends NodeRun
     }

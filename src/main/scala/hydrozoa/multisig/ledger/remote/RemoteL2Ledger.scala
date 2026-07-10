@@ -7,7 +7,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2TxSummary}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError}
 import hydrozoa.multisig.ledger.remote
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
@@ -18,8 +18,6 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.Utxos
 
 /** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
   *
@@ -171,14 +169,6 @@ class RemoteL2Ledger private (
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
         EitherT.leftT(L2LedgerError("restoreTo is not supported by RemoteL2Ledger"))
 
-    /** The remote black-box ledger owns its state behind the WebSocket and exposes no query
-      * channel, so the L2-query endpoints have nothing to read here; return an empty utxo set (the
-      * queries are meaningful only against the local EUTXO ledger). See [[currentCommandNumber]].
-      */
-    override def utxosByAddress(address: Address): IO[Utxos] = IO.pure(Map.empty)
-
-    /** Unsupported — see [[utxosByAddress]]; returns no transactions. */
-    override def recentTransactions(limit: Int): IO[Vector[L2TxSummary]] = IO.pure(Vector.empty)
 }
 
 object RemoteL2Ledger {

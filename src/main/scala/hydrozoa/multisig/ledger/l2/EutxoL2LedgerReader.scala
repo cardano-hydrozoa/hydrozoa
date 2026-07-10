@@ -3,15 +3,15 @@ package hydrozoa.multisig.ledger.l2
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.Utxos
 
-/** The read-only L2-ledger queries the user-facing HTTP server exposes (`GET /api/l2/utxos`,
-  * `GET /api/l2/transactions`). A narrow view of [[L2Ledger]] — the server is handed only this, so
-  * it can read L2 state but cannot issue ledger commands.
+/** The read-only L2-ledger queries the user-facing HTTP server exposes for the **EUTXO reference
+  * ledger** (`GET /api/l2/utxos`, `GET /api/l2/transactions`).
   *
-  * These reads are meaningful only for a ledger that holds its state locally (the EUTXO reference
-  * ledger, [[hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger]]); an implementation that owns its
-  * state elsewhere (a remote black box) returns empty results.
+  * Implemented only by [[hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger]], which holds its state
+  * locally. A node wired to a remote ledger has no such reader, so the server is handed `None` and
+  * the L2-query endpoints are not mounted. Handing the server only this narrow view lets it read L2
+  * state without being able to issue ledger commands.
   */
-trait L2LedgerReader[F[_]]:
+trait EutxoL2LedgerReader[F[_]]:
     /** The current L2 utxo set restricted to `address` — the outputs that address controls right
       * now. A live read of the ledger's committed state (no consensus round-trip).
       */

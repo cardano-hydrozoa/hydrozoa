@@ -8,22 +8,22 @@ import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
-import hydrozoa.multisig.ledger.l2.{L2LedgerReader, L2TxSummary}
 import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.Utxos
 
-/** Golden test pinning the committed `docs/openapi.yaml` to the schema generated from the tapir
-  * endpoint definitions. It regenerates the document and fails if the committed copy is stale, so
-  * the checked-in schema can never silently drift from the routes. Regenerate by re-running this
-  * test (a stale run overwrites the file) and committing the result.
+/** Golden tests pinning the two committed OpenAPI documents to the schemas generated from the tapir
+  * endpoint definitions: `docs/openapi.yaml` (the core node API) and `docs/openapi-eutxo-l2.yaml`
+  * (the EUTXO L2-ledger query API, served only on a node running the EUTXO ledger). Each
+  * regenerates its document and fails if the committed copy is stale, so the checked-in schemas can
+  * never silently drift from the routes. Regenerate by re-running these tests (a stale run
+  * overwrites the file) and committing the result.
   */
 class OpenApiSchemaTest extends AnyFunSuite:
 
-    private val committedSchema: Path = Path.of("docs/openapi.yaml")
+    private val coreSchema: Path = Path.of("docs/openapi.yaml")
+    private val l2Schema: Path = Path.of("docs/openapi-eutxo-l2.yaml")
 
     private val spec = defaultSpec.copy(nPeers = 1)
 
@@ -32,13 +32,11 @@ class OpenApiSchemaTest extends AnyFunSuite:
             .generate(testPeersSpec(spec))()
             .pureApply(Gen.Parameters.default, Seed(spec.generationSeed))
 
-    /** A no-op reader — the schema depends only on the endpoint descriptions, not the handlers. */
-    private val emptyReader: L2LedgerReader[IO] = new L2LedgerReader[IO] {
-        override def utxosByAddress(address: Address): IO[Utxos] = IO.pure(Map.empty)
-        override def recentTransactions(limit: Int): IO[Vector[L2TxSummary]] = IO.pure(Vector.empty)
-    }
-
-    private def generatedYaml: String =
+    /** Build the routes and hand them to `use`. No L2 reader is needed: both schemas derive from
+      * the endpoint definitions, not their handlers, so the L2 document is generated even with
+      * `None`.
+      */
+    private def withRoutes[A](use: HydrozoaRoutes => A): A =
         ActorSystem[IO]("OpenApiSchemaTest")
             .use { system =>
                 for {
@@ -56,25 +54,31 @@ class OpenApiSchemaTest extends AnyFunSuite:
                     routes <- HydrozoaRoutes(
                       requestSequencerStub,
                       blockWeaverStub,
-                      emptyReader,
+                      None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
-                } yield routes.openApiYaml
+                } yield use(routes)
             }
             .unsafeRunSync()
 
-    test("docs/openapi.yaml is up to date with the tapir endpoint definitions") {
-        val generated = generatedYaml
-        val committed =
-            if Files.exists(committedSchema) then Files.readString(committedSchema) else ""
+    /** Fail (after rewriting the file) if `committed` is out of date with `generated`. */
+    private def checkGolden(path: Path, generated: String): Unit =
+        val committed = if Files.exists(path) then Files.readString(path) else ""
         if committed != generated then
-            Files.writeString(committedSchema, generated)
+            Files.writeString(path, generated)
             fail(
-              "docs/openapi.yaml was out of date with the endpoint definitions and has been " +
-                  "regenerated. Review and commit the updated docs/openapi.yaml."
+              s"$path was out of date with the endpoint definitions and has been regenerated. " +
+                  s"Review and commit the updated $path."
             )
+
+    test("docs/openapi.yaml is up to date with the core tapir endpoint definitions") {
+        checkGolden(coreSchema, withRoutes(_.openApiYaml))
+    }
+
+    test("docs/openapi-eutxo-l2.yaml is up to date with the EUTXO L2 endpoint definitions") {
+        checkGolden(l2Schema, withRoutes(_.l2OpenApiYaml))
     }
 
 end OpenApiSchemaTest

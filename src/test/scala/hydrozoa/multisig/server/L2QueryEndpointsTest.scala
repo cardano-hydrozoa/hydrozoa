@@ -88,7 +88,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     routes <- HydrozoaRoutes(
                       requestSequencerStub,
                       blockWeaverStub,
-                      ledger,
+                      Some(ledger),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
