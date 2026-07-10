@@ -176,9 +176,11 @@ So identity isomorphism *is* the footgun. Default the ledger to enforce; make "d
 explicit, loud ledger setting. It is only safe when the app already bakes a headId-like domain
 separator into its own tx.
 
-### 5.3 Deposits: derive `validityEnd` from the deposit tx's TTL (and probably drop `submissionDuration`)
+### 5.3 Deposits: derive `validityEnd` from the deposit tx's TTL; keep `submissionDuration`
 
-A deposit's `validityEnd` is its **absorb-by deadline**, and it is mandatory for a real reason: at
+A deposit's `validityEnd` is its **accept-by deadline** — the head must *learn* (observe/accept) the
+deposit before it (absorption happens later, on a schedule derived from it) — and it is mandatory for a
+real reason: at
 registration the head builds three L1-timing values from it —
 
 - the deposit tx's **TTL** = `validityEnd + submissionDuration`,
@@ -202,25 +204,20 @@ case is **not** `validityEnd == ttl` (as it is for an L2 transaction): a deposit
 `submissionDuration` *below* the TTL, a deliberate grace window so the tx stays submittable past the
 user's deadline.
 
-**Verified: `submissionDuration` can be removed.** Traced `TxTiming`: the deposit tx TTL is
-`depositSubmissionDeadline = validityEnd + submissionDuration`, and *every* downstream time is computed
-from that deadline (= the TTL), never from `validityEnd`:
+**`submissionDuration` stays — it is the accept-by margin.** The head must *learn* a deposit before
+`ttl − submissionDuration` (= `validityEnd`), so that a deposit it accepts still has at least
+`submissionDuration` of slack to be submitted and confirmed on L1 before the deposit tx's TTL expires.
+This is enforced by an explicit **accept-by check**: when the head would include a deposit in a block it
+must verify `block_creation_start ≤ validityEnd` — i.e. `now ≤ ttl − submissionDuration`. So
+`validityEnd` is a genuine check reading `ttl − submissionDuration` directly (not merely a schedule
+anchor), which makes `submissionDuration` load-bearing. It remains head config and stays exposed via
+`/head-info`.
 
-- `depositAbsorptionStartTime = depositSubmissionDeadline + maturityDuration` (= `ttl + maturity`)
-- `depositAbsorptionEndTime   = absorptionStart + absorptionDuration`
-- `refundValidityStart        = absorptionEnd + silenceDuration`
-
-So `submissionDuration`'s *only* job is bridging `validityEnd → ttl`. Once the user supplies the TTL
-directly, the whole schedule re-anchors on it — `absorption_start = ttl + maturityDuration`,
-`refund_start = ttl + maturityDuration + absorptionDuration + silenceDuration` — and `submissionDuration`
-appears nowhere. There is **no `validityEnd < ttl` correctness invariant**: the relation is
-definitional, not a check. `/head-info` then drops `submissionDurationSeconds` and re-expresses the
-absorption/refund offsets relative to the TTL.
-
-**Integration caveat (real work — the missed piece).** The stage1 model/generator use
-`reservedSubmissionDuration` (`stage1/Model.scala`, `stage1/Generator.scala`) to reserve a submission
-window when generating deposit timings (`availableDuration > reservedSubmissionDuration`). Removing
-`submissionDuration` means reworking that generator to anchor deposit timing on the tx TTL instead.
+*Why it can look removable:* in the absorption/refund **schedule** alone, `submissionDuration` cancels —
+`absorption_start = validityEnd + absorptionStartOffset = depositSubmissionDeadline + maturityDuration =
+ttl + maturityDuration`, and likewise for refund. So if `validityEnd` were *only* a schedule anchor it
+would fold away. But it is also the accept-by deadline, so it does not. (This is also why the stage1
+generator's `reservedSubmissionDuration` — which reserves exactly this margin — stays as is.)
 
 ## 6. L2 backend selection & config model
 
@@ -317,9 +314,9 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
    does signature validation + output checks; submission does the stateful checks. Drop `userVk`.
 5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2.
 6. **Deposits (§5.3):** drop the `validityEnd` field — derive it from the deposit tx's TTL
-   (`ttl − submissionDuration`); require the deposit tx to carry a TTL. Then evaluate removing
-   `submissionDuration` entirely (fold its margin into the absorption/refund offsets, re-anchored on
-   the TTL) once no consumer needs a request deadline distinct from the TTL.
+   (`ttl − submissionDuration`); require the deposit tx to carry a TTL. **Keep `submissionDuration`**
+   (the accept-by margin) and add/enforce the accept-by check `block_creation_start ≤ validityEnd`
+   (`now ≤ ttl − submissionDuration`).
 7. **Naming:** replace working terms (`l2Payload`/`l1Payload`) with project-consistent names before code.
 8. **GUM-104 — ledger config at init (§6.1):** specify it in the whitepaper's initialization section;
    make the shared bootstrap config ledger-agnostic; derive the initial L2 state (drop
