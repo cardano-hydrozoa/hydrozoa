@@ -107,6 +107,42 @@ object MultiNodeConfig {
     private val mnctm = TestMFixedEnv[MultiNodeConfig]()
     export mnctm.*
 
+    extension (mnc: MultiNodeConfig)
+        /** Coil [[NodeConfig]]s for each of `coilWallets`, reusing head 0's operation-config
+          * sections (evacuation polling period, cardano-liaison polling period, etc.) — these don't
+          * depend on head-vs-coil, and the coil path doesn't exercise any wallet-derived fields on
+          * the template. Placeholder strings for blockfrost / websocket / http-admin are cosmetic
+          * in a mock-backed integration test. Callers get one `NodeConfig` per coil wallet in the
+          * same order the wallets are passed.
+          */
+        def mkCoilNodeConfigs(
+            coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet]
+        ): List[NodeConfig] = {
+            val templatePrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0))
+            coilWallets.map { w =>
+                NodeConfig
+                    .mkCoilConfig(
+                      headConfig = mnc.headConfig,
+                      ownCoilWallet = w,
+                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig
+                          .copy(ruleBasedWallet = w),
+                      nodeOperationMultisigConfig = templatePrivate.nodeOperationMultisigConfig,
+                      blockfrostApiKey = "not-a-real-key",
+                      sugarRushUri = "ws://localhost:3001/ws",
+                      adminUsername = "admin",
+                      adminPassword = "welcome",
+                      httpHost = "0.0.0.0",
+                      httpPort = "8080",
+                    )
+                    .getOrElse(
+                      throw new IllegalStateException(
+                        s"coil wallet ${w.exportVerificationKey} not registered in " +
+                            "headConfig.coilPeerVKeys"
+                      )
+                    )
+            }
+        }
+
     def runDefault[A](testM: MultiNodeConfigTestM[A])(using
         toProp: A => Prop,
         ioRuntime: IORuntime

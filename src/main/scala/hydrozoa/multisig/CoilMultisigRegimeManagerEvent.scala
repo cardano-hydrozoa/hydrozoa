@@ -7,6 +7,7 @@ import hydrozoa.multisig.consensus.liaison.PeerLiaisonEvent
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
+import hydrozoa.rulebased.RuleBasedActorEvent
 
 /** The (coil, multisig) cell of the regime-event grid. A union over the category traits from
   * [[RegimeManagerEvent]] that apply to a coil follower running the multisig regime:
@@ -23,9 +24,17 @@ import hydrozoa.multisig.ledger.joint.JointLedgerEvent
 type CoilMultisigRegimeManagerEvent =
     LifecycleEvent | CommonChildEvent | CoilOnlyChildEvent | MultisigOnlyChildEvent
 
-/** Per-producer projections for the (coil, multisig) cell. Today the coil only spawns the core set;
-  * `CoilPeerWsTransport`'s tracer is allocated outside the regime manager (in the harness / Main),
-  * so no field for it lives here yet.
+/** The full coil-side regime-event surface: the (coil, multisig) cell plus the rule-based children
+  * the coil may spawn after the multisig→rule-based handoff (see
+  * [[CoilMultisigRegimeManager.onHandoffToRuleBased]]). Mirrors [[HeadRegimeManagerEvent]] on the
+  * head side.
+  */
+type CoilRegimeManagerEvent = CoilMultisigRegimeManagerEvent | RuleBasedOnlyChildEvent
+
+/** Per-producer projections for the (coil, multisig) cell. Today the coil spawns the core set plus,
+  * post-handoff, a [[hydrozoa.rulebased.RuleBasedActor]] via
+  * [[hydrozoa.rulebased.RuleBasedRegimeManager]]. `CoilPeerWsTransport`'s tracer is allocated
+  * outside the regime manager (in the harness / Main), so no field for it lives here yet.
   */
 final case class CoilMrmTracers(
     blockWeaver: ContraTracer[IO, BlockWeaverEvent],
@@ -35,10 +44,11 @@ final case class CoilMrmTracers(
     stackComposer: ContraTracer[IO, StackComposerEvent],
     slowConsensusActor: ContraTracer[IO, SlowConsensusActorEvent],
     peerLiaison: PeerId => ContraTracer[IO, PeerLiaisonEvent],
+    ruleBasedActor: ContraTracer[IO, RuleBasedActorEvent],
 ) extends HasCoreTracers
 
 object CoilMrmTracers:
-    def fromRoot(tracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent]): CoilMrmTracers =
+    def fromRoot(tracer: ContraTracer[IO, CoilRegimeManagerEvent]): CoilMrmTracers =
         CoilMrmTracers(
           blockWeaver = tracer.contramap(CommonChildEvent.BlockWeaver.apply),
           cardanoLiaison = tracer.contramap(CommonChildEvent.CardanoLiaison.apply),
@@ -47,4 +57,5 @@ object CoilMrmTracers:
           stackComposer = tracer.contramap(CommonChildEvent.StackComposer.apply),
           slowConsensusActor = tracer.contramap(CommonChildEvent.SlowConsensusActor.apply),
           peerLiaison = pid => tracer.contramap(CommonChildEvent.PeerLiaison(pid, _)),
+          ruleBasedActor = tracer.contramap(RuleBasedOnlyChildEvent.RuleBasedActor.apply),
         )

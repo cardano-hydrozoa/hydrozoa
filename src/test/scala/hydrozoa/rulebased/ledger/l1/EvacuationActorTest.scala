@@ -10,8 +10,9 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
-import hydrozoa.rulebased.{EvacuationActor, EvacuationActorEventFormat}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
 import scala.collection.immutable.TreeMap
 import scalus.cardano.ledger.*
@@ -31,7 +32,7 @@ object EvacuationActorTestHelpers {
 
     def mkResolutionTx: MultiNodeConfigTestM[Transaction] = ???
 
-    def mkEvacuationActor: MultiNodeConfigTestM[EvacuationActor] =
+    def mkEvacuationActor: MultiNodeConfigTestM[RuleBasedActor] =
         for {
             env <- ask
             nEvacs <- pick(Gen.choose(0, 1000))
@@ -61,17 +62,30 @@ object EvacuationActorTestHelpers {
             )
 
             tracer = Slf4jTracer.sink.contramap(
-              EvacuationActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+              RuleBasedActorEventFormat.humanFormat(env.nodeConfigs.head._1)
             )
 
-        } yield EvacuationActor(
-          candidateEvacMaps = Map(evacMapFull.kzgCommitment -> evacMapFull),
+            // The test body doesn't actually invoke the actor, so an empty persistence is
+            // sufficient — loadAction / loadEvacuationInputs would raise `MissingState` on any
+            // real read (no hard-confirmed stack on disk). Keeps the fixture minimal.
+            persistence <- lift(mkEmptyPersistence(env))
+        } yield RuleBasedActor(
+          persistence = persistence,
           cardanoBackend = cardanoBackend,
-          fallbackTxHash = fallbackTxHash,
           tracer = tracer
         )(using
           env.nodeConfigs.head._2
         )
+
+    private def mkEmptyPersistence(env: MultiNodeConfig): IO[Persistence[IO]] =
+        val persistenceTracer =
+            Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        for
+            backend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
+            persistence <- Persistence.fromBackend(backend, persistenceTracer)(using
+              env.headConfig
+            )
+        yield persistence
 
 }
 

@@ -38,11 +38,10 @@ sealed trait SettlementTx
     def tx: Transaction
     def txLens: Lens[SettlementTx, Transaction]
     def settlementTxEndTime: SettlementTxEndTime
-
-    override def transactionFamily: String = "SettlementTx"
 }
 
 object SettlementTx {
+    given TxFamily[SettlementTx] = TxFamily.of("SettlementTx")
     export SettlementTxOps.Build
     export SettlementTxOps.Result
     export SettlementTxOps.Error

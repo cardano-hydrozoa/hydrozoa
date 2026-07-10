@@ -111,7 +111,7 @@ def genSimpleDeinitTxBuilder(using
 object DeinitTxTest extends Properties("Deinit Tx Test") {
     import MultiNodeConfig.*
 
-    val _ = property("Deinit Simple Happy Path") = runDefault(
+    val _ = property("Deinit Simple Happy Path") = runWithCoil(nCoil = 5, quorum = 0)(
       for {
           env <- ask
           _ <- {

@@ -7,8 +7,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{build, f
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
@@ -22,7 +22,7 @@ import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, In
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
+import scalus.cardano.txbuilder.TransactionBuilderStep.Send
 
 final case class EvacuationTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -30,12 +30,11 @@ final case class EvacuationTx(
     evacuatedOutputs: List[TransactionOutput],
     override val tx: Transaction,
     override val txLens: Lens[EvacuationTx, Transaction] = Focus[EvacuationTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[EvacuationTx] {
-    override def transactionFamily: String = "EvacuationTx"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[EvacuationTx] {}
 
 object EvacuationTx {
+    given TxFamily[EvacuationTx] = TxFamily.of("EvacuationTx")
     export EvacuationTxOps.{Build, Config}
 
     object Assumptions {
@@ -85,15 +84,16 @@ private object EvacuationTxOps {
       *   The sub-map of evacuations to try in this transaction
       * @param allRemainingEvacuatees
       *   The map of all evacuations that still need to be processed
-      * @param feeUtxos
-      *   Utxos to use to pay the fees
+      * @param collateralUtxo
+      *   Wallet UTxO used both as Plutus collateral and as the fee-paying regular input; the
+      *   returned collateral output absorbs the fee via the diff handler, matching the pattern used
+      *   by [[VoteTx]], [[ResolutionTx]], [[DeinitTx]] et al.
       */
     final case class Build(
         inputTreasuryUtxo: RuleBasedTreasuryUtxo,
         evacuateesToTryNext: EvacuationMap,
         allRemainingEvacuatees: EvacuationMap,
         collateralUtxo: CollateralUtxo,
-        feeUtxos: Utxos,
     ) {
 
         private def halveEvacuation(evacuatees: EvacuationMap): EvacuationMap = {
@@ -191,17 +191,16 @@ private object EvacuationTxOps {
                   List(
                     config.referenceTreasury,
                     inputTreasuryUtxo.spendAttached(evacuationRedeemer),
+                    // Spend the collateral utxo as a regular input; the returned
+                    // collateral output absorbs the tx fee via the index-0 diff handler.
                     collateralUtxo.add,
-                    collateralUtxo.send,
+                    collateralUtxo.spend,
+                    collateralUtxo.collateralOutput.send,
                     residualTreasury.send
                   )
                       ++
                           // Outputs for withdrawals
                           evacuationOutputs.map(Send(_))
-                          // Spend the fee utxos
-                          ++ feeUtxos.toList.map((ti, to) =>
-                              Spend(scalus.cardano.ledger.Utxo(ti, to), PubKeyWitness)
-                          )
                 )
                     .explainConst("Building evacuation tx failed")
                     .left
@@ -231,10 +230,11 @@ private object EvacuationTxOps {
                 )
 
                 evacuationTx = EvacuationTx(
-                  inputTreasuryUtxo,
-                  newTreasuryUtxo,
-                  evacuationOutputs,
-                  finalized.transaction
+                  treasuryUtxoSpent = inputTreasuryUtxo,
+                  treasuryUtxoProduced = newTreasuryUtxo,
+                  evacuatedOutputs = evacuationOutputs,
+                  tx = finalized.transaction,
+                  resolvedUtxos = finalized.resolvedUtxos
                 )
             } yield evacuationTx) match {
                 case Right(w) => Right(w)

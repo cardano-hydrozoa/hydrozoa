@@ -1,11 +1,12 @@
 package hydrozoa.bootstrap
 
 import cats.data.{NonEmptyList, NonEmptyMap, Validated}
-import cats.effect.{ExitCode, IO, IOApp}
+import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
 import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
+import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
@@ -18,7 +19,6 @@ import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.NodeConfig
-import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
@@ -30,11 +30,12 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.circe.generic.semiauto.deriveDecoder
 import io.circe.syntax.*
-import io.circe.{Decoder, parser}
+import io.circe.{Decoder, Json, parser}
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -43,7 +44,7 @@ import org.http4s.Uri
 import scala.collection.immutable.{SortedMap, TreeMap}
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, KeepRaw, PlutusScriptEvaluator, ScriptRef, TransactionHash, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -102,7 +103,8 @@ object Bootstrap:
       */
     def mkSharedHeadConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
         membership: Membership,
-        minEquity: Coin
+        minEquity: Coin,
+        scriptReferenceUtxos: ScriptReferenceUtxos
     ): IO[HeadConfig] = for {
         startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
         blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
@@ -137,7 +139,7 @@ object Bootstrap:
                 Payout.Obligation
                     .apply(
                       output = KeepRaw.apply(
-                        TransactionOutput.apply(
+                        Babbage(
                           address = Address
                               .fromBech32(
                                 "addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4"
@@ -284,7 +286,7 @@ object Bootstrap:
                 headPeers = headPeers,
                 coilPeers = coilPeers,
                 initializationParams = initializationParameters,
-                scriptReferenceUtxos = fakeScriptReferenceUtxos(cardanoNetwork)
+                scriptReferenceUtxos = scriptReferenceUtxos
               )
               .toEither
               .left
@@ -345,81 +347,310 @@ object Bootstrap:
         }
     } yield headConfig
 
-    // TODO: remove once we have a proper way of doing things
-    def fakeScriptReferenceUtxos(network: CardanoNetwork.Section): ScriptReferenceUtxos =
-        val txId = TransactionHash.fromHex(
-          "3ea527455ed27000badf7567912a3fec796a35accf594fa86ab974bbb7f1dad2"
-        )
-
-        val burnAddress =
-            if network.network.isMainnet
-            then
-                Address.fromBech32(
-                  "addr1wxa7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93ghspjnt"
-                )
-            else
-                Address.fromBech32(
-                  "addr_test1wza7ec20249sqg87yu2aqkqp735qa02q6yd93u28gzul93gvc4wuw"
-                )
-
-        val treasuryScript = HydrozoaBlueprint.treasuryScript
-        val disputeScript = HydrozoaBlueprint.disputeScript
-
-        val treasuryUtxo = Utxo(
-          TransactionInput(txId, 0),
-          Babbage(
-            burnAddress,
-            Value.ada(10),
-            None,
-            Some(ScriptRef(treasuryScript))
-          )
-        )
-
-        val disputeUtxo = Utxo(
-          TransactionInput(txId, 1),
-          Babbage(
-            burnAddress,
-            Value.ada(10),
-            None,
-            Some(ScriptRef(disputeScript))
-          )
-        )
-
-        val treasury = ScriptReferenceUtxos
-            .TreasuryScriptUtxo(network, treasuryUtxo)
-            .fold(throw _, identity)
-        val dispute = ScriptReferenceUtxos
-            .DisputeScriptUtxo(network, disputeUtxo)
-            .fold(throw _, identity)
-
-        ScriptReferenceUtxos(
-          treasury,
-          dispute
-        )
-
 end Bootstrap
 
 /** Main entry point for generating a new Ed25519 key pair.
   *
-  * Prints the verification key and signing key as hex to stdout.
+  * With no options, prints the verification key and signing key as hex to stdout (the historical
+  * behavior). Options add two file outputs, both meant to be run once per peer when cooking a
+  * head's configs:
+  *
+  *   - `--roster peers.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates or
+  *     appends to the [[Bootstrap.Membership]] roster that [[BuildHeadConfig]] consumes.
+  *     `--coil-quorum N` sets the roster's coil quorum. Head peers must be registered before the
+  *     coil peers that name them as hubs.
+  *   - `--template private-template.json --out private.json` writes the peer's private node config:
+  *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
+  *     `ownCoilWallet` per `--role`) and a second fresh key pair spliced in as the evacuation
+  *     `ruleBasedWallet`. The splice works on the JSON tree because the stock config encoders
+  *     deliberately withhold signing keys ([[PeerWallet.dummyPeerWalletEncoder]]). The peer's
+  *     Preview L1 address is written next to `--out` as `address.txt` (head peer 0's must be funded
+  *     before [[BuildHeadConfig]]).
+  *
+  * Usage:
+  * {{{
+  *   sbt "runMain hydrozoa.app.GenerateKeyPair \
+  *     --roster nodes/peers.json --role head --ws-address ws://head-0:4001 \
+  *     --template peer-private.template.json --out nodes/head-0/private.json"
+  * }}}
   */
-object GenerateKeyPair extends IOApp:
-    override def run(args: List[String]): IO[ExitCode] =
-        Bootstrap.generateKeyPair().flatMap { case (vKey, sKey) =>
-            val vKeyHex = vKey.bytes.toArray.map("%02x".format(_)).mkString
-            val sKeyHex = sKey.bytes.toArray.map("%02x".format(_)).mkString
-            for {
-                _ <- IO.println("Generated new Ed25519 key pair:")
-                _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
-                _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
-                _ <- IO.println(
-                  s"Testnet address: ${vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get}"
-                )
-            } yield ExitCode.Success
+object GenerateKeyPair
+    extends CommandIOApp(
+      name = "keygen",
+      header = "Generate an Ed25519 key pair; optionally register it in a roster " +
+          "and write a private node config"
+    ):
+
+    /** The peer role a generated key pair is registered under. */
+    enum Role:
+        case Head, Coil
+
+    private val rosterOpt: Opts[Option[Path]] =
+        Opts.option[String](
+          "roster",
+          "Membership roster JSON to create or append to (the BuildHeadConfig input)"
+        ).map(Path.of(_))
+            .orNone
+
+    private val roleOpt: Opts[Option[Role]] =
+        Opts.option[String]("role", "Peer role: head | coil")
+            .mapValidated {
+                case "head" => Validated.validNel(Role.Head)
+                case "coil" => Validated.validNel(Role.Coil)
+                case other => Validated.invalidNel(s"--role must be 'head' or 'coil', got '$other'")
+            }
+            .orNone
+
+    private val wsAddressOpt: Opts[Option[Uri]] =
+        Opts.option[String](
+          "ws-address",
+          "This head peer's inter-peer WebSocket address, e.g. ws://head-0:4001"
+        ).mapValidated(s =>
+            Validated.fromEither(Uri.fromString(s).left.map(_.message)).toValidatedNel
+        ).orNone
+
+    private val hubOpt: Opts[Option[Int]] =
+        Opts.option[Int]("hub", "The head peer number that hubs this coil peer").orNone
+
+    private val coilQuorumOpt: Opts[Option[Int]] =
+        Opts.option[Int]("coil-quorum", "Set the roster's coilQuorum").orNone
+
+    private val templateOpt: Opts[Option[Path]] =
+        Opts.option[String](
+          "template",
+          "Private-config template JSON to fill in with the generated keys"
+        ).map(Path.of(_))
+            .orNone
+
+    private val outOpt: Opts[Option[Path]] =
+        Opts.option[String]("out", "Where to write the filled-in private config", short = "o")
+            .map(Path.of(_))
+            .orNone
+
+    override def main: Opts[IO[ExitCode]] =
+        (rosterOpt, roleOpt, wsAddressOpt, hubOpt, coilQuorumOpt, templateOpt, outOpt)
+            .mapN(generateAndWrite)
+
+    /** Generate the key pair, print it, and perform whichever file outputs the options request. */
+    private def generateAndWrite(
+        roster: Option[Path],
+        role: Option[Role],
+        wsAddress: Option[Uri],
+        hub: Option[Int],
+        coilQuorum: Option[Int],
+        template: Option[Path],
+        out: Option[Path]
+    ): IO[ExitCode] = for {
+        _ <- validateOptionCombos(roster, role, wsAddress, hub, template, out)
+        keyPair <- Bootstrap.generateKeyPair()
+        (vKey, sKey) = keyPair
+        vKeyHex = mkHex(vKey.bytes.toArray)
+        sKeyHex = mkHex(sKey.bytes.toArray)
+        address = vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get
+        _ <- IO.println("Generated new Ed25519 key pair:")
+        _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
+        _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
+        _ <- IO.println(s"Testnet address: $address")
+        _ <- roster.traverse_(path =>
+            registerInRoster(path, role.get, vKeyHex, wsAddress, hub, coilQuorum) *>
+                IO.println(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
+        )
+        _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
+            writePrivateConfig(templatePath, outPath, role.get, vKeyHex, sKeyHex) *>
+                IO.println(s"Wrote private config: $outPath") *>
+                writeAddressFile(outPath, address)
         }
+    } yield ExitCode.Success
+
+    /** Reject option combinations the file outputs can't act on. */
+    private def validateOptionCombos(
+        roster: Option[Path],
+        role: Option[Role],
+        wsAddress: Option[Uri],
+        hub: Option[Int],
+        template: Option[Path],
+        out: Option[Path]
+    ): IO[Unit] = {
+        def fail(msg: String): IO[Unit] = IO.raiseError(new IllegalArgumentException(msg))
+        for {
+            _ <-
+                if (roster.isDefined || out.isDefined) && role.isEmpty then
+                    fail("--role is required with --roster or --out")
+                else IO.unit
+            _ <-
+                if roster.isDefined && role.contains(Role.Head) && wsAddress.isEmpty then
+                    fail("--ws-address is required for --role head with --roster")
+                else IO.unit
+            _ <-
+                if roster.isDefined && role.contains(Role.Coil) && hub.isEmpty then
+                    fail("--hub is required for --role coil with --roster")
+                else IO.unit
+            _ <-
+                if template.isDefined != out.isDefined then
+                    fail("--template and --out must be given together")
+                else IO.unit
+        } yield ()
+    }
+
+    /** Append this peer to the roster (creating the file if absent), keyed by role, and validate
+      * the result still decodes as a [[Bootstrap.Membership]].
+      */
+    private def registerInRoster(
+        path: Path,
+        role: Role,
+        vKeyHex: String,
+        wsAddress: Option[Uri],
+        hub: Option[Int],
+        coilQuorum: Option[Int]
+    ): IO[Unit] = for {
+        current <- IO.blocking(Files.exists(path)).flatMap {
+            case true =>
+                IO.blocking(Files.readString(path))
+                    .flatMap(s => IO.fromEither(parser.parse(s)))
+            case false => IO.pure(emptyRoster)
+        }
+        updated <- IO.fromEither(
+          appendPeer(current, role, vKeyHex, wsAddress, hub, coilQuorum).left
+              .map(new IllegalArgumentException(_))
+        )
+        _ <- IO.fromEither(
+          updated
+              .as[Bootstrap.Membership]
+              .left
+              .map(err =>
+                  new IllegalStateException(s"updated roster does not decode as a Membership: $err")
+              )
+        )
+        _ <- IO.blocking {
+            Option(path.getParent).foreach(Files.createDirectories(_))
+            Files.writeString(path, updated.spaces2)
+        }
+    } yield ()
+
+    private[bootstrap] val emptyRoster: Json = Json.obj(
+      "headPeers" -> Json.arr(),
+      "coilPeers" -> Json.arr(),
+      "coilQuorum" -> Json.fromInt(0)
+    )
+
+    /** Pure roster edit: append the peer entry for its role and apply `coilQuorum` if given. */
+    private[bootstrap] def appendPeer(
+        roster: Json,
+        role: Role,
+        vKeyHex: String,
+        wsAddress: Option[Uri],
+        hub: Option[Int],
+        coilQuorum: Option[Int]
+    ): Either[String, Json] = for {
+        obj <- roster.asObject.toRight("roster is not a JSON object")
+        headPeers = obj("headPeers").flatMap(_.asArray).getOrElse(Vector.empty)
+        coilPeers = obj("coilPeers").flatMap(_.asArray).getOrElse(Vector.empty)
+        withPeer <- role match {
+            case Role.Head =>
+                wsAddress.toRight("--ws-address is required for a head peer").map { ws =>
+                    val entry = Json.obj(
+                      "verificationKey" -> Json.fromString(vKeyHex),
+                      "webSocketAddress" -> Json.fromString(ws.renderString)
+                    )
+                    obj.add("headPeers", Json.fromValues(headPeers :+ entry))
+                }
+            case Role.Coil =>
+                for {
+                    hubNum <- hub.toRight("--hub is required for a coil peer")
+                    _ <- Either.cond(
+                      hubNum >= 0 && hubNum < headPeers.size,
+                      (),
+                      s"--hub $hubNum is not a registered head peer " +
+                          s"(roster has ${headPeers.size}; register head peers first)"
+                    )
+                } yield {
+                    val entry = Json.obj(
+                      "verificationKey" -> Json.fromString(vKeyHex),
+                      "hubHeadPeerNumber" -> Json.fromInt(hubNum)
+                    )
+                    obj.add("coilPeers", Json.fromValues(coilPeers :+ entry))
+                }
+        }
+        withQuorum = coilQuorum.fold(withPeer)(q => withPeer.add("coilQuorum", Json.fromInt(q)))
+    } yield Json.fromJsonObject(withQuorum)
+
+    /** Fill the private-config template: set `ownPeerPrivate` to the generated wallet under the
+      * role's field name, and replace the evacuation `ruleBasedWallet` with a fresh key pair.
+      */
+    private def writePrivateConfig(
+        templatePath: Path,
+        outPath: Path,
+        role: Role,
+        vKeyHex: String,
+        sKeyHex: String
+    ): IO[Unit] = for {
+        templateStr <- IO.blocking(Files.readString(templatePath))
+        template <- IO.fromEither(parser.parse(templateStr))
+        ruleBasedKeyPair <- Bootstrap.generateKeyPair()
+        (rbVKey, rbSKey) = ruleBasedKeyPair
+        filled <- IO.fromEither(
+          fillPrivateConfig(
+            template,
+            role,
+            vKeyHex,
+            sKeyHex,
+            mkHex(rbVKey.bytes.toArray),
+            mkHex(rbSKey.bytes.toArray)
+          ).left.map(new IllegalArgumentException(_))
+        )
+        _ <- IO.blocking {
+            Option(outPath.getParent).foreach(Files.createDirectories(_))
+            Files.writeString(outPath, filled.spaces2)
+        }
+    } yield ()
+
+    /** Pure template edit shared with tests. */
+    private[bootstrap] def fillPrivateConfig(
+        template: Json,
+        role: Role,
+        vKeyHex: String,
+        sKeyHex: String,
+        ruleBasedVKeyHex: String,
+        ruleBasedSKeyHex: String
+    ): Either[String, Json] = {
+        def mkWallet(v: String, s: String): Json = Json.obj(
+          "verificationKey" -> Json.fromString(v),
+          "signingKey" -> Json.fromString(s)
+        )
+        val walletField = role match {
+            case Role.Head => "ownHeadWallet"
+            case Role.Coil => "ownCoilWallet"
+        }
+        for {
+            obj <- template.asObject.toRight("template is not a JSON object")
+            evac <- obj("nodeOperationEvacuationConfig")
+                .flatMap(_.asObject)
+                .toRight("template missing nodeOperationEvacuationConfig object")
+        } yield Json.fromJsonObject(
+          obj
+              .add("ownPeerPrivate", Json.obj(walletField -> mkWallet(vKeyHex, sKeyHex)))
+              .add(
+                "nodeOperationEvacuationConfig",
+                Json.fromJsonObject(
+                  evac.add("ruleBasedWallet", mkWallet(ruleBasedVKeyHex, ruleBasedSKeyHex))
+                )
+              )
+        )
+    }
+
+    /** Write the peer's L1 address next to the private config, for funding scripts. */
+    private def writeAddressFile(outPath: Path, address: String): IO[Unit] = {
+        val addressPath =
+            Option(outPath.getParent).fold(Path.of("address.txt"))(_.resolve("address.txt"))
+        IO.blocking(Files.writeString(addressPath, address + "\n")) *>
+            IO.println(s"Wrote L1 address: $addressPath")
+    }
+
+    private def mkHex(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
+
 end GenerateKeyPair
 
-/** Migrate all funds from the configured peer's address to a destination address.
+/** Migrate all funds from the configured peer's own L1 address to a destination address.
   *
   * Usage:
   * {{{
@@ -428,6 +659,13 @@ end GenerateKeyPair
   *
   * Reads wallet + Blockfrost credentials from the same files Main does; signs with the peer wallet
   * carried by the private config.
+  *
+  * Sweeps only the UTxOs sitting at the peer wallet's own enterprise address, with that wallet's
+  * single signature. It never spends from the head's multisig address, so it is NOT a recovery tool
+  * for an initialized multi-peer head — funds locked in the head come back only through
+  * finalization (all head signatures + coil quorum) or the rule-based evacuation regime. The
+  * "recover the head's funds" reading held only for the single-peer demo, where finalization
+  * returns everything to peer 0's own address and this tool then sweeps it.
   */
 object Migrate
     extends CommandIOApp(
@@ -572,7 +810,7 @@ object Migrate
                         )
 
                         _ <- log.info("Submitting transaction...")
-                        submitResult <- backend.submitTx(signed)
+                        submitResult <- backend.submitTx(RawTx(signed))
                         _ <- IO.fromEither(
                           submitResult.left.map(err =>
                               new RuntimeException(s"Failed to submit transaction: $err")
@@ -593,13 +831,18 @@ end Migrate
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <peers.json> \
+  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <peers.json> --script-refs script-refs.json \
   *     --blockfrost-key <key> --equity <lovelace> [--out head-config.json]"
   * }}}
   *
   * Reads the head+coil membership from `<peers.json>`, funds the head from head peer 0's L1 address
   * (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out`
   * (default `head-config.json`). Every node then loads this same artifact.
+  *
+  * `--script-refs` names the file [[DeployReferenceScripts]] wrote: the L1 inputs of the treasury
+  * and dispute reference-script UTxOs. They are resolved and hash-checked against
+  * [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every node's
+  * startup.
   */
 object BuildHeadConfig
     extends CommandIOApp(
@@ -616,8 +859,10 @@ object BuildHeadConfig
     private val blockfrostKeyOpt: Opts[String] =
         Opts.option[String](
           "blockfrost-key",
-          "Blockfrost API key for the Cardano backend",
+          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY)",
           short = "k"
+        ).orElse(
+          Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         )
     private val equityOpt: Opts[Coin] =
         Opts.option[Long](
@@ -625,18 +870,25 @@ object BuildHeadConfig
           "Head peer 0's equity contribution, in lovelace",
           short = "e"
         ).map(Coin.apply)
+    private val scriptRefsOpt: Opts[Path] =
+        Opts.option[String](
+          "script-refs",
+          "The script-refs.json written by DeployReferenceScripts",
+          short = "s"
+        ).map(Path.of(_))
     private val outOpt: Opts[Path] =
         Opts.option[String]("out", "Output path (default head-config.json)", short = "o")
             .map(Path.of(_))
             .withDefault(Path.of("head-config.json"))
 
     override def main: Opts[IO[ExitCode]] =
-        (membershipArg, blockfrostKeyOpt, equityOpt, outOpt).mapN(buildHeadConfig)
+        (membershipArg, blockfrostKeyOpt, equityOpt, scriptRefsOpt, outOpt).mapN(buildHeadConfig)
 
     private def buildHeadConfig(
         membershipPath: Path,
         blockfrostKey: String,
         minEquity: Coin,
+        scriptRefsPath: Path,
         outPath: Path
     ): IO[ExitCode] =
         for {
@@ -651,9 +903,29 @@ object BuildHeadConfig
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
+            scriptRefsStr <- IO.blocking(Files.readString(scriptRefsPath))
+            unresolved <- IO.fromEither(
+              parser.decode[ScriptReferenceUtxos.Unresolved](scriptRefsStr)
+            )
+            scriptReferenceUtxos <- {
+                given CardanoNetwork.Section = cardanoNetwork
+                unresolved
+                    .resolve(backend)
+                    .flatMap(r =>
+                        IO.fromEither(
+                          r.left.map(e =>
+                              RuntimeException(
+                                s"Failed to resolve script reference UTxOs from $scriptRefsPath: " +
+                                    s"$e (redeploy with DeployReferenceScripts?)"
+                              )
+                          )
+                        )
+                    )
+            }
             headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
               membership,
-              minEquity
+              minEquity,
+              scriptReferenceUtxos
             )
             _ <- IO.blocking(Files.writeString(outPath, headConfig.asJson.spaces2))
             _ <- logger.info(s"Wrote shared head config to $outPath")

@@ -5,6 +5,7 @@ import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
@@ -30,6 +31,9 @@ object HydrozoaServer {
       *   Handle to the RequestSequencer actor
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
+      * @param l2QueryReader
+      *   The EUTXO L2-ledger read model behind `GET /api/l2/utxos` and `/api/l2/transactions`, or
+      *   `None` on a node that runs a remote ledger (those endpoints are then not mounted)
       * @param headConfig
       *   Head configuration
       * @param config
@@ -42,13 +46,21 @@ object HydrozoaServer {
     def create(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): Resource[IO, Server] =
         for {
             hydrozoaRoutes <- Resource.eval(
-              HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, config, tracer)
+              HydrozoaRoutes(
+                requestSequencer,
+                blockWeaver,
+                l2QueryReader,
+                headConfig,
+                config,
+                tracer
+              )
             )
             server <- EmberServerBuilder
                 .default[IO]
@@ -66,11 +78,12 @@ object HydrozoaServer {
     def run(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[Nothing] = {
-        create(requestSequencer, blockWeaver, headConfig, config, tracer)
+        create(requestSequencer, blockWeaver, l2QueryReader, headConfig, config, tracer)
             .use(_ => IO.never)
     }
 }

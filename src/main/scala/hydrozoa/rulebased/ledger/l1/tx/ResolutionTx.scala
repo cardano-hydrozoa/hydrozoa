@@ -7,8 +7,8 @@ import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
@@ -27,12 +27,11 @@ final case class ResolutionTx(
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[ResolutionTx, Transaction] = Focus[ResolutionTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[ResolutionTx] {
-    override def transactionFamily: String = "Resolution"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[ResolutionTx] {}
 
 object ResolutionTx {
+    given TxFamily[ResolutionTx] = TxFamily.of("Resolution")
     export ResolutionTxOps.{Build, Config}
 }
 
@@ -154,7 +153,8 @@ private object ResolutionTxOps {
               talliedBallotBox = talliedBallotBox,
               treasuryUnresolvedUtxoSpent = treasuryUtxo,
               treasuryResolvedUtxoProduced = newTreasuryUtxo,
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

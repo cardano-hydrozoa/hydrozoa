@@ -36,3 +36,6 @@ target/
 # AI
 .claude/
 /CLAUDE.local.md
+
+# keygen-fleet output (rosters, private configs, signing keys — never commit)
+/config/demo/

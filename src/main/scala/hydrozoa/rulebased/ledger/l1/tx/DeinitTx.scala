@@ -6,8 +6,8 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
@@ -22,10 +22,8 @@ final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[DeinitTx] {
-    override def transactionFamily: String = "Deinit"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[DeinitTx] {}
 
 /** The deinit tx spends an empty (i.e. not containing any l2 utxos) treasury utxo, distributing the
   * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,
@@ -42,6 +40,7 @@ final case class DeinitTx(
   * All head tokens under the head's policy id (and only those) should be burnt.
   */
 object DeinitTx {
+    given TxFamily[DeinitTx] = TxFamily.of("Deinit")
     export DeinitTxOps.{Build, Config}
 }
 
@@ -113,7 +112,8 @@ private object DeinitTxOps {
 
             } yield DeinitTx(
               treasuryUtxoSpent = treasuryUtxo,
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

@@ -13,6 +13,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
 import hydrozoa.multisig.backend.cardano.CardanoBackend.Error.*
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import io.bullet.borer.Cbor
 import scala.collection.mutable
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -518,9 +519,9 @@ class CardanoBackendBlockfrost private (
             )
         )
 
-    override def submitTx(tx: Transaction): IO[Either[CardanoBackend.Error, Unit]] =
+    override def submitTx(etx: EnrichedTx[?]): IO[Either[CardanoBackend.Error, Unit]] =
         IO {
-            val result = backendService.getTransactionService.submitTransaction(tx.toCbor)
+            val result = backendService.getTransactionService.submitTransaction(etx.tx.toCbor)
             if result.isSuccessful
             then Right(())
             else Left(Unexpected(result.getResponse))

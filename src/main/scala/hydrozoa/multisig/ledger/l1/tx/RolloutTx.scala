@@ -27,6 +27,7 @@ sealed trait RolloutTx extends EnrichedTx[RolloutTx], RolloutUtxo.Spent, Rollout
 }
 
 object RolloutTx {
+    given TxFamily[RolloutTx] = TxFamily.of("RolloutTx")
     export RolloutTxOps.Build
     export RolloutTxOps.PartialResult
 

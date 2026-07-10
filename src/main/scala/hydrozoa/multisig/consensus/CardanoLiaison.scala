@@ -55,10 +55,18 @@ object CardanoLiaison:
         pendingConnections: HeadMultisigRegimeManager.PendingConnections |
             CardanoLiaison.Connections,
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
-        persistence: Persistence[IO]
+        persistence: Persistence[IO],
+        mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
     ): IO[CardanoLiaison] =
         IO(
-          new CardanoLiaison(config, cardanoBackend, pendingConnections, tracer, persistence) {}
+          new CardanoLiaison(
+            config,
+            cardanoBackend,
+            pendingConnections,
+            tracer,
+            persistence,
+            mrmSelf
+          ) {}
         )
 
     type Config = CardanoNetwork.Section & NodeOperationMultisigConfig.Section &
@@ -344,6 +352,7 @@ trait CardanoLiaison(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
+    mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
@@ -726,10 +735,6 @@ trait CardanoLiaison(
                         )
                     }
 
-                    fallbackTxId = actionsToSubmit.collectFirst {
-                        case Action.FallbackToRuleBased(tx) => tx.tx.id
-                    }
-
                     submitRet <-
                         if actionsToSubmit.nonEmpty then
                             IO.traverse(actionsToSubmit.flatMap(actionTxs).toList)(etx =>
@@ -737,7 +742,7 @@ trait CardanoLiaison(
                                     _ <- tracer.traceWith(
                                       CardanoLiaisonEvent.TxSubmitting(etx.tx.id)
                                     )
-                                    ret <- cardanoBackend.submitTx(etx.tx)
+                                    ret <- cardanoBackend.submitTx(etx)
                                 } yield (etx, ret)
                             )
                         else IO.pure(List.empty)
@@ -748,21 +753,24 @@ trait CardanoLiaison(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
 
-                    // Post-submission: fire FallbackToRuleBasedDispatched only after the fallback
-                    // tx was accepted by the backend. "Dispatched" denotes confirmed submission, not
-                    // intent — pre-effect intent is logged earlier as ActionsDispatched.
-                    _ <- fallbackTxId match {
-                        case None => IO.unit
-                        case Some(id) =>
-                            val submittedOk = submitRet.exists { case (etx, ret) =>
-                                etx.tx.id == id && ret.isRight
+                    // Every peer that sees a known fallback tx on L1 hands off — not just the
+                    // submitter. MRM handler is idempotent so re-fires are safe.
+                    _ <- state.fallbackEffects.values.toList
+                        .traverse { ft =>
+                            cardanoBackend.isTxKnown(ft.tx.id).map {
+                                case Right(true) => Some(ft)
+                                case _           => None
                             }
-                            IO.whenA(submittedOk)(
-                              tracer.traceWith(
-                                CardanoLiaisonEvent.FallbackToRuleBasedDispatched(id)
-                              )
-                            )
-                    }
+                        }
+                        .map(_.flatten.headOption)
+                        .flatMap {
+                            case None => IO.unit
+                            case Some(ft) =>
+                                tracer.traceWith(
+                                  CardanoLiaisonEvent.FallbackToRuleBasedDispatched(ft.tx.id)
+                                ) >>
+                                    (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased(ft))
+                        }
 
                 } yield ()
         }
@@ -788,7 +796,7 @@ trait CardanoLiaison(
     object Action {
 
         /** Switching into the rule-based regime. */
-        final case class FallbackToRuleBased(tx: EnrichedTx[?]) extends DirectAction
+        final case class FallbackToRuleBased(tx: FallbackTx) extends DirectAction
 
         /** Pushing the existing state in the multisig regime forward. */
         final case class PushForwardMultisig(txs: Seq[EnrichedTx[?]]) extends DirectAction

@@ -5,6 +5,7 @@ import cats.effect.unsafe.implicits.global
 import cats.syntax.contravariant.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.Slf4jTracer
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import io.github.cdimascio.dotenv.Dotenv
 import org.scalatest.Tag
 import org.scalatest.funsuite.AnyFunSuite
@@ -220,7 +221,7 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
                   key,
                   tracer = tracer
                 )
-                ret <- backend.submitTx(Transaction.empty)
+                ret <- backend.submitTx(RawTx(Transaction.empty))
             } yield ret
         )
         print(ret)

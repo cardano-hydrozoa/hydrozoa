@@ -7,12 +7,14 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartT
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
+import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import io.circe.*
 import monocle.{Focus, Lens}
@@ -20,13 +22,13 @@ import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Mint as _, TransactionOutput, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.Data.toData
+import scalus.uplc.builtin.bls12_381.G2Element
 import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 
@@ -51,11 +53,10 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
-      EnrichedTx[FallbackTx] {
-    override def transactionFamily: String = "FallbackTx"
-}
+      EnrichedTx[FallbackTx] {}
 
 object FallbackTx {
+    given TxFamily[FallbackTx] = TxFamily.of("FallbackTx")
     export FallbackTxOps.Build
 
     given fallbackTxEncoder: Encoder[FallbackTx] =
@@ -144,14 +145,19 @@ private object FallbackTxOps {
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
                           versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                          // TODO: pull the onchain G2 prefix from the head's TrustedSetup
-                          setupG2 = SList.empty
+                          // Size the G2 prefix to cover the largest EvacuationTx the treasury will
+                          // ever validate (evacuatedUtxos.length + 1 elements per tx, capped at
+                          // maxEvacuationsPerTx).
+                          setupG2 = TrustedSetup
+                              .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
+                              .map(p2 => G2Element(p2).toCompressedByteString)
                         )
                     }
 
                     // TODO: Partial, hacked in during a refactor
                     private val output = {
-                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                            Value(config.collectiveContingency.minAdaForTreasury)
                         RuleBasedTreasuryOutput(
                           value = v,
                           datum = datum,
@@ -180,7 +186,6 @@ private object FallbackTxOps {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
-                                  + config.collectiveContingency.minAdaForTreasury
                             )
                         }
                     }
@@ -243,7 +248,8 @@ private object FallbackTxOps {
                 // FIXME: Partial, introduced during a refactor where RuleBasedTreasuryOutput began to verify
                 // that the constructed output did indeed have a valid treasury token
                 val treasuryOutputProduced = {
-                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                        Value(config.collectiveContingency.minAdaForTreasury)
                     RuleBasedTreasuryOutput(
                       datum = Steps.Sends.Treasury.datum,
                       value = value

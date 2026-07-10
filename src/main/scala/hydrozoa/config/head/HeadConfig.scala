@@ -10,6 +10,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
 import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
 import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -288,11 +289,19 @@ object HeadConfig {
 
                     parser.decode(bootstrapConfigStr)
                 }
+                coilPeers <- EitherT.fromEither[IO] {
+                    given onlyCoilPeers: Decoder[CoilPeers] =
+                        Decoder.instance(c =>
+                            c.downField("coilPeers").as[CoilPeers](using coilPeersDecoder)
+                        )
+
+                    parser.decode(bootstrapConfigStr)
+                }
 
                 privateConfig <- EitherT.fromEither[IO] {
                     given HeadPeers = headPeers
 
-                    given CardanoNetwork = network
+                    given CoilPeers = coilPeers
 
                     io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
                 }
@@ -533,6 +542,17 @@ object HeadConfig {
               */
             override def headMultisigScript: HeadMultisigScript =
                 HeadMultisigScript(this, coilPeerVKeys, coilQuorum)
+
+            /** The single-quantity treasury beacon token, under this head's multisig policy with
+              * the CIP-67 treasury asset name derived from the seed utxo. Tests build treasury utxo
+              * values as `evacMap.totalValue + treasuryToken`.
+              */
+            final def treasuryToken: scalus.cardano.ledger.Value =
+                scalus.cardano.ledger.Value.asset(
+                  headMultisigScript.policyId,
+                  headTokenNames.treasuryTokenName,
+                  1
+                )
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =

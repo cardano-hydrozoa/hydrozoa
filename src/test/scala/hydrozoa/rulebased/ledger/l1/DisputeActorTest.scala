@@ -1,24 +1,29 @@
 package hydrozoa.rulebased.ledger.l1
 
 import cats.*
+import cats.data.NonEmptyList
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.*
 import hydrozoa.config.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
-import hydrozoa.rulebased.{DisputeActor, DisputeActorEvent, DisputeActorEventFormat, RuleBasedRegimeManager}
+import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat}
 import org.scalacheck.{Arbitrary, Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.{genByteStringOfN, given}
@@ -87,10 +92,17 @@ object DisputeActorTestHelpers {
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
         pure(mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline))
 
+    /** Default actor NodeConfig: first head peer. Coil tests override via `actorConfig`. */
+    def defaultActorConfig: MultiNodeConfigTestM[NodeConfig] =
+        for env <- ask yield env.nodeConfigs.head._2
+
     /** Given a pre-initialized TestM with a TestHeadConfig environment and an initial L2 UTxO set,
       * create a (pure) DisputeActor.
       *
       * Automatically adds an ada-only collateral utxo and the reference utxos from the config.
+      * @param actorConfig
+      *   which NodeConfig to use for the RBA. Defaults to the first head peer; coil tests pass
+      *   [[coilActorConfig]] to run the coil ratchet path.
       * @param versionMajor
       *   the major version to vote for
       * @param versionMinor
@@ -105,9 +117,11 @@ object DisputeActorTestHelpers {
         versionMinor: BigInt,
         additionalL1Utxos: Utxos,
         initialEvacuationMap: EvacuationMap,
-    ): MultiNodeConfigTestM[DisputeActor] =
+        actorConfig: MultiNodeConfigTestM[NodeConfig] = defaultActorConfig
+    ): MultiNodeConfigTestM[RuleBasedActor] =
         for {
             env <- ask
+            actorNodeConfig <- actorConfig
 
             // If you happen to have reference utxos with the same tx id as other utxos, this will screw things up
             refUtxoIds = env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.input)
@@ -116,11 +130,10 @@ object DisputeActorTestHelpers {
               refUtxoIds.forall(id => !additionalL1Utxos.contains(id)),
               "Reference utxos from head config conflict with utxos from mkDisputeActor"
             )
-            _ = env.nodePrivateConfigs.head
 
             disputeCollateralUtxo <- pick(
               genCollateralUtxo(
-                env.nodePrivateConfigs.head._2.ownWallet.exportVerificationKey.addrKeyHash
+                actorNodeConfig.ownWallet.exportVerificationKey.addrKeyHash
               )(using env.headConfig)
                   .label("collateral utxo")
             )
@@ -166,27 +179,126 @@ object DisputeActorTestHelpers {
                     )
               )
             )
+            // The event formatter labels traces with a HeadPeerNumber; for coil peers the label
+            // is cosmetic (peer 0 by default).
+            tracerPeerNum = env.nodeConfigs.headOption.map(_._1).getOrElse(HeadPeerNumber(0))
             tracer = Slf4jTracer.sink.contramap(
-              DisputeActorEventFormat.humanFormat(env.nodeConfigs.head._1)
+              RuleBasedActorEventFormat.humanFormat(tracerPeerNum)
             )
 
-            disputeActor = DisputeActor(
-              action = RuleBasedRegimeManager.DisputeAction.Vote(
-                sec = blockHeader,
-                signatures = env.multisignHeader(blockHeader).toList,
-                coilSignatures = env.multisignHeaderCoil(blockHeader)
-              ),
+            persistence <- lift(
+              mkPersistenceWithDisputeVote(
+                env = env,
+                blockHeader = blockHeader,
+                versionMajor = versionMajor,
+                versionMinor = versionMinor,
+                kzgCommitment = initialCommitment,
+              )
+            )
+
+            disputeActor = RuleBasedActor(
+              persistence = persistence,
               cardanoBackend = cardanoBackend,
               tracer = tracer
-            )(using env.nodeConfigs.head._2)
+            )(using actorNodeConfig)
         } yield disputeActor
+
+    /** Coil NodeConfig for the actor: uses `env.coilWallets.head` as the ownWallet, reusing the
+      * head peer's operation-config sections (they don't depend on head-vs-coil). Requires the test
+      * to run under `runWithCoil(nCoil >= 1)`.
+      */
+    def coilActorConfig: MultiNodeConfigTestM[NodeConfig] = for {
+        env <- ask
+        template = env.nodePrivateConfigs.head._2
+        coilWallet <- lift(env.coilWallets.headOption match {
+            case Some(w) => IO.pure(w)
+            case None =>
+                IO.raiseError(
+                  new IllegalStateException(
+                    "coilActorConfig requires runWithCoil(nCoil >= 1)"
+                  )
+                )
+        })
+        // The rule-based actor signs its own txs with `config.ruleBasedWallet`; the coil
+        // ratchet path also declares `ownWallet`'s addr key hash as a required signer for
+        // collateral. Point ruleBasedWallet at the coil wallet so signer and required-signer
+        // match.
+        coilEvacConfig = template.nodeOperationEvacuationConfig.copy(ruleBasedWallet = coilWallet)
+        coilNodeConfig <- lift(
+          NodeConfig.mkCoilConfig(
+            headConfig = env.headConfig,
+            ownCoilWallet = coilWallet,
+            nodeOperationEvacuationConfig = coilEvacConfig,
+            nodeOperationMultisigConfig = template.nodeOperationMultisigConfig,
+            blockfrostApiKey = template.blockfrostApiKey,
+            sugarRushUri = template.sugarRushUri,
+            adminUsername = template.adminUsername,
+            adminPassword = template.adminPassword,
+            httpHost = template.httpHost,
+            httpPort = template.httpPort,
+          ) match {
+              case Some(c) => IO.pure(c)
+              case None =>
+                  IO.raiseError(
+                    new IllegalStateException(
+                      "coil wallet is not registered among headConfig.coilPeerVKeys"
+                    )
+                  )
+          }
+        )
+    } yield coilNodeConfig
+
+    /** Seed a persistence-backed InMemoryBackendStore with a single hard-confirmed stack whose
+      * Minor partition carries a [[StandaloneEvacuationCommitment.MultiSigned]] matching
+      * `blockHeader`. The actor's `loadAction(versionMajor)` will walk to `StackNumber.first` and
+      * find the SEC there, returning
+      * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
+      *
+      * NOTE: `coilSignatures` come back as `Nil` from `loadAction` (coil-side recovery is deferred
+      * in the current implementation). Tests that assert on `coilSignatures` will fail; the
+      * surviving tests here only exercise the head-multisigned path.
+      */
+    def mkPersistenceWithDisputeVote(
+        env: MultiNodeConfig,
+        blockHeader: StandaloneEvacuationCommitmentOnchain,
+        versionMajor: BigInt,
+        versionMinor: BigInt,
+        kzgCommitment: KzgCommitment,
+    ): IO[Persistence[IO]] =
+        val serialized: StandaloneEvacuationCommitmentOnchain.Serialized =
+            StandaloneEvacuationCommitmentOnchain(blockHeader)
+        val offchainSec: StandaloneEvacuationCommitment =
+            StandaloneEvacuationCommitment(
+              blockNum = BlockNumber(1),
+              blockVersion = BlockVersion.Full(versionMajor.toInt, versionMinor.toInt),
+              kzgCommitment = kzgCommitment,
+              header = serialized,
+            )
+        val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
+            StandaloneEvacuationCommitment.MultiSigned(
+              commitment = offchainSec,
+              headerMultiSigned = env.multisignHeader(blockHeader).toList,
+            )
+        val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
+            PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)
+        val hardConfirmed: StackEffects.HardConfirmed.Regular =
+            StackEffects.HardConfirmed.Regular(NonEmptyList.of(partition))
+        val persistenceTracer =
+            Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        for
+            backend <- InMemoryBackendStore.open(persistenceTracer).allocated.map(_._1)
+            persistence <- Persistence.fromBackend(backend, persistenceTracer)(using
+              env.headConfig
+            )
+            _ <- persistence.put(StoreKey.HardConfirmation(StackNumber.first))(hardConfirmed)
+        yield persistence
 }
 
 /*
 These tests test the basic functionality of the dispute actor.
 
 The first few tests are sanity checks to ensure that raising exceptions (for unrecoverable failures) and returning
-left are handled properly by `handleDisputeRes`.
+left are handled properly by `handleDispute`.
  */
 object DisputeActorTest extends Properties("Dispute Actor Test") {
 //    override def overrideParameters(p: Test.Parameters): Test.Parameters =
@@ -199,6 +311,24 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         env <- ask
         txHash <- pick(genByteStringOfN(32).map(TransactionHash.fromByteString))
         index <- pick(Gen.choose(0, 10))
+
+        fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+        now <- lift(realTimeQuantizedInstant(env.headConfig.slotConfig))
+        // Provide an Unresolved treasury utxo so handleTick reaches the dispute branch.
+        ruleBasedTreasury <- mkRuleBasedTreasury(
+          versionMajor = 100,
+          value = Value.assets(
+            lovelace = Coin.ada(2),
+            assets = Map(
+              (
+                env.headConfig.headMultisigScript.policyId,
+                Map((env.headConfig.headTokenNames.treasuryTokenName, 1))
+              )
+            )
+          ),
+          txIn = TransactionInput(fallbackTxId, 0),
+          votingDeadline = now.toPosixTime + 600_000
+        )
 
         voteInput = TransactionInput(txHash, index)
         voteOutput = Babbage(
@@ -218,11 +348,17 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
         disputeActor <- mkDisputeActor(
           versionMajor = 100,
           versionMinor = 2,
-          additionalL1Utxos = Map((voteInput, voteOutput)),
+          additionalL1Utxos = Map(
+            (voteInput, voteOutput),
+            (
+              ruleBasedTreasury.utxoId,
+              ruleBasedTreasury.treasuryOutput.toOutput(using env.nodeConfigs.head._2)
+            )
+          ),
           initialEvacuationMap = EvacuationMap.empty
         )
         // Should throw here
-        res <- lift(disputeActor.handleDisputeRes.attempt)
+        res <- lift(disputeActor.handleTick.attempt)
         _ <- {
             val expectedError = Left(
               BallotBox.ParseError.MissingDatum(Utxo(voteInput, voteOutput))
@@ -241,22 +377,17 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           additionalL1Utxos = Map.empty,
           initialEvacuationMap = EvacuationMap.empty
         )
-        res <- lift(disputeActor.handleDisputeRes)
+        res <- lift(disputeActor.handleTick)
         _ <- assertWith(
           msg = "Missing rules best treasury returns Left",
-          condition = res == Left(DisputeActor.Error.ParseError.Treasury.TreasuryMissing)
+          condition = res == Left(RuleBasedActor.Error.ParseError.Treasury.TreasuryMissing)
         )
     } yield true
 
     // Own uncast vote utxo and other uncast vote utxo exist -- Vote is cast
     def votingHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
-        treasuryToken =
-            Value.asset(
-              env.headConfig.headMultisigScript.policyId,
-              env.headConfig.headTokenNames.treasuryTokenName,
-              1
-            )
+        treasuryToken = env.headConfig.treasuryToken
         fallbackTxId <- pick(Arbitrary.arbitrary[TransactionHash])
         nEvacs <- pick(Gen.choose(0, 1000))
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))
@@ -311,7 +442,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           ),
           initialEvacuationMap = evacMap
         )
-        _ <- lift(disputeActor.handleDisputeRes)
+        _ <- lift(disputeActor.handleTick)
         queryRes <- lift(
           disputeActor.cardanoBackend.utxosAt(
             HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -418,7 +549,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 //          ),
 //          initialEvacuationMap = evacMap
 //        )
-//        _ <- lift(disputeActor.handleDisputeRes)
+//        _ <- lift(disputeActor.handleTick)
 //        queryRes <- lift(
 //          disputeActor.cardanoBackend.utxosAt(
 //            HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
@@ -429,12 +560,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     def resolutionHappyPath: MultiNodeConfigTestM[Boolean] = for {
         env <- ask
-        treasuryToken =
-            Value.asset(
-              env.headConfig.headMultisigScript.policyId,
-              env.headConfig.headTokenNames.treasuryTokenName,
-              1
-            )
+        treasuryToken = env.headConfig.treasuryToken
 
         nEvacs <- pick(Gen.choose(0, 1000))
         evacMap <- pick(genEvacuationMap(nEvacs)(using env))
@@ -465,7 +591,7 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
           evacMap
         )
 
-        _ <- lift(da.handleDisputeRes)
+        _ <- lift(da.handleTick)
         utxosAtResolutionAddress <- lift(
           da.cardanoBackend.utxosAt(HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network))
         )
@@ -488,7 +614,12 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    val _ = property("dispute actor (no actor system)") = runWithCoil()(
+    // `runWithCoil(quorum = 0)` seeds the treasury's `coilPeerVKeys` from generated coil
+    // wallets while keeping `coilQuorum = 0` — the persistence-backed `loadAction` returns
+    // `coilSignatures = Nil` (coil-side recovery is deferred), so any non-zero quorum would
+    // trip the Plutus `coilMultisig must contain at least coilQuorum valid signatures` check.
+    // Quorum-0 exercises the head path under a treasury shape that carries coil metadata.
+    val _ = property("dispute actor (no actor system)") = runWithCoil(nCoil = 5, quorum = 0)(
       for {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow

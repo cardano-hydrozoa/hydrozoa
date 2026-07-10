@@ -22,6 +22,7 @@ import hydrozoa.integration.yaci.DevKit
 import hydrozoa.integration.yaci.DevKit.devnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
+import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackendBlockfrost.URL
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CardanoBackendMock, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -30,6 +31,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat}
 import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
@@ -184,7 +186,7 @@ case class Suite(
                              s"mixSplitTxSigned = ${HexUtil.encodeHexString(mixSplitTxSigned.toCbor)}"
                            )
                          )
-                    ret <- run(backend.submitTx(mixSplitTxSigned))
+                    ret <- run(backend.submitTx(RawTx(mixSplitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
                     // TODO: await tx
@@ -223,7 +225,7 @@ case class Suite(
                              s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}"
                            )
                          )
-                    ret <- run(backend.submitTx(splitTxSigned))
+                    ret <- run(backend.submitTx(RawTx(splitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
                     // TODO: await tx
@@ -513,6 +515,16 @@ case class Suite(
                     nodeConfig.headPeers.nHeadPeers: Int
                   )
                 )
+                // No HMRM in stage1 — provide a stub actor that swallows any HandoffToRuleBased
+                // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
+                // path only), so the ref is a required-but-inert construction parameter.
+                mrmSelfStub <- system.actorOf(
+                  new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased] {
+                      override def receive
+                          : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased] =
+                          _ => IO.unit
+                  }
+                )
                 // Cardano liaison
                 cardanoLiaison <- system.actorOf(
                   CardanoLiaison(
@@ -520,7 +532,8 @@ case class Suite(
                     cardanoBackend,
                     CardanoLiaison.Connections(blockWeaver),
                     clTracer,
-                    persistence
+                    persistence,
+                    mrmSelf = mrmSelfStub,
                   )
                 )
                 // Request sequencer stub

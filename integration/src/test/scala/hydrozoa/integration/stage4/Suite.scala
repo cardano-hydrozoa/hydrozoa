@@ -3,22 +3,22 @@ package hydrozoa.integration.stage4
 import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
-import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.Plugin
+import hydrozoa.integration.harness.{
+  MultiPeerHeadHarness,
+  Plugin
+}
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId, PeerWallet}
@@ -132,7 +132,9 @@ case class Stage4Suite(
             // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
             submittedRequestIds <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
 
-            hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
+            // Hooks.handle is unused now — each head peer's SubmissionClient is built by the
+            // harness against its in-process HydrozoaRoutes and exposed on Peer[H].submissionClient.
+            hooks = MultiPeerHeadHarness.Hooks[Unit](
                       tracer = Plugin.tracerOf(
                         perPeer,
                         perCoil,
@@ -142,15 +144,7 @@ case class Stage4Suite(
                         effectsLandedSignal,
                         fallbackEnteredSignal,
                       ),
-                      peerHandle = (peerNum, conns) =>
-                          IO.pure(
-                            Stage4PeerHandle(
-                              conns.requestSequencer.getOrElse(
-                                sys.error(s"head peer $peerNum missing RequestSequencer")
-                              )
-                            )
-                          ),
-                      coilHandle = (_, _) => IO.unit,
+                      handle = (_, _) => IO.unit,
                     )
             harness <- MultiPeerHeadHarness.resource(
                            MultiPeerHeadHarness.Inputs(
@@ -168,7 +162,7 @@ case class Stage4Suite(
           static = Stage4SutStatic(
             system = harness.system,
             cardanoBackend = harness.cardanoBackend,
-            peers = harness.peers.map { case (n, p) => n -> p.handle },
+            peers = harness.peers.map { case (n, p) => n -> p.submissionClient },
             backendStores = harness.peers.map { case (n, p) => n -> p.backendStore },
             log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
           ),
@@ -794,52 +788,31 @@ object Stage4Suite:
         useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
+        // TestPeers provisions head + coil wallets from the same seed under stable ordinals.
+        // Coil peers are hubbed by head 0 (single-hub topology); their vkeys land in the head
+        // bootstrap so the threshold script requires `coilQuorum` of them, and
+        // `mkCoilNodeConfigs` (below) derives each coil's own node config from the MNC.
+        val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nPeers, nCoilPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+        val coilWallets: List[PeerWallet] = testPeers.coilWallets
+        val coilPeers: CoilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
-        // Coil wallets are extra keys from the same seed, beyond the head set; each coil peer is hubbed
-        // by head 0. Empty for a pure-head run. Their vkeys go into the head bootstrap so the
-        // threshold script requires `coilQuorum` of them, and `mkCoilConfig` (below) derives each
-        // coil's own node config from the shared head config.
-        val coilWallets: List[PeerWallet] =
-            if nCoilPeers == 0 then Nil
-            else {
-                val withCoils =
-                    TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoilPeers)
-                (0 until nCoilPeers).toList.map(i =>
-                    withCoils.walletFor(HeadPeerNumber(nPeers + i))
-                )
-            }
-        val coilPeers: CoilPeers =
-            CoilPeers.indexed(
-              coilWallets.map(w => CoilPeerData(w.exportVerificationKey, HeadPeerNumber(0)))
-            )
-
-        // For non-TestControl runs we need the head's initial block end-time anchored at a
-        // small wall-clock offset in the future, so `sutResource` can sleep until that anchor
-        // and have the model clock and the wall clock coincide at command 1. 60s matches
-        // stage 1's budget; if 20-peer setup overruns it the test aborts (see sutResource).
-        // Under TestControl we keep the deterministic Jan-1-2026 + 100-day random distribution
-        // — `Instant.now()` would defeat seed-based reproducibility.
+        // Non-TestControl runs anchor the initial block's end-time to a wall-clock offset in
+        // the future so `sutResource` can sleep until that anchor and have the model clock
+        // and the wall clock coincide at command 1. 60s matches stage 1's budget; if 20-peer
+        // setup overruns it the test aborts (see sutResource). Under TestControl the head-config
+        // generator falls back to the deterministic Jan-1-2026 + 100-day random distribution
+        // — reading the wall clock there would defeat seed-based reproducibility.
+        //
+        // TODO: `genInitialState` returns a pure `Gen[ModelState]` so we can't thread
+        // [[MultiPeerHeadHarness.mkTakeoffTime]] (which returns `IO[Option[Instant]]`) here
+        // without lifting the whole model construction into an IO/PropertyM. Callers under
+        // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
             else Some(java.time.Instant.now().plusSeconds(60))
 
-        val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            takeoffTime match {
-                case Some(t) =>
-                    Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                case None =>
-                    // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
-                    val anchorTime = 1767225600L
-                    // 100 day range, seconds
-                    val range = 86_400 * 100L
-                    for offset <- Gen.choose(0L, range)
-                    yield BlockCreationEndTime(
-                      java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
-                    )
-            }
-        )
+        val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
           generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
@@ -894,27 +867,7 @@ object Stage4Suite:
             )
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
-
-            // Each coil's own node config: the shared head config plus the coil identity seam. The
-            // coil is a read-only follower, so it reuses head 0's operational sub-configs (polling
-            // period etc.); none of head 0's wallet-derived fields are exercised on the coil path.
-            head0Private = config.nodePrivateConfigs(HeadPeerNumber(0))
-            coilNodeConfigs = coilWallets.map { w =>
-                NodeConfig
-                    .mkCoilConfig(
-                      headConfig = config.headConfig,
-                      ownCoilWallet = w,
-                      nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
-                      nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      blockfrostApiKey = "not-a-real-key",
-                      sugarRushUri = "ws://localhost:3001/ws",
-                      adminUsername = "admin",
-                      adminPassword = "welcome",
-                      httpHost = "0.0.0.0",
-                      httpPort = "8080",
-                    )
-                    .get
-            }
+            coilNodeConfigs = config.mkCoilNodeConfigs(coilWallets)
 
             initTx = config.headConfig.initializationTx.tx
             spentInputs = initTx.body.value.inputs.toSet

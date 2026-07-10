@@ -7,6 +7,7 @@ import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.transport.{CoilPeerWsTransportEvent, HubWsTransportEvent, NodeWsServerEvent, PeerTransportEvent}
 import hydrozoa.multisig.consensus.{BlockWeaverEvent, CardanoLiaisonEvent, CoilAckSequencerEvent, EventSequencerEvent, FastConsensusActorEvent, SlowConsensusActorEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.joint.JointLedgerEvent
+import hydrozoa.rulebased.RuleBasedActorEvent
 
 /** Top of a 2-dim event hierarchy for the regime managers, sliced along the two axes the regime
   * managers themselves are sliced on:
@@ -81,6 +82,7 @@ object MultisigOnlyChildEvent:
     final case class BlockWeaverLimiter(event: LimiterEvent) extends MultisigOnlyChildEvent
     final case class StackComposerLimiter(event: LimiterEvent) extends MultisigOnlyChildEvent
 
-/** Children only the rule-based regime spawns (in any role). Populated when PR 2 lands. */
+/** Children only the rule-based regime spawns (in any role). */
 sealed trait RuleBasedOnlyChildEvent extends RegimeManagerEvent
-object RuleBasedOnlyChildEvent
+object RuleBasedOnlyChildEvent:
+    final case class RuleBasedActor(event: RuleBasedActorEvent) extends RuleBasedOnlyChildEvent

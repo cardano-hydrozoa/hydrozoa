@@ -1,12 +1,24 @@
 package hydrozoa.integration.harness
 
+import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.comcast.ip4s.{Port, host}
 import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.{ActorContext, ActorSystem}
+import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
+import hydrozoa.config.head.multisig.timing.TxTiming
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.generateHeadParameters
+import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
+import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
+import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
+import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, MockState}
 import hydrozoa.multisig.consensus.CardanoLiaison
@@ -15,23 +27,26 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEvent, CoilMultisigRegimeManagerEventFormat, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEvent, HeadMultisigRegimeManagerEventFormat}
+import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
-import org.http4s.{HttpRoutes, Uri}
+import org.http4s.client.Client as Http4sClient
 import org.http4s.client.websocket.WSClient
+import org.http4s.implicits.*
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
+import org.http4s.{HttpRoutes, Uri}
+import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
-import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
+import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
+import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
-/** Reusable bring-up scaffold for a multi-peer head (+ optional coil followers) backed by a shared
-  * mock L1. The `resource` for-comprehension reads top-down through one stage per sub-object:
-  * [[PreSystem]] → `ActorSystem` → [[CardanoBackend]] → [[Transport]] → [[Mrm]] → connections drain
-  * → [[ErrorDrainer]] → [[Ticks]] → hook handle extraction.
-  *
+/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
+  * mock L1.
+ *
   * Test-side concerns (capture observers, signal `Deferred`s, custom per-peer handle types like
   * stage4's `Stage4PeerHandle`) are injected via [[Hooks]] — the harness threads test-provided
   * tracers into each MRM and runs a test-provided `(num, connections) => IO[H]` finalizer once
@@ -43,14 +58,150 @@ object MultiPeerHeadHarness:
     // Public surface
     // ===================================
 
-    /** Coarse-grained run knobs. `label` names the `ActorSystem`. */
+    /** Wall-clock alignment for the head's initial-block end-time.
+      *
+      *   - `useTestControl = true`: return `None`. The head-config generator falls back to the
+      *     deterministic Jan-1-2026 + 100-day random anchor (see [[generateHeadStartTime]]),
+      *     which is stable across TestControl seeds; reading `IO.realTimeInstant` there would
+      *     defeat reproducibility.
+      *   - `useTestControl = false`: return `Some(now + offset)`, materialised via
+      *     [[IO.realTimeInstant]] so no wall-clock read happens at property-construction time.
+      *     `offset` gives the scenario room to spawn actors before the initial block's
+      *     validity window opens; each test tunes it against its actor-spawn budget.
+      */
+    def mkTakeoffTime(
+        useTestControl: Boolean,
+        offset: FiniteDuration,
+    ): IO[Option[Instant]] =
+        if useTestControl then IO.pure(None)
+        else IO.realTimeInstant.map(t => Some(t.plusSeconds(offset.toSeconds)))
+
+    /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime`
+      * is `Some`, quantize it to the peer's slot config. When `None`, generate a random
+      * Jan-1-2026 + 100-day offset — deterministic per ScalaCheck seed, safe under TestControl.
+      * Feed to `hydrozoa.config.head.initialization.generateInitialBlock`'s
+      * `generateBlockCreationEndTime` parameter.
+      */
+    def generateHeadStartTime(
+        takeoffTime: Option[Instant]
+    ): GenWithTestPeers[BlockCreationEndTime] =
+        ReaderT { (tp: TestPeers) =>
+            takeoffTime match {
+                case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
+                case None    =>
+                    val anchorTime = 1767225600L // Jan 1 2026 00:00:00 UTC
+                    val range      = 86_400 * 100L // 100 days in seconds
+                    for offset <- Gen.choose(0L, range)
+                    yield BlockCreationEndTime(
+                      java.time.Instant
+                          .ofEpochSecond(anchorTime + offset)
+                          .quantize(tp.slotConfig)
+                    )
+            }
+        }
+
+    /** Static fast [[TxTiming]] so `Action.FallbackToRuleBased` fires within a wall-clock
+      * scenario budget (settlement/fallback windows are seconds, not hours). Shared by the
+      * dispute-flow tests via [[mkResource]]'s default.
+      */
+    val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        Gen.const(
+          TxTiming(
+            minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
+            // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
+            // = 5s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
+            inactivityMarginDuration =
+                InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
+            silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
+            depositSubmissionDuration =
+                DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
+            depositMaturityDuration =
+                DepositMaturityDuration(1.second.quantize(network.slotConfig)),
+            depositAbsorptionDuration =
+                DepositAbsorptionDuration(2.minutes.quantize(network.slotConfig)),
+          )
+        )
+    }
+
+    /** Shared `PropertyM[IO, Resource[IO, Ctx]]` shell for dispute-flow integration tests: takeoff
+      * time, yaci-genesis-pinned MNC, initial block anchored on `takeoffTime`, coil peers in the
+      * bootstrap. Pins the 100ms evacuation polling + 500ms/250ms rate-limits both callers need;
+      * `buildCtx` owns everything test-specific.
+      */
+    def mkResource[Ctx](
+        transportMode: Transport.Mode,
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        takeoffOffset: FiniteDuration,
+        fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
+        disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+            generateDisputeResolutionConfig,
+        coilPeers: CoilPeers = CoilPeers.empty,
+        coilQuorum: Int = 0,
+    )(
+        buildCtx: (Option[Instant], MultiNodeConfig) => Resource[IO, Ctx]
+    ): PropertyM[IO, Resource[IO, Ctx]] =
+        for {
+            takeoffTime <- PropertyM.run(
+              mkTakeoffTime(transportMode.useTestControl, takeoffOffset)
+            )
+            mnc <- PropertyM.pick[IO, MultiNodeConfig](
+              MultiNodeConfig
+                  .generateWith(testPeers)(
+                    generateHeadConfig = generateHeadConfig(
+                      genHeadConfigBootstrap = generateHeadConfigBootstrap(
+                        generateHeadParams = generateHeadParameters(
+                          generateTxTiming = fastTxTiming,
+                          generateDisputeResolutionConfig = disputeResolutionConfig,
+                        ).map(_.copy(coilQuorum = coilQuorum)),
+                        generateInitializationParameters = InitParamsType.TopDown(
+                          InitializationParametersGenTopDown.GenWithDeps(
+                            generateGenesisUtxosL1 = ReaderT((_: TestPeers) =>
+                                Gen.const(
+                                  testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
+                                )
+                            )
+                          )
+                        ),
+                        coilPeers = coilPeers,
+                      ),
+                      generateInitialBlock = (bootstrap, funding) =>
+                          generateInitialBlock(
+                            genHeadConfigBootstrap = ReaderT
+                                .pure[Gen, TestPeers, (
+                                    HeadConfig.Bootstrap,
+                                    hydrozoa.bootstrap.InitializationFunding
+                                )]((bootstrap, funding)),
+                            generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
+                          ),
+                    ),
+                    generateNodeOperationEvacuationConfig = w =>
+                        Gen.const(
+                          NodeOperationEvacuationConfig(
+                            evacuationBotPollingPeriod = 100.millis,
+                            ruleBasedWallet = w,
+                          )
+                        ),
+                    generateNodeOperationMultisigConfig = hc =>
+                        generateNodeOperationMultisigConfig(
+                          maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                          rateLimits = RateLimits(
+                            softBlockMinPeriod = 500.millis,
+                            hardStackMinPeriod = 250.millis,
+                          ),
+                        )
+                  )
+                  .label("MultiNodeConfig")
+            )
+        } yield buildCtx(takeoffTime, mnc)
+
     case class Config(
         label: String,
         backendMode: StorageBackend.Mode,
         transportMode: Transport.Mode,
     )
 
-    /** Per-run configuration assembled by the caller (typically derived from a `ModelState`). */
     case class Inputs(
         config: Config,
         multiNodeConfig: MultiNodeConfig,
@@ -60,75 +211,84 @@ object MultiPeerHeadHarness:
         startEpochMs: Long,
     )
 
-    /** Roll-up of every event emitted by the regime managers the harness owns. The harness
-      * `contramap`s its per-peer / per-coil MRM tracer sinks through this — one sink at the harness
-      * boundary feeds head and coil sides alike. Pattern-match on the wrapper for routing, then on
-      * the underlying [[RegimeManagerEvent]] category for the actor.
+    /** Roll-up of every event emitted by the regime managers the harness owns.
       */
     enum Event:
-        case Head(peerNum: HeadPeerNumber, event: HeadMultisigRegimeManagerEvent)
-        case Coil(coilNum: CoilPeerNumber, event: CoilMultisigRegimeManagerEvent)
+        case Head(peerNum: HeadPeerNumber, event: HeadRegimeManagerEvent)
+        case Coil(coilNum: CoilPeerNumber, event: CoilRegimeManagerEvent)
 
-    /** Test-side wiring injected into each MRM. One [[Event]]-typed tracer captures every
-      * regime-manager event the harness owns; the harness combines it with its own slf4j sinks via
-      * the `ContraTracer` monoid. `peerHandle` / `coilHandle` run once each MRM's
+    /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
+     * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
       * `connectionsDeferred` resolves.
       */
-    case class Hooks[H, C](
+    /** Test-side wiring — one `PeerId`-keyed hook per concern. Callers that only need a head-side
+      * handle can use `H = Option[HeadHandle]` and return `None` from the coil branch; likewise
+      * `wrapBackend` can pattern-match on `PeerId.Head` / `PeerId.Coil` when the wrap differs
+      * (e.g. only head peers get firewalled).
+      */
+    case class Hooks[H](
         tracer: ContraTracer[IO, Event],
-        peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
-        coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
+        handle: (PeerId, HeadMultisigRegimeManager.Connections) => IO[H],
+        // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
+        wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
-    /** Per-peer artifacts exposed to callers: resolved connections, persistence backend, and the
-      * caller-derived handle.
+    /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
+      * in-process [[SubmissionClient]] (bound to this peer's [[HydrozoaRoutes]] via
+      * `Client.fromHttpApp`), and the caller-derived handle.
       */
     case class Peer[H](
+        connections: HeadMultisigRegimeManager.Connections,
+        backendStore: BackendStore[IO],
+        submissionClient: SubmissionClient,
+        handle: H,
+    )
+
+    case class Coil[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
         handle: H,
     )
 
-    case class Coil[C](
-        connections: HeadMultisigRegimeManager.Connections,
-        backendStore: BackendStore[IO],
-        handle: C,
-    )
-
     /** Everything the harness yields. `sutErrors` is appended to by the error drainer (one entry
       * per uncaught actor exception); callers read it post-run.
       */
-    case class Harness[H, C](
+    case class Harness[H](
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
+        l1Snapshot: IO[Utxos],
         peers: Map[HeadPeerNumber, Peer[H]],
-        coils: Map[CoilPeerNumber, Coil[C]],
+        coils: Map[CoilPeerNumber, Coil[H]],
         sutErrors: Ref[IO, List[String]],
     )
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns
       * everything; release cancels the CL tick fibers and the error drainer.
       */
-    def resource[H, C](
+    def resource[H](
         inputs: Inputs,
-        hooks: Hooks[H, C],
-    ): Resource[IO, Harness[H, C]] =
+        hooks: Hooks[H],
+    ): Resource[IO, Harness[H]] =
         import inputs.*
         import inputs.config.*
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val log: ContraTracer[IO, Slf4jMsg] =
             Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Harness"))
         for
+            // Handle websocket "take off" timing alignment
             _ <- Resource.eval(
                      PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
                  )
-            system         <- ActorSystem[IO](label)
-            cardanoBackend <- Resource.eval(
-                                  CardanoBackend.mkMock(
-                                    preinitPeerUtxosL1,
-                                    multiNodeConfig.headConfig.cardanoInfo,
-                                  )
-                              )
+
+            system                     <- ActorSystem[IO](label)
+            backendAndSnapshot         <- Resource.eval(
+                                              CardanoBackend.mkMock(
+                                                preinitPeerUtxosL1,
+                                                multiNodeConfig.headConfig.scriptReferenceUtxos,
+                                                multiNodeConfig.headConfig.cardanoInfo,
+                                              )
+                                          )
+            (cardanoBackend, l1Snapshot) = backendAndSnapshot
             transports <- Transport.setup(
                               transportMode,
                               multiNodeConfig,
@@ -141,7 +301,7 @@ object MultiPeerHeadHarness:
                                     .buildPeer(
                                       peerNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
@@ -158,7 +318,7 @@ object MultiPeerHeadHarness:
                                       coilConfig,
                                       coilNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                                       multiNodeConfig,
                                       transports.coilUplinks(coilNum),
                                       hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -204,18 +364,24 @@ object MultiPeerHeadHarness:
                  )
             peerEntries <- Resource.eval(
                                peerConnections.toList.traverse { case (peerNum, conns) =>
-                                   hooks.peerHandle(peerNum, conns).map { h =>
-                                       peerNum -> Peer(
-                                         connections = conns,
-                                         backendStore = peerMrms(peerNum).backendStore,
-                                         handle = h,
-                                       )
-                                   }
+                                   for
+                                       submissionClient <- Http.mkPeerSubmissionClient(
+                                                               peerNum,
+                                                               conns,
+                                                               multiNodeConfig,
+                                                           )
+                                       h <- hooks.handle(PeerId.Head(peerNum), conns)
+                                   yield peerNum -> Peer(
+                                     connections = conns,
+                                     backendStore = peerMrms(peerNum).backendStore,
+                                     submissionClient = submissionClient,
+                                     handle = h,
+                                   )
                                }
                            )
             coilEntries <- Resource.eval(
                                coilConnections.toList.traverse { case (coilNum, conns) =>
-                                   hooks.coilHandle(coilNum, conns).map { h =>
+                                   hooks.handle(PeerId.Coil(coilNum), conns).map { h =>
                                        coilNum -> Coil(
                                          connections = conns,
                                          backendStore = coilMrms(coilNum).backendStore,
@@ -227,6 +393,7 @@ object MultiPeerHeadHarness:
         yield Harness(
           system = system,
           cardanoBackend = cardanoBackend,
+          l1Snapshot = l1Snapshot,
           peers = peerEntries.toMap,
           coils = coilEntries.toMap,
           sutErrors = sutErrors,
@@ -294,15 +461,19 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object CardanoBackend:
-        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs. The head
+        /** Single mock L1 shared by every peer, seeded with the merged pre-init UTxOs plus the
+          * globally-deployed script reference UTxOs (treasury + dispute validators). The head
           * initialization tx is submitted by the protocol through normal operation.
           */
         def mkMock(
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
+            scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
-        ): IO[L1Backend[IO]] =
-            val genesisUtxos: Utxos = preinitPeerUtxosL1.values.reduce(_ ++ _)
-            CardanoBackendMock.mockIO(
+        ): IO[(L1Backend[IO], IO[Utxos])] =
+            val genesisUtxos: Utxos =
+                preinitPeerUtxosL1.values.reduce(_ ++ _) ++
+                    scriptReferenceUtxos.toList.map(_.toTuple).toMap
+            CardanoBackendMock.mockIOWithSnapshot(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
                   Context(
@@ -360,17 +531,15 @@ object MultiPeerHeadHarness:
                 case Mode.Direct    => true
                 case Mode.WebSocket => false
 
-        /** All transport-layer state needed to build per-peer HMRM + per-coil CMRM. Produced by
+        /** Transport-layer state needed to build Regime Managers. Produced by
           * exactly one of [[setupDirect]] / [[setupWebSocket]]; the consumer doesn't need to know
           * which mode it's in.
           *
           * `bringUpNetwork` is a second-phase resource the caller must acquire *after* the MRMs
-          * (and their RocksDB backends) are built. Under WS it binds each peer's `NodeWsServer`
-          * and starts every mesh + coil dialer; under Direct it is `Resource.unit`. Acquiring it
-          * last makes its finalizer (server stop + dialer fiber cancel) run *before* the MRM
-          * finalizers stop their actors and close RocksDB — so no inbound WS message can reach
-          * an actor handler that calls `Persistence` after the underlying column-family handles
-          * are freed (use-after-free → JVM SIGSEGV inside `FailIfCfHasTs`).
+          * (and their RocksDB backends) are built. Under WS it binds sockets and starts dialers;
+         *  under Direct it is a no-op. Acquiring it last makes its finalizer run *before* the MRM
+          * finalizers stop their actors and close RocksDB — so no inbound WS message can cause a use-after-free
+         * segfault.
           */
         case class Setup(
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
@@ -669,10 +838,10 @@ object MultiPeerHeadHarness:
             multiNodeConfig: MultiNodeConfig,
             backendMode: StorageBackend.Mode,
             network: Transport.HeadNetwork,
-            callerTracer: ContraTracer[IO, HeadMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         ): Resource[IO, Peer] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-            val slf4jMrm: ContraTracer[IO, HeadMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, HeadRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
                 )
@@ -722,14 +891,14 @@ object MultiPeerHeadHarness:
             cardanoBackend: L1Backend[IO],
             multiNodeConfig: MultiNodeConfig,
             uplink: Transport.ContextFn[CoilTransport],
-            callerTracer: ContraTracer[IO, CoilMultisigRegimeManagerEvent],
+            callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         ): Resource[IO, Coil] =
             val nHeadPeers = multiNodeConfig.nHeadPeers
             // Synthetic `HeadPeerNumber` label so coil log lines stay distinguishable from head
             // ones in the same run; passes through `CoilMultisigRegimeManagerEventFormat` which
             // still delegates to the head per-actor formatters (per the TODO inside that object).
             val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
-            val slf4jMrm: ContraTracer[IO, CoilMultisigRegimeManagerEvent] =
+            val slf4jMrm: ContraTracer[IO, CoilRegimeManagerEvent] =
                 Slf4jTracer.sink.contramap(
                   CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
                 )
@@ -754,6 +923,51 @@ object MultiPeerHeadHarness:
                            )
                     _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
                 yield Coil(mrm, backendStore, coilConfig)
+            }
+
+    // ===================================
+    // Http — per-peer in-memory HydrozoaRoutes + SubmissionClient
+    // ===================================
+
+    object Http:
+        /** Placeholder authority for the in-process HTTP client. `Client.fromHttpApp` dispatches
+          * by path against the wrapped `HttpApp`, so the authority never hits a socket.
+          */
+        private val InProcBaseUri: Uri = uri"http://harness"
+
+        /** Build a peer's [[HydrozoaRoutes]] and wrap it in an in-memory http4s
+          * [[org.http4s.client.Client]] via `Client.fromHttpApp`, then return a
+          * [[SubmissionClient]] that signs each request with the peer's own wallet.
+          */
+        def mkPeerSubmissionClient(
+            peerNum: HeadPeerNumber,
+            conns: HeadMultisigRegimeManager.Connections,
+            multiNodeConfig: MultiNodeConfig,
+        ): IO[SubmissionClient] =
+            val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
+            val requestSequencer = conns.requestSequencer.getOrElse(
+              throw new IllegalStateException(
+                s"head peer $peerNum missing RequestSequencer; cannot build SubmissionClient"
+              )
+            )
+            val serverConfig = HydrozoaServer.Config(
+              adminUsername = "harness-admin",
+              adminPassword = "harness-admin",
+            )
+            val httpTracer: ContraTracer[IO, HydrozoaHttpEvent] =
+                Slf4jTracer.sink.contramap(HydrozoaHttpEventFormat.humanFormat)
+            HydrozoaRoutes(
+              requestSequencer,
+              conns.blockWeaver,
+              // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
+              None,
+              nodeConfig.headConfig,
+              serverConfig,
+              httpTracer,
+            ).map { hydrozoaRoutes =>
+                val client: Http4sClient[IO] =
+                    Http4sClient.fromHttpApp(hydrozoaRoutes.routes.orNotFound)
+                SubmissionClient.http(client, InProcBaseUri, nodeConfig.ownWallet)
             }
 
     // ===================================
