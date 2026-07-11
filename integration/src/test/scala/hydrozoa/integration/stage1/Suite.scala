@@ -534,6 +534,9 @@ case class Suite(
                     clTracer,
                     persistence,
                     mrmSelf = mrmSelfStub,
+                    // Stage1 runs no user-facing HTTP server, so the readiness status has
+                    // no reader.
+                    advanceNodeStatus = _ => IO.unit,
                   )
                 )
                 // Request sequencer stub

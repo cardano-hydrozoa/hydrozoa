@@ -1,6 +1,7 @@
 package hydrozoa.multisig.server
 
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import io.bullet.borer.Cbor
@@ -23,6 +24,22 @@ object ApiDto {
     /** `{ "status": "ok" }` — the liveness body. */
     final case class HealthResponse(status: String)
     given Codec[HealthResponse] = deriveCodec
+
+    /** `{ "status": "<lifecycle>" }` — the readiness diagnostic body for `GET /ready`. The verdict
+      * itself is the HTTP status (200 vs 503); this is only for diagnostics.
+      */
+    final case class ReadinessResponse(status: String)
+    given Codec[ReadinessResponse] = deriveCodec
+
+    /** Map the node lifecycle status to its readiness body (kebab-case label). */
+    def mkReadinessResponse(status: NodeStatus): ReadinessResponse =
+        ReadinessResponse(nodeStatusLabel(status))
+
+    private def nodeStatusLabel(status: NodeStatus): String = status match
+        case NodeStatus.Initializing         => "initializing"
+        case NodeStatus.Active               => "active"
+        case NodeStatus.Finalized            => "finalized"
+        case NodeStatus.HandedOffToRuleBased => "handed-off-to-rule-based"
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */
     final case class FinalizeResponse(status: String, message: String)
