@@ -123,6 +123,8 @@ object Bootstrap:
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
           // The demo build targets the built-in EUTXO ledger. TODO: surface via a --l2-ledger flag.
           l2Ledger = L2LedgerKind.CardanoEutxo,
+          // Enforce the headId pin (format isomorphism only). TODO: surface via a flag.
+          identityIsomorphism = false,
         )
 
         // This is the temporary hard-coded evacuation map - 10 ADA

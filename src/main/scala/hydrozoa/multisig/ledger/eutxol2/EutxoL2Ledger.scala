@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
@@ -65,7 +66,7 @@ extension (em: EvacuationMap) {
 }
 
 object EutxoL2Ledger {
-    type Config = CardanoNetwork.Section & InitializationParameters.Section
+    type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
 
     case class State(
         activeUtxos: Utxos,

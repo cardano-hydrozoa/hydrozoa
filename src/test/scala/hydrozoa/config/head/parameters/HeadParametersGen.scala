@@ -18,7 +18,10 @@ def generateHeadParameters(
         generateDisputeResolutionConfig,
     generateSettlementConfig: Gen[SettlementConfig] = generateSettlementConfig,
     generateL2ParamsHash: Gen[Hash32] = Arbitrary.arbitrary[Hash32],
-    generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo)
+    generateL2Ledger: Gen[L2LedgerKind] = Gen.const(L2LedgerKind.CardanoEutxo),
+    // Default identity-isomorphism ON (headId pin NOT enforced) so generated L2 txs, which carry no
+    // headId metadatum, are accepted. Pin-enforcing suites override this to `false`.
+    generateIdentityIsomorphism: Gen[Boolean] = Gen.const(true)
 ): GenWithTestPeers[HeadParameters] = {
     for {
         txTiming <- generateTxTiming
@@ -27,6 +30,7 @@ def generateHeadParameters(
         settlementConfig <- ReaderT.liftF(generateSettlementConfig)
         l2ParamsHash <- ReaderT.liftF(generateL2ParamsHash)
         l2Ledger <- ReaderT.liftF(generateL2Ledger)
+        identityIsomorphism <- ReaderT.liftF(generateIdentityIsomorphism)
     } yield HeadParameters(
       txTiming = txTiming,
       fallbackContingency = fallbackContingency.fallbackContingency,
@@ -35,6 +39,7 @@ def generateHeadParameters(
       // TODO: Generate
       coilQuorum = 0,
       l2ParamsHash = l2ParamsHash,
-      l2Ledger = l2Ledger
+      l2Ledger = l2Ledger,
+      identityIsomorphism = identityIsomorphism
     )
 }
