@@ -227,6 +227,92 @@ ttl + maturityDuration`, and likewise for refund. So if `validityEnd` were *only
 would fold away. But it is also the accept-by deadline, so it does not. (This is also why the stage1
 generator's `reservedSubmissionDuration` — which reserves exactly this margin — stays as is.)
 
+### 5.4 Field-removal roadmap (stripping the request wrapper)
+
+A user request today is a Hydrozoa-specific **wrapper** around the payload:
+`UserRequestHeader { headId, validityStart, validityEnd, bodyHash }` + `userVk` + a COSE signature over
+the header JSON. Under §4 (delegate every check to the ledger) and §5 (derive what's needed from the
+native tx), most of that wrapper is redundant for the EUTXO ledger and can be dismantled. The work is a
+**staged teardown**, each phase an independently-landable, green slice that keeps the wire working — the
+model is §5.3's deposit slice (move the check into the ledger, *keep* the shared field, delete nothing on
+the wire until a later structural phase).
+
+> **Key finding (corrects §3.2):** there is **no `headId` equality check anywhere in the code today**
+> (grep-verified). `headId` is carried and bound by the COSE signature but is never compared to *this*
+> head's own id. So the pin work **adds** a check; a regression here fails silently (reopens cross-head
+> replay with everything still green), which is why Phase 1's enforcement toggle must default to *enforce*.
+
+**Phases** (ordered; each independently landable):
+
+1. **`headId` aux-data pin** — *EUTXO, additive, wire-neutral.* Extract a `headId` metadatum from the tx's
+   auxiliary data and compare it to `config.headId` (both already exist: `InitializationParameters.headId`;
+   `L2Tx` already parses tx aux metadata). Gate enforcement behind the ledger's identity-isomorphism toggle
+   (§5.2), **default enforce**. No header/COSE/wire change.
+2. **Tx validity from the tx's own slot interval** — *EUTXO semantics.* Stop trusting `header.validityEnd`
+   on the transaction path; the ledger's validity-interval validator (the tx's `[invalidBefore, ttl)` in the
+   slot domain, checked against block-creation-start) is authoritative. `validityStart` is already dead
+   code. *Keep the header field* (mirrors the deposit slice — no field deleted).
+3. **Ledger screening entry point + invert id-assignment** — *both backends; the structural pivot.* Add
+   `screen(payload): No | Yes` to the shared `L2Ledger` trait; a *Yes* is what assigns the `RequestId`
+   (gating the sequencer). EUTXO screening = the stateless subset of the tx mutator's validators (signature
+   verification, output/conformance/size checks) + the Phase-1 pin; the remote gets a new screening endpoint
+   on `remoteLedgerUri`. Submission stays the current stateful apply path. This is the prerequisite for
+   moving auth off COSE.
+4. **Drop the COSE envelope + `bodyHash` — *all backends*** *(corrected from EUTXO-only).* COSE lives at the
+   **shared** HTTP front door (`UserRequestDecoder`) with **zero backend-awareness**, and is not on the peer
+   wire; making it EUTXO-only would mean *adding* a backend branch to keep it for remote nodes — backwards.
+   Under §4 the ledger owns *every* check including signature validation, and both backends implement
+   `screen()`, so each ledger authenticates its own payload (EUTXO = the native tx's vkey witnesses; remote =
+   SugarRush's self-authenticating payload). So the Hydrozoa COSE wrapper is redundant for both — delete the
+   shared decoder outright. **Depends on Phase 3** (the remote screening endpoint must authenticate the remote
+   payload first). **Assumes** the remote payload self-authenticates (true of any ledger's tx format; confirm
+   against the SugarRush contract). Regenerate/delete the `JsonCodecsTest` COSE golden.
+5. **Delete the redundant header fields from the request type** — delete `headId / validityStart /
+   validityEnd / bodyHash` from `UserRequestHeader`. Lockstep peer-transport wire change + goldens + ~8
+   construction sites. With COSE gone (Phase 4), any header field kept "for the remote" would be *unsigned*,
+   so the remote must source validity/headId from its own payload anyway — i.e. the fields trend
+   droppable-for-all, not remote-only.
+6. **Resolve `userVk` on the shared command wire** — gated on the SugarRush contract (a black box here):
+   does the remote ledger need a distinguished `userVk` on `L2LedgerCommand`? The EUTXO ledger already
+   ignores it (§3.1). Dropping it entirely is an on-disk persistence-log migration, so this may legitimately
+   stay open — it does not block Phases 1–5.
+
+**Decision forks** (recommendation in **bold**):
+
+- *Screening before removing COSE, or rely on submission-time auth?* → **Screening first.** Removing COSE
+  without screening lets an unauthenticated request get a durable `RequestId` + peer fan-out *before*
+  rejection (a DoS/resource-waste regression). The order-inversion is the substantive §4 value.
+- *How far EUTXO-only at the request-type level?* → **Keep the shared header on the wire first**; move
+  checks into each ledger while keeping the fields (the deposit pattern). Only split the request shape per
+  backend once the remote screening endpoint (Phase 3) can self-source — deleting fields before that breaks
+  the remote path.
+- *Where does the `headId` pin live in tx metadata?* → **A new dedicated metadatum** (`Metadatum.Text(headId.toHex)`,
+  mirroring the L1 convention), not an overload of the existing CIP-67 head-tag list.
+- *Tx validity: derive from `ttl`, or rely on the ledger?* → **Rely on the ledger** for EUTXO. A tx's
+  `validityEnd == ttl` (no offset, unlike a deposit), and the ledger already enforces the interval — the
+  Gummiworm-side check is a redundant second source that can disagree.
+- *§4.2 positive valid/invalid verdict signal-back — now or later?* → **Defer.** The in-process EUTXO ledger
+  makes the verdict implicit; it only matters for the remote submission phase.
+
+**Prerequisites** (mostly already present):
+
+- *slot↔L2-time convention* is the existing per-head `SlotConfig` with block-creation-start as "now"
+  (already wired through the tx mutator) — it needs *naming/formalizing* and the assertion `validityEnd ==
+  tx.ttl` for L2 txs, not a new clock.
+- *Native-witness auth as a screening check* requires partitioning the tx mutator's validator stack into a
+  stateless subset (witness verification, conformance, size, output checks) versus a stateful subset
+  (input-set membership, value conservation, required-signers-present, script execution). "Are all required
+  signers present?" needs resolved inputs → stateful; only "do these witnesses verify over the tx id?" is
+  stateless. This is a real refactor, not a rename.
+- *`config.headId` + tx aux-data parsing* already exist.
+
+**Biggest risks:** the COSE golden (must be re-signed, never hand-edited); a **silent** cross-head-replay
+regression (Phase 1 toggle default must be *enforce*); remote-ledger wire breakage (three distinct wires —
+client HTTP, peer transport, host→ledger command — carry different subsets; keep the shared wire until the
+remote can self-source); the peer-transport golden + on-disk persistence-log migration; and the
+`RequestSequencer` order-inversion, which must preserve head-local sequential ids and the persist-before-
+observable invariant.
+
 ## 6. L2 backend selection & config model
 
 - **Head config gains an `l2ledger` field: `cardano-eutxo` | `any-remote`.** It fixes the ledger
@@ -318,9 +404,12 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
    is used.
 3. **Screening endpoint** on the remote ledger (takes `l2Payload` → yes/no) + the final verdict
    signal-back after Gummiworm-side validation.
-4. **Native-tx isomorphism (EUTXO):** strip header + `userVk` + `signature` from the request; screening
-   does signature validation + output checks; submission does the stateful checks. Drop `userVk`.
-5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2.
+4. **Native-tx isomorphism — strip the request wrapper (header + COSE `signature` + `userVk`).** Now
+   fully phased in **§5.4** (headId pin → tx-validity → ledger screening → drop COSE *for all backends* →
+   delete header fields → resolve `userVk`). Screening does signature/output checks; submission does the
+   stateful checks.
+5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2 — see §5.4 prerequisites
+   (it is the existing per-head `SlotConfig`, to be formalized, not built).
 6. **Deposits (§5.3):** ✅ **DONE (behavioral, deposit-only).** The deposit path now derives
    `validityEnd = ttl − submissionDuration` from the parsed deposit tx's mandatory TTL (a missing TTL
    fails the parse) instead of reading a request-header field; the accept-by check
