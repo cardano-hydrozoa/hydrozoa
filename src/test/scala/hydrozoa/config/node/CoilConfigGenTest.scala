@@ -52,7 +52,7 @@ object CoilConfigGenTest extends Properties("Coil config generation") {
               nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
               nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
               blockfrostApiKey = "not-a-real-key",
-              remoteLedgerUri = "ws://localhost:3001/ws",
+              remoteLedgerUri = Some("ws://localhost:3001/ws"),
               adminUsername = "admin",
               adminPassword = "welcome",
               httpHost = "0.0.0.0",

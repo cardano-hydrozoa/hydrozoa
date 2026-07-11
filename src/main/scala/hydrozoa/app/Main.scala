@@ -199,13 +199,16 @@ object Main
                 } yield (ledger, Some(ledger))
             case L2LedgerKind.AnyRemote =>
                 val tracer = Slf4jTracer.sink.contramap(RemoteL2LedgerEventFormat.humanFormat)
+                val wsUri = nodeConfig.remoteLedgerUri.getOrElse(
+                  throw new IllegalArgumentException(
+                    "l2Ledger=any-remote requires remoteLedgerUri in the node's private config"
+                  )
+                )
                 for {
-                    _ <- Resource.eval(
-                      log.info(s"L2 ledger: remote at ${nodeConfig.remoteLedgerUri}")
-                    )
+                    _ <- Resource.eval(log.info(s"L2 ledger: remote at $wsUri"))
                     ledger <- Resource.eval(
                       RemoteL2Ledger.create(
-                        wsUri = nodeConfig.remoteLedgerUri,
+                        wsUri = wsUri,
                         config = nodeConfig,
                         tracer = tracer,
                       )
