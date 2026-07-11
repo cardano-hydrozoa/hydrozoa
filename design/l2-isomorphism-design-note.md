@@ -421,6 +421,11 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
 
 ## 9. Work items
 
+> **Ordering note:** backend selection (item 1) is **landed**. GUM-104 (item 8) and the §5.4 field-removal
+> phases are **orthogonal** — item 8 reworks the ledger *init* config; §5.4 reworks the *request* path.
+> Neither blocks the other, so the §5.4 phases proceed independently. The one shared touchpoint is Phase 1's
+> identity-isomorphism toggle, a small agreed `HeadParameters` field (like `l2Ledger`).
+
 1. **`l2ledger` head-config field** (`cardano-eutxo` | `any-remote`) + `sugarRushUri` →
    `remoteLedgerUri` rename + `Main` wiring `EutxoL2Ledger` (and `Some(reader)`) when `cardano-eutxo`.
 2. **Separate runnable targets** to submit deposits and transactions when the `cardano-eutxo` ledger
