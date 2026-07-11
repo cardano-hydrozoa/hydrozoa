@@ -208,10 +208,18 @@ user's deadline.
 `ttl − submissionDuration` (= `validityEnd`), so that a deposit it accepts still has at least
 `submissionDuration` of slack to be submitted and confirmed on L1 before the deposit tx's TTL expires.
 This is enforced by an explicit **accept-by check**: when the head would include a deposit in a block it
-must verify `block_creation_start ≤ validityEnd` — i.e. `now ≤ ttl − submissionDuration`. So
+must verify `block_creation_start < validityEnd` — i.e. `now < ttl − submissionDuration`. So
 `validityEnd` is a genuine check reading `ttl − submissionDuration` directly (not merely a schedule
 anchor), which makes `submissionDuration` load-bearing. It remains head config and stays exposed via
 `/head-info`.
+
+The check reuses the existing shared `TxTiming.checkRequestValidityInterval` predicate, which is a
+**strict** `<` (not `≤`): it also gates L2 transaction requests, where `validityEnd == ttl` and Cardano's
+TTL is exclusive (`invalid_hereafter`), so a strict bound is the correct one there; for deposits the
+strict bound is a hair more conservative (it guarantees *strictly more* than `submissionDuration` of
+slack), which is safe. Implementation: the check is deposit-specific in that it reads the *derived*
+`validityEnd` (= `ttl − submissionDuration` from the parsed deposit tx) rather than a request-header
+field, and it runs *after* the deposit tx is parsed (the derived deadline is only knowable post-parse).
 
 *Why it can look removable:* in the absorption/refund **schedule** alone, `submissionDuration` cancels —
 `absorption_start = validityEnd + absorptionStartOffset = depositSubmissionDeadline + maturityDuration =
@@ -313,10 +321,14 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
 4. **Native-tx isomorphism (EUTXO):** strip header + `userVk` + `signature` from the request; screening
    does signature validation + output checks; submission does the stateful checks. Drop `userVk`.
 5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2.
-6. **Deposits (§5.3):** drop the `validityEnd` field — derive it from the deposit tx's TTL
-   (`ttl − submissionDuration`); require the deposit tx to carry a TTL. **Keep `submissionDuration`**
-   (the accept-by margin) and add/enforce the accept-by check `block_creation_start ≤ validityEnd`
-   (`now ≤ ttl − submissionDuration`).
+6. **Deposits (§5.3):** ✅ **DONE (behavioral, deposit-only).** The deposit path now derives
+   `validityEnd = ttl − submissionDuration` from the parsed deposit tx's mandatory TTL (a missing TTL
+   fails the parse) instead of reading a request-header field; the accept-by check
+   `block_creation_start < validityEnd` runs post-parse against that derived value; `submissionDuration`
+   stays (head config, exposed via `/head-info`). The shared `UserRequestHeader.validityEnd` **field is
+   kept** — it is still read by the transaction path, and literally deleting it is entangled with items
+   4/5 (a `TransactionRequest` has no TTL to derive from) plus the signed-header COSE golden. **Defer the
+   field deletion to §5.**
 7. **Naming:** replace working terms (`l2Payload`/`l1Payload`) with project-consistent names before code.
 8. **GUM-104 — ledger config at init (§6.1):** specify it in the whitepaper's initialization section;
    make the shared bootstrap config ledger-agnostic; derive the initial L2 state (drop

@@ -12,7 +12,6 @@ import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
@@ -259,13 +258,12 @@ final case class JointLedger(
             _ <- executeL2ProxyCommand(l2Command)
         } yield ()
 
-    /** Pure deposit-ledger op: parse the deposit tx, check its submission-deadline TTL, and append
-      * the produced deposit utxo to the L1 deposits map — this actor's only L1-ledger surface.
-      * Returns the new map + the produced deposit utxo and its post-dated refund tx, or a
-      * [[DepositLedgerError]] (rejected via `rejectEvent`, never raised).
-      *
-      * NOTE: checks SOME time bounds — specifically that the deposit's submission deadline matches
-      * the one expected from its validity-end.
+    /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
+      * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
+      * deadline (`validityEnd`) from the tx's mandatory TTL (`ttl − submissionDuration`) and stamps
+      * it on the produced utxo. Returns the new map + the produced deposit utxo and its post-dated
+      * refund tx, or a [[DepositLedgerError]] (rejected via `rejectEvent`, never raised). The
+      * accept-by check itself is enforced by the caller, [[registerDeposit]].
       */
     private def registerDepositInMap(
         deposits: DepositsMap,
@@ -273,29 +271,17 @@ final case class JointLedger(
     ): Either[DepositLedgerError, (DepositsMap, (DepositUtxo, RefundTx.PostDated))] = {
         import requestWithId.*
         import request.*
-        val validityEndTime = RequestValidityEndTime(header.validityEnd)
         for {
             depositRefundTxSeq <- DepositRefundTxSeq
                 .Parse(config)(
                   depositTxBytes = body.l1Payload,
                   l2Payload = body.l2Payload,
-                  requestId = requestWithId.requestId,
-                  requestValidityEndTime = validityEndTime
+                  requestId = requestWithId.requestId
                 )
                 .result
                 .left
                 .map(DepositLedgerError.ParseError(_))
-            expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(validityEndTime)
-            depositProduced <-
-                if depositRefundTxSeq.depositTx.submissionDeadline == expectedSubmissionDeadline
-                then Right(depositRefundTxSeq.depositTx.depositProduced)
-                else
-                    Left(
-                      DepositLedgerError.DepositTxInvalidTTL(
-                        expectedSubmissionDeadline,
-                        depositRefundTxSeq.depositTx.submissionDeadline
-                      )
-                    )
+            depositProduced = depositRefundTxSeq.depositTx.depositProduced
         } yield (
           deposits.append(DepositsMap.Entry(requestId, depositProduced)),
           (depositProduced, depositRefundTxSeq.refundTx)
@@ -317,60 +303,64 @@ final case class JointLedger(
             blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
-            _ <-
-                if !checkRequestValidityInterval(req, blockStartTime) then
-                    rejectEvent(
-                      requestId,
-                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
-                        blockStartTime,
-                        req.request.header.validityStart,
-                        req.request.header.validityEnd
-                      )
-                    )
-                else {
-                    val l1Res = registerDepositInMap(p.deposits, req)
-                    l1Res match {
-                        case Left(error) => rejectEvent(requestId, error)
-                        case Right((newDeposits, (depositProduced, refundTx))) => {
-                            val l2Command = L2LedgerCommand.RegisterDeposit(
-                              requestId = requestId,
-                              userVKey = req.request.userVk,
-                              blockNumber = currentBlockNum,
-                              blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
-                              depositId = depositProduced.utxoId,
-                              depositFee = depositProduced.depositFee,
-                              depositL2Value = depositProduced.l2Value,
-                              refundDestination = refundTx.refundDestination,
-                              l2Payload = l2Payload
-                            )
-                            for {
-                                res <- runL2Command(p, l2Command)
-                                _ <- res match {
-                                    // FIXME: Should we distinguish between genuine L2 failures and things like
-                                    // network errors?
-                                    case Left(e) => rejectEvent(requestId, e)
-                                    case Right(newL2State) =>
-                                        for {
-                                            _ <- state.set(
-                                              p.setDeposits(newDeposits)
-                                                  .setL2LedgerState(newL2State)
-                                                  .focus(_.userRequestState.requests)
-                                                  .modify(_.appended((requestId, Valid)))
-                                                  .focus(_.userRequestState.postDatedRefundTxs)
-                                                  .modify(_.appended(refundTx))
-                                            )
-                                            _ <- tracer.traceWith(
-                                              JointLedgerEvent.DepositRegistrationCompleted(
-                                                requestId,
-                                                currentBlockNum
-                                              )
-                                            )
-                                        } yield ()
-                                }
-                            } yield ()
-                        }
+            _ <- registerDepositInMap(p.deposits, req) match {
+                case Left(error) => rejectEvent(requestId, error)
+                case Right((newDeposits, (depositProduced, refundTx))) =>
+                    // The accept-by deadline is derived from the deposit tx's TTL during the parse
+                    // above (ttl − submissionDuration), so the check can only run post-parse.
+                    if !TxTiming.checkRequestValidityInterval(
+                          blockStartTime,
+                          req.request.header.validityStart,
+                          depositProduced.requestValidityEndTime
+                        )
+                    then
+                        rejectEvent(
+                          requestId,
+                          JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
+                            blockStartTime,
+                            req.request.header.validityStart,
+                            depositProduced.requestValidityEndTime
+                          )
+                        )
+                    else {
+                        val l2Command = L2LedgerCommand.RegisterDeposit(
+                          requestId = requestId,
+                          userVKey = req.request.userVk,
+                          blockNumber = currentBlockNum,
+                          blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
+                          depositId = depositProduced.utxoId,
+                          depositFee = depositProduced.depositFee,
+                          depositL2Value = depositProduced.l2Value,
+                          refundDestination = refundTx.refundDestination,
+                          l2Payload = l2Payload
+                        )
+                        for {
+                            res <- runL2Command(p, l2Command)
+                            _ <- res match {
+                                // FIXME: Should we distinguish between genuine L2 failures and things like
+                                // network errors?
+                                case Left(e) => rejectEvent(requestId, e)
+                                case Right(newL2State) =>
+                                    for {
+                                        _ <- state.set(
+                                          p.setDeposits(newDeposits)
+                                              .setL2LedgerState(newL2State)
+                                              .focus(_.userRequestState.requests)
+                                              .modify(_.appended((requestId, Valid)))
+                                              .focus(_.userRequestState.postDatedRefundTxs)
+                                              .modify(_.appended(refundTx))
+                                        )
+                                        _ <- tracer.traceWith(
+                                          JointLedgerEvent.DepositRegistrationCompleted(
+                                            requestId,
+                                            currentBlockNum
+                                          )
+                                        )
+                                    } yield ()
+                            }
+                        } yield ()
                     }
-                }
+            }
         } yield ()
     }
 
@@ -913,15 +903,6 @@ object JointLedger {
         final case class ParseError(wrapped: DepositRefundTxSeq.Parse.Error)
             extends DepositLedgerError {
             override def toString: String = s"ParseError: $wrapped"
-        }
-
-        final case class DepositTxInvalidTTL(
-            expectedSubmissionDeadline: QuantizedInstant,
-            actualSubmissionDeadline: QuantizedInstant
-        ) extends DepositLedgerError {
-            override def toString: String =
-                "DepositTxInvalidTTL: expected submission deadline " +
-                    s"$expectedSubmissionDeadline, but got $actualSubmissionDeadline"
         }
     }
 

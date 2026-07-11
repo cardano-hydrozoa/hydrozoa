@@ -194,8 +194,7 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: EnrichedTx.Serialized,
-        l2Payload: ByteString,
-        requestValidityEndTime: RequestValidityEndTime
+        l2Payload: ByteString
     ) {
         import Parse.*
         import Parse.Error.*
@@ -241,11 +240,8 @@ private object DepositTxOps {
                             case _ => Left(InvalidDatumType)
                         }
 
-                        expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
-                          requestValidityEndTime
-                        )
-
-                        // Check that ttl was properly quantized
+                        // Read the deposit tx's mandatory TTL and recover its submission deadline
+                        // (the tx's validity-interval end). A missing/malformed TTL fails here.
                         submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
@@ -256,7 +252,12 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        _ = expectedSubmissionDeadline.toSlot.slot
+                        // Derive the accept-by deadline from the TTL: a deposit's validityEnd sits
+                        // submissionDuration below its tx TTL (inverse of
+                        // TxTiming.depositSubmissionDeadline).
+                        requestValidityEndTime = RequestValidityEndTime(
+                          submissionDeadline - config.depositSubmissionDuration.convert
+                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

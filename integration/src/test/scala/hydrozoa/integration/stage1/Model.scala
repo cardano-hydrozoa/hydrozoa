@@ -742,8 +742,7 @@ object Model:
                         .Parse(config.headConfig)(
                           depositTxBytes = req.request.body.l1Payload,
                           l2Payload = req.request.body.l2Payload,
-                          requestId = req.requestId,
-                          requestValidityEndTime = requestValidityEndTime
+                          requestId = req.requestId
                         )
                         .result
                         .fold(

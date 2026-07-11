@@ -149,8 +149,7 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                         DepositTx
                             .Parse(config)(
                               ByteString.fromArray(depositTx.tx.toCbor),
-                              depositTx.depositProduced.l2Payload,
-                              depositTx.depositProduced.requestValidityEndTime
+                              depositTx.depositProduced.l2Payload
                             )
                             .result match {
                             case Left(e) =>
