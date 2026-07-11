@@ -231,8 +231,14 @@ generator's `reservedSubmissionDuration` — which reserves exactly this margin 
 
 A user request today is a Hydrozoa-specific **wrapper** around the payload:
 `UserRequestHeader { headId, validityStart, validityEnd, bodyHash }` + `userVk` + a COSE signature over
-the header JSON. Under §4 (delegate every check to the ledger) and §5 (derive what's needed from the
-native tx), most of that wrapper is redundant for the EUTXO ledger and can be dismantled. The work is a
+the header JSON. Under §4 (delegate every check to the ledger — which per §5.1 applies to **both**
+backends), the whole wrapper is redundant for **any** ledger, not just EUTXO: every ledger's payload is a
+self-describing, self-authenticating transaction (its own validity interval and signatures, and it can
+carry the `headId` pin in its metadata), and every ledger runs its own screening — so the checks the
+wrapper enabled move into the ledger and the fields fall away. The teardown is sequenced **EUTXO-first**
+only for a *practical* reason: the in-process EUTXO ledger is here now, while the remote screening endpoint
+(§9 item 3) that lets a remote ledger self-source is later work — *not* because a remote ledger needs the
+wrapper. The work is a
 **staged teardown**, each phase an independently-landable, green slice that keeps the wire working — the
 model is §5.3's deposit slice (move the check into the ledger, *keep* the shared field, delete nothing on
 the wire until a later structural phase).
@@ -244,10 +250,20 @@ the wire until a later structural phase).
 
 **Phases** (ordered; each independently landable):
 
-1. **`headId` aux-data pin** — *EUTXO, additive, wire-neutral.* Extract a `headId` metadatum from the tx's
-   auxiliary data and compare it to `config.headId` (both already exist: `InitializationParameters.headId`;
-   `L2Tx` already parses tx aux metadata). Gate enforcement behind the ledger's identity-isomorphism toggle
-   (§5.2), **default enforce**. No header/COSE/wire change.
+1. **`headId` aux-data pin** — *EUTXO, additive, wire-neutral.* Extract a **new dedicated** `headId`
+   metadatum from the tx's auxiliary data and compare it to `config.headId` (both already exist:
+   `InitializationParameters.headId`; `L2Tx.utxoPartition` already parses tx aux metadata). It is a
+   *separate* key from the existing CIP-67 head-tag metadatum, which carries the per-output L1/L2
+   designation list (`Metadatum.List` of `Int(1)`/`Int(2)`, L2Tx.scala:85-106) — do not overload it.
+   Gate enforcement behind the ledger's identity-isomorphism toggle (§5.2), **default enforce**. No
+   header/COSE/wire change.
+   > **Consequence — metadata becomes mandatory on every L2 tx.** Today a *regular* L2 tx carries no
+   > auxiliary data; only a withdrawal-bearing tx carries the CIP-67 head-tag designation metadatum. With
+   > the pin enforced, **every** L2 tx must now carry the `headId` metadatum, so a plain Cardano tx from a
+   > standard library is no longer valid unrewritten — the head's submission/SDK path must inject the
+   > metadatum. This mandatory-ness *is* the identity-isomorphism switch: enforce the pin ⟺ require the
+   > metadatum; turn it off ⟺ the exact L1 tx runs with no added metadata (true identity isomorphism, at the
+   > cost of cross-head-replay protection, §5.2). "Switch in the future" = surfacing this toggle.
 2. **Tx validity from the tx's own slot interval** — *EUTXO semantics.* Stop trusting `header.validityEnd`
    on the transaction path; the ledger's validity-interval validator (the tx's `[invalidBefore, ttl)` in the
    slot domain, checked against block-creation-start) is authoritative. `validityStart` is already dead
@@ -272,20 +288,23 @@ the wire until a later structural phase).
    construction sites. With COSE gone (Phase 4), any header field kept "for the remote" would be *unsigned*,
    so the remote must source validity/headId from its own payload anyway — i.e. the fields trend
    droppable-for-all, not remote-only.
-6. **Resolve `userVk` on the shared command wire** — gated on the SugarRush contract (a black box here):
-   does the remote ledger need a distinguished `userVk` on `L2LedgerCommand`? The EUTXO ledger already
-   ignores it (§3.1). Dropping it entirely is an on-disk persistence-log migration, so this may legitimately
-   stay open — it does not block Phases 1–5.
+6. **Resolve `userVk` on the shared command wire** — the EUTXO ledger ignores it (§3.1) and SugarRush
+   authenticates its *own* payload, so the expectation is Gummiworm passes no `userVk` for either backend;
+   confirm against the SugarRush contract (a black box here). Dropping it entirely is an on-disk
+   persistence-log migration, so this may stay open — it does not block Phases 1–5.
 
 **Decision forks** (recommendation in **bold**):
 
 - *Screening before removing COSE, or rely on submission-time auth?* → **Screening first.** Removing COSE
   without screening lets an unauthenticated request get a durable `RequestId` + peer fan-out *before*
   rejection (a DoS/resource-waste regression). The order-inversion is the substantive §4 value.
-- *How far EUTXO-only at the request-type level?* → **Keep the shared header on the wire first**; move
-  checks into each ledger while keeping the fields (the deposit pattern). Only split the request shape per
-  backend once the remote screening endpoint (Phase 3) can self-source — deleting fields before that breaks
-  the remote path.
+- *When can the wrapper be stripped for the remote?* → The end state (§5.1: Gummiworm keeps **no** checks
+  of its own) is that the wrapper is stripped for **both** backends — for the remote, SugarRush runs every
+  check on its own payload. So the fields are droppable-for-all; the only gating factor is a *sequencing*
+  one: until the SugarRush screening endpoint + self-sourcing contract lands (Phase 3 / §9 item 3), the
+  remote path still leans on the Gummiworm-side fields, so **keep them on the shared wire transitionally**
+  (the deposit pattern). This is a temporary crutch, **not** a permanent "the remote needs the wrapper"
+  asymmetry.
 - *Where does the `headId` pin live in tx metadata?* → **A new dedicated metadatum** (`Metadatum.Text(headId.toHex)`,
   mirroring the L1 convention), not an overload of the existing CIP-67 head-tag list.
 - *Tx validity: derive from `ttl`, or rely on the ledger?* → **Rely on the ledger** for EUTXO. A tx's
