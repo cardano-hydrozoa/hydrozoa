@@ -288,10 +288,14 @@ the wire until a later structural phase).
    construction sites. With COSE gone (Phase 4), any header field kept "for the remote" would be *unsigned*,
    so the remote must source validity/headId from its own payload anyway — i.e. the fields trend
    droppable-for-all, not remote-only.
-6. **Resolve `userVk` on the shared command wire** — the EUTXO ledger ignores it (§3.1) and SugarRush
-   authenticates its *own* payload, so the expectation is Gummiworm passes no `userVk` for either backend;
-   confirm against the SugarRush contract (a black box here). Dropping it entirely is an on-disk
-   persistence-log migration, so this may stay open — it does not block Phases 1–5.
+6. **Remove `userVk` from the ledger calls** — `userVk` was used **only** for COSE validation, so once
+   Phase 4 removes COSE it has no remaining purpose: drop it from the request, from `L2LedgerCommand.userVKey`
+   (the host→ledger command wire), and from the persisted command log. The ledger reads any key it needs from
+   the `l2Payload` itself (EUTXO: the native tx's own vkey witnesses; remote: SugarRush's payload — *if* it
+   needs one). **Tightly coupled to Phase 4:** `userVk`'s only *source* is the COSE-key recovery
+   (`JsonCodecs.scala:199-206`), not an explicit field, so removing COSE strips `userVk` from the request at
+   Phase 4 and the command + persistence must follow. Weight: an on-disk persistence-log migration
+   (`L2StoreCodecs`, R2b write-before-advance) — no longer an open/contract-gated question.
 
 **Decision forks** (recommendation in **bold**):
 
