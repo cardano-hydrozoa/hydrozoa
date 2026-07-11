@@ -10,6 +10,7 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEn
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent}
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.ContraTracer
@@ -382,7 +383,14 @@ final case class JointLedger(
             currentBlockNum = p.nextBlockNumber
 
             _ <-
-                if !checkRequestValidityInterval(req, blockStartTime) then
+                // EUTXO: the ledger's OutsideValidityIntervalValidator is authoritative for the tx's
+                // own [invalidBefore, ttl) slot interval, checked against block-creation-start — so
+                // skip the redundant header-based check and stop trusting `header.validityEnd`. A
+                // remote ledger's payload is not a native tx, so it still relies on this Gummiworm-side
+                // check until its own screening lands (§5.4 Phase 2; the header field stays for now).
+                if config.l2Ledger == L2LedgerKind.AnyRemote
+                    && !checkRequestValidityInterval(req, blockStartTime)
+                then
                     rejectEvent(
                       requestId,
                       JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
