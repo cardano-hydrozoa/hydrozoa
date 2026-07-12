@@ -66,11 +66,9 @@ Coil peers dial out only; they need no inbound port at all.
 | **Coil peers** in the head config / multisig script | **Supported.** The bootstrap config takes `coilPeers` + `coilQuorum`; the threshold script and hub/coil transports are implemented. |
 | Starting a **coil node from JSON configs** | **Supported.** `ownPeerPrivate` dispatches on `ownHeadWallet` / `ownCoilWallet`; `Main` starts a coil node from the standard two files. Keygen writes the coil shape (`--role coil`). |
 | Multi-node orchestration | **Supported for the local docker demo** (`docker-compose.yml`, §6): 2 head + 4 coil single-container nodes on one mesh network. No multi-host automation yet (§7). |
-| Coil-peer persistence / crash recovery, skip-hard-ack, rule-based handover | Deferred (`design/coil-network.md` §6.1). |
-
-Proven multi-peer reference: `integration/.../harness/MultiPeerHeadHarness.scala` +
-`stage4/Suite.scala` (N head + M coil, Direct or real-WebSocket transport). Use it as the wiring
-blueprint for anything the CLI path doesn't cover yet (§6b).
+| Coil-peer **persistence** | **Implemented.** |
+| Coil-peer **crash recovery** | **Implemented, not yet tested.** |
+| Coil skip-hard-ack, rule-based handover | Deferred (`design/coil-network.md` §6.1). |
 
 ---
 
