@@ -379,11 +379,12 @@ end Bootstrap
   * behavior). Options add two file outputs, both meant to be run once per peer when cooking a
   * head's configs:
   *
-  *   - `--roster bootstrap.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates
-  *     or appends to the [[Bootstrap.Membership]] roster — the peer-topology part of the
-  *     `bootstrap.json` that [[BuildHeadConfig]] consumes once the operators complete it with the
-  *     network, script references, and initial evacuation map. `--coil-quorum N` sets the roster's
-  *     coil quorum. Head peers must be registered before the coil peers that name them as hubs.
+  *   - `--roster roster.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates or
+  *     appends to the [[Bootstrap.Membership]] roster — the peer-topology part of the bootstrap
+  *     config. The operators complete it into the `bootstrap.json` that [[BuildHeadConfig]]
+  *     consumes by adding the network, script references, and initial evacuation map.
+  *     `--coil-quorum N` sets the roster's coil quorum. Head peers must be registered before the
+  *     coil peers that name them as hubs.
   *   - `--template private-template.json --out private.json` writes the peer's private node config:
   *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
   *     `ownCoilWallet` per `--role`) and a second fresh key pair spliced in as the evacuation
@@ -394,8 +395,8 @@ end Bootstrap
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.GenerateKeyPair \
-  *     --roster nodes/bootstrap.json --role head --ws-address ws://head-0:4001 \
+  *   sbt "runMain hydrozoa.bootstrap.GenerateKeyPair \
+  *     --roster nodes/roster.json --role head --ws-address ws://head-0:4001 \
   *     --template peer-private.template.json --out nodes/head-0/private.json"
   * }}}
   */
