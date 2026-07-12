@@ -59,10 +59,9 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
               Role.Head,
               hex('0'),
               Some(wsUri),
-              None,
               None
             )
-            r1 <- GenerateKeyPair.appendPeer(r0, Role.Coil, hex('2'), None, Some(0), Some(1))
+            r1 <- GenerateKeyPair.appendPeer(r0, Role.Coil, hex('2'), None, Some(0))
         } yield r1
 
         val membership = roster
@@ -72,8 +71,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
         assert(
           membership.headPeers.size == 1 &&
               membership.coilPeers.size == 1 &&
-              membership.coilPeers.head.hubHeadPeerNumber == HeadPeerNumber(0) &&
-              membership.coilQuorum == 1
+              membership.coilPeers.head.hubHeadPeerNumber == HeadPeerNumber(0)
         )
     }
 
@@ -84,8 +82,7 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
               Role.Coil,
               hex('2'),
               None,
-              Some(0),
-              None
+              Some(0)
             )
         assert(result.isLeft)
     }

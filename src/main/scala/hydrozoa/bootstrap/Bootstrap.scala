@@ -28,21 +28,22 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.joint.EvacuationMap
+import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
-import io.circe.generic.semiauto.deriveDecoder
+import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
-import io.circe.{Decoder, Json, parser}
+import io.circe.{Decoder, DecodingFailure, Encoder, Json, parser}
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import org.http4s.Uri
 import scala.collection.immutable.SortedMap
-import scalus.cardano.address.Address
+import scala.util.Try
+import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionInput, TransactionOutput, Utxo, Utxos, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -79,25 +80,66 @@ object Bootstrap:
         Decoder.decodeString.emap(Uri.fromString(_).left.map(_.message))
     private given Decoder[HeadPeerData] = deriveDecoder[HeadPeerData]
 
-    /** The peer topology: each head peer's verification key + WebSocket address, each coil peer's
-      * verification key + hub head peer, and the coil quorum. This is the portion of the bootstrap
-      * config that [[GenerateKeyPair]] assembles into the roster; the operators complete it into a
-      * full [[BootstrapConfig]]. Head peer 0 is the first entry in [[headPeers]].
+    /** The peer topology (`roster.json`): each head peer's verification key + WebSocket address and
+      * each coil peer's verification key + hub head peer. [[GenerateKeyPair]] writes this; the
+      * operators + [[BuildBootstrapConfig]] complete it into a [[BootstrapConfig]]. Head peer 0 is
+      * the first entry in [[headPeers]].
       */
     final case class Membership(
         headPeers: List[HeadPeerData],
-        coilPeers: List[CoilPeerData],
-        coilQuorum: Int
+        coilPeers: List[CoilPeerData]
     )
 
     object Membership {
         given Decoder[Membership] = deriveDecoder[Membership]
     }
 
-    /** The bootstrap config the operators author and the build step turns into a shared
-      * [[HeadConfig]] (the whitepaper's head-initialization "bootstrap config"). Extends the peer
-      * topology ([[Membership]]) with the L1 network, the pre-deployed script reference utxos, and
-      * the initial evacuation map.
+    /** Assembly-time defaults (`bootstrap-defaults.json`): the L1 network and the coil quorum.
+      * [[GenerateKeyPair]] writes these with sensible defaults (preview, a simple majority of coil
+      * peers) for the operators to adjust before [[BuildBootstrapConfig]].
+      */
+    final case class BootstrapDefaults(cardanoNetwork: CardanoNetwork, coilQuorum: Int)
+
+    object BootstrapDefaults {
+        given Decoder[BootstrapDefaults] = deriveDecoder[BootstrapDefaults]
+        given Encoder[BootstrapDefaults] = deriveEncoder[BootstrapDefaults]
+    }
+
+    /** One opening L2 output (`l2-state.json` entry): a bech32 address and a CIP-0116 value. This
+      * is an EUTXO utxo minus its input reference — [[BuildHeadConfig]] assigns the reference (the
+      * seed utxo's tx id + a per-entry index) once the seed is resolved. (A datum field can be
+      * added here later; the opening distribution does not need one.)
+      */
+    final case class L2Output(address: Address, value: Value) {
+        def toTransactionOutput: TransactionOutput =
+            TransactionOutput.Babbage(address, value, None, None)
+    }
+
+    object L2Output {
+        given Decoder[L2Output] = Decoder.instance { c =>
+            for {
+                addressStr <- c.downField("address").as[String]
+                address <- Try(Address.fromBech32(addressStr)).toEither.left.map(e =>
+                    DecodingFailure(s"invalid bech32 address: ${e.getMessage}", c.history)
+                )
+                value <- c.downField("value").as[Value]
+            } yield L2Output(address, value)
+        }
+
+        given Encoder[L2Output] = Encoder.instance { o =>
+            val addressBech32 = o.address match {
+                case s: ShelleyAddress => s.toBech32.getOrElse(s.toHex)
+                case a                 => a.toString
+            }
+            Json.obj("address" -> Json.fromString(addressBech32), "value" -> o.value.asJson)
+        }
+    }
+
+    /** The bootstrap config (`bootstrap.json`) that [[BuildBootstrapConfig]] assembles from the
+      * roster, the deployed script references, the defaults, and the opening L2 state, and that
+      * [[BuildHeadConfig]] turns into the shared [[HeadConfig]]. Carries the L1 network, the peer
+      * topology, the coil quorum, the pre-deployed script reference utxos, and the opening L2
+      * state.
       *
       * Equity, the seed utxo, and the funding utxos are not carried here yet: the demo uses the
       * simplified model where head peer 0 funds the head, resolving the seed + funding from its own
@@ -109,34 +151,11 @@ object Bootstrap:
         coilPeers: List[CoilPeerData],
         coilQuorum: Int,
         scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
-        initialEvacuationMap: EvacuationMap
+        initialL2State: List[L2Output]
     )
 
     object BootstrapConfig {
-        given Decoder[BootstrapConfig] = Decoder.instance { c =>
-            for {
-                cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
-                headPeers <- c.downField("headPeers").as[List[HeadPeerData]]
-                coilPeers <- c.downField("coilPeers").as[List[CoilPeerData]]
-                coilQuorum <- c.downField("coilQuorum").as[Int]
-                scriptReferenceUtxos <- c
-                    .downField("scriptReferenceUtxos")
-                    .as[ScriptReferenceUtxos.Unresolved]
-                // The evacuation-map decoder needs the L1 network for its output addresses; this
-                // config carries the network, so decode it first and supply it here.
-                initialEvacuationMap <- {
-                    given CardanoNetwork.Section = cardanoNetwork
-                    c.downField("initialEvacuationMap").as[EvacuationMap]
-                }
-            } yield BootstrapConfig(
-              cardanoNetwork,
-              headPeers,
-              coilPeers,
-              coilQuorum,
-              scriptReferenceUtxos,
-              initialEvacuationMap
-            )
-        }
+        given Decoder[BootstrapConfig] = deriveDecoder[BootstrapConfig]
     }
 
     /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
@@ -175,8 +194,10 @@ object Bootstrap:
 
         // The initial L2 state comes from the bootstrap config as an evacuation map. Its total value
         // is what the treasury must back on L1 (the initial L2 value).
-        evacMap = bootstrapConfig.initialEvacuationMap
-        feeAccValue = Value.combine(evacMap.outputs.map(_.utxo.value.value))
+        // The opening L2 state's total value is what the treasury must back on L1 (the initial L2
+        // value). The evacuation map itself is built later, once the seed utxo — the source of the
+        // synthetic key ids — is resolved.
+        initialL2Value = Value.combine(bootstrapConfig.initialL2State.map(_.value))
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -215,11 +236,11 @@ object Bootstrap:
         // Calculate required value: equity + total head contingency + evacuation fee account +
         // max non-Plutus tx fee for initialization
         maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
-        requiredValue = Value(minEquity + totalContingency + maxNonPlutusTxFee) + feeAccValue
+        requiredValue = Value(minEquity + totalContingency + maxNonPlutusTxFee) + initialL2Value
         _ <- logger.info(
           s"Required value: ${minEquity.value} lovelace (equity) + " +
               s"${totalContingency.value} lovelace (total head contingency) + " +
-              s"${feeAccValue.coin.value} lovelace (evacuation fee account) + " +
+              s"${initialL2Value.coin.value} lovelace (initial L2 value) + " +
               s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
         )
 
@@ -289,11 +310,21 @@ object Bootstrap:
             TransactionOutput.Babbage(
               address = peerAddress,
               value = valueSelected - Value(minEquity) -
-                  Value(totalContingency) - feeAccValue,
+                  Value(totalContingency) - initialL2Value,
               datumOption = None,
               scriptRef = None
             )
           )
+        )
+
+        // Assign each opening L2 output a synthetic utxo reference — the seed utxo's (unique) tx id
+        // plus a per-entry index — and project the outputs into the initial evacuation map (which
+        // also validates min-ada).
+        initialUtxos: Utxos = bootstrapConfig.initialL2State.zipWithIndex.map { case (out, i) =>
+            TransactionInput(seedUtxo.input.transactionId, i) -> out.toTransactionOutput
+        }.toMap
+        evacMap <- IO.fromEither(
+          initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
         )
 
         initializationParameters = InitializationParameters(
@@ -381,10 +412,9 @@ end Bootstrap
   *
   *   - `--roster roster.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates or
   *     appends to the [[Bootstrap.Membership]] roster — the peer-topology part of the bootstrap
-  *     config. The operators complete it into the `bootstrap.json` that [[BuildHeadConfig]]
-  *     consumes by adding the network, script references, and initial evacuation map.
-  *     `--coil-quorum N` sets the roster's coil quorum. Head peers must be registered before the
-  *     coil peers that name them as hubs.
+  *     config. [[BuildBootstrapConfig]] merges it with the network, coil quorum, script references,
+  *     and initial L2 state into the `bootstrap.json` that [[BuildHeadConfig]] consumes. Head peers
+  *     must be registered before the coil peers that name them as hubs.
   *   - `--template private-template.json --out private.json` writes the peer's private node config:
   *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
   *     `ownCoilWallet` per `--role`) and a second fresh key pair spliced in as the evacuation
@@ -438,9 +468,6 @@ object GenerateKeyPair
     private val hubOpt: Opts[Option[Int]] =
         Opts.option[Int]("hub", "The head peer number that hubs this coil peer").orNone
 
-    private val coilQuorumOpt: Opts[Option[Int]] =
-        Opts.option[Int]("coil-quorum", "Set the roster's coilQuorum").orNone
-
     private val templateOpt: Opts[Option[Path]] =
         Opts.option[String](
           "template",
@@ -454,7 +481,7 @@ object GenerateKeyPair
             .orNone
 
     override def main: Opts[IO[ExitCode]] =
-        (rosterOpt, roleOpt, wsAddressOpt, hubOpt, coilQuorumOpt, templateOpt, outOpt)
+        (rosterOpt, roleOpt, wsAddressOpt, hubOpt, templateOpt, outOpt)
             .mapN(generateAndWrite)
 
     /** Generate the key pair, print it, and perform whichever file outputs the options request. */
@@ -463,7 +490,6 @@ object GenerateKeyPair
         role: Option[Role],
         wsAddress: Option[Uri],
         hub: Option[Int],
-        coilQuorum: Option[Int],
         template: Option[Path],
         out: Option[Path]
     ): IO[ExitCode] = for {
@@ -478,7 +504,7 @@ object GenerateKeyPair
         _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
         _ <- IO.println(s"Testnet address: $address")
         _ <- roster.traverse_(path =>
-            registerInRoster(path, role.get, vKeyHex, wsAddress, hub, coilQuorum) *>
+            registerInRoster(path, role.get, vKeyHex, wsAddress, hub) *>
                 IO.println(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
         )
         _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
@@ -526,8 +552,7 @@ object GenerateKeyPair
         role: Role,
         vKeyHex: String,
         wsAddress: Option[Uri],
-        hub: Option[Int],
-        coilQuorum: Option[Int]
+        hub: Option[Int]
     ): IO[Unit] = for {
         current <- IO.blocking(Files.exists(path)).flatMap {
             case true =>
@@ -536,7 +561,7 @@ object GenerateKeyPair
             case false => IO.pure(emptyRoster)
         }
         updated <- IO.fromEither(
-          appendPeer(current, role, vKeyHex, wsAddress, hub, coilQuorum).left
+          appendPeer(current, role, vKeyHex, wsAddress, hub).left
               .map(new IllegalArgumentException(_))
         )
         _ <- IO.fromEither(
@@ -555,18 +580,16 @@ object GenerateKeyPair
 
     private[bootstrap] val emptyRoster: Json = Json.obj(
       "headPeers" -> Json.arr(),
-      "coilPeers" -> Json.arr(),
-      "coilQuorum" -> Json.fromInt(0)
+      "coilPeers" -> Json.arr()
     )
 
-    /** Pure roster edit: append the peer entry for its role and apply `coilQuorum` if given. */
+    /** Pure roster edit: append the peer entry for its role. */
     private[bootstrap] def appendPeer(
         roster: Json,
         role: Role,
         vKeyHex: String,
         wsAddress: Option[Uri],
-        hub: Option[Int],
-        coilQuorum: Option[Int]
+        hub: Option[Int]
     ): Either[String, Json] = for {
         obj <- roster.asObject.toRight("roster is not a JSON object")
         headPeers = obj("headPeers").flatMap(_.asArray).getOrElse(Vector.empty)
@@ -597,8 +620,7 @@ object GenerateKeyPair
                     obj.add("coilPeers", Json.fromValues(coilPeers :+ entry))
                 }
         }
-        withQuorum = coilQuorum.fold(withPeer)(q => withPeer.add("coilQuorum", Json.fromInt(q)))
-    } yield Json.fromJsonObject(withQuorum)
+    } yield Json.fromJsonObject(withPeer)
 
     /** Fill the private-config template: set `ownPeerPrivate` to the generated wallet under the
       * role's field name, and replace the evacuation `ruleBasedWallet` with a fresh key pair.
@@ -953,3 +975,162 @@ object BuildHeadConfig
         } yield ExitCode.Success
 
 end BuildHeadConfig
+
+/** Assemble the `bootstrap.json` that [[BuildHeadConfig]] consumes by combining the four
+  * operator-facing inputs into one artifact. Pure — no Cardano backend.
+  *
+  * Usage:
+  * {{{
+  *   sbt "runMain hydrozoa.bootstrap.BuildBootstrapConfig <roster.json> \
+  *     --script-refs script-refs.json --defaults bootstrap-defaults.json --l2-state l2-state.json \
+  *     [--out bootstrap.json]"
+  * }}}
+  */
+object BuildBootstrapConfig
+    extends CommandIOApp(
+      name = "build-bootstrap",
+      header =
+          "Assemble bootstrap.json from the roster, script refs, defaults, and opening L2 state"
+    ):
+
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildBootstrapConfig")
+
+    private val rosterArg: Opts[Path] =
+        Opts.argument[String]("roster.json").map(Path.of(_))
+    private val scriptRefsOpt: Opts[Path] =
+        Opts.option[String](
+          "script-refs",
+          "The script-refs.json from DeployReferenceScripts",
+          short = "s"
+        ).map(Path.of(_))
+    private val defaultsOpt: Opts[Path] =
+        Opts.option[String](
+          "defaults",
+          "The bootstrap-defaults.json (network + coil quorum)",
+          short = "d"
+        ).map(Path.of(_))
+    private val l2StateOpt: Opts[Path] =
+        Opts.option[String]("l2-state", "The l2-state.json (opening L2 outputs)", short = "l")
+            .map(Path.of(_))
+    private val outOpt: Opts[Path] =
+        Opts.option[String]("out", "Output path (default bootstrap.json)", short = "o")
+            .map(Path.of(_))
+            .withDefault(Path.of("bootstrap.json"))
+
+    override def main: Opts[IO[ExitCode]] =
+        (rosterArg, scriptRefsOpt, defaultsOpt, l2StateOpt, outOpt).mapN(build)
+
+    private def readJson(path: Path): IO[Json] =
+        IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))
+
+    private def field(json: Json, key: String, source: Path): IO[Json] =
+        IO.fromOption(json.asObject.flatMap(_(key)))(
+          RuntimeException(s"$source is missing the '$key' field")
+        )
+
+    private def build(
+        rosterPath: Path,
+        scriptRefsPath: Path,
+        defaultsPath: Path,
+        l2StatePath: Path,
+        outPath: Path
+    ): IO[ExitCode] =
+        for {
+            roster <- readJson(rosterPath)
+            scriptRefs <- readJson(scriptRefsPath)
+            defaults <- readJson(defaultsPath)
+            l2State <- readJson(l2StatePath)
+            headPeers <- field(roster, "headPeers", rosterPath)
+            coilPeers <- field(roster, "coilPeers", rosterPath)
+            cardanoNetwork <- field(defaults, "cardanoNetwork", defaultsPath)
+            coilQuorum <- field(defaults, "coilQuorum", defaultsPath)
+            bootstrapJson = Json.obj(
+              "cardanoNetwork" -> cardanoNetwork,
+              "headPeers" -> headPeers,
+              "coilPeers" -> coilPeers,
+              "coilQuorum" -> coilQuorum,
+              "scriptReferenceUtxos" -> scriptRefs,
+              "initialL2State" -> l2State
+            )
+            // Validate the assembled config round-trips before writing it.
+            _ <- IO.fromEither(
+              bootstrapJson
+                  .as[Bootstrap.BootstrapConfig]
+                  .left
+                  .map(e => RuntimeException(s"assembled bootstrap.json does not decode: $e"))
+            )
+            _ <- IO.blocking {
+                Option(outPath.getParent).foreach(Files.createDirectories(_))
+                Files.writeString(outPath, bootstrapJson.spaces2)
+            }
+            _ <- logger.info(s"Wrote bootstrap config to $outPath")
+        } yield ExitCode.Success
+
+end BuildBootstrapConfig
+
+/** Write the assembly-time inputs a [[BuildBootstrapConfig]] needs but that are not per-peer:
+  * `bootstrap-defaults.json` (the L1 network + coil quorum) and an `l2-state.json` template (a
+  * min-ada placeholder per head peer's L1 address, which the operators edit into the opening
+  * distribution).
+  *
+  * Usage:
+  * {{{
+  *   sbt "runMain hydrozoa.bootstrap.InitBootstrapFiles <roster.json> [--out-dir .]"
+  * }}}
+  */
+object InitBootstrapFiles
+    extends CommandIOApp(
+      name = "init-bootstrap-files",
+      header = "Write bootstrap-defaults.json and an l2-state.json template from a roster"
+    ):
+
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.InitBootstrapFiles")
+
+    private val rosterArg: Opts[Path] =
+        Opts.argument[String]("roster.json").map(Path.of(_))
+    private val outDirOpt: Opts[Path] =
+        Opts.option[String]("out-dir", "Directory for the generated files (default .)", short = "o")
+            .map(Path.of(_))
+            .withDefault(Path.of("."))
+    private val coilQuorumOpt: Opts[Option[Int]] =
+        Opts.option[Int]("coil-quorum", "Coil quorum (default: a simple majority of coil peers)")
+            .orNone
+
+    override def main: Opts[IO[ExitCode]] =
+        (rosterArg, outDirOpt, coilQuorumOpt).mapN(init)
+
+    private def init(
+        rosterPath: Path,
+        outDir: Path,
+        coilQuorumOverride: Option[Int]
+    ): IO[ExitCode] =
+        for {
+            rosterStr <- IO.blocking(Files.readString(rosterPath))
+            roster <- IO.fromEither(parser.decode[Bootstrap.Membership](rosterStr))
+            network = CardanoNetwork.Preview
+            // Default coil quorum: a simple majority of the coil peers.
+            coilQuorum = coilQuorumOverride.getOrElse(roster.coilPeers.size / 2 + 1)
+            defaults = Bootstrap.BootstrapDefaults(network, coilQuorum)
+            // l2-state template: a min-ada placeholder per head peer's L1 address, for the operators
+            // to edit into the opening distribution (or empty, to fund entirely via deposits).
+            l2State = roster.headPeers.map(hpd =>
+                Bootstrap.L2Output(
+                  hpd.verificationKey.shelleyAddress()(using network),
+                  Value.ada(5L)
+                )
+            )
+            _ <- IO.blocking {
+                Files.createDirectories(outDir)
+                Files.writeString(
+                  outDir.resolve("bootstrap-defaults.json"),
+                  defaults.asJson.spaces2
+                )
+                Files.writeString(outDir.resolve("l2-state.json"), l2State.asJson.spaces2)
+            }
+            _ <- logger.info(
+              s"Wrote bootstrap-defaults.json (network=$network, coilQuorum=$coilQuorum) and an " +
+                  s"l2-state.json template (${l2State.size} head-peer entries) to $outDir"
+            )
+        } yield ExitCode.Success
+
+end InitBootstrapFiles
