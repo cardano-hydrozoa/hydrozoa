@@ -829,10 +829,13 @@ object Stage4Suite:
 
         val generateHeadConfig_ = generateHeadConfig(
           genHeadConfigBootstrap = generateHeadConfigBootstrap_,
-          generateInitialBlock = bootstrap =>
+          generateInitialBlock = (bootstrap, funding) =>
               generateInitialBlock(
                 genHeadConfigBootstrap = ReaderT
-                    .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                    .pure[Gen, TestPeers, (
+                        hydrozoa.config.head.HeadConfig.Bootstrap,
+                        hydrozoa.bootstrap.InitializationFunding
+                    )]((bootstrap, funding)),
                 generateBlockCreationEndTime = generateHeadStartTime
               )
         )
