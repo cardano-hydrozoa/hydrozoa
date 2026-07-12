@@ -93,13 +93,14 @@ build-bootstrap ROSTER="config/demo/roster.json" SCRIPT_REFS="config/demo/script
   trap 'just notify "build-bootstrap"' EXIT
   sbt "runMain hydrozoa.bootstrap.BuildBootstrapConfig {{ROSTER}} --script-refs {{SCRIPT_REFS}} --defaults {{DEFAULTS}} --l2-state {{L2_STATE}} --out {{OUT}}"
 
-# Build the shared head-config.json from a complete bootstrap.json (from build-bootstrap). Reads the
-# Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address must be funded on Preview first (the
-# tool logs the exact lovelace required and fails with the shortfall if not).
-build-head-config BOOTSTRAP OUT EQUITY:
+# Build the shared head-config.json from a complete bootstrap.json (from build-bootstrap). The head
+# parameters and per-peer equity now come from the bootstrap config, so there is no equity argument.
+# Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address must be funded on Preview
+# first (the tool logs the exact lovelace required and fails with the shortfall if not).
+build-head-config BOOTSTRAP OUT:
   #!/usr/bin/env bash
   trap 'just notify "build-head-config"' EXIT
-  sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP}} --equity {{EQUITY}} --out {{OUT}}"
+  sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP}} --out {{OUT}}"
 
 export:
   #!/usr/bin/env bash

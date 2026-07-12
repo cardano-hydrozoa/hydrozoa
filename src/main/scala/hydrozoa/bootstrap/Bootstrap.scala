@@ -10,6 +10,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -27,8 +28,10 @@ import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jMsg, Slf4jMsgFormat, Sl
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
 import hydrozoa.multisig.ledger.eutxol2.toEvacuationMap
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Genesis
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
@@ -94,15 +97,46 @@ object Bootstrap:
         given Decoder[Membership] = deriveDecoder[Membership]
     }
 
-    /** Assembly-time defaults (`bootstrap-defaults.json`): the L1 network and the coil quorum.
-      * [[GenerateKeyPair]] writes these with sensible defaults (preview, a simple majority of coil
-      * peers) for the operators to adjust before [[BuildBootstrapConfig]].
+    /** The head's protocol parameters as carried in the bootstrap config — the spec's `headParams`
+      * cluster: transaction timing, the fallback contingency, the dispute-resolution and settlement
+      * configs, and the coil quorum. [[BuildHeadConfig]] completes it into the full
+      * [[HeadParameters]] by adding the code-pinned `l2Ledger` / `identityIsomorphism` /
+      * `l2ParamsHash`.
       */
-    final case class BootstrapDefaults(cardanoNetwork: CardanoNetwork, coilQuorum: Int)
+    final case class BootstrapHeadParams(
+        txTiming: TxTiming,
+        fallbackContingency: FallbackContingency,
+        disputeResolutionConfig: DisputeResolutionConfig,
+        settlementConfig: SettlementConfig,
+        coilQuorum: Int
+    )
+
+    object BootstrapHeadParams {
+        given Encoder[BootstrapHeadParams] = deriveEncoder[BootstrapHeadParams]
+        given (using CardanoNetwork.Section): Decoder[BootstrapHeadParams] =
+            deriveDecoder[BootstrapHeadParams]
+    }
+
+    /** Assembly-time defaults (`bootstrap-defaults.json`): everything the head needs that is
+      * neither peer topology (the roster), script references, nor the opening L2 state — the L1
+      * network, the head protocol parameters, the per-peer equity contributions, and (optionally)
+      * the block-zero timing anchors. [[GenerateKeyPair]] writes these with demo defaults for the
+      * operators to adjust before [[BuildBootstrapConfig]]. Block-zero timing is optional: omit it
+      * and [[BuildHeadConfig]] anchors the initial block to wall-clock at build time.
+      */
+    final case class BootstrapDefaults(
+        cardanoNetwork: CardanoNetwork,
+        headParams: BootstrapHeadParams,
+        initialEquityContributions: Map[HeadPeerNumber, Coin],
+        blockZeroStartTime: Option[BlockCreationStartTime],
+        blockZeroEndTime: Option[BlockCreationEndTime]
+    )
 
     object BootstrapDefaults {
-        given Decoder[BootstrapDefaults] = deriveDecoder[BootstrapDefaults]
-        given Encoder[BootstrapDefaults] = deriveEncoder[BootstrapDefaults]
+        given (using CardanoNetwork.Section): Decoder[BootstrapDefaults] =
+            deriveDecoder[BootstrapDefaults]
+        given (using CardanoNetwork.Section): Encoder[BootstrapDefaults] =
+            deriveEncoder[BootstrapDefaults]
     }
 
     /** One opening L2 output (`l2-state.json` entry): a bech32 address and a CIP-0116 value. This
@@ -137,52 +171,87 @@ object Bootstrap:
 
     /** The bootstrap config (`bootstrap.json`) that [[BuildBootstrapConfig]] assembles from the
       * roster, the deployed script references, the defaults, and the opening L2 state, and that
-      * [[BuildHeadConfig]] turns into the shared [[HeadConfig]]. Carries the L1 network, the peer
-      * topology, the coil quorum, the pre-deployed script reference utxos, and the opening L2
-      * state.
+      * [[BuildHeadConfig]] turns into the shared [[HeadConfig]]. It carries the L1 network, the
+      * head protocol parameters, the peer topology, the pre-deployed script references, the opening
+      * L2 state, the per-peer equity contributions, and (optionally) the block-zero timing.
       *
-      * Equity, the seed utxo, and the funding utxos are not carried here yet: the demo uses the
-      * simplified model where head peer 0 funds the head, resolving the seed + funding from its own
-      * L1 address at build time.
+      * The seed utxo and the funding utxos are still not carried here: the demo uses the simplified
+      * model where head peer 0 funds the head, so [[BuildHeadConfig]] resolves the seed + funding
+      * from head peer 0's own L1 address at build time.
       */
     final case class BootstrapConfig(
         cardanoNetwork: CardanoNetwork,
+        headParams: BootstrapHeadParams,
         headPeers: List[HeadPeerData],
         coilPeers: List[CoilPeerData],
-        coilQuorum: Int,
         scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
-        initialL2State: List[L2Output]
+        initialL2State: List[L2Output],
+        initialEquityContributions: Map[HeadPeerNumber, Coin],
+        blockZeroStartTime: Option[BlockCreationStartTime],
+        blockZeroEndTime: Option[BlockCreationEndTime]
     )
 
     object BootstrapConfig {
-        given Decoder[BootstrapConfig] = deriveDecoder[BootstrapConfig]
+        // `headParams` and the block-zero timing decode against the config's own `cardanoNetwork`
+        // (the timing codec re-quantizes against its slot config), so read the network first and
+        // decode the rest with it in scope.
+        given Decoder[BootstrapConfig] = Decoder.instance { c =>
+            c.get[CardanoNetwork]("cardanoNetwork").flatMap { network =>
+                given CardanoNetwork.Section = network
+                for {
+                    headParams <- c.get[BootstrapHeadParams]("headParams")
+                    headPeers <- c.get[List[HeadPeerData]]("headPeers")
+                    coilPeers <- c.get[List[CoilPeerData]]("coilPeers")
+                    scriptReferenceUtxos <- c.get[ScriptReferenceUtxos.Unresolved](
+                      "scriptReferenceUtxos"
+                    )
+                    initialL2State <- c.get[List[L2Output]]("initialL2State")
+                    initialEquityContributions <- c.get[Map[HeadPeerNumber, Coin]](
+                      "initialEquityContributions"
+                    )
+                    blockZeroStartTime <- c.get[Option[BlockCreationStartTime]](
+                      "blockZeroStartTime"
+                    )
+                    blockZeroEndTime <- c.get[Option[BlockCreationEndTime]]("blockZeroEndTime")
+                } yield BootstrapConfig(
+                  network,
+                  headParams,
+                  headPeers,
+                  coilPeers,
+                  scriptReferenceUtxos,
+                  initialL2State,
+                  initialEquityContributions,
+                  blockZeroStartTime,
+                  blockZeroEndTime
+                )
+            }
+        }
     }
 
     /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
       *
-      * Only head peer 0 funds the head: it contributes [[minEquity]] as L2 equity and covers the
-      * whole head's fallback contingency (the collective share once, plus one individual share per
-      * head peer) from its own L1 enterprise address. Heads 1..N-1 contribute zero and just co-sign
-      * the stack-0 initialization; coil peers fund nothing. The initial L2 ledger and L2 parameters
-      * are empty, and Cardano preview is used.
+      * The head protocol parameters, the per-peer equity contributions, and (optionally) the
+      * block-zero timing all come from the bootstrap config. Head peer 0 funds the head: it
+      * supplies the seed and every funding utxo from its own L1 enterprise address, covering the
+      * total equity plus the whole head's fallback contingency (the collective share once, plus one
+      * individual share per head peer). Block-zero timing falls back to wall-clock when the config
+      * omits it.
       */
     def mkSharedHeadConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
         bootstrapConfig: BootstrapConfig,
-        minEquity: Coin,
         scriptReferenceUtxos: ScriptReferenceUtxos
     ): IO[HeadConfig] = for {
-        startTimeInstant <- realTimeQuantizedInstant(cardanoNetwork.slotConfig)
-        blockCreationStartTime = BlockCreationStartTime(startTimeInstant)
+        blockCreationStartTime <- bootstrapConfig.blockZeroStartTime.fold(
+          realTimeQuantizedInstant(cardanoNetwork.slotConfig).map(BlockCreationStartTime(_))
+        )(IO.pure)
 
+        bhp = bootstrapConfig.headParams
         headParams = HeadParameters(
-          txTiming = TxTiming.demo(cardanoNetwork.slotConfig),
-          fallbackContingency = cardanoNetwork.mkFallbackContingencyWithDefaults(
-            tallyTxFee = Coin.ada(3),
-            voteTxFee = Coin.ada(3)
-          ),
-          disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
-          settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
-          coilQuorum = bootstrapConfig.coilQuorum,
+          txTiming = bhp.txTiming,
+          fallbackContingency = bhp.fallbackContingency,
+          disputeResolutionConfig = bhp.disputeResolutionConfig,
+          settlementConfig = bhp.settlementConfig,
+          coilQuorum = bhp.coilQuorum,
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
@@ -192,12 +261,17 @@ object Bootstrap:
           identityIsomorphism = false,
         )
 
-        // The initial L2 state comes from the bootstrap config as an evacuation map. Its total value
-        // is what the treasury must back on L1 (the initial L2 value).
         // The opening L2 state's total value is what the treasury must back on L1 (the initial L2
         // value). The evacuation map itself is built later, once the seed utxo — the source of the
         // synthetic key ids — is resolved.
         initialL2Value = Value.combine(bootstrapConfig.initialL2State.map(_.value))
+
+        // Equity comes from the config (per head peer). Its total is what the treasury backs beyond
+        // the L2 value; the per-peer split is recorded but the init tx consumes only the sum.
+        initialEquityContributions <- IO.fromOption(
+          NonEmptyMap.fromMap(SortedMap.from(bootstrapConfig.initialEquityContributions))
+        )(RuntimeException("initialEquityContributions must be non-empty"))
+        totalEquity = initialEquityContributions.toSortedMap.values.foldLeft(Coin.zero)(_ + _)
 
         headPeers <- IO.fromOption(
           HeadPeers(
@@ -233,12 +307,12 @@ object Bootstrap:
               nHeadPeers.toLong * fallbackContingency.individualContingency.total.value
         )
 
-        // Calculate required value: equity + total head contingency + evacuation fee account +
+        // Calculate required value: total equity + total head contingency + initial L2 value +
         // max non-Plutus tx fee for initialization
         maxNonPlutusTxFee = cardanoNetwork.maxNonPlutusTxFee
-        requiredValue = Value(minEquity + totalContingency + maxNonPlutusTxFee) + initialL2Value
+        requiredValue = Value(totalEquity + totalContingency + maxNonPlutusTxFee) + initialL2Value
         _ <- logger.info(
-          s"Required value: ${minEquity.value} lovelace (equity) + " +
+          s"Required value: ${totalEquity.value} lovelace (equity) + " +
               s"${totalContingency.value} lovelace (total head contingency) + " +
               s"${initialL2Value.coin.value} lovelace (initial L2 value) + " +
               s"${maxNonPlutusTxFee.value} lovelace (fee) = ${requiredValue.coin.value} lovelace"
@@ -268,7 +342,7 @@ object Bootstrap:
                     val errorMsg =
                         s"Insufficient funds at address ${peerAddress.toBech32.get}. " +
                             s"Available: ${accumulated.coin.value} lovelace, " +
-                            s"Required: ${requiredValue.coin.value} lovelace (${minEquity.value} equity + ${maxNonPlutusTxFee.value} fee). " +
+                            s"Required: ${requiredValue.coin.value} lovelace (${totalEquity.value} equity + ${maxNonPlutusTxFee.value} fee). " +
                             s"Please fund address ${peerAddress.toBech32.get} with at least ${requiredValue.coin.value - accumulated.coin.value} more lovelace."
                     logger.error(errorMsg) *>
                         IO.raiseError(new RuntimeException(errorMsg))
@@ -292,15 +366,6 @@ object Bootstrap:
         seedUtxo = utxosSelected.head
         valueSelected = Value.combine(utxosSelected.map(_.output.value).toList)
 
-        // Only head peer 0 contributes equity; heads 1..N-1 contribute zero and just co-sign.
-        initialEquityContributions = NonEmptyMap.fromMapUnsafe(
-          SortedMap.from(
-            bootstrapConfig.headPeers.zipWithIndex.map((_, i) =>
-                HeadPeerNumber(i) -> (if i == 0 then minEquity else Coin.zero)
-            )
-          )
-        )
-
         // The build-time funding recipe (seed + funding utxos + change). The head id is derived
         // from the seed here, in the bootstrap module, and presented explicitly in the config.
         funding = InitializationFunding(
@@ -309,7 +374,7 @@ object Bootstrap:
           changeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
-              value = valueSelected - Value(minEquity) -
+              value = valueSelected - Value(totalEquity) -
                   Value(totalContingency) - initialL2Value,
               datumOption = None,
               scriptRef = None
@@ -317,11 +382,15 @@ object Bootstrap:
           )
         )
 
-        // Assign each opening L2 output a synthetic utxo reference — the seed utxo's (unique) tx id
-        // plus a per-entry index — and project the outputs into the initial evacuation map (which
-        // also validates min-ada).
+        // Assign each opening L2 output a synthetic utxo reference and project the outputs into the
+        // initial evacuation map (which also validates min-ada). The reference's tx id is the
+        // genesis hash of the *whole* seed input (tx id + index) — the same synthetic-id convention
+        // the EUTXO ledger uses for deposit-created utxos (`L2Genesis.mkGenesisId`). Reusing the
+        // seed's raw tx id would be unsafe: `(seedTxId, i)` could collide with a real on-chain output
+        // of the seed's own transaction, or with the seed utxo itself.
+        genesisTxId = L2Genesis.mkGenesisId(seedUtxo.input)
         initialUtxos: Utxos = bootstrapConfig.initialL2State.zipWithIndex.map { case (out, i) =>
-            TransactionInput(seedUtxo.input.transactionId, i) -> out.toTransactionOutput
+            TransactionInput(genesisTxId, i) -> out.toTransactionOutput
         }.toMap
         evacMap <- IO.fromEither(
           initialUtxos.toEvacuationMap(cardanoNetwork).left.map(e => RuntimeException(e.toString))
@@ -353,10 +422,11 @@ object Bootstrap:
               )
         )
 
-        endTimeInstant <- IO.realTimeInstant.map(instant =>
-            instant.quantize(cardanoNetwork.slotConfig)
-        )
-        blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
+        blockCreationEndTime <- bootstrapConfig.blockZeroEndTime.fold(
+          IO.realTimeInstant.map(instant =>
+              BlockCreationEndTime(instant.quantize(cardanoNetwork.slotConfig))
+          )
+        )(IO.pure)
 
         initTxSeq <- InitializationTxSeq
             .Build(bootstrap, funding)(blockCreationEndTime)
@@ -880,12 +950,13 @@ end Migrate
   * Usage:
   * {{{
   *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <bootstrap.json> \
-  *     --blockfrost-key <key> --equity <lovelace> [--out head-config.json]"
+  *     --blockfrost-key <key> [--out head-config.json]"
   * }}}
   *
-  * Reads the [[Bootstrap.BootstrapConfig]] from `<bootstrap.json>`, funds the head from head peer
-  * 0's L1 address (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to
-  * `--out` (default `head-config.json`). Every node then loads this same artifact.
+  * Reads the [[Bootstrap.BootstrapConfig]] from `<bootstrap.json>` (which carries the head
+  * parameters, the per-peer equity, and the opening state), funds the head from head peer 0's L1
+  * address (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out`
+  * (default `head-config.json`). Every node then loads this same artifact.
   *
   * The bootstrap config carries the `scriptReferenceUtxos` — the L1 inputs of the treasury and
   * dispute reference-script UTxOs that [[DeployReferenceScripts]] deployed. They are resolved and
@@ -910,24 +981,17 @@ object BuildHeadConfig
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         )
-    private val equityOpt: Opts[Coin] =
-        Opts.option[Long](
-          "equity",
-          "Head peer 0's equity contribution, in lovelace",
-          short = "e"
-        ).map(Coin.apply)
     private val outOpt: Opts[Path] =
         Opts.option[String]("out", "Output path (default head-config.json)", short = "o")
             .map(Path.of(_))
             .withDefault(Path.of("head-config.json"))
 
     override def main: Opts[IO[ExitCode]] =
-        (bootstrapArg, blockfrostKeyOpt, equityOpt, outOpt).mapN(buildHeadConfig)
+        (bootstrapArg, blockfrostKeyOpt, outOpt).mapN(buildHeadConfig)
 
     private def buildHeadConfig(
         bootstrapPath: Path,
         blockfrostKey: String,
-        minEquity: Coin,
         outPath: Path
     ): IO[ExitCode] =
         for {
@@ -936,7 +1000,8 @@ object BuildHeadConfig
             cardanoNetwork = bootstrapConfig.cardanoNetwork
             _ <- logger.info(
               s"Building shared head config: ${bootstrapConfig.headPeers.size} head peer(s), " +
-                  s"${bootstrapConfig.coilPeers.size} coil peer(s), coil quorum ${bootstrapConfig.coilQuorum}"
+                  s"${bootstrapConfig.coilPeers.size} coil peer(s), " +
+                  s"coil quorum ${bootstrapConfig.headParams.coilQuorum}"
             )
             backendTracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             // Blockfrost only serves the standard networks.
@@ -967,7 +1032,6 @@ object BuildHeadConfig
             }
             headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
               bootstrapConfig,
-              minEquity,
               scriptReferenceUtxos
             )
             _ <- IO.blocking(Files.writeString(outPath, headConfig.asJson.spaces2))
@@ -1006,7 +1070,7 @@ object BuildBootstrapConfig
     private val defaultsOpt: Opts[Path] =
         Opts.option[String](
           "defaults",
-          "The bootstrap-defaults.json (network + coil quorum)",
+          "The bootstrap-defaults.json (network, head params, equity, block-zero timing)",
           short = "d"
         ).map(Path.of(_))
     private val l2StateOpt: Opts[Path] =
@@ -1043,15 +1107,22 @@ object BuildBootstrapConfig
             headPeers <- field(roster, "headPeers", rosterPath)
             coilPeers <- field(roster, "coilPeers", rosterPath)
             cardanoNetwork <- field(defaults, "cardanoNetwork", defaultsPath)
-            coilQuorum <- field(defaults, "coilQuorum", defaultsPath)
-            bootstrapJson = Json.obj(
-              "cardanoNetwork" -> cardanoNetwork,
-              "headPeers" -> headPeers,
-              "coilPeers" -> coilPeers,
-              "coilQuorum" -> coilQuorum,
-              "scriptReferenceUtxos" -> scriptRefs,
-              "initialL2State" -> l2State
-            )
+            headParams <- field(defaults, "headParams", defaultsPath)
+            equity <- field(defaults, "initialEquityContributions", defaultsPath)
+            // Block-zero timing is optional in the defaults; carry it through only when present.
+            timing = List("blockZeroStartTime", "blockZeroEndTime")
+                .flatMap(k => defaults.asObject.flatMap(_(k)).map(k -> _))
+            bootstrapJson = Json
+                .obj(
+                  "cardanoNetwork" -> cardanoNetwork,
+                  "headParams" -> headParams,
+                  "headPeers" -> headPeers,
+                  "coilPeers" -> coilPeers,
+                  "scriptReferenceUtxos" -> scriptRefs,
+                  "initialL2State" -> l2State,
+                  "initialEquityContributions" -> equity
+                )
+                .deepMerge(Json.obj(timing*))
             // Validate the assembled config round-trips before writing it.
             _ <- IO.fromEither(
               bootstrapJson
@@ -1069,9 +1140,11 @@ object BuildBootstrapConfig
 end BuildBootstrapConfig
 
 /** Write the assembly-time inputs a [[BuildBootstrapConfig]] needs but that are not per-peer:
-  * `bootstrap-defaults.json` (the L1 network + coil quorum) and an `l2-state.json` template (a
-  * min-ada placeholder per head peer's L1 address, which the operators edit into the opening
-  * distribution).
+  * `bootstrap-defaults.json` (the L1 network, the head protocol parameters, and the per-peer equity
+  * contributions — with demo defaults) and an `l2-state.json` template (a min-ada placeholder per
+  * head peer's L1 address, which the operators edit into the opening distribution). Block-zero
+  * timing is left out of the defaults, so [[BuildHeadConfig]] anchors it to wall-clock at build
+  * time; operators who want to pin it add `blockZeroStartTime` / `blockZeroEndTime` (epoch millis).
   *
   * Usage:
   * {{{
@@ -1110,7 +1183,27 @@ object InitBootstrapFiles
             network = CardanoNetwork.Preview
             // Default coil quorum: a simple majority of the coil peers.
             coilQuorum = coilQuorumOverride.getOrElse(roster.coilPeers.size / 2 + 1)
-            defaults = Bootstrap.BootstrapDefaults(network, coilQuorum)
+            // Demo head parameters: the same values BuildHeadConfig used to hard-code, now surfaced
+            // for the operators to adjust.
+            headParams = Bootstrap.BootstrapHeadParams(
+              txTiming = TxTiming.demo(network.slotConfig),
+              fallbackContingency = network.mkFallbackContingencyWithDefaults(
+                tallyTxFee = Coin.ada(3),
+                voteTxFee = Coin.ada(3)
+              ),
+              disputeResolutionConfig = DisputeResolutionConfig.default(network.slotConfig),
+              settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
+              coilQuorum = coilQuorum
+            )
+            // Demo equity: head peer 0 funds the whole head, the rest contribute zero and co-sign.
+            equity = roster.headPeers.indices
+                .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
+                .toMap
+            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
+            defaultsJson = {
+                given CardanoNetwork.Section = network
+                defaults.asJson.deepDropNullValues
+            }
             // l2-state template: a min-ada placeholder per head peer's L1 address, for the operators
             // to edit into the opening distribution (or empty, to fund entirely via deposits).
             l2State = roster.headPeers.map(hpd =>
@@ -1121,10 +1214,7 @@ object InitBootstrapFiles
             )
             _ <- IO.blocking {
                 Files.createDirectories(outDir)
-                Files.writeString(
-                  outDir.resolve("bootstrap-defaults.json"),
-                  defaults.asJson.spaces2
-                )
+                Files.writeString(outDir.resolve("bootstrap-defaults.json"), defaultsJson.spaces2)
                 Files.writeString(outDir.resolve("l2-state.json"), l2State.asJson.spaces2)
             }
             _ <- logger.info(
