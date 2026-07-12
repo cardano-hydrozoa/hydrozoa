@@ -19,6 +19,43 @@ fields. It is underused today precisely because of that friction. For the remote
 mechanical pack/unpack refactor still applies (its payload is not a native tx), but the isomorphism
 semantics below are EUTXO-only.
 
+## Changes in this PR (#531)
+
+A grouped overview of what branch `feature/isomorphic-l2` changes, for review. The sections below are
+the design rationale; this list is the "what landed".
+
+**L2 isomorphism — strip the request wrapper (§5.4).** Make the built-in EUTXO ledger drivable by
+native Cardano txs, and move every request check into the ledger:
+
+- **Phase 1** — a dedicated `headId` aux-data pin (a tx metadatum the ledger checks against its own
+  head id; gated by the `identityIsomorphism` toggle, default enforce).
+- **Phase 2** — EUTXO tx validity comes from the tx's own slot interval, not a request-header field.
+- **Phase 3** — `L2Ledger.screen()` entry point (stateless, pre-`RequestId`) + the `RequestSequencer`
+  id-assignment inversion (a screened-out request never gets a durable id or fan-out).
+- **Phase 4+6** — drop the COSE envelope and `userVk` for all backends; `EutxoL2Ledger.screen`
+  authenticates the native tx's own vkey witnesses.
+- **Phase 5** — collapse `UserRequestHeader` entirely; a request is just its body.
+- **Deposits (§5.3)** — derive the accept-by `validityEnd` from the deposit tx's TTL.
+
+**L2 backend selection & config.** `HeadParameters.l2Ledger` (`cardano-eutxo` | `any-remote`) +
+`identityIsomorphism`; `sugarRushUri` → `remoteLedgerUri` (now optional); the L2 query endpoints gated
+EUTXO-only (`EutxoL2LedgerReader`).
+
+**Bootstrap config — `peers.json` → `bootstrap.json` (§6.1).** Reworked the peer roster into a
+spec-shaped `Bootstrap.BootstrapConfig` (`bootstrap.json`) that also carries `cardanoNetwork`,
+`scriptReferenceUtxos`, and `initialEvacuationMap` — folding the network (was hard-coded `Preview`),
+the script references (was a separate `--script-refs` file), and the evacuation map (was hard-coded in
+`Bootstrap.scala`) into one agreed artifact. `BuildHeadConfig` reads it; the justfile is updated.
+
+**Wallet cleanup.** Retire the now-dead CIP-30 `signData` chain (its only user was the deleted COSE
+request path).
+
+**Merged from `origin/main`.** fund14-proj69 (the `/ready` readiness endpoint + `NodeStatus`) and
+#505 / GUM-129 (init-tx parsing; `Bootstrap` moved to the `hydrozoa.bootstrap` package).
+
+**Docs.** This design note: the §5.4 field-removal roadmap and its landings, the §5.3 deposit change,
+the evacuation-map ledger-agnostic correction (§6.1), and the §6.1 bootstrap-config revision.
+
 ## 1. Isomorphism goal (EUTXO)
 
 Make the EUTXO L2 ledger *isomorphic* to L1, at two strengths:
@@ -391,31 +428,35 @@ narrower:
   (`RuleBasedActor`), `StackEffectsBuilder`, and the `InitializationTx` all read it — so removing it
   from the shared config touches the fallback path too, not just the ledger.
 
-**Direction (aligns with §6).** Keep the shared init/bootstrap config **ledger-agnostic**: carry only
-what every backend needs and all peers must agree on — the `l2ledger` type, the `l2ParamsHash`, and
-the opening funds (`initialEquityContributions`, `seedUtxo`, funding utxos). **Each ledger derives its
-own initial state** instead of having it injected (the EUTXO ledger derives its initial utxo set /
-evacuation map; SugarRush derives its own). This is GUM-104's "the initial evacuation map can always
-be derived, so postpone / remove it from the bootstrap config."
+**Direction — revised (landed 2026-07-12): keep the evacuation map in the bootstrap config.** GUM-104's
+"derive not store, keep only a commitment" does **not** work for the evacuation map. The initialization
+tx *commits to the initial map on-chain*: the multisig-treasury value is `initialL2Value = Σ(map utxo
+values)`, and the treasury datum carries the map's KZG commitment. GUM-129's parse side recomputes that
+datum from the config and verifies it, and the EUTXO ledger seeds its opening state from
+`initialEvacuationMap.toUtxos`. You cannot "derive and forget" a value the on-chain tx commits to and
+every node verifies — so the initial evacuation map stays an explicit, agreed field of the bootstrap
+config. (Its *content* can still be as simple as "empty + a fee-account reserve", the current default.)
 
-**What it's derived from — to pin down.** The initial L2 state is the head's opening distribution of
-funds; its *value* is already fixed (`initialL2Value = Σ(map utxo values)`), so what's missing is the
-*distribution* (which L2 address holds what). Candidates: agreed opening params + a stated initial
-allocation; the `InitializationTx` outputs; or **empty + funded by deposits** (head opens with no L2
-utxos, everything arrives via the deposit path — the simplest, and the most ledger-agnostic).
+**Landed: a spec-shaped bootstrap config, `peers.json` → `bootstrap.json`.** The whitepaper's
+head-initialization section defines a **bootstrap config** (human-authored) that the tooling turns into
+the head config (adding `headId` + the built `initTx`). The tooling now matches that shape: the old
+`peers.json` roster was reworked into `Bootstrap.BootstrapConfig` (`config/demo/bootstrap.json`, read by
+`BuildHeadConfig`), which carries `cardanoNetwork`, the peer topology
+(`headPeers`/`coilPeers`/`coilQuorum`), `scriptReferenceUtxos`, and `initialEvacuationMap`. This folded
+three things out of the code / side-files into one agreed artifact: the network (was hard-coded
+`Preview`), the script references (was a separate `--script-refs script-refs.json`), and the evacuation
+map (was hard-coded in `Bootstrap.scala`). `GenerateKeyPair` still emits the peer-topology portion
+(`Bootstrap.Membership`) as a partial `bootstrap.json` that the operators complete.
 
-**The commitment angle.** Because the fallback regime commits to the initial L2 state (a KZG
-commitment) and all peers must agree on it, "derive not store" doesn't mean "forget it" — the shared
-config keeps a **commitment** to the initial state (folded into `l2ParamsHash`, or the fallback KZG
-root), while the *full* state is derived by whoever needs it. So the agreed artifact shrinks from a
-whole concrete evacuation map to a hash/commitment (the map is already ledger-agnostic in shape; what
-changes is storing the concrete map vs. a commitment to it).
+**Still simplified / not yet in the config** (the demo's head-0-funds-everything model):
+`initialEquityContributions` (the `--equity` CLI, head-0 only), `seedUtxo` + `additionalFundingUtxos`
+(auto-resolved from head-0's L1 address at build), block-zero timing (derived from wall-clock), and
+`headParams` (demo defaults). The spec's bootstrap config carries all of these; folding them in is the
+remaining GUM-104 work.
 
-**Open questions.** (a) Derivable purely from agreed opening params, or does init need a ledger
-round-trip (the ledger produces its own genesis, Gummiworm records only the commitment)? (b) Can the
-fallback regime derive the map too, or does removing it from the config just move the coupling into
-the fallback path? (c) If "empty + deposits" is chosen, does anything require a non-empty opening L2
-state (e.g. peer equity that must appear on L2 at open rather than as treasury)?
+**Open questions.** (a) Whether `headParams` + block-zero timing should be negotiated into the config
+now (the spec puts them there) or stay derived. (b) Whether the fallback KZG commitment should fold
+into `l2ParamsHash` rather than being recomputed from the config's evacuation map at build/parse.
 
 ## 7. Deployment / one-command
 
