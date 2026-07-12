@@ -34,9 +34,10 @@ import RequestTimes.*
   *   - settlement tx and refund tx that tries to absorb/refund the same deposit
   *
   * @param depositSubmissionDuration
-  *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized
-  *   as the ttl for deposit txs, which SHOULD be exactly the deposit request's validity-end +
-  *   [[depositSubmissionDuration]].
+  *   The fixed amount of time reserved for a deposit tx to be submitted and confirmed on L1 by the
+  *   user. The head materializes a deposit's accept-by validity-end from the deposit tx's TTL by
+  *   subtracting this duration (`validityEnd = ttl - depositSubmissionDuration`), so every deposit
+  *   tx must carry a TTL.
   *
   * @param depositMaturityDuration
   *   The head waits for this duration after a deposit tx's validity end time to check whether a
