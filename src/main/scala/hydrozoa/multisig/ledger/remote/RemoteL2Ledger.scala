@@ -18,6 +18,7 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
+import scalus.uplc.builtin.ByteString
 
 /** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
   *
@@ -157,6 +158,16 @@ class RemoteL2Ledger private (
     ): EitherT[IO, L2LedgerError, Unit] = {
         sendRequest(Request.ProxyRequestError(req)).map(_ => ())
     }
+
+    /** Passthrough for now: the remote ledger accepts every request and does its own screening at
+      * submission. A dedicated remote screening endpoint (§9 item 3) replaces this so a remote node
+      * also rejects pre-RequestId.
+      */
+    override def screen(
+        l2Payload: ByteString,
+        l1Payload: Option[ByteString]
+    ): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.rightT[IO, L2LedgerError](())
 
     /** The remote ledger owns its own persistence + recovery behind the WebSocket, so the host does
       * not track its commandNumber (R2b is the EUTXO reference ledger only); always report

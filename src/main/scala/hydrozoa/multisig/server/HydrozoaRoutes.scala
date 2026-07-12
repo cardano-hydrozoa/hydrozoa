@@ -281,7 +281,11 @@ class HydrozoaRoutes(
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
-                requestId <- requestSequencer ?: userRequest
+                requestId <- (requestSequencer ?: userRequest).flatMap {
+                    case Right(id) => IO.pure(id)
+                    // A screen rejection surfaces as a 400 via handleErrorWith below.
+                    case Left(rejected) => IO.raiseError(new RuntimeException(rejected.reason))
+                }
             } yield ApiDto.mkRequestAcceptedResponse(requestId)
 
         handled

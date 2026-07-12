@@ -29,7 +29,11 @@ object SubmissionClient:
     def direct(handle: RequestSequencer.Handle): SubmissionClient =
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
-                handle ?: userRequest
+                (handle ?: userRequest).flatMap {
+                    case Right(id) => IO.pure(id)
+                    case Left(rejected) =>
+                        IO.raiseError(new RuntimeException(s"request rejected: ${rejected.reason}"))
+                }
 
     /** http4s-based impl: signs the [[UserRequestHeader]] with `wallet` as a CIP-30 COSE_Sign1,
       * routes the request to the deposit-register or l2-submit endpoint by variant, and expects a

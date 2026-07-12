@@ -5,6 +5,7 @@ import cats.data.*
 import cats.syntax.all.*
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import scalus.uplc.builtin.ByteString
 
 private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
 // See: "Kendo" from the test library
@@ -104,6 +105,17 @@ trait L2Ledger[F[_]] {
 
     def sendProxyHydrozoaRequestError(
         req: L2LedgerCommand.ProxyRequestError
+    ): EitherT[F, L2LedgerError, Unit]
+
+    /** Stateless pre-RequestId screening (§4.1 / §5.4 Phase 3): decide whether a user request is
+      * worth assigning a RequestId and fanning out to consensus — reject a malformed or
+      * replay-pinned request before it consumes resources. Conservative: only definite, stateless
+      * failures; stateful checks (balance, inputs, completeness) stay at submission. `l1Payload` is
+      * `Some` for a deposit request (the deposit tx), `None` for a transaction request.
+      */
+    def screen(
+        l2Payload: ByteString,
+        l1Payload: Option[ByteString]
     ): EitherT[F, L2LedgerError, Unit]
 
     /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per

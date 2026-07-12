@@ -214,6 +214,23 @@ case class EutxoL2Ledger private (
           )
         )
 
+    override def screen(
+        l2Payload: ByteString,
+        l1Payload: Option[ByteString]
+    ): EitherT[IO, L2LedgerError, Unit] =
+        l1Payload match {
+            // Deposit: defer to registerDeposit's existing parse/validation for now (Phase 3 screens
+            // the transaction path; deposit screening moves to the ledger in a later slice).
+            case Some(_) => EitherT.rightT[IO, L2LedgerError](())
+            case None    =>
+                // Transaction: the native L2 tx must parse and carry this head's headId pin. Both
+                // are stateless; balance/input/completeness checks stay at submission.
+                EitherT.fromEither[IO](for {
+                    l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
+                    _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
+                } yield ())
+        }
+
     override def sendApplyTransaction(
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] =
