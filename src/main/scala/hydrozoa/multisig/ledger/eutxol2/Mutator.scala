@@ -84,6 +84,23 @@ object HydrozoaTransactionMutator {
             state = EvacuatingMutator.transit(config, scalusState.utxos, l2Tx)
         yield state
     }
+
+    /** Stateless auth pre-check for ledger screening: verify the L2 tx's vkey witnesses over its id,
+      * reusing the exact validator [[transit]] runs at submission
+      * ([[VerifiedSignaturesInWitnessesValidator]]). Signature verification reads neither the utxo
+      * state nor the block time, so an empty state and a placeholder time are safe (and keep the
+      * result byte-identical to the submission-time check).
+      */
+    def screenSignatures(
+        config: Config,
+        l2Tx: L2Tx
+    ): Either[String | TransactionException, Unit] =
+        VerifiedSignaturesInWitnessesValidator.validate(
+          CardanoLedgerContext
+              .fromCardanoNetwork(config, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
+          L1State(utxos = Map.empty),
+          l2Tx.tx
+        )
 }
 
 /** TODO: Update

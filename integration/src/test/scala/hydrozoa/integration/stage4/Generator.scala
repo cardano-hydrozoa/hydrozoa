@@ -206,8 +206,6 @@ object CommandGenerators:
                   bodyHash = body.hash
                 )
 
-                userVk = config.nodeConfigs(peerNum).ownWallet.exportVerificationKey
-
             } yield Some(
               L2TxCommand(
                 peerNum = peerNum,
@@ -215,8 +213,7 @@ object CommandGenerators:
                   requestId = state.nextRequestId(peerNum),
                   request = UserRequest.TransactionRequest(
                     header = header,
-                    body = body.asInstanceOf[TransactionRequestBody],
-                    userVk = userVk
+                    body = body.asInstanceOf[TransactionRequestBody]
                   )
                 ),
                 txStrategy = txStrategy,
@@ -350,11 +347,6 @@ object CommandGenerators:
                                           bodyHash = body.hash
                                         )
 
-                                        userVk = config
-                                            .nodeConfigs(peerNum)
-                                            .ownWallet
-                                            .exportVerificationKey
-
                                         absorptionStartTime =
                                             config.headConfig.txTiming
                                                 .depositAbsorptionStartTime(requestValidityEndTime)
@@ -370,8 +362,7 @@ object CommandGenerators:
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
                                             header = header,
-                                            body = body.asInstanceOf[DepositRequestBody],
-                                            userVk = userVk
+                                            body = body.asInstanceOf[DepositRequestBody]
                                           )
                                         ),
                                         l2Payload =

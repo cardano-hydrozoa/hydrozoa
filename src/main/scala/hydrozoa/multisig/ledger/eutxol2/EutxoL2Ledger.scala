@@ -223,11 +223,17 @@ case class EutxoL2Ledger private (
             // the transaction path; deposit screening moves to the ledger in a later slice).
             case Some(_) => EitherT.rightT[IO, L2LedgerError](())
             case None    =>
-                // Transaction: the native L2 tx must parse and carry this head's headId pin. Both
-                // are stateless; balance/input/completeness checks stay at submission.
+                // Transaction: the native L2 tx must parse, carry this head's headId pin, and have
+                // valid vkey-witness signatures over the tx id. All stateless; the stateful
+                // required-signers / balance / input checks stay at submission (an unsigned tx that
+                // slips past here is still rejected there by MissingKeyHashes).
                 EitherT.fromEither[IO](for {
                     l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
                     _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
+                    _ <- HydrozoaTransactionMutator
+                        .screenSignatures(config, l2Tx)
+                        .left
+                        .map(e => L2LedgerError(e.toString))
                 } yield ())
         }
 

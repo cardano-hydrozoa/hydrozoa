@@ -46,7 +46,6 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
-import scalus.crypto.ed25519.Signature
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -433,21 +432,9 @@ object JointLedgerTestHelpers {
                   bodyHash = body.hash
                 )
 
-                userWallet = env.multiNodeConfig
-                    .nodePrivateConfigs(HeadPeerNumber.zero)
-                    .ownWallet
-
-                userVk = userWallet.exportVerificationKey
-
-                _: Signature =
-                    Signature.unsafeFromArray(
-                      IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
-                    )
-
                 request = UserRequest.DepositRequest(
                   header = header,
-                  body = body,
-                  userVk = userVk
+                  body = body
                 )
 
                 req =

@@ -75,8 +75,7 @@ object BlockWeaverTestHelpers {
                 validityEnd = RequestValidityEndTime(zeroQI),
                 bodyHash = Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0)))
               ),
-              body = TransactionRequestBody(ByteString.empty),
-              userVk = mnc.headConfig.headPeerVKeys.head
+              body = TransactionRequestBody(ByteString.empty)
             )
         } yield UserRequestWithId(userRequest = userRequest, requestId = requestId)
     }

@@ -274,7 +274,9 @@ the wire until a later structural phase).
    verification, output/conformance/size checks) + the Phase-1 pin; the remote gets a new screening endpoint
    on `remoteLedgerUri`. Submission stays the current stateful apply path. This is the prerequisite for
    moving auth off COSE.
-4. **Drop the COSE envelope + `bodyHash` — *all backends*** *(corrected from EUTXO-only).* COSE lives at the
+4. **Drop the COSE envelope + `bodyHash` — *all backends*** *(corrected from EUTXO-only).* **DONE** (auth
+   moved into `EutxoL2Ledger.screen`, reusing `VerifiedSignaturesInWitnessesValidator`; shared
+   `UserRequestDecoder` no longer recovers a key from a COSE envelope). COSE lives at the
    **shared** HTTP front door (`UserRequestDecoder`) with **zero backend-awareness**, and is not on the peer
    wire; making it EUTXO-only would mean *adding* a backend branch to keep it for remote nodes — backwards.
    Under §4 the ledger owns *every* check including signature validation, and both backends implement
@@ -288,7 +290,9 @@ the wire until a later structural phase).
    construction sites. With COSE gone (Phase 4), any header field kept "for the remote" would be *unsigned*,
    so the remote must source validity/headId from its own payload anyway — i.e. the fields trend
    droppable-for-all, not remote-only.
-6. **Remove `userVk` from the ledger calls** — `userVk` was used **only** for COSE validation, so once
+6. **Remove `userVk` from the ledger calls** — **DONE** (done together with Phase 4: dropped from
+   `UserRequest`/`UserRequestHeader`, `L2LedgerCommand.{RegisterDeposit,ApplyTransaction}`, the peer-wire
+   `Codecs`, and `JointLedger` construction; zero `.userVKey` reads remained). — `userVk` was used **only** for COSE validation, so once
    Phase 4 removes COSE it has no remaining purpose: drop it from the request, from `L2LedgerCommand.userVKey`
    (the host→ledger command wire), and from the persisted command log. The ledger reads any key it needs from
    the `l2Payload` itself (EUTXO: the native tx's own vkey witnesses; remote: SugarRush's payload — *if* it

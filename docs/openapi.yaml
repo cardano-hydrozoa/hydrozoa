@@ -5,8 +5,8 @@ info:
 paths:
   /api/l2/submit:
     post:
-      description: Submit a signed L2 transaction (a JSON UserRequest with a COSE
-        signature).
+      description: Submit an L2 transaction (a JSON UserRequest whose L2 payload is
+        a native, self-authenticating Cardano transaction).
       operationId: postApiL2Submit
       requestBody:
         content:
@@ -29,7 +29,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /api/deposit/register:
     post:
-      description: Register an L1 deposit (a JSON UserRequest with a COSE signature).
+      description: Register an L1 deposit (a JSON UserRequest whose L2 payload is
+        a native, self-authenticating Cardano transaction).
       operationId: postApiDepositRegister
       requestBody:
         content:

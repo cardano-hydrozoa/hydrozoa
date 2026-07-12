@@ -274,8 +274,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             UserRequestBody.TransactionRequestBody(
               l2Payload = ByteString.fromArray(Array.empty[Byte])
             )
-        val userVk     =
-            ctx.multiNodeConfig.nodeConfigs(peerNum).ownWallet.exportVerificationKey
         for
             now    <- IO.realTimeInstant
             header = UserRequestHeader(
@@ -288,7 +286,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
               ),
               bodyHash = body.hash,
             )
-            userRequest = UserRequest.TransactionRequest(header, body, userVk)
+            userRequest = UserRequest.TransactionRequest(header, body)
             sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peerNum missing in harness")
             )

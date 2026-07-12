@@ -409,15 +409,12 @@ object CommandGenerators:
               bodyHash = body.hash
             )
 
-            userVk = config.nodeConfigs(HeadPeerNumber.zero).ownWallet.exportVerificationKey
-
         } yield L2TxCommand(
           request = UserRequestWithId.TransactionRequest(
             requestId = state.nextRequestId,
             request = UserRequest.TransactionRequest(
               header = header,
-              body = body.asInstanceOf[TransactionRequestBody],
-              userVk = userVk
+              body = body.asInstanceOf[TransactionRequestBody]
             )
           ),
           txStrategy = txStrategy,
@@ -561,19 +558,13 @@ object CommandGenerators:
                                           bodyHash = body.hash
                                         )
 
-                                        userVk = multiNodeConfig
-                                            .nodeConfigs(HeadPeerNumber.zero)
-                                            .ownWallet
-                                            .exportVerificationKey
-
                                     } yield Some(
                                       RegisterDepositCommand(
                                         request = UserRequestWithId.DepositRequest(
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
                                             header = header,
-                                            body = body.asInstanceOf[DepositRequestBody],
-                                            userVk = userVk
+                                            body = body.asInstanceOf[DepositRequestBody]
                                           )
                                         ),
                                         depositRefundTxSeq = depositRefundSeq,

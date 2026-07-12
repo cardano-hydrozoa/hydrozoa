@@ -1,6 +1,5 @@
 package hydrozoa.multisig.server
 
-import com.bloxbean.cardano.client.cip.cip30.{CIP30DataSigner, DataSignature}
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{*, given}
@@ -16,10 +15,8 @@ import io.bullet.borer.Cbor
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
-import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 
 /** JSON encoders and decoders for API types */
@@ -110,101 +107,28 @@ object JsonCodecs {
                 override def toString: String = "Body hash mismatch"
             }
 
-            /** The COSE signature of the header does not match
-              */
-            case object SignatureMismatch extends ValidationError {
-                override def toString: String = "Signature mismatch"
-            }
-
-            case object VerificationKeyParsingFailure extends ValidationError {
-                override def toString: String = "Verification key parsing failure"
-            }
-
-            case object WrongPayload extends ValidationError {
-                override def toString: String = "Signed payload should match the request header"
-            }
-        }
-
-        /** Validates COSE signature.
-          *
-          * @param bodyHash
-          * @param coseKeyCborHex
-          * @param coseSignatureCborHex
-          * @return
-          *   the verification key and signed payload from the COSEKey/COSESignature if valid, an
-          *   error otherwise
-          */
-        def validateCoseSignature(
-            coseKeyCborHex: String,
-            coseSignatureCborHex: String
-        ): Either[Error.ValidationError, (VerificationKey, ByteString)] = {
-            val bbDataSignature = DataSignature(coseSignatureCborHex, coseKeyCborHex)
-            for {
-                // Verify the signature
-                _ <- Either.cond(
-                  CIP30DataSigner.INSTANCE.verify(bbDataSignature),
-                  (),
-                  Error.SignatureMismatch
-                )
-                // Extract the public key from COSE key parameter -2 (x-coordinate for OKP/Ed25519 keys)
-                vKey <- Try(
-                  VerificationKey.unsafeFromArray(bbDataSignature.coseKey().otherHeaderAsBytes(-2))
-                ).toEither.left.map(_ => Error.VerificationKeyParsingFailure)
-                payload = ByteString.fromArray(bbDataSignature.coseSign1().payload())
-            } yield (vKey, payload)
         }
 
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
             for {
-                // QUESTION: What exactly are these "ops" in DecodingFailure cons?
                 header <- c.downField("header").as[UserRequestHeader]
                 // Try both "deposit" and "transaction" fields
                 body <- c
                     .downField("deposit")
                     .as[DepositRequestBody]
                     .orElse(c.downField("transaction").as[TransactionRequestBody])
-                // Check body hash
+                // Bind the header to the body. Authentication is not done here: the L2 payload is a
+                // native, self-authenticating tx, and the ledger's stateless screening verifies its
+                // signatures before a RequestId is assigned.
                 _ <- Either.cond(
                   body.hash == header.bodyHash,
                   (),
                   DecodingFailure(Error.BodyHashMismatch.getMessage, ops = List.empty)
                 )
-                // Validate the COSE signature
-                coseKeyCborHex <- c.downField("coseKey").as[String]
-                cosedSignatureCborHex <- c.downField("coseSignature").as[String]
-                ret <- validateCoseSignature(
-                  coseKeyCborHex,
-                  cosedSignatureCborHex
-                ).left
-                    .map(e => DecodingFailure(e.getMessage, ops = List.empty))
-                (vKey, payload) = ret
-                // Check that payload is actually the serialized header from the request
-                payloadHeader <- io.circe.parser
-                    .decode[UserRequestHeader](
-                      new String(payload.bytes, java.nio.charset.StandardCharsets.UTF_8)
-                    )
-                    .left
-                    .map(e =>
-                        DecodingFailure(
-                          s"Failed to parse payload as UserRequestHeader: ${e.getMessage}",
-                          ops = List.empty
-                        )
-                    )
-                _ <- Either.cond(
-                  payloadHeader == header,
-                  (),
-                  DecodingFailure(Error.WrongPayload.getMessage, ops = List.empty)
-                )
-                // Construct the result
                 userRequest = body match {
-                    case d: DepositRequestBody =>
-                        UserRequest
-                            .DepositRequest(header, d, vKey)
-                    case t: TransactionRequestBody =>
-                        UserRequest
-                            .TransactionRequest(header, t, vKey)
+                    case d: DepositRequestBody     => UserRequest.DepositRequest(header, d)
+                    case t: TransactionRequestBody => UserRequest.TransactionRequest(header, t)
                 }
-
             } yield userRequest
     }
 

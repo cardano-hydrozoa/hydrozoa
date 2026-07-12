@@ -181,13 +181,11 @@ extension (self: UserRequestWithId)
         case UserRequestWithId.DepositRequest(_, r) =>
             UserRequest.DepositRequest(
               header = r.header,
-              body = r.body,
-              userVk = r.userVk
+              body = r.body
             )
         case UserRequestWithId.TransactionRequest(_, r) =>
             UserRequest.TransactionRequest(
               header = r.header,
-              body = r.body,
-              userVk = r.userVk
+              body = r.body
             )
     }

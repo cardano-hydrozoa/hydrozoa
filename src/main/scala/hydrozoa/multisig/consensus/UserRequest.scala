@@ -6,21 +6,15 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidi
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.server.JsonCodecs.given_Encoder_UserRequestHeader
-import io.circe.*
-import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
-import scalus.crypto.ed25519.{Signature, VerificationKey}
 import scalus.uplc.builtin.Builtins.blake2b_256
-import scalus.uplc.builtin.{ByteString, JVMPlatformSpecific}
+import scalus.uplc.builtin.ByteString
 import scalus.|>
 
 // TODO: move away from server, it doesn't belong in here
-/** A parsed user request with a valid signature and body hash
-  *
-  * @param signature
-  *   Signature of the header, encoded as the bytestring of the UTF-8 representation of json string,
-  *   verifiable by userVK
+/** A parsed user request: a header bound to its body by the header's body hash. Authentication is
+  * not carried here — the L2 payload in the body is a native, self-authenticating Cardano
+  * transaction, and its signatures are verified by the ledger's stateless screening (§5.4 Phase 4).
   */
 enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejected, RequestId]] {
 
@@ -29,18 +23,15 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
 
     def header: UserRequestHeader
     def body: UserRequestBody
-    def userVk: VerificationKey
 
     case DepositRequest private (
         override val header: UserRequestHeader,
-        override val body: UserRequestBody.DepositRequestBody,
-        override val userVk: VerificationKey
+        override val body: UserRequestBody.DepositRequestBody
     ) extends UserRequest
 
     case TransactionRequest private (
         override val header: UserRequestHeader,
-        override val body: UserRequestBody.TransactionRequestBody,
-        override val userVk: VerificationKey
+        override val body: UserRequestBody.TransactionRequestBody
     ) extends UserRequest
 }
 
@@ -49,17 +40,15 @@ object UserRequest {
     object DepositRequest {
         def apply(
             header: UserRequestHeader,
-            body: DepositRequestBody,
-            userVk: VerificationKey
-        ): DepositRequest = new UserRequest.DepositRequest(header, body, userVk)
+            body: DepositRequestBody
+        ): DepositRequest = new UserRequest.DepositRequest(header, body)
     }
 
     object TransactionRequest {
         def apply(
             header: UserRequestHeader,
-            body: TransactionRequestBody,
-            userVk: VerificationKey
-        ): TransactionRequest = new UserRequest.TransactionRequest(header, body, userVk)
+            body: TransactionRequestBody
+        ): TransactionRequest = new UserRequest.TransactionRequest(header, body)
     }
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, Either[Rejected, RequestId]]
@@ -88,13 +77,7 @@ case class UserRequestHeader(
     validityStart: RequestValidityStartTime,
     validityEnd: RequestValidityEndTime,
     bodyHash: Hash32
-) {
-    def signEd25519(privateKey: ByteString): Signature =
-        Signature.unsafeFromByteString(JVMPlatformSpecific.signEd25519(privateKey, this.byteString))
-    // TODO: do we want to remove it finally?
-    def bytes: Array[Byte] = this.asJson(given_Encoder_UserRequestHeader).toString.getBytes("UTF-8")
-    private def byteString: ByteString = ByteString.fromArray(this.bytes)
-}
+)
 
 enum UserRequestBody {
 

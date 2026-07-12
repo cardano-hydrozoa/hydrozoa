@@ -326,7 +326,6 @@ final case class JointLedger(
                     else {
                         val l2Command = L2LedgerCommand.RegisterDeposit(
                           requestId = requestId,
-                          userVKey = req.request.userVk,
                           blockNumber = currentBlockNum,
                           blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
                           depositId = depositProduced.utxoId,
@@ -403,7 +402,6 @@ final case class JointLedger(
                     val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
                         .ApplyTransaction(
                           requestId = req.requestId,
-                          userVKey = req.request.userVk,
                           blockNumber = p.nextBlockNumber,
                           blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
                           l2Payload = l2Payload

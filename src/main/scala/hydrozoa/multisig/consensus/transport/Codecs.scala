@@ -17,7 +17,6 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import scalus.crypto.ed25519.VerificationKey
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
@@ -27,8 +26,8 @@ import scodec.bits.ByteVector
   *
   * Codecs are bundled here rather than spread across types because (a) several inner types are
   * opaque and have no public codecs, and (b) the existing codecs in
-  * [[hydrozoa.multisig.server.JsonCodecs]] are tailored for the user-facing API (COSE-validated
-  * UserRequest decoding) and don't round-trip cleanly between peers.
+  * [[hydrozoa.multisig.server.JsonCodecs]] are tailored for the user-facing API (UserRequest
+  * decoding) and don't round-trip cleanly between peers.
   */
 object Codecs {
 
@@ -413,9 +412,8 @@ object Codecs {
 
     // ---- UserRequestWithId ----
     //
-    // Plain field-by-field encoding of UserRequest (header/body/userVk). The COSE
-    // signature/validation flow in [[hydrozoa.multisig.server.JsonCodecs]] is intended for
-    // the user-facing API, not peer-to-peer. Trust-by-network for v1.
+    // Plain field-by-field encoding of UserRequest (header/body). Trust-by-network for v1; the
+    // user-facing API carries no signature envelope — the L2 payload is a self-authenticating tx.
 
     private given Codec[UserRequestBody.DepositRequestBody] =
         deriveCodec[UserRequestBody.DepositRequestBody]
@@ -431,16 +429,14 @@ object Codecs {
         val enc: Encoder[UserRequest.DepositRequest] = Encoder.instance(r =>
             Json.obj(
               "header" -> r.header.asJson,
-              "body" -> r.body.asJson,
-              "userVk" -> r.userVk.asJson
+              "body" -> r.body.asJson
             )
         )
         val dec: Decoder[UserRequest.DepositRequest] = Decoder.instance(c =>
             for {
                 h <- c.downField("header").as[UserRequestHeader]
                 b <- c.downField("body").as[UserRequestBody.DepositRequestBody]
-                vk <- c.downField("userVk").as[VerificationKey]
-            } yield UserRequest.DepositRequest(h, b, vk)
+            } yield UserRequest.DepositRequest(h, b)
         )
         io.circe.Codec.from(dec, enc)
     }
@@ -449,16 +445,14 @@ object Codecs {
         val enc: Encoder[UserRequest.TransactionRequest] = Encoder.instance(r =>
             Json.obj(
               "header" -> r.header.asJson,
-              "body" -> r.body.asJson,
-              "userVk" -> r.userVk.asJson
+              "body" -> r.body.asJson
             )
         )
         val dec: Decoder[UserRequest.TransactionRequest] = Decoder.instance(c =>
             for {
                 h <- c.downField("header").as[UserRequestHeader]
                 b <- c.downField("body").as[UserRequestBody.TransactionRequestBody]
-                vk <- c.downField("userVk").as[VerificationKey]
-            } yield UserRequest.TransactionRequest(h, b, vk)
+            } yield UserRequest.TransactionRequest(h, b)
         )
         io.circe.Codec.from(dec, enc)
     }

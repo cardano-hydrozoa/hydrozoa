@@ -14,7 +14,6 @@ import scala.util.Try
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.{Coin, TransactionInput, Value}
 import scalus.cardano.onchain.plutus.v3.PosixTime
-import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, Data}
 import scodec.bits.ByteVector
 
@@ -71,7 +70,6 @@ object L2LedgerCommand {
 
     final case class RegisterDeposit(
         requestId: RequestId,
-        userVKey: VerificationKey,
         blockNumber: BlockNumber,
         blockCreationStartTime: PosixTime,
         depositId: TransactionInput,
@@ -83,7 +81,6 @@ object L2LedgerCommand {
 
     object RegisterDeposit {
 
-        // TODO: can be removed if we just rename the userVk field?
         given depositRegistrationEncoder: io.circe.Encoder[L2LedgerCommand.RegisterDeposit] = {
             import Destination.given
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
@@ -92,7 +89,6 @@ object L2LedgerCommand {
             (r: L2LedgerCommand.RegisterDeposit) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
-                  "userVk" -> summon[io.circe.Encoder[VerificationKey]].apply(r.userVKey),
                   "blockNumber" -> r.blockNumber.asJson,
                   "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
                   "depositId" -> r.depositId.asJson,
@@ -132,7 +128,6 @@ object L2LedgerCommand {
       */
     final case class ApplyTransaction(
         requestId: RequestId,
-        userVKey: VerificationKey,
         blockNumber: BlockNumber,
         blockCreationStartTime: PosixTime,
         l2Payload: ByteString
@@ -143,28 +138,23 @@ object L2LedgerCommand {
         import BlockNumber.given
         import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 
-        // TODO: can be removed if we just rename the userVk field?
         given applyTransactionEncoder: io.circe.Encoder[L2LedgerCommand.ApplyTransaction] =
             (r: L2LedgerCommand.ApplyTransaction) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
-                  "userVk" -> summon[io.circe.Encoder[VerificationKey]].apply(r.userVKey),
                   "blockNumber" -> r.blockNumber.asJson,
                   "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
                   "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
                 )
 
-        // Hand-written to match the encoder's `userVk` key (the case-class field is `userVKey`, so a
-        // derived decoder looks for the wrong key and never round-trips). Ported from PR #465.
         given applyTransactionDecoder: io.circe.Decoder[L2LedgerCommand.ApplyTransaction] =
             io.circe.Decoder.instance(c =>
                 for {
                     rid <- c.downField("requestId").as[RequestId]
-                    vk <- c.downField("userVk").as[VerificationKey]
                     bn <- c.downField("blockNumber").as[BlockNumber]
                     t <- c.downField("blockCreationStartTime").as[PosixTime]
                     p <- c.downField("l2Payload").as[ByteString]
-                } yield L2LedgerCommand.ApplyTransaction(rid, vk, bn, t, p)
+                } yield L2LedgerCommand.ApplyTransaction(rid, bn, t, p)
             )
     }
 
