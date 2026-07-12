@@ -43,10 +43,14 @@ and off by default. (L1 replay is *already* mostly prevented structurally — an
 references that don't exist on L1 — so the pin mainly defends **cross-head** replay and adds defense
 in depth.)
 
-## 3. What a request carries today (from the code)
+## 3. What a request carried before the strip (the baseline)
 
-`UserRequest` = `header` + `body` + `userVk`, and the **body already carries the payload fields** —
-the payload split is NOT what's new:
+> **Landed (§5.4):** all of this is now gone. The `header`, `userVk`, and the COSE `signature` were
+> removed; a `UserRequest` is now just its `body` (a native, self-authenticating tx). This section is
+> the pre-strip baseline that motivated the change — read §5.4 for the end state.
+
+`UserRequest` was `header` + `body` + `userVk`, and the **body already carried the payload fields** —
+the payload split is NOT what was new:
 
 - `DepositRequestBody(l1Payload, l2Payload)` — `l1Payload` is the cbor-encoded (unsigned) deposit tx;
   `l2Payload` is an opaque byte array passed unmodified to the L2.
@@ -415,6 +419,15 @@ state (e.g. peer equity that must appear on L2 at open rather than as treasury)?
 
 ## 8. Landed so far
 
+**On branch `feature/isomorphic-l2` (tip `1773d3d8`): all six §5.4 field-removal phases + the CIP-30
+retirement have landed.** The request wrapper is gone — no header, no `userVk`, no COSE envelope; a
+request is just its body. `EutxoL2Ledger.screen` authenticates the native tx's own vkey witnesses
+statelessly (pre-`RequestId`, reusing `VerifiedSignaturesInWitnessesValidator`); the headId pin lives
+in a dedicated tx metadatum (label 4936) checked by the ledger; deposit `validityEnd` is derived from
+the deposit tx TTL. The **AnyRemote** tx-path validity check was dropped in favor of the remote
+ledger's own screening (item 3). Verified `-Werror`-clean across main/test/integration + 9/9 stage
+properties (Stage1-Mock + Stage4 incl. 20-peer/WS).
+
 On branch `ilia/multi-peer-deployment` (PR open, merged up to date with `main`): the L2 query
 endpoints are now **EUTXO-only and optional**, a provisional step toward backend selection.
 - `L2LedgerReader` → **`EutxoL2LedgerReader`**, decoupled from `L2Ledger` (only `EutxoL2Ledger`
@@ -438,21 +451,24 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
 2. **Separate runnable targets** to submit deposits and transactions when the `cardano-eutxo` ledger
    is used.
 3. **Screening endpoint** on the remote ledger (takes `l2Payload` → yes/no) + the final verdict
-   signal-back after Gummiworm-side validation.
-4. **Native-tx isomorphism — strip the request wrapper (header + COSE `signature` + `userVk`).** Now
-   fully phased in **§5.4** (headId pin → tx-validity → ledger screening → drop COSE *for all backends* →
-   delete header fields → resolve `userVk`). Screening does signature/output checks; submission does the
-   stateful checks.
+   signal-back after Gummiworm-side validation. **Now load-bearing:** §5.4 Phase 5 removed the
+   Gummiworm-side validity/headId check on the AnyRemote path, so this endpoint is the *only* thing
+   screening a remote payload. `RemoteL2Ledger.screen` is a passthrough stub until it lands — so
+   AnyRemote is not yet a safe production backend (EUTXO is).
+4. **Native-tx isomorphism — strip the request wrapper (header + COSE `signature` + `userVk`).** ✅
+   **DONE** — all of **§5.4** landed (headId pin → tx-validity → ledger screening → drop COSE *for all
+   backends* → delete the header entirely → drop `userVk`). Screening does signature/output checks;
+   submission does the stateful checks.
 5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2 — see §5.4 prerequisites
    (it is the existing per-head `SlotConfig`, to be formalized, not built).
 6. **Deposits (§5.3):** ✅ **DONE (behavioral, deposit-only).** The deposit path now derives
    `validityEnd = ttl − submissionDuration` from the parsed deposit tx's mandatory TTL (a missing TTL
    fails the parse) instead of reading a request-header field; the accept-by check
    `block_creation_start < validityEnd` runs post-parse against that derived value; `submissionDuration`
-   stays (head config, exposed via `/head-info`). The shared `UserRequestHeader.validityEnd` **field is
-   kept** — it is still read by the transaction path, and literally deleting it is entangled with items
-   4/5 (a `TransactionRequest` has no TTL to derive from) plus the signed-header COSE golden. **Defer the
-   field deletion to §5.**
+   stays (head config, exposed via `/head-info`). The `UserRequestHeader.validityEnd` field — and the
+   whole `UserRequestHeader` — was **deleted in §5.4 Phase 5**: the transaction path now relies on the
+   tx's own slot interval, and the stage model reads the deposit's `validityEnd` from
+   `DepositUtxo.requestValidityEndTime` (matching the ledger) rather than a header field.
 7. **Naming:** replace working terms (`l2Payload`/`l1Payload`) with project-consistent names before code.
 8. **GUM-104 — ledger config at init (§6.1):** specify it in the whitepaper's initialization section;
    make the shared bootstrap config ledger-agnostic; derive the initial L2 state (drop
@@ -462,5 +478,6 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
 ## 10. Open questions
 
 - Finishing `headParamsHash` (`= ???`) and where exactly `l2ledger` + the L2 params hash in.
-- Whether the remote ledger needs a distinguished `userVk` (decides whether it can be dropped from
-  the wire entirely, not just the EUTXO path).
+- `userVk` was **dropped from the wire entirely** (§5.4 Phase 6), not just the EUTXO path. If a remote
+  ledger needs a key, it must source it from its own `l2Payload` — resolved as part of the remote
+  screening endpoint (item 3), not a distinguished request field.
