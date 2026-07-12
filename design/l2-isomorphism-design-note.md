@@ -421,8 +421,21 @@ from the config and verifies it, and the EUTXO ledger seeds its opening state fr
 cannot "derive and forget" a value the on-chain tx commits to and every node verifies — so the opening
 state stays an explicit, agreed field of the bootstrap config. It is carried in a human-readable form —
 `initialL2State`, a list of CIP-0116 outputs (address + value) — which `BuildHeadConfig` keys into the
-`initialEvacuationMap` once the seed utxo is resolved (each output's input reference is the seed tx id +
-its index). (Its *content* can still be as simple as empty, the current default.)
+`initialEvacuationMap` once the seed utxo is resolved. Each output's input reference is
+`(L2Genesis.mkGenesisId(seedInput), i)`: a synthetic tx id that hashes the *whole* seed input (tx id +
+index), the same convention the EUTXO ledger uses for deposit-created utxos — reusing the seed's raw tx
+id would let `(seedTxId, i)` collide with a real on-chain output of the seed's own transaction. (Its
+*content* can still be as simple as empty, the current default.)
+
+**Divergence from the spec: `initialL2State`, not the spec's `initialEvacuationMap`, in the bootstrap
+config.** The whitepaper's bootstrap-config section (`.../cardano/initialization`) specifies the opening
+state as `initialEvacuationMap` — a *keyed* map `{ cbor(input): cbor(destination) }`. That keyed map
+**cannot be authored in the bootstrap config**: its keys are CBOR-encoded `TransactionInput`s derived
+from the seed utxo, which `BuildHeadConfig` only resolves at build time (the demo auto-selects it from
+head peer 0's wallet). So the bootstrap config carries the unkeyed pre-image `initialL2State` (a list of
+outputs), and the keyed `initialEvacuationMap` is what `BuildHeadConfig` derives into the head config
+(`InitializationParameters`) — which *does* match the spec's shape. The spec text is left unchanged; this
+is a deliberate representation divergence, not a spec change.
 
 **Landed: a spec-shaped bootstrap config, `peers.json` → `bootstrap.json`.** The whitepaper's
 head-initialization section defines a **bootstrap config** (human-authored) that the tooling turns into
@@ -437,15 +450,26 @@ head peer) both emitted by `InitBootstrapFiles`, and the `script-refs.json` from
 artifact: the network (was hard-coded `Preview`), the script references (was a separate
 `--script-refs script-refs.json`), and the opening state (was hard-coded in `Bootstrap.scala`).
 
-**Still simplified / not yet in the config** (the demo's head-0-funds-everything model):
-`initialEquityContributions` (the `--equity` CLI, head-0 only), `seedUtxo` + `additionalFundingUtxos`
-(auto-resolved from head-0's L1 address at build), block-zero timing (derived from wall-clock), and
-`headParams` (demo defaults). The spec's bootstrap config carries all of these; folding them in is the
-remaining GUM-104 work.
+**Landed 2026-07-12: `headParams` + equity + timing surfaced into the config.** The values
+`mkSharedHeadConfig` used to hard-code are now agreed bootstrap-config fields, seeded with demo
+defaults by `InitBootstrapFiles` into `bootstrap-defaults.json`: the full `headParams` (`txTiming`,
+`fallbackContingency`, `disputeResolutionConfig`, `settlementConfig`, `coilQuorum` — folding the
+standalone `coilQuorum` into `headParams`, per the spec shape) and the per-peer
+`initialEquityContributions` (replacing `BuildHeadConfig`'s `--equity` CLI). Block-zero timing
+(`blockZeroStartTime` / `blockZeroEndTime`) is **optional**: omit it and `BuildHeadConfig` anchors the
+initial block to wall-clock at build (kept relaxed — the head config stays ironclad-concrete either
+way, since it is built right before bring-up).
 
-**Open questions.** (a) Whether `headParams` + block-zero timing should be negotiated into the config
-now (the spec puts them there) or stay derived. (b) Whether the fallback KZG commitment should fold
-into `l2ParamsHash` rather than being recomputed from the config's evacuation map at build/parse.
+**Still simplified / not yet in the config** (the demo's head-0-funds-everything model): only
+`seedUtxo` + `additionalFundingUtxos` remain out — `build-bootstrap` stays pure, so `build-head-config`
+resolves the seed + funding from head peer 0's L1 address at build. Folding those in (which would let
+`build-bootstrap` talk to L1 and carry the *keyed* `initialEvacuationMap`) is the remaining GUM-104
+work.
+
+**Open questions.** (a) Whether the pure `BuildBootstrapConfig` merge step earns its place at all, or
+the roster + defaults + l2-state should be assembled another way (e.g. `GenerateKeyPair` writing
+`bootstrap.json` directly). Kept for now. (b) Whether the fallback KZG commitment should fold into
+`l2ParamsHash` rather than being recomputed from the config's evacuation map at build/parse.
 
 ## 7. Deployment / one-command
 
