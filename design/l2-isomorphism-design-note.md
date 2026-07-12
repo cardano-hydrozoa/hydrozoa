@@ -285,11 +285,14 @@ the wire until a later structural phase).
    shared decoder outright. **Depends on Phase 3** (the remote screening endpoint must authenticate the remote
    payload first). **Assumes** the remote payload self-authenticates (true of any ledger's tx format; confirm
    against the SugarRush contract). Regenerate/delete the `JsonCodecsTest` COSE golden.
-5. **Delete the redundant header fields from the request type** — delete `headId / validityStart /
-   validityEnd / bodyHash` from `UserRequestHeader`. Lockstep peer-transport wire change + goldens + ~8
-   construction sites. With COSE gone (Phase 4), any header field kept "for the remote" would be *unsigned*,
-   so the remote must source validity/headId from its own payload anyway — i.e. the fields trend
-   droppable-for-all, not remote-only.
+5. **Delete the redundant header fields from the request type** — **DONE** (the whole `UserRequestHeader`
+   is gone, not just the fields: all four were redundant after Phases 1-2, so the request collapsed to its
+   body). `headId` was pinned in the tx metadatum (Phase 1); `validityStart` was already `@unused`
+   everywhere; `validityEnd` on the deposit path is derived from the deposit tx TTL (the model now sources
+   it from `DepositUtxo.requestValidityEndTime` too); `bodyHash` bound a header that no longer exists. The
+   **AnyRemote** tx-path header-validity check was dropped — a remote ledger enforces validity in its own
+   screening (Ilia chose collapse-now over deferring to that slice). Wire form drops the `header` envelope
+   on both the user-facing API (still `stringJsonBody`, so no OpenAPI change) and the peer transport.
 6. **Remove `userVk` from the ledger calls** — **DONE** (done together with Phase 4: dropped from
    `UserRequest`/`UserRequestHeader`, `L2LedgerCommand.{RegisterDeposit,ApplyTransaction}`, the peer-wire
    `Codecs`, and `JointLedger` construction; zero `.userVKey` reads remained). — `userVk` was used **only** for COSE validation, so once
