@@ -7,6 +7,7 @@ import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockNumber
@@ -88,6 +89,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     routes <- HydrozoaRoutes(
                       requestSequencerStub,
                       blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
                       Some(ledger),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
@@ -119,6 +121,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     routes <- HydrozoaRoutes(
                       requestSequencerStub,
                       blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

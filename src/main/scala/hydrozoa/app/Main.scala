@@ -413,6 +413,7 @@ object Main
                             sys.error("RequestSequencer required on head peers")
                           ),
                           connections.blockWeaver,
+                          mrm.nodeStatus.get,
                           // Some(reader) for a cardano-eutxo node (mounts GET /api/l2/...); None for
                           // a remote-ledger node, which serves no L2-query endpoints.
                           l2QueryReader,

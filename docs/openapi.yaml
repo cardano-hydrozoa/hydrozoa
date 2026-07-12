@@ -79,6 +79,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+  /ready:
+    get:
+      description: Readiness — 200 only while the head is Active (open on L1); 503
+        with the lifecycle status otherwise.
+      operationId: getReady
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
   /api/admin/finalize:
     post:
       description: Trigger head finalization (admin only).
@@ -163,6 +175,14 @@ components:
           type: string
     HealthResponse:
       title: HealthResponse
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+    ReadinessResponse:
+      title: ReadinessResponse
       type: object
       required:
       - status

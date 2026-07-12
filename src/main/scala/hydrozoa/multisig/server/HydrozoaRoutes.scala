@@ -3,6 +3,7 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.server.ApiDto.*
@@ -33,6 +34,7 @@ import sttp.tapir.swagger.bundle.SwaggerInterpreter
 class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
+    nodeStatus: IO[NodeStatus],
     l2QueryReader: Option[EutxoL2LedgerReader[IO]],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
@@ -159,6 +161,27 @@ class HydrozoaRoutes(
             .description("Liveness — always 200 while the process is serving HTTP.")
             .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
 
+    /** Readiness — `200` only while the head is [[NodeStatus.Active]] (open on L1); otherwise
+      * `503`, always with the lifecycle status in the body, so a proxy routes user traffic here
+      * only when the node can serve it. The verdict is the status code; the body is diagnostic.
+      */
+    private val readyEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("ready")
+            .out(statusCode.and(jsonBody[ReadinessResponse]))
+            .description(
+              "Readiness — 200 only while the head is Active (open on L1); 503 with the lifecycle " +
+                  "status otherwise."
+            )
+            .serverLogicSuccess(_ =>
+                nodeStatus.map { status =>
+                    val code =
+                        if status == NodeStatus.Active then StatusCode.Ok
+                        else StatusCode.ServiceUnavailable
+                    (code, ApiDto.mkReadinessResponse(status))
+                }
+            )
+
     private val finalizeEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
             // Optional credentials so the security logic runs (and logs) even when the header is
@@ -216,6 +239,7 @@ class HydrozoaRoutes(
           registerDepositEndpoint,
           headInfoEndpoint,
           healthEndpoint,
+          readyEndpoint,
           finalizeEndpoint
         )
 
@@ -311,6 +335,7 @@ object HydrozoaRoutes {
     def apply(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        nodeStatus: IO[NodeStatus],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
@@ -320,6 +345,7 @@ object HydrozoaRoutes {
           new HydrozoaRoutes(
             requestSequencer,
             blockWeaver,
+            nodeStatus,
             l2QueryReader,
             headConfig,
             serverConfig,
