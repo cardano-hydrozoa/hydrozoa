@@ -21,40 +21,25 @@ semantics below are EUTXO-only.
 
 ## Changes in this PR (#531)
 
-A grouped overview of what branch `feature/isomorphic-l2` changes, for review. The sections below are
-the design rationale; this list is the "what landed".
+A grouped overview of what branch `feature/isomorphic-l2` changes; the sections below give the rationale.
 
-**L2 isomorphism — strip the request wrapper (§5.4).** Make the built-in EUTXO ledger drivable by
-native Cardano txs, and move every request check into the ledger:
-
-- **Phase 1** — a dedicated `headId` aux-data pin (a tx metadatum the ledger checks against its own
-  head id; gated by the `identityIsomorphism` toggle, default enforce).
-- **Phase 2** — EUTXO tx validity comes from the tx's own slot interval, not a request-header field.
-- **Phase 3** — `L2Ledger.screen()` entry point (stateless, pre-`RequestId`) + the `RequestSequencer`
-  id-assignment inversion (a screened-out request never gets a durable id or fan-out).
-- **Phase 4+6** — drop the COSE envelope and `userVk` for all backends; `EutxoL2Ledger.screen`
-  authenticates the native tx's own vkey witnesses.
-- **Phase 5** — collapse `UserRequestHeader` entirely; a request is just its body.
-- **Deposits (§5.3)** — derive the accept-by `validityEnd` from the deposit tx's TTL.
-
-**L2 backend selection & config.** `HeadParameters.l2Ledger` (`cardano-eutxo` | `any-remote`) +
-`identityIsomorphism`; `sugarRushUri` → `remoteLedgerUri` (now optional); the L2 query endpoints gated
-EUTXO-only (`EutxoL2LedgerReader`).
-
-**Bootstrap config — `peers.json` → `bootstrap.json` (§6.1).** Reworked the peer roster into a
-spec-shaped `Bootstrap.BootstrapConfig` (`bootstrap.json`) that also carries `cardanoNetwork`,
-`scriptReferenceUtxos`, and `initialEvacuationMap` — folding the network (was hard-coded `Preview`),
-the script references (was a separate `--script-refs` file), and the evacuation map (was hard-coded in
-`Bootstrap.scala`) into one agreed artifact. `BuildHeadConfig` reads it; the justfile is updated.
-
-**Wallet cleanup.** Retire the now-dead CIP-30 `signData` chain (its only user was the deleted COSE
-request path).
-
-**Merged from `origin/main`.** fund14-proj69 (the `/ready` readiness endpoint + `NodeStatus`) and
-#505 / GUM-129 (init-tx parsing; `Bootstrap` moved to the `hydrozoa.bootstrap` package).
-
-**Docs.** This design note: the §5.4 field-removal roadmap and its landings, the §5.3 deposit change,
-the evacuation-map ledger-agnostic correction (§6.1), and the §6.1 bootstrap-config revision.
+- **L2 isomorphism — strip the request wrapper (§5.4).** The EUTXO ledger is now drivable by native
+  Cardano txs: the `headId` pin moves into a tx metadatum the ledger checks; tx validity comes from the
+  tx's own slot interval; a stateless `L2Ledger.screen()` gates `RequestSequencer` and authenticates the
+  tx's own witnesses; and the COSE envelope, `userVk`, and the whole `UserRequestHeader` are gone — a
+  request is just its body. Deposit accept-by is derived from the deposit tx's TTL (§5.3).
+- **L2 backend selection & config.** `HeadParameters.l2Ledger` (`cardano-eutxo` | `any-remote`) +
+  `identityIsomorphism`; `sugarRushUri` → `remoteLedgerUri` (optional); L2 query endpoints gated
+  EUTXO-only.
+- **Bootstrap config — `peers.json` → `bootstrap.json` (§6.1).** A spec-shaped `Bootstrap.BootstrapConfig`
+  carrying `cardanoNetwork`, `scriptReferenceUtxos`, and the opening `initialL2State` — folding the
+  network, script refs, and opening state out of hard-code / side-files into one agreed artifact,
+  assembled by `BuildBootstrapConfig` and read by `BuildHeadConfig`.
+- **Wallet cleanup.** Retire the now-dead CIP-30 `signData` chain.
+- **Merged from `origin/main`.** fund14-proj69 (`/ready` + `NodeStatus`) and #505 / GUM-129 (init-tx
+  parsing; `Bootstrap` moved to `hydrozoa.bootstrap`).
+- **Docs.** This design note (§5.4 roadmap, §5.3 deposits, §6.1 evacuation-map correction +
+  bootstrap-config revision).
 
 ## 1. Isomorphism goal (EUTXO)
 
@@ -428,25 +413,29 @@ narrower:
   (`RuleBasedActor`), `StackEffectsBuilder`, and the `InitializationTx` all read it — so removing it
   from the shared config touches the fallback path too, not just the ledger.
 
-**Direction — revised (landed 2026-07-12): keep the evacuation map in the bootstrap config.** GUM-104's
-"derive not store, keep only a commitment" does **not** work for the evacuation map. The initialization
-tx *commits to the initial map on-chain*: the multisig-treasury value is `initialL2Value = Σ(map utxo
-values)`, and the treasury datum carries the map's KZG commitment. GUM-129's parse side recomputes that
-datum from the config and verifies it, and the EUTXO ledger seeds its opening state from
-`initialEvacuationMap.toUtxos`. You cannot "derive and forget" a value the on-chain tx commits to and
-every node verifies — so the initial evacuation map stays an explicit, agreed field of the bootstrap
-config. (Its *content* can still be as simple as "empty + a fee-account reserve", the current default.)
+**Direction — revised (landed 2026-07-12): keep the opening L2 state in the bootstrap config.** GUM-104's
+"derive not store, keep only a commitment" does **not** work here. The initialization tx *commits to the
+opening state on-chain*: the multisig-treasury value is `initialL2Value = Σ(output values)`, and the
+treasury datum carries the evacuation map's KZG commitment. GUM-129's parse side recomputes that datum
+from the config and verifies it, and the EUTXO ledger seeds its opening state from the same map. You
+cannot "derive and forget" a value the on-chain tx commits to and every node verifies — so the opening
+state stays an explicit, agreed field of the bootstrap config. It is carried in a human-readable form —
+`initialL2State`, a list of CIP-0116 outputs (address + value) — which `BuildHeadConfig` keys into the
+`initialEvacuationMap` once the seed utxo is resolved (each output's input reference is the seed tx id +
+its index). (Its *content* can still be as simple as empty, the current default.)
 
 **Landed: a spec-shaped bootstrap config, `peers.json` → `bootstrap.json`.** The whitepaper's
 head-initialization section defines a **bootstrap config** (human-authored) that the tooling turns into
-the head config (adding `headId` + the built `initTx`). The tooling now matches that shape: the old
-`peers.json` roster was reworked into `Bootstrap.BootstrapConfig` (`config/demo/bootstrap.json`, read by
-`BuildHeadConfig`), which carries `cardanoNetwork`, the peer topology
-(`headPeers`/`coilPeers`/`coilQuorum`), `scriptReferenceUtxos`, and `initialEvacuationMap`. This folded
-three things out of the code / side-files into one agreed artifact: the network (was hard-coded
-`Preview`), the script references (was a separate `--script-refs script-refs.json`), and the evacuation
-map (was hard-coded in `Bootstrap.scala`). `GenerateKeyPair` still emits the peer-topology portion
-(`Bootstrap.Membership`) as a partial `bootstrap.json` that the operators complete.
+the head config (adding `headId` + the built `initTx`). The tooling now matches that shape:
+`Bootstrap.BootstrapConfig` (`config/demo/bootstrap.json`, read by `BuildHeadConfig`) carries
+`cardanoNetwork`, the peer topology (`headPeers`/`coilPeers`/`coilQuorum`), `scriptReferenceUtxos`, and
+the opening `initialL2State`. It is assembled from four operator-facing files by the pure
+`BuildBootstrapConfig` tool: the `roster.json` peer topology (`GenerateKeyPair`), a
+`bootstrap-defaults.json` (network + coil quorum) and an `l2-state.json` template (one funded output per
+head peer) both emitted by `InitBootstrapFiles`, and the `script-refs.json` from
+`deploy-reference-scripts`. This folded three things out of the code / side-files into one agreed
+artifact: the network (was hard-coded `Preview`), the script references (was a separate
+`--script-refs script-refs.json`), and the opening state (was hard-coded in `Bootstrap.scala`).
 
 **Still simplified / not yet in the config** (the demo's head-0-funds-everything model):
 `initialEquityContributions` (the `--equity` CLI, head-0 only), `seedUtxo` + `additionalFundingUtxos`
@@ -523,10 +512,11 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
    tx's own slot interval, and the stage model reads the deposit's `validityEnd` from
    `DepositUtxo.requestValidityEndTime` (matching the ledger) rather than a header field.
 7. **Naming:** replace working terms (`l2Payload`/`l1Payload`) with project-consistent names before code.
-8. **GUM-104 — ledger config at init (§6.1):** specify it in the whitepaper's initialization section;
-   make the shared bootstrap config ledger-agnostic; derive the initial L2 state (drop
-   `initialEvacuationMap`, keep only a commitment / `l2ParamsHash`); confirm the fallback regime +
-   `InitializationTx` can derive it too.
+8. **GUM-104 — ledger config at init (§6.1):** ⚠️ **partly landed.** The opening state stays in the
+   bootstrap config (as `initialL2State`, not a bare commitment — the init tx commits to it on-chain and
+   every node verifies it, see §6.1). Remaining: fold the still-simplified fields into the config
+   (`initialEquityContributions`, `seedUtxo` + `additionalFundingUtxos`, block-zero timing, `headParams`)
+   and specify the bootstrap config in the whitepaper's initialization section.
 
 ## 10. Open questions
 
