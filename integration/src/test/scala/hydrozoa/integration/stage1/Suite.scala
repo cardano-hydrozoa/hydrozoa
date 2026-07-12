@@ -351,10 +351,13 @@ case class Suite(
 
             generateHeadConfig = hydrozoa.config.head.generateHeadConfig(
               genHeadConfigBootstrap = generateHeadConfigBootstrap,
-              generateInitialBlock = bootstrap =>
+              generateInitialBlock = (bootstrap, funding) =>
                   hydrozoa.config.head.initialization.generateInitialBlock(
                     genHeadConfigBootstrap = ReaderT
-                        .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                        .pure[Gen, TestPeers, (
+                            hydrozoa.config.head.HeadConfig.Bootstrap,
+                            hydrozoa.bootstrap.InitializationFunding
+                        )]((bootstrap, funding)),
                     generateBlockCreationEndTime = generateHeadStartTime
                   )
             )

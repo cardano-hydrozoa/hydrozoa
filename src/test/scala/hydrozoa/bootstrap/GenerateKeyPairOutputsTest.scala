@@ -1,7 +1,7 @@
-package hydrozoa.app
+package hydrozoa.bootstrap
 
 import cats.data.NonEmptyMap
-import hydrozoa.app.GenerateKeyPair.Role
+import hydrozoa.bootstrap.GenerateKeyPair.Role
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.node.NodePrivateConfig

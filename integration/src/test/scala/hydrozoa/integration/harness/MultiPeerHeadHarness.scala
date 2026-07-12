@@ -166,10 +166,13 @@ object MultiPeerHeadHarness:
                         ),
                         coilPeers = coilPeers,
                       ),
-                      generateInitialBlock = bootstrap =>
+                      generateInitialBlock = (bootstrap, funding) =>
                           generateInitialBlock(
                             genHeadConfigBootstrap = ReaderT
-                                .pure[Gen, TestPeers, HeadConfig.Bootstrap](bootstrap),
+                                .pure[Gen, TestPeers, (
+                                    HeadConfig.Bootstrap,
+                                    hydrozoa.bootstrap.InitializationFunding
+                                )]((bootstrap, funding)),
                             generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
                           ),
                     ),
