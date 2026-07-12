@@ -370,15 +370,26 @@ observable invariant.
 
 The whitepaper's initialization / negotiation-bootstrap section under-specifies the **ledger** config
 — it just says "inject specific parts of the config." Today the head's init config
-(`InitializationParameters`) bakes in **`initialEvacuationMap`** ("the utxos with which the head's L2
-ledger should be populated upon initialization"). That is **EUTXO-specific state** (an evacuation map
-of Cardano utxos) sitting in the *shared, agreed* init config, which:
+(`InitializationParameters`) bakes in **`initialEvacuationMap`** — a concrete evacuation map for the
+head's opening L2 state.
 
-- couples bootstrap to the built-in EUTXO ledger — a producer of that map must run at bootstrap time;
-- doesn't fit a **remote** ledger, whose initial state has a different shape;
-- is consumed *beyond* the ledger — the rule-based/**fallback** regime's KZG commitment
-  (`RuleBasedActor`), `StackComposer`/`StackEffectsBuilder`, and the `InitializationTx` all read it —
-  so it isn't purely ledger-internal state.
+The evacuation map is **not** EUTXO-specific. It is the projection of *any* L2 ledger's state into its
+**L1-compatible (Cardano-utxo) representation** — the utxos that would be materialized on L1 if the
+head is evacuated/settled — so *every* backend must define it, precisely because L1 is Cardano. The
+code already treats it this way: `EvacuationMap` (`= TreeMap[EvacuationKey, Payout.Obligation]`) lives
+in the ledger-agnostic `multisig.ledger.joint` package, the `L2Ledger` contract *requires* every
+command to return `EvacuationDiff`s, and both `EutxoL2Ledger` and `RemoteL2Ledger` produce them. For
+EUTXO the L2 state already *is* Cardano utxos, so the projection is near-identity; a remote ledger
+projects its own internal state into the same map. So the map type is universal — the coupling is
+narrower:
+
+- **A concrete *initial* map is injected into the *shared, agreed* config**, so a producer of that map
+  must run at bootstrap time — coupling bootstrap to whoever computes the opening state (today, an
+  EUTXO utxo set). A remote ledger would have to synthesize a Cardano-utxo initial map just to satisfy
+  this field.
+- It is consumed *beyond* the ledger — the rule-based/**fallback** regime's KZG commitment
+  (`RuleBasedActor`), `StackEffectsBuilder`, and the `InitializationTx` all read it — so removing it
+  from the shared config touches the fallback path too, not just the ledger.
 
 **Direction (aligns with §6).** Keep the shared init/bootstrap config **ledger-agnostic**: carry only
 what every backend needs and all peers must agree on — the `l2ledger` type, the `l2ParamsHash`, and
@@ -397,7 +408,8 @@ utxos, everything arrives via the deposit path — the simplest, and the most le
 commitment) and all peers must agree on it, "derive not store" doesn't mean "forget it" — the shared
 config keeps a **commitment** to the initial state (folded into `l2ParamsHash`, or the fallback KZG
 root), while the *full* state is derived by whoever needs it. So the agreed artifact shrinks from a
-whole EUTXO evacuation map to a ledger-agnostic hash/commitment.
+whole concrete evacuation map to a hash/commitment (the map is already ledger-agnostic in shape; what
+changes is storing the concrete map vs. a commitment to it).
 
 **Open questions.** (a) Derivable purely from agreed opening params, or does init need a ledger
 round-trip (the ledger produces its own genesis, Gummiworm records only the commitment)? (b) Can the
