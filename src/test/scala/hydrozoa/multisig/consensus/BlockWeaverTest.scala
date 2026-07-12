@@ -9,9 +9,7 @@ import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
@@ -24,7 +22,6 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -61,24 +58,15 @@ object BlockWeaverTestHelpers {
             }
 
     /** A dummy user request whose content is not interesting to the block weaver — only the request
-      * id matters. Closed over the trial's [[MultiNodeConfig]] so the head id / peer vkey match the
-      * env.
+      * id matters.
       */
-    def genUserRequest(mnc: MultiNodeConfig): Gen[UserRequestWithId] = {
-        val zeroQI = QuantizedInstant(mnc.slotConfig, Instant.ofEpochSecond(0))
+    def genUserRequest: Gen[UserRequestWithId] =
         for {
             requestId <- genRequestId
             userRequest = TransactionRequest(
-              header = UserRequestHeader(
-                headId = mnc.headConfig.headId,
-                validityStart = RequestValidityStartTime(zeroQI),
-                validityEnd = RequestValidityEndTime(zeroQI),
-                bodyHash = Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0)))
-              ),
               body = TransactionRequestBody(ByteString.empty)
             )
         } yield UserRequestWithId(userRequest = userRequest, requestId = requestId)
-    }
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
         for {
@@ -178,7 +166,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       resource = defaultResource,
       testM = for {
           env <- ask
-          anyRequest <- pick(genUserRequest(env.multiNodeConfig))
+          anyRequest <- pick(genUserRequest)
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
@@ -212,7 +200,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event to finish the first block")
+            genUserRequest.label("any event to finish the first block")
           )
           weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
           _ <- lift(weaver ! anyLedgerEvent)
@@ -232,7 +220,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           env <- ask
           requests <- pick(
             Gen
-                .nonEmptyListOf(genUserRequest(env.multiNodeConfig))
+                .nonEmptyListOf(genUserRequest)
                 .map(_.distinctBy(_.requestId))
                 .label("random user requests")
           )
@@ -272,7 +260,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           env <- ask
           events <- pick(
             Gen
-                .nonEmptyListOf(genUserRequest(env.multiNodeConfig))
+                .nonEmptyListOf(genUserRequest)
                 .map(_.distinctBy(_.requestId))
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
@@ -329,7 +317,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event to start the block")
+            genUserRequest.label("any event to start the block")
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
@@ -356,7 +344,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event before brief")
+            genUserRequest.label("any event before brief")
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)

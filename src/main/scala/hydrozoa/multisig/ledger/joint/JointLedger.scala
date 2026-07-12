@@ -7,10 +7,9 @@ import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastOps
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.multisig.timing.{TxTiming, TxTimingEvent}
 import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.parameters.L2LedgerKind
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import hydrozoa.lib.actor.*
 import hydrozoa.lib.logging.ContraTracer
@@ -225,18 +224,6 @@ final case class JointLedger(
         case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
     }
 
-    private def checkRequestValidityInterval(
-        req: UserRequestWithId,
-        blockCreationStartTime: BlockCreationStartTime
-    ): Boolean = {
-        val header = req.request.header
-        TxTiming.checkRequestValidityInterval(
-          blockCreationStartTime,
-          header.validityStart,
-          header.validityEnd
-        )
-    }
-
     private def rejectEvent(
         requestId: RequestId,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError
@@ -311,7 +298,6 @@ final case class JointLedger(
                     // above (ttl − submissionDuration), so the check can only run post-parse.
                     if !TxTiming.checkRequestValidityInterval(
                           blockStartTime,
-                          req.request.header.validityStart,
                           depositProduced.requestValidityEndTime
                         )
                     then
@@ -319,7 +305,6 @@ final case class JointLedger(
                           requestId,
                           JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
                             blockStartTime,
-                            req.request.header.validityStart,
                             depositProduced.requestValidityEndTime
                           )
                         )
@@ -378,56 +363,42 @@ final case class JointLedger(
             _ <- tracer.traceWith(JointLedgerEvent.TransactionApplicationStarted(requestId))
 
             p <- unsafeGetProducing
-            blockStartTime = p.BlockCreationStartTime
             currentBlockNum = p.nextBlockNumber
 
-            _ <-
-                // EUTXO: the ledger's OutsideValidityIntervalValidator is authoritative for the tx's
-                // own [invalidBefore, ttl) slot interval, checked against block-creation-start — so
-                // skip the redundant header-based check and stop trusting `header.validityEnd`. A
-                // remote ledger's payload is not a native tx, so it still relies on this Gummiworm-side
-                // check until its own screening lands (§5.4 Phase 2; the header field stays for now).
-                if config.l2Ledger == L2LedgerKind.AnyRemote
-                    && !checkRequestValidityInterval(req, blockStartTime)
-                then
-                    rejectEvent(
-                      requestId,
-                      JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
-                        blockStartTime,
-                        req.request.header.validityStart,
-                        req.request.header.validityEnd
-                      )
+            _ <- {
+                // The tx's own [invalidBefore, ttl) slot interval is authoritative: the EUTXO
+                // ledger's OutsideValidityIntervalValidator enforces it against block-creation-start,
+                // and a remote ledger enforces validity in its own screening. There is no
+                // Gummiworm-side header validity check.
+                val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
+                    .ApplyTransaction(
+                      requestId = req.requestId,
+                      blockNumber = p.nextBlockNumber,
+                      blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
+                      l2Payload = l2Payload
                     )
-                else {
-                    val l2Command: L2LedgerCommand.ApplyTransaction = L2LedgerCommand
-                        .ApplyTransaction(
-                          requestId = req.requestId,
-                          blockNumber = p.nextBlockNumber,
-                          blockCreationStartTime = p.BlockCreationStartTime.toPosixTime,
-                          l2Payload = l2Payload
-                        )
 
-                    for {
-                        res <- runL2Command(p, l2Command)
-                        _ <- res match {
-                            case Left(e) => rejectEvent(requestId, e)
-                            case Right(newL2State) =>
-                                for {
-                                    _ <- state.set(
-                                      p.setL2LedgerState(newL2State)
-                                          .focus(_.userRequestState.requests)
-                                          .modify(_.appended((requestId, Valid)))
-                                    )
-                                    _ <- tracer.traceWith(
-                                      JointLedgerEvent.TransactionApplicationCompleted(
-                                        requestId,
-                                        currentBlockNum
-                                      )
-                                    )
-                                } yield ()
-                        }
-                    } yield ()
-                }
+                for {
+                    res <- runL2Command(p, l2Command)
+                    _ <- res match {
+                        case Left(e) => rejectEvent(requestId, e)
+                        case Right(newL2State) =>
+                            for {
+                                _ <- state.set(
+                                  p.setL2LedgerState(newL2State)
+                                      .focus(_.userRequestState.requests)
+                                      .modify(_.appended((requestId, Valid)))
+                                )
+                                _ <- tracer.traceWith(
+                                  JointLedgerEvent.TransactionApplicationCompleted(
+                                    requestId,
+                                    currentBlockNum
+                                  )
+                                )
+                            } yield ()
+                    }
+                } yield ()
+            }
         } yield ()
     }
 
@@ -886,16 +857,14 @@ object JointLedger {
 
     enum UserRequestError extends Throwable:
         // Inherits Throwable.toString = "<className>: <getMessage>"; we override getMessage so
-        // the rejection log shows all three timestamps and can be diagnosed at a glance.
+        // the rejection log shows both timestamps and can be diagnosed at a glance.
         override def getMessage: String = this match
             case e: BlockOutOfRequestValidityInterval =>
                 s"blockCreationStartTime=${e.blockCreationStartTime.convert}, " +
-                    s"requestValidityStart=${e.requestValidityStart.convert}, " +
                     s"requestValidityEnd=${e.requestValidityEnd.convert}"
 
         case BlockOutOfRequestValidityInterval(
             blockCreationStartTime: BlockCreationStartTime,
-            requestValidityStart: RequestValidityStartTime,
             requestValidityEnd: RequestValidityEndTime
         ) extends UserRequestError
 

@@ -7,7 +7,6 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, Quant
 import hydrozoa.lib.logging.ContraTracer
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, Encoder, HCursor, Json}
-import scala.annotation.unused
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordered.orderingToOrdered
 import scala.util.Try
@@ -36,7 +35,7 @@ import RequestTimes.*
   *
   * @param depositSubmissionDuration
   *   The fixed amount of time reserved for submitting the deposit txs by users. It's materialized
-  *   as the ttl for deposit txs, which SHOULD be exactly [[UserRequestHeader.validityEnd]] +
+  *   as the ttl for deposit txs, which SHOULD be exactly the deposit request's validity-end +
   *   [[depositSubmissionDuration]].
   *
   * @param depositMaturityDuration
@@ -220,12 +219,14 @@ object TxTiming {
 
         }
 
+    /** The accept-by check: the block creating this request must start before the request's
+      * validity end. For a deposit that end is `ttl − submissionDuration`; for an EUTXO tx the
+      * validity interval lives in the tx's own slot bounds and is enforced by the ledger, not here.
+      */
     def checkRequestValidityInterval(
         blockCreationStartTime: BlockCreationStartTime,
-        @unused requestValidityStartTime: RequestValidityStartTime,
         requestValidityEndTime: RequestValidityEndTime
     ): Boolean =
-        //        requestValidityStartTime.convert <= blockCreationStartTime.convert &&
         blockCreationStartTime.convert < requestValidityEndTime.convert
 
     /** Maturity. The deposit is immature if its absorption start time is later than the block

@@ -1,8 +1,6 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.IO
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
@@ -12,25 +10,22 @@ import scalus.uplc.builtin.ByteString
 import scalus.|>
 
 // TODO: move away from server, it doesn't belong in here
-/** A parsed user request: a header bound to its body by the header's body hash. Authentication is
-  * not carried here — the L2 payload in the body is a native, self-authenticating Cardano
-  * transaction, and its signatures are verified by the ledger's stateless screening (§5.4 Phase 4).
+/** A parsed user request wrapping its body. There is no separate header: the L2 payload in the body
+  * is a native, self-authenticating Cardano transaction that carries its own validity interval and
+  * headId pin, and its signatures are verified by the ledger's stateless screening.
   */
 enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejected, RequestId]] {
 
     export UserRequest.Sync
     def ?: : this.Send = SyncRequest.send(_, this)
 
-    def header: UserRequestHeader
     def body: UserRequestBody
 
     case DepositRequest private (
-        override val header: UserRequestHeader,
         override val body: UserRequestBody.DepositRequestBody
     ) extends UserRequest
 
     case TransactionRequest private (
-        override val header: UserRequestHeader,
         override val body: UserRequestBody.TransactionRequestBody
     ) extends UserRequest
 }
@@ -38,17 +33,13 @@ enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejecte
 object UserRequest {
 
     object DepositRequest {
-        def apply(
-            header: UserRequestHeader,
-            body: DepositRequestBody
-        ): DepositRequest = new UserRequest.DepositRequest(header, body)
+        def apply(body: DepositRequestBody): DepositRequest =
+            new UserRequest.DepositRequest(body)
     }
 
     object TransactionRequest {
-        def apply(
-            header: UserRequestHeader,
-            body: TransactionRequestBody
-        ): TransactionRequest = new UserRequest.TransactionRequest(header, body)
+        def apply(body: TransactionRequestBody): TransactionRequest =
+            new UserRequest.TransactionRequest(body)
     }
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, Either[Rejected, RequestId]]
@@ -59,25 +50,6 @@ object UserRequest {
     final case class Rejected(reason: String)
 
 }
-
-/** @param headId
-  *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
-  *   prefix HYDR. This is the asset name of the treasury token
-  * @param bodyHash
-  *   blake2b_256 hash of the Cbor-encoded
-  * @param validityStart
-  *   Epoch time in seconds, block creation start time must be no earlier than this time in order
-  *   for the request to be actionable
-  * @param validityEnd
-  *   Epoch time in seconds, block creation start time must be before this time in order for the
-  *   request to be actionable
-  */
-case class UserRequestHeader(
-    headId: HeadId,
-    validityStart: RequestValidityStartTime,
-    validityEnd: RequestValidityEndTime,
-    bodyHash: Hash32
-)
 
 enum UserRequestBody {
 

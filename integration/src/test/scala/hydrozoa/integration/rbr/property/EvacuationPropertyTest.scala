@@ -4,19 +4,17 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import scala.annotation.unused
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
@@ -274,24 +272,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
 
     private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
         val peerNum    = HeadPeerNumber(0)
-        val slotConfig = ctx.multiNodeConfig.headConfig.cardanoNetwork.slotConfig
         val body: UserRequestBody.TransactionRequestBody =
             UserRequestBody.TransactionRequestBody(
               l2Payload = ByteString.fromArray(Array.empty[Byte])
             )
+        val userRequest = UserRequest.TransactionRequest(body)
         for
-            now    <- IO.realTimeInstant
-            header = UserRequestHeader(
-              headId = ctx.multiNodeConfig.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
-              ),
-              validityEnd = RequestValidityEndTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
-              ),
-              bodyHash = body.hash,
-            )
-            userRequest = UserRequest.TransactionRequest(header, body)
             sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peerNum missing in harness")
             )

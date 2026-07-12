@@ -9,7 +9,7 @@ import hydrozoa.multisig.consensus.liaison.BatchMessages.{Mesh, OwnHardAck, Popu
 import hydrozoa.multisig.consensus.liaison.BatchNumber.given
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.TxSignature
@@ -420,44 +420,29 @@ object Codecs {
     private given Codec[UserRequestBody.TransactionRequestBody] =
         deriveCodec[UserRequestBody.TransactionRequestBody]
 
-    given (using CardanoNetwork.Section): Codec[UserRequestHeader] = {
-        import hydrozoa.multisig.server.JsonCodecs.given
-        io.circe.Codec.from(summon[Decoder[UserRequestHeader]], summon[Encoder[UserRequestHeader]])
-    }
-
-    given (using CardanoNetwork.Section): Codec[UserRequest.DepositRequest] = {
-        val enc: Encoder[UserRequest.DepositRequest] = Encoder.instance(r =>
-            Json.obj(
-              "header" -> r.header.asJson,
-              "body" -> r.body.asJson
-            )
-        )
+    given Codec[UserRequest.DepositRequest] = {
+        val enc: Encoder[UserRequest.DepositRequest] =
+            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
         val dec: Decoder[UserRequest.DepositRequest] = Decoder.instance(c =>
-            for {
-                h <- c.downField("header").as[UserRequestHeader]
-                b <- c.downField("body").as[UserRequestBody.DepositRequestBody]
-            } yield UserRequest.DepositRequest(h, b)
+            c.downField("body")
+                .as[UserRequestBody.DepositRequestBody]
+                .map(UserRequest.DepositRequest(_))
         )
         io.circe.Codec.from(dec, enc)
     }
 
-    given (using CardanoNetwork.Section): Codec[UserRequest.TransactionRequest] = {
-        val enc: Encoder[UserRequest.TransactionRequest] = Encoder.instance(r =>
-            Json.obj(
-              "header" -> r.header.asJson,
-              "body" -> r.body.asJson
-            )
-        )
+    given Codec[UserRequest.TransactionRequest] = {
+        val enc: Encoder[UserRequest.TransactionRequest] =
+            Encoder.instance(r => Json.obj("body" -> r.body.asJson))
         val dec: Decoder[UserRequest.TransactionRequest] = Decoder.instance(c =>
-            for {
-                h <- c.downField("header").as[UserRequestHeader]
-                b <- c.downField("body").as[UserRequestBody.TransactionRequestBody]
-            } yield UserRequest.TransactionRequest(h, b)
+            c.downField("body")
+                .as[UserRequestBody.TransactionRequestBody]
+                .map(UserRequest.TransactionRequest(_))
         )
         io.circe.Codec.from(dec, enc)
     }
 
-    given (using CardanoNetwork.Section): Codec[UserRequestWithId] = {
+    given Codec[UserRequestWithId] = {
         val enc: Encoder[UserRequestWithId] = Encoder.instance {
             case UserRequestWithId.DepositRequest(rid, r) =>
                 Json.obj(

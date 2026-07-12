@@ -25,7 +25,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
@@ -398,22 +398,10 @@ object CommandGenerators:
               l2Payload = ByteString.fromArray(txSigned.toCbor)
             )
 
-            header = UserRequestHeader(
-              headId = config.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                state.getCurrentTime.instant - 5.seconds
-              ),
-              validityEnd = RequestValidityEndTime(
-                state.getCurrentTime.instant + 2.minutes
-              ),
-              bodyHash = body.hash
-            )
-
         } yield L2TxCommand(
           request = UserRequestWithId.TransactionRequest(
             requestId = state.nextRequestId,
             request = UserRequest.TransactionRequest(
-              header = header,
               body = body.asInstanceOf[TransactionRequestBody]
             )
           ),
@@ -549,21 +537,11 @@ object CommandGenerators:
                                           l2Payload = GenesisObligation.serialize(l2Outputs)
                                         )
 
-                                        header = UserRequestHeader(
-                                          headId = multiNodeConfig.headConfig.headId,
-                                          validityStart = RequestValidityStartTime(
-                                            state.getCurrentTime.instant - 5.seconds
-                                          ),
-                                          validityEnd = requestValidityEndTime,
-                                          bodyHash = body.hash
-                                        )
-
                                     } yield Some(
                                       RegisterDepositCommand(
                                         request = UserRequestWithId.DepositRequest(
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
-                                            header = header,
                                             body = body.asInstanceOf[DepositRequestBody]
                                           )
                                         ),
@@ -597,8 +575,9 @@ object CommandGenerators:
                           ))
             selected  = registeredDeposits.take(n)
             partition = selected.partition { registered =>
-                            val submissionDeadline = registered.cmd.request.request.header.validityEnd
-                            val submissionRunway   = state.getCurrentTime.instant + 20.seconds
+                            val submissionDeadline =
+                                registered.cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
+                            val submissionRunway = state.getCurrentTime.instant + 20.seconds
                             submissionDeadline.convert > submissionRunway
                         }
             _         <- run(log.trace(

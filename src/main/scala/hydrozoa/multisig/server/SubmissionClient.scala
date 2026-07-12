@@ -33,10 +33,11 @@ object SubmissionClient:
                         IO.raiseError(new RuntimeException(s"request rejected: ${rejected.reason}"))
                 }
 
-    /** http4s-based impl: posts the request (header + body, no COSE envelope — auth is the native
-      * tx's own witnesses, verified at the ledger's screening) to the deposit-register or l2-submit
-      * endpoint by variant, and expects a [[RequestAccepted]] JSON response. `client` can be a real
-      * http4s `Client[IO]` or an in-memory `Client.fromHttpApp` — the harness uses the latter.
+    /** http4s-based impl: posts the request body (no header, no signature envelope — auth is the
+      * native tx's own witnesses, verified at the ledger's screening) to the deposit-register or
+      * l2-submit endpoint by variant, and expects a [[RequestAccepted]] JSON response. `client` can
+      * be a real http4s `Client[IO]` or an in-memory `Client.fromHttpApp` — the harness uses the
+      * latter.
       */
     def http(
         client: Client[IO],
@@ -56,10 +57,6 @@ object SubmissionClient:
             case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/api/l2/submit")
 
     private def requestJson(request: UserRequest): Json =
-        val bodyField: (String, Json) = request.body match
-            case b: UserRequestBody.DepositRequestBody     => "deposit" -> b.asJson
-            case b: UserRequestBody.TransactionRequestBody => "transaction" -> b.asJson
-        Json.obj(
-          "header" -> request.header.asJson,
-          bodyField
-        )
+        request.body match
+            case b: UserRequestBody.DepositRequestBody     => Json.obj("deposit" -> b.asJson)
+            case b: UserRequestBody.TransactionRequestBody => Json.obj("transaction" -> b.asJson)

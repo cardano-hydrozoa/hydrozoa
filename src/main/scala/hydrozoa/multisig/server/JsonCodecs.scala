@@ -2,19 +2,17 @@ package hydrozoa.multisig.server
 
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{*, given}
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
 import io.bullet.borer.Cbor
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import io.circe.{Decoder, DecodingFailure, Encoder, Json}
+import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.uplc.builtin.ByteString
@@ -56,31 +54,6 @@ object JsonCodecs {
               } yield UserRequestBody.TransactionRequestBody(l2Payload)
             )
 
-    // UserRequestHeader codec
-    given Encoder[UserRequestHeader] =
-        (header: UserRequestHeader) =>
-            Json.obj(
-              "headId" -> header.headId.asJson,
-              "validityStart" -> header.validityStart.asJson,
-              "validityEnd" -> header.validityEnd.asJson,
-              "bodyHash" -> header.bodyHash.asJson
-            )
-
-    given (using config: CardanoNetwork.Section): Decoder[UserRequestHeader] = c =>
-        for {
-            headId <- c
-                .downField("headId")
-                .as[HeadId](using InitializationParameters.HeadId.given_Decoder_HeadId)
-            validityStart <- c.downField("validityStart").as[RequestValidityStartTime]
-            validityEnd <- c.downField("validityEnd").as[RequestValidityEndTime]
-            bodyHash <- c.downField("bodyHash").as[Hash32]
-        } yield UserRequestHeader(
-          headId,
-          validityStart,
-          validityEnd,
-          bodyHash
-        )
-
     // UserRequest cannot be encoded - we can only decode it, since the signatures are not needed
     // once the parsing is done.
 
@@ -93,46 +66,23 @@ object JsonCodecs {
     //  ...
     // }
 
-    case class UserRequestDecoder()(using CardanoNetwork.Section) extends Decoder[UserRequest] {
+    case class UserRequestDecoder() extends Decoder[UserRequest] {
 
-        object Error {
-            trait ValidationError extends Throwable {
-                override def getMessage: String = toString
-            }
-
-            /** The [[UserRequestHeader.body]] does not match the [[blake2b_256]] hash of the
-              * [[UserRequestBody]]
-              */
-            case object BodyHashMismatch extends ValidationError {
-                override def toString: String = "Body hash mismatch"
-            }
-
-        }
-
+        // The request is its body under a "deposit" or "transaction" field. Authentication is not
+        // done here: the L2 payload is a native, self-authenticating tx, and the ledger's stateless
+        // screening verifies its signatures before a RequestId is assigned.
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
-            for {
-                header <- c.downField("header").as[UserRequestHeader]
-                // Try both "deposit" and "transaction" fields
-                body <- c
-                    .downField("deposit")
-                    .as[DepositRequestBody]
-                    .orElse(c.downField("transaction").as[TransactionRequestBody])
-                // Bind the header to the body. Authentication is not done here: the L2 payload is a
-                // native, self-authenticating tx, and the ledger's stateless screening verifies its
-                // signatures before a RequestId is assigned.
-                _ <- Either.cond(
-                  body.hash == header.bodyHash,
-                  (),
-                  DecodingFailure(Error.BodyHashMismatch.getMessage, ops = List.empty)
+            c.downField("deposit")
+                .as[DepositRequestBody]
+                .map(UserRequest.DepositRequest(_))
+                .orElse(
+                  c.downField("transaction")
+                      .as[TransactionRequestBody]
+                      .map(UserRequest.TransactionRequest(_))
                 )
-                userRequest = body match {
-                    case d: DepositRequestBody     => UserRequest.DepositRequest(header, d)
-                    case t: TransactionRequestBody => UserRequest.TransactionRequest(header, t)
-                }
-            } yield userRequest
     }
 
-    given (using config: CardanoNetwork.Section): Decoder[UserRequest] = UserRequestDecoder()
+    given Decoder[UserRequest] = UserRequestDecoder()
 
     // Specific body type encoders/decoders
     given Encoder[UserRequestBody.DepositRequestBody] =

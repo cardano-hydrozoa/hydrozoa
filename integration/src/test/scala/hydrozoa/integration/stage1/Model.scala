@@ -129,7 +129,8 @@ object Model:
         def mAbsorptionStartTime: Option[DepositAbsorptionStartTime] = {
             val absorptionBounds: Queue[(DepositAbsorptionStartTime, DepositAbsorptionEndTime)] =
                 deposits.hydrozoaKnownRegisteredDeposits.map(cmd =>
-                    val validityEnd = cmd.request.request.header.validityEnd
+                    val validityEnd =
+                        cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
                     (
                       multiNodeConfig.txTiming.depositAbsorptionStartTime(validityEnd),
                       multiNodeConfig.txTiming.depositAbsorptionEndTime(validityEnd)
@@ -735,7 +736,8 @@ object Model:
 
                 val BlockCycle.InProgress(_, blockStartTime, _, _) = state.blockCycle: @unchecked
 
-                val requestValidityEndTime = req.request.header.validityEnd
+                val requestValidityEndTime =
+                    cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
 
                 for
                     seq <- DepositRefundTxSeq

@@ -40,8 +40,6 @@ class HydrozoaRoutes(
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
 
-    private given HeadConfig = headConfig
-
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
 
