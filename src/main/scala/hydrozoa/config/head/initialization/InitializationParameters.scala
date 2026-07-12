@@ -20,10 +20,11 @@ import spire.math.Rational
 /** Configuration settings for the head's initialization.
   *
   * @param initialEvacuationMap
-  *   the head's opening L2 state as an evacuation map — the projection of the L2 ledger's state into
-  *   its L1-compatible Cardano-utxo representation. General to any backend (for the EUTXO ledger it
-  *   is the initial utxo set); a concrete map is injected here today, which GUM-104 aims to replace
-  *   with a state each ledger derives plus a shared commitment to it.
+  *   the head's opening L2 state as an evacuation map — the projection of the L2 ledger's state
+  *   into its L1-compatible Cardano-utxo representation. General to any backend (for the EUTXO
+  *   ledger it is the initial utxo set). It is an explicit, agreed field of the bootstrap config:
+  *   the init tx commits to it on-chain (treasury value + datum KZG) and every node verifies that,
+  *   so it cannot be derived-and-forgotten.
   * @param initialEquityContributions
   *   the ADA amounts (if any) that each peer contributed to the head's equity. The total ADA
   *   contributed must be sufficient for the initialization tx fee, and will also be used for all

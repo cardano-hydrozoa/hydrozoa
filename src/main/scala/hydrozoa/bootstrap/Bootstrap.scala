@@ -28,11 +28,9 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
-import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap, evacuationKeyOrdering}
+import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.circe.generic.semiauto.deriveDecoder
 import io.circe.syntax.*
 import io.circe.{Decoder, Json, parser}
@@ -41,10 +39,10 @@ import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
 import org.bouncycastle.crypto.params.{Ed25519KeyGenerationParameters, Ed25519PrivateKeyParameters, Ed25519PublicKeyParameters}
 import org.http4s.Uri
-import scala.collection.immutable.{SortedMap, TreeMap}
+import scala.collection.immutable.SortedMap
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, KeepRaw, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Coin, EvaluatorMode, Hash32, PlutusScriptEvaluator, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.cardano.txbuilder.{Change, TransactionBuilder}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
@@ -75,10 +73,16 @@ object Bootstrap:
             (vKey, sKey)
         }
 
-    /** The static head+coil membership the build step turns into a shared [[HeadConfig]]: each head
-      * peer's verification key + WebSocket address, each coil peer's verification key + hub head
-      * peer, and the coil quorum. Authored once (from [[GenerateKeyPair]] output) and shared with
-      * every node. Head peer 0 is the first entry in [[headPeers]].
+    // Shared peer-topology decoders, used by both `Membership` (the roster) and `BootstrapConfig`
+    // (the full config). Nested in the enclosing object so both companions see them.
+    private given Decoder[Uri] =
+        Decoder.decodeString.emap(Uri.fromString(_).left.map(_.message))
+    private given Decoder[HeadPeerData] = deriveDecoder[HeadPeerData]
+
+    /** The peer topology: each head peer's verification key + WebSocket address, each coil peer's
+      * verification key + hub head peer, and the coil quorum. This is the portion of the bootstrap
+      * config that [[GenerateKeyPair]] assembles into the roster; the operators complete it into a
+      * full [[BootstrapConfig]]. Head peer 0 is the first entry in [[headPeers]].
       */
     final case class Membership(
         headPeers: List[HeadPeerData],
@@ -87,10 +91,52 @@ object Bootstrap:
     )
 
     object Membership {
-        private given Decoder[Uri] =
-            Decoder.decodeString.emap(Uri.fromString(_).left.map(_.message))
-        private given Decoder[HeadPeerData] = deriveDecoder[HeadPeerData]
         given Decoder[Membership] = deriveDecoder[Membership]
+    }
+
+    /** The bootstrap config the operators author and the build step turns into a shared
+      * [[HeadConfig]] (the whitepaper's head-initialization "bootstrap config"). Extends the peer
+      * topology ([[Membership]]) with the L1 network, the pre-deployed script reference utxos, and
+      * the initial evacuation map.
+      *
+      * Equity, the seed utxo, and the funding utxos are not carried here yet: the demo uses the
+      * simplified model where head peer 0 funds the head, resolving the seed + funding from its own
+      * L1 address at build time.
+      */
+    final case class BootstrapConfig(
+        cardanoNetwork: CardanoNetwork,
+        headPeers: List[HeadPeerData],
+        coilPeers: List[CoilPeerData],
+        coilQuorum: Int,
+        scriptReferenceUtxos: ScriptReferenceUtxos.Unresolved,
+        initialEvacuationMap: EvacuationMap
+    )
+
+    object BootstrapConfig {
+        given Decoder[BootstrapConfig] = Decoder.instance { c =>
+            for {
+                cardanoNetwork <- c.downField("cardanoNetwork").as[CardanoNetwork]
+                headPeers <- c.downField("headPeers").as[List[HeadPeerData]]
+                coilPeers <- c.downField("coilPeers").as[List[CoilPeerData]]
+                coilQuorum <- c.downField("coilQuorum").as[Int]
+                scriptReferenceUtxos <- c
+                    .downField("scriptReferenceUtxos")
+                    .as[ScriptReferenceUtxos.Unresolved]
+                // The evacuation-map decoder needs the L1 network for its output addresses; this
+                // config carries the network, so decode it first and supply it here.
+                initialEvacuationMap <- {
+                    given CardanoNetwork.Section = cardanoNetwork
+                    c.downField("initialEvacuationMap").as[EvacuationMap]
+                }
+            } yield BootstrapConfig(
+              cardanoNetwork,
+              headPeers,
+              coilPeers,
+              coilQuorum,
+              scriptReferenceUtxos,
+              initialEvacuationMap
+            )
+        }
     }
 
     /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
@@ -102,7 +148,7 @@ object Bootstrap:
       * are empty, and Cardano preview is used.
       */
     def mkSharedHeadConfig(cardanoNetwork: CardanoNetwork, backend: CardanoBackend[IO])(
-        membership: Membership,
+        bootstrapConfig: BootstrapConfig,
         minEquity: Coin,
         scriptReferenceUtxos: ScriptReferenceUtxos
     ): IO[HeadConfig] = for {
@@ -117,7 +163,7 @@ object Bootstrap:
           ),
           disputeResolutionConfig = DisputeResolutionConfig.default(cardanoNetwork.slotConfig),
           settlementConfig = SettlementConfig(PositiveInt.unsafeApply(100)),
-          coilQuorum = membership.coilQuorum,
+          coilQuorum = bootstrapConfig.coilQuorum,
           // Placeholder: the L2 params hash is not consumed yet. Hash32 requires 32 bytes, so use
           // a zero hash rather than empty bytes (which fail the length check).
           l2ParamsHash = Hash32.fromByteString(ByteString.fromArray(new Array[Byte](32))),
@@ -127,52 +173,26 @@ object Bootstrap:
           identityIsomorphism = false,
         )
 
-        // This is the temporary hard-coded evacuation map - 10 ADA
-        // goes to the fee account so the whole Sugar Rush ledger can be
-        // correctly evacuated at any point of time.
-        feeAccValue = Value.ada(10L)
-        evacMap: EvacuationMap = EvacuationMap.apply(
-          TreeMap(
-            EvacuationKey
-                .apply(
-                  ByteString.fromHex(
-                    "ef779a7b07ef490490ae0039458bccb3e78df0776dbf014e3cf780c600000000"
-                  )
-                )
-                .get ->
-                Payout.Obligation
-                    .apply(
-                      output = KeepRaw.apply(
-                        Babbage(
-                          address = Address
-                              .fromBech32(
-                                "addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4"
-                              ),
-                          value = feeAccValue
-                        )
-                      ),
-                      network = cardanoNetwork
-                    )
-                    .toOption
-                    .get
-          )
-        )
+        // The initial L2 state comes from the bootstrap config as an evacuation map. Its total value
+        // is what the treasury must back on L1 (the initial L2 value).
+        evacMap = bootstrapConfig.initialEvacuationMap
+        feeAccValue = Value.combine(evacMap.outputs.map(_.utxo.value.value))
 
         headPeers <- IO.fromOption(
           HeadPeers(
             NonEmptyMap.fromMapUnsafe(
               SortedMap.from(
-                membership.headPeers.zipWithIndex.map((data, i) => HeadPeerNumber(i) -> data)
+                bootstrapConfig.headPeers.zipWithIndex.map((data, i) => HeadPeerNumber(i) -> data)
               )
             )
           )
         )(RuntimeException("head peers must be a non-empty list (head peer 0 first)"))
 
-        coilPeers = CoilPeers.indexed(membership.coilPeers)
-        nHeadPeers = membership.headPeers.size
+        coilPeers = CoilPeers.indexed(bootstrapConfig.coilPeers)
+        nHeadPeers = bootstrapConfig.headPeers.size
 
         // Head peer 0 is the sole funder; its L1 enterprise address supplies the seed and funding.
-        funderVKey = membership.headPeers.head.verificationKey
+        funderVKey = bootstrapConfig.headPeers.head.verificationKey
         peerAddress = funderVKey.shelleyAddress()(using cardanoNetwork)
         _ <- logger.info(s"Funder (head peer 0) address: ${peerAddress.toBech32.get}")
 
@@ -254,7 +274,7 @@ object Bootstrap:
         // Only head peer 0 contributes equity; heads 1..N-1 contribute zero and just co-sign.
         initialEquityContributions = NonEmptyMap.fromMapUnsafe(
           SortedMap.from(
-            membership.headPeers.zipWithIndex.map((_, i) =>
+            bootstrapConfig.headPeers.zipWithIndex.map((_, i) =>
                 HeadPeerNumber(i) -> (if i == 0 then minEquity else Coin.zero)
             )
           )
@@ -359,10 +379,11 @@ end Bootstrap
   * behavior). Options add two file outputs, both meant to be run once per peer when cooking a
   * head's configs:
   *
-  *   - `--roster peers.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates or
-  *     appends to the [[Bootstrap.Membership]] roster that [[BuildHeadConfig]] consumes.
-  *     `--coil-quorum N` sets the roster's coil quorum. Head peers must be registered before the
-  *     coil peers that name them as hubs.
+  *   - `--roster bootstrap.json --role head --ws-address ws://…` (or `--role coil --hub N`) creates
+  *     or appends to the [[Bootstrap.Membership]] roster — the peer-topology part of the
+  *     `bootstrap.json` that [[BuildHeadConfig]] consumes once the operators complete it with the
+  *     network, script references, and initial evacuation map. `--coil-quorum N` sets the roster's
+  *     coil quorum. Head peers must be registered before the coil peers that name them as hubs.
   *   - `--template private-template.json --out private.json` writes the peer's private node config:
   *     the template with `ownPeerPrivate` replaced by the generated wallet (as `ownHeadWallet` /
   *     `ownCoilWallet` per `--role`) and a second fresh key pair spliced in as the evacuation
@@ -374,7 +395,7 @@ end Bootstrap
   * Usage:
   * {{{
   *   sbt "runMain hydrozoa.app.GenerateKeyPair \
-  *     --roster nodes/peers.json --role head --ws-address ws://head-0:4001 \
+  *     --roster nodes/bootstrap.json --role head --ws-address ws://head-0:4001 \
   *     --template peer-private.template.json --out nodes/head-0/private.json"
   * }}}
   */
@@ -835,18 +856,18 @@ end Migrate
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <peers.json> --script-refs script-refs.json \
+  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <bootstrap.json> \
   *     --blockfrost-key <key> --equity <lovelace> [--out head-config.json]"
   * }}}
   *
-  * Reads the head+coil membership from `<peers.json>`, funds the head from head peer 0's L1 address
-  * (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out`
-  * (default `head-config.json`). Every node then loads this same artifact.
+  * Reads the [[Bootstrap.BootstrapConfig]] from `<bootstrap.json>`, funds the head from head peer
+  * 0's L1 address (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to
+  * `--out` (default `head-config.json`). Every node then loads this same artifact.
   *
-  * `--script-refs` names the file [[DeployReferenceScripts]] wrote: the L1 inputs of the treasury
-  * and dispute reference-script UTxOs. They are resolved and hash-checked against
-  * [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every node's
-  * startup.
+  * The bootstrap config carries the `scriptReferenceUtxos` — the L1 inputs of the treasury and
+  * dispute reference-script UTxOs that [[DeployReferenceScripts]] deployed. They are resolved and
+  * hash-checked against [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather
+  * than every node's startup.
   */
 object BuildHeadConfig
     extends CommandIOApp(
@@ -856,10 +877,8 @@ object BuildHeadConfig
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
-    private val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
-
-    private val membershipArg: Opts[Path] =
-        Opts.argument[String]("peers.json").map(Path.of(_))
+    private val bootstrapArg: Opts[Path] =
+        Opts.argument[String]("bootstrap.json").map(Path.of(_))
     private val blockfrostKeyOpt: Opts[String] =
         Opts.option[String](
           "blockfrost-key",
@@ -874,60 +893,57 @@ object BuildHeadConfig
           "Head peer 0's equity contribution, in lovelace",
           short = "e"
         ).map(Coin.apply)
-    private val scriptRefsOpt: Opts[Path] =
-        Opts.option[String](
-          "script-refs",
-          "The script-refs.json written by DeployReferenceScripts",
-          short = "s"
-        ).map(Path.of(_))
     private val outOpt: Opts[Path] =
         Opts.option[String]("out", "Output path (default head-config.json)", short = "o")
             .map(Path.of(_))
             .withDefault(Path.of("head-config.json"))
 
     override def main: Opts[IO[ExitCode]] =
-        (membershipArg, blockfrostKeyOpt, equityOpt, scriptRefsOpt, outOpt).mapN(buildHeadConfig)
+        (bootstrapArg, blockfrostKeyOpt, equityOpt, outOpt).mapN(buildHeadConfig)
 
     private def buildHeadConfig(
-        membershipPath: Path,
+        bootstrapPath: Path,
         blockfrostKey: String,
         minEquity: Coin,
-        scriptRefsPath: Path,
         outPath: Path
     ): IO[ExitCode] =
         for {
-            membershipStr <- IO.blocking(Files.readString(membershipPath))
-            membership <- IO.fromEither(parser.decode[Bootstrap.Membership](membershipStr))
+            bootstrapStr <- IO.blocking(Files.readString(bootstrapPath))
+            bootstrapConfig <- IO.fromEither(parser.decode[Bootstrap.BootstrapConfig](bootstrapStr))
+            cardanoNetwork = bootstrapConfig.cardanoNetwork
             _ <- logger.info(
-              s"Building shared head config: ${membership.headPeers.size} head peer(s), " +
-                  s"${membership.coilPeers.size} coil peer(s), coil quorum ${membership.coilQuorum}"
+              s"Building shared head config: ${bootstrapConfig.headPeers.size} head peer(s), " +
+                  s"${bootstrapConfig.coilPeers.size} coil peer(s), coil quorum ${bootstrapConfig.coilQuorum}"
             )
-            backend <- CardanoBackendBlockfrost(
-              Left(cardanoNetwork),
-              blockfrostKey,
-              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-            )
-            scriptRefsStr <- IO.blocking(Files.readString(scriptRefsPath))
-            unresolved <- IO.fromEither(
-              parser.decode[ScriptReferenceUtxos.Unresolved](scriptRefsStr)
-            )
+            backendTracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+            // Blockfrost only serves the standard networks.
+            backend <- cardanoNetwork match {
+                case n: StandardCardanoNetwork =>
+                    CardanoBackendBlockfrost(Left(n), blockfrostKey, tracer = backendTracer)
+                case CardanoNetwork.Custom(_, _) =>
+                    IO.raiseError(
+                      RuntimeException("The Blockfrost backend does not support a Custom network")
+                    )
+            }
+            // Script reference utxos are carried in the bootstrap config as bare inputs; resolve
+            // their outputs from the backend.
             scriptReferenceUtxos <- {
                 given CardanoNetwork.Section = cardanoNetwork
-                unresolved
+                bootstrapConfig.scriptReferenceUtxos
                     .resolve(backend)
                     .flatMap(r =>
                         IO.fromEither(
                           r.left.map(e =>
                               RuntimeException(
-                                s"Failed to resolve script reference UTxOs from $scriptRefsPath: " +
-                                    s"$e (redeploy with DeployReferenceScripts?)"
+                                "Failed to resolve script reference UTxOs from the bootstrap " +
+                                    s"config: $e (redeploy with DeployReferenceScripts?)"
                               )
                           )
                         )
                     )
             }
             headConfig <- Bootstrap.mkSharedHeadConfig(cardanoNetwork, backend)(
-              membership,
+              bootstrapConfig,
               minEquity,
               scriptReferenceUtxos
             )

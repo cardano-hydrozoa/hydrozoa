@@ -53,25 +53,26 @@ keygen *ARGS:
   trap 'just notify "keygen"' EXIT
   sbt "runMain hydrozoa.app.GenerateKeyPair {{ARGS}}"
 
-# Generate a whole head's keys + configs in one sbt run: a roster (peers.json) plus a
-# private config and L1 address per peer, under OUTDIR/{head,coil}-N/. Coil peers are
-# hubbed round-robin across the head peers. Fund OUTDIR/head-0/address.txt, then run
-# `just build-head-config`.
+# Generate a whole head's keys + configs in one sbt run: the peer-topology part of the
+# bootstrap config (bootstrap.json) plus a private config and L1 address per peer, under
+# OUTDIR/{head,coil}-N/. Coil peers are hubbed round-robin across the head peers. Before
+# `just build-head-config`, fund OUTDIR/head-0/address.txt and complete bootstrap.json with
+# cardanoNetwork, scriptReferenceUtxos (from deploy-reference-scripts), and initialEvacuationMap.
 keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "keygen-fleet"' EXIT
   outdir="{{OUTDIR}}"
-  if [ -e "$outdir/peers.json" ]; then
-    echo "error: $outdir/peers.json already exists; move it away or pick another OUTDIR" >&2
+  if [ -e "$outdir/bootstrap.json" ]; then
+    echo "error: $outdir/bootstrap.json already exists; move it away or pick another OUTDIR" >&2
     exit 1
   fi
   cmds=()
   for i in $(seq 0 $(( {{HEADS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/peers.json --role head --ws-address ws://head-$i:4001 --template peer-private.template.json --out $outdir/head-$i/private.json")
+    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/bootstrap.json --role head --ws-address ws://head-$i:4001 --template peer-private.template.json --out $outdir/head-$i/private.json")
   done
   for i in $(seq 0 $(( {{COILS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/peers.json --role coil --hub $(( i % {{HEADS}} )) --template peer-private.template.json --out $outdir/coil-$i/private.json")
+    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/bootstrap.json --role coil --hub $(( i % {{HEADS}} )) --template peer-private.template.json --out $outdir/coil-$i/private.json")
   done
   cmds[-1]+=" --coil-quorum {{QUORUM}}"
   sbt "${cmds[@]}"
@@ -85,14 +86,15 @@ deploy-reference-scripts WALLET OUT="config/demo/script-refs.json":
   trap 'just notify "deploy-reference-scripts"' EXIT
   sbt "runMain hydrozoa.app.DeployReferenceScripts --wallet {{WALLET}} --out {{OUT}}"
 
-# Build the shared head-config.json from a keygen-fleet roster + deployed script refs.
-# Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address must be
-# funded on Preview first (the tool logs the exact lovelace required and fails with
-# the shortfall if not).
-build-head-config ROSTER REFS OUT EQUITY:
+# Build the shared head-config.json from a complete bootstrap.json (the keygen-fleet roster
+# completed with cardanoNetwork, scriptReferenceUtxos from deploy-reference-scripts, and the
+# initialEvacuationMap). Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address
+# must be funded on Preview first (the tool logs the exact lovelace required and fails with the
+# shortfall if not).
+build-head-config BOOTSTRAP OUT EQUITY:
   #!/usr/bin/env bash
   trap 'just notify "build-head-config"' EXIT
-  sbt "runMain hydrozoa.app.BuildHeadConfig {{ROSTER}} --script-refs {{REFS}} --equity {{EQUITY}} --out {{OUT}}"
+  sbt "runMain hydrozoa.app.BuildHeadConfig {{BOOTSTRAP}} --equity {{EQUITY}} --out {{OUT}}"
 
 export:
   #!/usr/bin/env bash
