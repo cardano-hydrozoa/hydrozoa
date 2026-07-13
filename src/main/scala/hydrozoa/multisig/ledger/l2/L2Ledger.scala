@@ -90,16 +90,21 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    /** Stateless pre-RequestId screening (§4.1 / §5.4 Phase 3): decide whether a user request is
-      * worth assigning a RequestId and fanning out to consensus — reject a malformed or
-      * replay-pinned request before it consumes resources. Conservative: only definite, stateless
-      * failures; stateful checks (balance, inputs, completeness) stay at submission. `l1Payload` is
-      * `Some` for a deposit request (the deposit tx), `None` for a transaction request.
+    /** Stateless pre-RequestId screening of a transaction request (§4.1 / §5.4): decide whether the
+      * native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to consensus —
+      * reject a malformed or replay-pinned tx before it consumes resources. A transaction has no
+      * pre-screening stage: it self-authenticates through its own witnesses, so this is the whole
+      * of its screening. Conservative: only definite, stateless failures; stateful checks (balance,
+      * inputs, completeness) stay at submission.
       */
-    def screen(
-        l2Payload: ByteString,
-        l1Payload: Option[ByteString]
-    ): EitherT[F, L2LedgerError, Unit]
+    def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
+
+    /** Stateless pre-RequestId screening of a deposit request (§5.5) — the ledger's stage, after
+      * Hydrozoa's deposit pre-screening (COSE authentication + the accept-by check) has passed. The
+      * ledger checks that the `l2Payload` is well-formed for it and consistent with the deposit's
+      * reference data — for the EUTXO ledger, that `depositL2Value` covers the `l2Payload` outputs.
+      */
+    def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
 
     /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per
       * successful state-mutating command (the "real" commands), so the consumer (JointLedger) can

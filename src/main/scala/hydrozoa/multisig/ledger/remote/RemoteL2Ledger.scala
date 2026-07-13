@@ -151,9 +151,12 @@ class RemoteL2Ledger private (
       * submission. A dedicated remote screening endpoint (§9 item 3) replaces this so a remote node
       * also rejects pre-RequestId.
       */
-    override def screen(
-        l2Payload: ByteString,
-        l1Payload: Option[ByteString]
+    override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.rightT[IO, L2LedgerError](())
+
+    /** Passthrough for now — see [[sendScreenTx]]. */
+    override def sendScreenDeposit(
+        req: L2LedgerCommand.ScreenDeposit
     ): EitherT[IO, L2LedgerError, Unit] =
         EitherT.rightT[IO, L2LedgerError](())
 

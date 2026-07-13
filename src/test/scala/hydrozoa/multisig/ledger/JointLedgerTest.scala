@@ -46,6 +46,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
+import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -388,6 +389,12 @@ object JointLedgerTestHelpers {
 
                 depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
+                  // The depositor's COSE endorsement of the L2 payload (design note §5.5); head
+                  // peer 0 plays the depositor in this test.
+                  l2PayloadCose = env.multiNodeConfig
+                      .nodeConfigs(HeadPeerNumber.zero)
+                      .ownWallet
+                      .signCoseCip30(blake2b_256(l2OutputsBytes).bytes),
                   l2Value = l2OutputsValue,
                   depositFee = Coin.zero,
                   utxosFunding = utxosFunding,

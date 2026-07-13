@@ -64,6 +64,19 @@ object L2LedgerCommand {
     export ApplyDepositDecisions.given
     export ApplyTransaction.given
 
+    /** The deposit-screening request ([[L2Ledger.sendScreenDeposit]], §5.5): [[RegisterDeposit]]
+      * minus the consensus-assigned `requestId` / `blockNumber` / `blockCreationStartTime` — those
+      * do not exist yet at screening time. Deliberately not a [[Real]] command: screening is a
+      * stateless query, never logged or replayed.
+      */
+    final case class ScreenDeposit(
+        depositId: TransactionInput,
+        depositFee: Coin,
+        depositL2Value: Value,
+        refundDestination: Destination,
+        l2Payload: ByteString
+    )
+
     final case class RegisterDeposit(
         requestId: RequestId,
         blockNumber: BlockNumber,

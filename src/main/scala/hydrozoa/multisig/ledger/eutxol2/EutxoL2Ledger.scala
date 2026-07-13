@@ -187,28 +187,43 @@ case class EutxoL2Ledger private (
             _ <- EitherT.right(state.set(next))
         yield next
 
-    override def screen(
-        l2Payload: ByteString,
-        l1Payload: Option[ByteString]
+    override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
+        // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
+        // signatures over the tx id. All stateless; the stateful required-signers / balance / input
+        // checks stay at submission (an unsigned tx that slips past here is still rejected there by
+        // MissingKeyHashes).
+        EitherT.fromEither[IO](for {
+            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
+            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
+            _ <- HydrozoaTransactionMutator
+                .screenSignatures(config, l2Tx)
+                .left
+                .map(e => L2LedgerError(e.toString))
+        } yield ())
+
+    override def sendScreenDeposit(
+        req: L2LedgerCommand.ScreenDeposit
     ): EitherT[IO, L2LedgerError, Unit] =
-        l1Payload match {
-            // Deposit: defer to registerDeposit's existing parse/validation for now (Phase 3 screens
-            // the transaction path; deposit screening moves to the ledger in a later slice).
-            case Some(_) => EitherT.rightT[IO, L2LedgerError](())
-            case None    =>
-                // Transaction: the native L2 tx must parse, carry this head's headId pin, and have
-                // valid vkey-witness signatures over the tx id. All stateless; the stateful
-                // required-signers / balance / input checks stay at submission (an unsigned tx that
-                // slips past here is still rejected there by MissingKeyHashes).
-                EitherT.fromEither[IO](for {
-                    l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
-                    _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
-                    _ <- HydrozoaTransactionMutator
-                        .screenSignatures(config, l2Tx)
-                        .left
-                        .map(e => L2LedgerError(e.toString))
-                } yield ())
-        }
+        EitherT.fromEither[IO](for {
+            // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger
+            // will spawn when the deposit is absorbed. Shares the decode with registration
+            // (fromDepositPayload), so nothing screened here can fail to register later.
+            l2Genesis <- Try(
+              L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
+            ).toEither.left.map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+            // depositL2Value must cover the spawned outputs: the treasury absorbs depositL2Value,
+            // so the L2 state the deposit creates cannot exceed it. Covers = the difference is
+            // non-negative in the coin and every asset.
+            spawnedValue = Value.combine(l2Genesis.genesisObligations.map(_.l2OutputValue))
+            diff = req.depositL2Value - spawnedValue
+            _ <- Either.cond(
+              diff.coin.value >= 0 && diff.assets.assets.values.forall(_.values.forall(_ >= 0)),
+              (),
+              L2LedgerError(
+                s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value (${req.depositL2Value})"
+              )
+            )
+        } yield ())
 
     override def sendApplyTransaction(
         req: L2LedgerCommand.ApplyTransaction

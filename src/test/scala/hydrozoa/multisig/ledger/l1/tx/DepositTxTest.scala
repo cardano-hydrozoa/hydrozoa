@@ -17,8 +17,9 @@ import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Hash, *}
+import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
+import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -58,7 +59,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         _ <- arbitrary[TransactionInput]
 
-        depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
+        depositor <- multiNodeConfig.pickPeer
+        depositorAddress = multiNodeConfig.addressOf(depositor)
 
         nL2Outputs <- Gen.choose(1, 10)
         l2Outputs <- Gen
@@ -99,9 +101,18 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         _ <- genPubkeyAddress()(using config)
 
+        l2Payload = GenesisObligation.serialize(l2Outputs)
+        // The depositor endorses the L2 payload: COSE-sign its hash with the depositor's wallet
+        // (design note §5.5).
+        l2PayloadCose = multiNodeConfig
+            .nodeConfigs(depositor)
+            .ownWallet
+            .signCoseCip30(blake2b_256(l2Payload).bytes)
+
     } yield DepositTx.Build(
       utxosFunding = fundingUtxos,
-      l2Payload = GenesisObligation.serialize(l2Outputs),
+      l2Payload = l2Payload,
+      l2PayloadCose = l2PayloadCose,
       depositFee = depositFee,
       changeAddress = depositorAddress,
       requestValidityEndTime = requestValidityEndTime,
@@ -118,17 +129,24 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
             val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             val gen = for {
-                hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
                 fee <- Gen.choose(0, 100_000_000).map(Coin(_))
-            } yield (index, Hash[Blake2b_256, Any](hash), fee)
+                keyLen <- Gen.choose(1, 100)
+                // A COSE_Sign1 exceeds the 64-byte metadata-string cap, so force sizes that
+                // exercise the multi-chunk encoding.
+                sigLen <- Gen.choose(65, 300)
+                coseKey <- genByteStringOfN(keyLen)
+                coseSignature <- genByteStringOfN(sigLen)
+            } yield (index, fee, coseKey, coseSignature)
 
-            Prop.forAll(gen)((idx, hash, fee) =>
+            Prop.forAll(gen)((idx, fee, coseKey, coseSignature) =>
                 val aux: AuxiliaryData.Metadata =
                     AuxiliaryData.Metadata(
-                      MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
+                      MD.Deposit(idx, fee, coseKey, coseSignature)
+                          .asAuxData(config.headId)
+                          .getMetadata
                     )
-                val expectedX = MD.Deposit(idx, fee, hash)
+                val expectedX = MD.Deposit(idx, fee, coseKey, coseSignature)
 
                 MD.Deposit.parse(aux) match {
                     case Right(_, x) if x.isInstanceOf[MD.Deposit] =>
