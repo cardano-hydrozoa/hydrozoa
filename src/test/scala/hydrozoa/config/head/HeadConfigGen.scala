@@ -1,6 +1,7 @@
 package hydrozoa.config.head
 
 import cats.data.{Kleisli, ReaderT, Validated}
+import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.InitParamsType.{BottomUp, Constant, TopDown}
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters, InitializationParametersGenBottomUp, InitializationParametersGenTopDown, generateInitialBlock}
@@ -13,17 +14,20 @@ import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 type HeadConfigGen = (
     generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime],
-    generateHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap]
+    generateHeadConfigBootstrap: GenWithTestPeers[(HeadConfig.Bootstrap, InitializationFunding)]
 ) => GenWithTestPeers[HeadConfig]
 
 def generateHeadConfig(
-    genHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap] = generateHeadConfigBootstrap(),
-    generateInitialBlock: HeadConfig.Bootstrap => GenWithTestPeers[InitialBlock] =
-        bootstrapConfig => generateInitialBlock(ReaderT.pure(bootstrapConfig))
+    genHeadConfigBootstrap: GenWithTestPeers[(HeadConfig.Bootstrap, InitializationFunding)] =
+        generateHeadConfigBootstrap(),
+    generateInitialBlock: (HeadConfig.Bootstrap, InitializationFunding) => GenWithTestPeers[
+      InitialBlock
+    ] = (bootstrapConfig, funding) => generateInitialBlock(ReaderT.pure((bootstrapConfig, funding)))
 ): GenWithTestPeers[HeadConfig] =
     for {
-        bootstrap <- genHeadConfigBootstrap
-        initialBlock <- generateInitialBlock(bootstrap)
+        bootstrapAndFunding <- genHeadConfigBootstrap
+        (bootstrap, funding) = bootstrapAndFunding
+        initialBlock <- generateInitialBlock(bootstrap, funding)
     } yield HeadConfig(
       headConfigBootstrap = bootstrap,
       initialBlock = initialBlock
@@ -38,7 +42,7 @@ enum InitParamsType:
         initializationParametersGenBottomUp: InitializationParametersGenBottomUp.GenInitializationParameters
     )
     case TopDown(initializationParametersGenTopDown: InitializationParametersGenTopDown.GenWithDeps)
-    case Constant(params: InitializationParameters)
+    case Constant(params: InitializationParameters, funding: InitializationFunding)
 
 def generateHeadConfigBootstrap(
     generateHeadParams: GenWithTestPeers[HeadParameters] = generateHeadParameters(),
@@ -48,12 +52,12 @@ def generateHeadConfigBootstrap(
     generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
         generateScriptReferenceUtxos,
     coilPeers: CoilPeers = CoilPeers.empty
-): GenWithTestPeers[HeadConfig.Bootstrap] =
+): GenWithTestPeers[(HeadConfig.Bootstrap, InitializationFunding)] =
     for {
         testPeers <- Kleisli.ask
         cardanoNetwork = testPeers.cardanoNetwork
         headParams <- generateHeadParams
-        initializationParams <- generateInitializationParameters match {
+        initializationParamsAndFunding <- generateInitializationParameters match {
             case BottomUp(g) =>
                 g(generateFallbackContingency)
             case TopDown(
@@ -68,22 +72,26 @@ def generateHeadConfigBootstrap(
                   generateGenesisUtxosL1,
                   equityRange
                 )
-            case Constant(p) => ReaderT.pure(p)(using genMonad)
+            case Constant(p, f) => ReaderT.pure((p, f))(using genMonad)
         }
+        (initializationParams, funding) = initializationParamsAndFunding
         scriptReferenceUtxos <- generateScriptReferenceUtxos
 
-    } yield HeadConfig
-        .Bootstrap(
-          cardanoNetwork = cardanoNetwork,
-          headParams = headParams,
-          headPeers = testPeers.headPeers,
-          coilPeers = coilPeers,
-          initializationParams = initializationParams,
-          scriptReferenceUtxos = scriptReferenceUtxos
-        ) match {
-        case Validated.Valid(x) => x
-        case Validated.Invalid(errors) =>
-            throw RuntimeException(s"generating HeadConfig.Bootstrap failed: $errors")
+    } yield {
+        val bootstrap = HeadConfig
+            .Bootstrap(
+              cardanoNetwork = cardanoNetwork,
+              headParams = headParams,
+              headPeers = testPeers.headPeers,
+              coilPeers = coilPeers,
+              initializationParams = initializationParams,
+              scriptReferenceUtxos = scriptReferenceUtxos
+            ) match {
+            case Validated.Valid(x) => x
+            case Validated.Invalid(errors) =>
+                throw RuntimeException(s"generating HeadConfig.Bootstrap failed: $errors")
+        }
+        (bootstrap, funding)
     }
 
 object HeadConfigTest extends Properties("Head config") {
@@ -93,6 +101,7 @@ object HeadConfigTest extends Properties("Head config") {
           .generate()
           .flatMap(TestPeers.generate)
           .flatMap(generateHeadConfigBootstrap().run(_))
+          .map(_._1)
     )(_ => true)
 
     val _ = property("full config generates") = Prop.forAll(

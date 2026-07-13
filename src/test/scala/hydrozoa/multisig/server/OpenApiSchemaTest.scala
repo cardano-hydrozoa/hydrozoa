@@ -7,6 +7,7 @@ import com.suprnation.actor.ActorSystem
 import hydrozoa.config.GenerateSampleConfig.{defaultSpec, testPeersSpec}
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
@@ -54,6 +55,7 @@ class OpenApiSchemaTest extends AnyFunSuite:
                     routes <- HydrozoaRoutes(
                       requestSequencerStub,
                       blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

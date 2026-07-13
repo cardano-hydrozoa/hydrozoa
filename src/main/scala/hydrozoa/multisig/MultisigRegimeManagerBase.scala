@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
@@ -51,6 +51,12 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
 
+    /** Node lifecycle status backing the user-facing server's `/ready` endpoint. Advanced
+      * monotonically (via [[NodeStatus.advanceTo]]) by [[CardanoLiaison]] as the L1 target state
+      * changes and by this manager on [[HandoffToRuleBased]]; never read here.
+      */
+    val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
+
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
             case _: IllegalArgumentException =>
@@ -70,7 +76,9 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
             tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
-        case HandoffToRuleBased(fallback) => onHandoffToRuleBased(fallback)
+        case HandoffToRuleBased(fallback) =>
+            nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
+                onHandoffToRuleBased(fallback)
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
@@ -116,6 +124,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 tracers.cardanoLiaison,
                 persistence,
                 mrmSelf = context.self,
+                advanceNodeStatus = next => nodeStatus.update(_.advanceTo(next)),
               )
             )
             consensusActor <- context.actorOf(

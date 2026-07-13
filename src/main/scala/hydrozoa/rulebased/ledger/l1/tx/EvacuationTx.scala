@@ -12,10 +12,7 @@ import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
 import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{
-  RuleBasedTreasuryDatum,
-  evacuate
-}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, evacuate}
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx.Assumptions
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTxOps.Build.Error.BuilderError
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}

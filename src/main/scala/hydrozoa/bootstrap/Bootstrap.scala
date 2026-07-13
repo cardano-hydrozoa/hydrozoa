@@ -1,4 +1,4 @@
-package hydrozoa.app
+package hydrozoa.bootstrap
 
 import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.{ExitCode, IO}
@@ -52,7 +52,7 @@ import scalus.uplc.builtin.ByteString
 
 object Bootstrap:
 
-    private val logger = Logging.loggerIO("hydrozoa.app.Bootstrap")
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.Bootstrap")
 
     /** Generate a new Ed25519 key pair for Cardano. */
     def generateKeyPair(): IO[(VerificationKey, SigningKey)] =
@@ -256,12 +256,12 @@ object Bootstrap:
           )
         )
 
-        initializationParameters = InitializationParameters(
-          initialEvacuationMap = evacMap,
-          initialEquityContributions = initialEquityContributions,
+        // The build-time funding recipe (seed + funding utxos + change). The head id is derived
+        // from the seed here, in the bootstrap module, and presented explicitly in the config.
+        funding = InitializationFunding(
           seedUtxo = seedUtxo,
           additionalFundingUtxos = utxosSelected.tail.map(_.toTuple).toMap,
-          initialChangeOutputs = List(
+          changeOutputs = List(
             TransactionOutput.Babbage(
               address = peerAddress,
               value = valueSelected - Value(minEquity) -
@@ -270,6 +270,12 @@ object Bootstrap:
               scriptRef = None
             )
           )
+        )
+
+        initializationParameters = InitializationParameters(
+          initialEvacuationMap = evacMap,
+          initialEquityContributions = initialEquityContributions,
+          headId = funding.headId
         )
 
         bootstrap <- IO.fromEither(
@@ -298,7 +304,7 @@ object Bootstrap:
         blockCreationEndTime = BlockCreationEndTime(endTimeInstant)
 
         initTxSeq <- InitializationTxSeq
-            .Build(bootstrap)(blockCreationEndTime)
+            .Build(bootstrap, funding)(blockCreationEndTime)
             .result
             .fold(
               e => logger.error(e.toString) >> IO.raiseError(e),
@@ -521,14 +527,14 @@ object GenerateKeyPair
         }
     } yield ()
 
-    private[app] val emptyRoster: Json = Json.obj(
+    private[bootstrap] val emptyRoster: Json = Json.obj(
       "headPeers" -> Json.arr(),
       "coilPeers" -> Json.arr(),
       "coilQuorum" -> Json.fromInt(0)
     )
 
     /** Pure roster edit: append the peer entry for its role and apply `coilQuorum` if given. */
-    private[app] def appendPeer(
+    private[bootstrap] def appendPeer(
         roster: Json,
         role: Role,
         vKeyHex: String,
@@ -599,7 +605,7 @@ object GenerateKeyPair
     } yield ()
 
     /** Pure template edit shared with tests. */
-    private[app] def fillPrivateConfig(
+    private[bootstrap] def fillPrivateConfig(
         template: Json,
         role: Role,
         vKeyHex: String,
@@ -648,7 +654,7 @@ end GenerateKeyPair
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.Migrate <head-config.json> <peer-private.json> <bech32-dest>"
+  *   sbt "runMain hydrozoa.bootstrap.Migrate <head-config.json> <peer-private.json> <bech32-dest>"
   * }}}
   *
   * Reads wallet + Blockfrost credentials from the same files Main does; signs with the peer wallet
@@ -668,7 +674,7 @@ object Migrate
     ):
 
     private val log: ContraTracer[IO, Slf4jMsg] =
-        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.app.Migrate"))
+        Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.Migrate"))
 
     private val headArg: Opts[Path] =
         Opts.argument[String]("head-config.json").map(Path.of(_))
@@ -825,7 +831,7 @@ end Migrate
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.BuildHeadConfig <peers.json> --script-refs script-refs.json \
+  *   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig <peers.json> --script-refs script-refs.json \
   *     --blockfrost-key <key> --equity <lovelace> [--out head-config.json]"
   * }}}
   *
@@ -844,7 +850,7 @@ object BuildHeadConfig
       header = "Build the shared head-config.json artifact every node loads"
     ):
 
-    private val logger = Logging.loggerIO("hydrozoa.app.BuildHeadConfig")
+    private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
     private val cardanoNetwork: StandardCardanoNetwork = CardanoNetwork.Preview
 
