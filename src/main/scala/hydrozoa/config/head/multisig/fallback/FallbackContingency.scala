@@ -179,7 +179,7 @@ object FallbackContingency {
         val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(6960)
 
         // Max serialized size of the rule-based regime utxo (HRWT beacon + head-identity datum,
-        // dominated by the peer vkey lists)
+        // ~one compressed vkey per head/coil peer); measured ~880 bytes at the largest supported head.
         val maxRegimeUtxoBytes: PositiveInt = PositiveInt.unsafeApply(1024)
     }
 }
