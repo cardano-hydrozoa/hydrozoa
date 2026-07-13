@@ -314,14 +314,11 @@ final case class RuleBasedActor(
                     case Some(r: StackEffects.HardConfirmed.Regular) =>
                         RuleBasedActor.lastFallback(r.partitions) match {
                             case None =>
-                                // Minor-only stack: no fallback to anchor from. Walk back.
-                                if stack == StackNumber.first then
-                                    IO.raiseError(
-                                      MissingState(
-                                        s"walked back to $stack with no fallback found"
-                                      )
-                                    )
-                                else IO.pure(Left(stack.decrement))
+                                // Minor-only stack: no fallback to anchor from. Walk back;
+                                // stack 0 (Initial) terminates the walk with the initial
+                                // fallback. A Regular stack is always >= 1, so `decrement`
+                                // never underflows.
+                                IO.pure(Left(stack.decrement))
                             case Some(fallbackTx) =>
                                 loadRegularEvacuationInputs(stack, r, fallbackTx).map(Right(_))
                         }
