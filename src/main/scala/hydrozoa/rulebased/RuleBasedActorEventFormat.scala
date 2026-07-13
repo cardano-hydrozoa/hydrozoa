@@ -50,6 +50,11 @@ object RuleBasedActorEventFormat:
             case Dispute.ParsingEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
             case Dispute.WaitingForVotesBeforeDeadline =>
                 info("Dispute state: awaiting peer votes; deadline not yet elapsed")
+            case Dispute.VotingDeadlineElapsed =>
+                info(
+                  "Dispute state: voting deadline elapsed; skipping our own vote/ratchet " +
+                      "and dispatching to residual tally/resolve"
+                )
 
             case Dispute.Coil.ParsingRatchet =>
                 info("Coil dispute state: ratcheting a public ballot box")

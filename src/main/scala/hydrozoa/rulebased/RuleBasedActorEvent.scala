@@ -45,6 +45,13 @@ object RuleBasedActorEvent:
           */
         case object WaitingForVotesBeforeDeadline extends RuleBasedActorEvent
 
+        /** Voting deadline has elapsed while the peer's own path (cast a vote for a head peer;
+          * ratchet an open box for a coil peer) is still applicable. On-chain the corresponding tx
+          * would fail the validity range, so we skip it and dispatch to the residual tally/resolve
+          * path immediately.
+          */
+        case object VotingDeadlineElapsed extends RuleBasedActorEvent
+
         /** Coil-peer classifier outcomes for the coil ratchet path (see
           * [[RuleBasedActor.Dispute.handleCoil]]).
           */
