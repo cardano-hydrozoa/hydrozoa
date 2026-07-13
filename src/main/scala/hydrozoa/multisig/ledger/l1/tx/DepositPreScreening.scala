@@ -53,6 +53,11 @@ object DepositPreScreening {
         now: QuantizedInstant
     )(config: Config): Either[Error, L2LedgerCommand.ScreenDeposit] =
         for {
+            // NB: the COSE authentication happens INSIDE the parse — DepositTx.Parse verifies that
+            // the metadata's (coseKey, coseSignature) pair is a valid COSE_Sign1 and that it covers
+            // blake2b_256(l2Payload), so a failed authentication surfaces as DepositTxParseFailed
+            // here. TODO: Parse does far more than parsing (validation, authentication); extract
+            // those steps (or rename it) so pre-screening's checks are visible at this call site.
             depositTx <- DepositTx
                 .Parse(config)(l1Payload, l2Payload)
                 .result
