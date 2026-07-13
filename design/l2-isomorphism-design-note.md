@@ -369,6 +369,61 @@ remote can self-source); the peer-transport golden + on-disk persistence-log mig
 `RequestSequencer` order-inversion, which must preserve head-local sequential ids and the persist-before-
 observable invariant.
 
+### 5.5 Deposit authentication — a signature over `hash(l2Payload)` in the deposit metadata
+
+**Landed by the strip (§5.4), then reconsidered (2026-07-13, post-George-sync).** Dropping COSE with the
+rest of the request wrapper was misleading for *deposits*: isomorphism is a **transaction** property (a
+native L2 tx self-authenticates through its own vkey witnesses), but a deposit is **not** an L2 tx —
+it's the on-ramp, and its `l2Payload` (the `GenesisObligation`s spawned on absorption) can't
+self-authenticate. So deposits must keep an explicit signature. The old COSE was worthless as auth
+anyway: its key was **self-declared** in the request, checked against nothing (§3.1 / the removed
+`JsonCodecs.validateCoseSignature`) — an attacker could self-sign a genuine-deposit + arbitrary-`l2Payload`
+pair.
+
+**The binding that already exists.** The deposit tx metadata carries `l2PayloadHash` (a `Hash32`
+metadatum), and `DepositTx.Parse` already enforces `blake2b_256(l2Payload) == l2PayloadHash`. Because the
+deposit tx's own L1 witnesses (the fund controllers) sign the body — which commits to the metadata — a
+deposit signer already endorses `hash(l2Payload)` *once the deposit is on-chain*. The gap is purely
+**screening-time**: the request's `l1Payload` is the *unsigned* deposit tx, so at screening there are no
+witnesses to check.
+
+**Design.** Have the depositor — one of the deposit tx's signers — **COSE-sign `hash(l2Payload)`** and put
+the **COSE key + signature into the deposit tx metadata** (replacing the bare `l2PayloadHash`). The COSE
+sig is self-contained, so it is verifiable at screening on the unsigned tx, and its key ties the
+endorsement to a real deposit party rather than a self-declared one. Verification splits in two:
+
+- **Hydrozoa's part of screening (before the ledger):** verify the COSE signature over `hash(l2Payload)`.
+  This is Hydrozoa's own screening step, run *before* it hands the payload to the ledger. (`coseKey` must
+  belong to a deposit-tx signer — see the open point on *when* that tie is checked, given the request-time
+  tx is unsigned.)
+- **The ledger's part (`sendScreenDeposit`):** ledger-specific well-formedness — the `l2Payload` matches
+  `depositL2Value` / `depositFee`. For the **EUTXO** ledger: `depositL2Value` covers the `l2Payload`
+  outputs (Σ output values ≤ `depositL2Value`), plus min-ada / parseable `GenesisObligation`s. (Open:
+  the exact value relation — `≤`, `==`, or `== depositL2Value − depositFee` — and whatever else the
+  ledger should assert.)
+
+**Two screening entrypoints** on `L2Ledger`, replacing the single `screen(l2Payload, Option[l1Payload])`
+(the `Option` encoded "deposit-or-not" in a nullable arg):
+
+- `sendScreenTx(l2Payload)` — native-tx path (parse + headId pin + witness sigs, §4.1/§5.4).
+- `sendScreenDeposit(depositId, depositFee, depositL2Value, refundDestination, l2Payload)` — deposit path
+  (a `ScreenDeposit` type = `RegisterDeposit` minus the consensus-assigned `{requestId, blockNumber,
+  blockCreationStartTime}`).
+
+**Where COSE is verified.** The key + sig sit in the deposit tx metadata; Hydrozoa extracts and verifies
+them where it handles the deposit tx (today `DepositTx.Parse`). That step does far more than parse — it
+validates and verifies — so it wants a better name.
+
+**Restore the COSE primitives.** The strip deleted the sign/verify crypto (`WalletModule.signCoseCip30`,
+`Cip30SignedData`, the `CIP30DataSigner` verify helper). Resurrect them and re-point at `hash(l2Payload)`
++ the deposit metadata — *not* the old request-header COSE flow, which this replaces.
+
+**Open point.** `coseKey` must be a deposit-tx signer to be meaningful (not self-declared, the old flaw).
+But the request-time `l1Payload` is unsigned, so at screening only the COSE sig's internal validity is
+checkable; the `coseKey ∈ deposit-tx witnesses` tie lands when the deposit is observed on L1. Decide
+whether screening should additionally pin `coseKey` to something stateless (the `refundDestination` /
+deposit-input credential) so the screening step is not itself self-asserted.
+
 ## 6. L2 backend selection & config model
 
 - **Head config gains an `l2ledger` field: `cardano-eutxo` | `any-remote`.** It fixes the ledger
