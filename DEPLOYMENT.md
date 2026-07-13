@@ -313,10 +313,17 @@ Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signi
   configs (step 1 skipped).
 
 **Teardown / recovery of funds:** to get the head's funds back on L1, **finalize before tearing
-down** (`POST /api/admin/finalize` on a head peer, basic auth) — the head address is a multisig
-(`AllOf(heads) ∧ AtLeast(coilQuorum, coils)`), so once the peers are gone nothing can spend from it
-except the pre-signed fallback/evacuation path. Then `docker compose down`. Leftover change at head
-peer 0's own L1 address (not head-locked) can be swept with its single key at any time.
+down** — the head address is a multisig (`AllOf(heads) ∧ AtLeast(coilQuorum, coils)`), so once the
+peers are gone nothing can spend from it except the pre-signed fallback/evacuation path. Finalize on
+any head peer (basic auth, the template's default credentials shown):
+
+```bash
+curl -u admin:welcome -X POST http://localhost:8080/api/admin/finalize
+```
+
+The finalization tx pays the L2 state and equity back out on L1 (watch `preview.cexplorer.io`).
+Then `docker compose down`. Leftover change at head peer 0's own L1 address (not head-locked) can
+be swept with its single key at any time.
 
 ---
 
