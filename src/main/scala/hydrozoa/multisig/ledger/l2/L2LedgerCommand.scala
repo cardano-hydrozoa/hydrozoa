@@ -4,7 +4,6 @@ package hydrozoa.multisig.ledger.l2
 
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
@@ -60,13 +59,10 @@ sealed trait L2LedgerCommand
 
 object L2LedgerCommand {
     sealed trait Real extends L2LedgerCommand
-    sealed trait Proxy extends L2LedgerCommand
 
     export RegisterDeposit.given
     export ApplyDepositDecisions.given
     export ApplyTransaction.given
-    export ProxyBlockConfirmation.given
-    export ProxyRequestError.given
 
     final case class RegisterDeposit(
         requestId: RequestId,
@@ -157,31 +153,5 @@ object L2LedgerCommand {
                 } yield L2LedgerCommand.ApplyTransaction(rid, bn, t, p)
             )
     }
-
-    object ProxyBlockConfirmation {
-        given Codec[L2LedgerCommand.ProxyBlockConfirmation] = {
-            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
-            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
-
-            io.circe.generic.semiauto.deriveCodec
-        }
-    }
-
-    final case class ProxyBlockConfirmation(
-        blockNumber: BlockNumber,
-        refundTxs: Vector[(RequestId, EnrichedTx.Serialized)]
-    ) extends L2LedgerCommand.Proxy
-
-    object ProxyRequestError {
-        given Codec[ProxyRequestError] = {
-            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
-            io.circe.generic.semiauto.deriveCodec
-        }
-    }
-
-    final case class ProxyRequestError(
-        requestId: RequestId,
-        message: String
-    ) extends L2LedgerCommand.Proxy
 
 }

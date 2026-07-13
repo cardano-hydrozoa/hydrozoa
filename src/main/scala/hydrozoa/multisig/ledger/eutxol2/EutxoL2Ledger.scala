@@ -9,13 +9,11 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
@@ -71,12 +69,9 @@ object EutxoL2Ledger {
     case class State(
         activeUtxos: Utxos,
         pendingDeposits: Map[RequestId, L2Genesis],
-        errors: Map[RequestId, String],
-        confirmations: Map[BlockNumber, Vector[(RequestId, EnrichedTx.Serialized)]],
         headId: Option[HeadId],
         /** Monotonic commit counter — the recovery anchor (§R2b). Bumped once per successful
-          * state-mutating command; the transient proxy commands (confirmations / errors) do not
-          * advance it.
+          * state-mutating command.
           */
         commandNumber: L2CommandNumber,
     )
@@ -90,8 +85,6 @@ object EutxoL2Ledger {
             State(
               activeUtxos = config.initialEvacuationMap.toUtxos,
               pendingDeposits = Map.empty,
-              errors = Map.empty,
-              confirmations = Map.empty,
               headId = None,
               commandNumber = L2CommandNumber.zero
             )
@@ -193,26 +186,6 @@ case class EutxoL2Ledger private (
             )
             _ <- EitherT.right(state.set(next))
         yield next
-
-    override def sendProxyBlockConfirmation(
-        req: L2LedgerCommand.ProxyBlockConfirmation
-    ): EitherT[IO, L2LedgerError, Unit] =
-        EitherT.right(
-          state.update(
-            _.focus(_.confirmations)
-                .modify(c => c.updated(req.blockNumber, req.refundTxs))
-          )
-        )
-
-    override def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyRequestError
-    ): EitherT[IO, L2LedgerError, Unit] =
-        EitherT.right(
-          state.update(
-            _.focus(_.errors)
-                .modify(c => c.updated(req.requestId, req.message))
-          )
-        )
 
     override def screen(
         l2Payload: ByteString,
@@ -359,8 +332,7 @@ case class EutxoL2Ledger private (
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `pendingDeposits`, and `commandNumber` come from the snapshot; the transient `errors` /
-      * `confirmations` are not persisted and start empty (§R2b).
+      * `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
       */
     private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2

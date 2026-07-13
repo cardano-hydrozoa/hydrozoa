@@ -2,7 +2,6 @@ package hydrozoa.multisig.ledger.l2
 
 import cats.*
 import cats.data.*
-import cats.syntax.all.*
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.uplc.builtin.ByteString
@@ -34,14 +33,6 @@ final case class L2LedgerState private (
 
 object L2LedgerState:
     def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty)
-
-    def executeProxyCommand[F[_]](
-        l2Ledger: L2Ledger[F],
-        command: L2LedgerCommand.Proxy
-    ): F[Unit] = {
-        val action = l2Ledger.L2LedgerAction.fromL2LedgerCommandProxy(command)
-        action.run()
-    }
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
       * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerCommand]].
@@ -99,14 +90,6 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    def sendProxyBlockConfirmation(
-        req: L2LedgerCommand.ProxyBlockConfirmation
-    ): EitherT[F, L2LedgerError, Unit]
-
-    def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyRequestError
-    ): EitherT[F, L2LedgerError, Unit]
-
     /** Stateless pre-RequestId screening (§4.1 / §5.4 Phase 3): decide whether a user request is
       * worth assigning a RequestId and fanning out to consensus — reject a malformed or
       * replay-pinned request before it consumes resources. Conservative: only definite, stateless
@@ -147,32 +130,11 @@ trait L2Ledger[F[_]] {
                 this.unLedgerAction.run(state).value
         }
 
-        final class Proxy private[l2] (override val unLedgerAction: KEF[F]) extends L2LedgerAction {
-            def run(): F[Unit] =
-                this.unLedgerAction.run(L2LedgerState.empty).value.void
-        }
-
         def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
             case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDeposit(e)
             case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
             case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransaction(e)
         }
-
-        def fromL2LedgerCommandProxy(e: L2LedgerCommand.Proxy): L2LedgerAction.Proxy = e match {
-            case e: L2LedgerCommand.ProxyBlockConfirmation => fromProxyBlockConfirmation(e)
-            case e: L2LedgerCommand.ProxyRequestError      => fromProxyHydrozoaRequestError(e)
-        }
-
-        /** Execute the given EitherT (returning Unit), but return the original state
-          */
-        private def kConst(e: EitherT[F, L2LedgerError, Unit]): L2LedgerAction.Proxy =
-            L2LedgerAction.Proxy(
-              Kleisli(ledgerState =>
-                  for {
-                      _ <- e
-                  } yield ledgerState
-              )
-            )
 
         private def fromRegisterDeposit(
             req: L2LedgerCommand.RegisterDeposit
@@ -209,15 +171,6 @@ trait L2Ledger[F[_]] {
           )
         )
 
-        private def fromProxyBlockConfirmation(
-            req: L2LedgerCommand.ProxyBlockConfirmation
-        ): L2LedgerAction.Proxy =
-            kConst(sendProxyBlockConfirmation(req))
-
-        private def fromProxyHydrozoaRequestError(
-            req: L2LedgerCommand.ProxyRequestError
-        ): L2LedgerAction.Proxy =
-            kConst(sendProxyHydrozoaRequestError(req))
     }
 
 }

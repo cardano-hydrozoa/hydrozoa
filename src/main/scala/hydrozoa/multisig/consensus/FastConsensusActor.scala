@@ -13,7 +13,6 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
 import scala.util.control.NonFatal
 import scalus.crypto.ed25519.VerificationKey
@@ -58,7 +57,6 @@ object FastConsensusActor:
         cardanoLiaison: CardanoLiaison.Handle,
         requestSequencer: Option[RequestSequencer.Handle],
         headPeerLiaisons: List[liaison.PeerLiaisonHeadToHead.Handle],
-        jointLedger: JointLedger.Handle,
         stackComposer: StackComposer.Handle,
         /** A hub's coil relay (§5.4) [doc-ref]: this actor's **own** soft-ack is sent here so the
           * hub's coil peers receive it. `None` off a hub.
@@ -189,7 +187,6 @@ class FastConsensusActor(
                       cardanoLiaison = _connections.cardanoLiaison,
                       requestSequencer = _connections.requestSequencer,
                       headPeerLiaisons = _connections.headPeerLiaisons,
-                      jointLedger = _connections.jointLedger,
                       stackComposer = _connections.stackComposer,
                       coilRelay = _connections.coilRelay,
                     )
@@ -310,7 +307,6 @@ class FastConsensusActor(
         // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the
         // new lane protocol prunes per-reply, not on local confirmation.)
         _ <- conn.blockWeaver ! confirmed
-        _ <- conn.jointLedger ! confirmed
         _ <- conn.stackComposer ! confirmed
 
         // Announce any postponed own-ack for the next block now that this cell is done.

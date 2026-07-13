@@ -84,15 +84,6 @@ final case class JointLedger(
         }
     } yield ret
 
-    private def executeL2ProxyCommand(
-        command: L2LedgerCommand.Proxy
-    ): IO[Unit] = L2LedgerState
-        .executeProxyCommand(l2Ledger, command)
-        .handleErrorWith { err =>
-            tracer.traceWith(JointLedgerEvent.L2ProxyCommandFailed(err)) *>
-                IO.raiseError(err)
-        }
-
     private def runL2Command(
         state: JointLedger.Producing,
         command: L2LedgerCommand.Real
@@ -178,26 +169,7 @@ final case class JointLedger(
                 req.request match {
                     case r: GetState.type => r.handleSync(req, _ => state.get)
                 }
-            case p: Block.SoftConfirmed.Next => proxyConfirmation(p)
         }
-
-    /** Notify the L2 ledger that the brief was soft-confirmed, recording the block's refund-tx
-      * CBORs in the L2 ledger's per-block `confirmations` map for L2 clients (SugarRush) to
-      * retrieve.
-      *
-      * TODO(GUM-133): incomplete — passes an empty refund-tx list. Post-dated refunds now live on
-      * the slow side (`BlockResult.postDatedRefundTxs` → slow consensus → L1), so this fast path
-      * has no refund CBORs to hand the L2 ledger, and a client querying `confirmations` sees none.
-      * The proxy was a temporary measure; simply relocating it to slow consensus is not the answer
-      * — the refund-surfacing contract needs a joint design with the SugarRush team.
-      */
-    private def proxyConfirmation(next: Block.SoftConfirmed.Next): IO[Unit] = {
-        val l2Command = L2LedgerCommand.ProxyBlockConfirmation(
-          next.blockNum,
-          Vector.empty
-        )
-        executeL2ProxyCommand(l2Command)
-    }
 
     private def preStartLocal: IO[Unit] =
         for {
@@ -238,12 +210,6 @@ final case class JointLedger(
             _ <- tracer.traceWith(
               JointLedgerEvent.RequestRejected(requestId, currentBlockNum, e.toString)
             )
-            l2Command = L2LedgerCommand.ProxyRequestError(
-              requestId = requestId,
-              message = e.toString
-            )
-            // FIXME: Should we retry?
-            _ <- executeL2ProxyCommand(l2Command)
         } yield ()
 
     /** Pure deposit-ledger op: parse the deposit tx and append the produced deposit utxo to the L1
@@ -884,7 +850,7 @@ object JointLedger {
     object Requests {
         type Request =
             PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
-                CompleteBlockFinal | GetState.Sync | Block.SoftConfirmed.Next
+                CompleteBlockFinal | GetState.Sync
 
         case object PreStart
 
