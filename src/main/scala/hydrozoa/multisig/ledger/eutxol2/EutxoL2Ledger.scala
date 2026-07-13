@@ -219,8 +219,12 @@ case class EutxoL2Ledger private (
         l1Payload: Option[ByteString]
     ): EitherT[IO, L2LedgerError, Unit] =
         l1Payload match {
-            // Deposit: defer to registerDeposit's existing parse/validation for now (Phase 3 screens
-            // the transaction path; deposit screening moves to the ledger in a later slice).
+            // Deposit: a passthrough for now — registerDeposit still parses/validates the deposit tx
+            // itself, but nothing here binds the deposit's l1Payload (the deposit tx) to its l2Payload
+            // (the utxos to spawn on absorption). COSE used to sign both together; with it gone this
+            // leaves l2Payload unauthenticated against the on-chain deposit. Fix: pin hash(l2Payload)
+            // in the deposit tx metadata and verify it here (design/l2-isomorphism-design-note.md §9
+            // item 9).
             case Some(_) => EitherT.rightT[IO, L2LedgerError](())
             case None    =>
                 // Transaction: the native L2 tx must parse, carry this head's headId pin, and have
