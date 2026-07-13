@@ -175,13 +175,17 @@ object Metadata {
         // Output index
         multisigRegimeIx: Int,
         // input index
-        seedIx: Int
+        seedIx: Int,
+        // Total equity contributed to the head; the produced treasury's equity is
+        // totalEquity minus this tx's fee. Carried here so the init tx is self-contained.
+        totalEquity: Coin
     ) extends Metadata(EnrichedTx.Type.Initialization) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("multisigTreasuryIx") -> Metadatum.Int(multisigTreasuryIx),
             Metadatum.Text("multisigRegimeIx") -> Metadatum.Int(multisigRegimeIx),
-            Metadatum.Text("seedIx") -> Metadatum.Int(seedIx)
+            Metadatum.Text("seedIx") -> Metadatum.Int(seedIx),
+            Metadatum.Text("totalEquity") -> Metadatum.Int(totalEquity.value)
           )
         )
     }
@@ -214,6 +218,14 @@ object Metadata {
                         innerMapEntries.keys.map(_.toString).toList
                       )
                     )
+                totalEquityRaw <- innerMapEntries
+                    .get(Metadatum.Text("totalEquity"))
+                    .toRight(
+                      MissingMetadataKeyForTransactionType(
+                        "totalEquity",
+                        innerMapEntries.keys.map(_.toString).toList
+                      )
+                    )
 
                 multisigTreasuryIx <- multisigTreasuryIxRaw match {
                     case i: Metadatum.Int if i.value >= 0L => Right(i.value.intValue)
@@ -231,10 +243,16 @@ object Metadata {
                     case i: Metadatum.Int if i.value >= 0 => Right(i.value.intValue)
                     case _ => Left(WrongMetadataValue("seedIx", seedIxRaw))
                 }
+
+                totalEquity <- totalEquityRaw match {
+                    case i: Metadatum.Int if i.value >= 0L => Right(Coin(i.value))
+                    case _ => Left(WrongMetadataValue("totalEquity", totalEquityRaw))
+                }
             } yield Initialization(
               multisigTreasuryIx = multisigTreasuryIx,
               multisigRegimeIx = multisigRegimeIx,
-              seedIx = seedIx
+              seedIx = seedIx,
+              totalEquity = totalEquity
             )
         }
     }

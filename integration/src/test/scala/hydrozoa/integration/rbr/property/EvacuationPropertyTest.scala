@@ -101,7 +101,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 2.seconds,
+          takeoffOffset = 10.seconds,
           fastTxTiming = widenedTxTiming,
           disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeers,
