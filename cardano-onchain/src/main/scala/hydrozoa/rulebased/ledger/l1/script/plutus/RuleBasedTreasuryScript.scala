@@ -8,7 +8,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.Tre
 import hydrozoa.rulebased.ledger.l1.state.RegimeState.RuleBasedRegimeDatum
 import hydrozoa.rulebased.ledger.l1.state.RegimeState.given
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum, evacuate, resolve}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
 import scalus.*
@@ -245,28 +245,22 @@ object RuleBasedTreasuryValidator extends Validator {
                     case AwaitingVote(_) => fail(ResolveUnexpectedAwaitingVote)
                     case Abstain         => fail(ResolveUnexpectedAbstain)
                     case Voted(commitment, versionMinor) =>
-                        val inputMajor = unresolvedDatum.versionMajor
-                        val inputMinor = versionMinor
-                        val outputMajor = treasuryOutputDatum.version._1
-                        val outputMinor = treasuryOutputDatum.version._2
-                        // (a) Let versionMinor be the corresponding field in voteStatus.
-                        // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
+                        // The only valid Resolve output is the unresolved input transitioned to
+                        // this vote's commitment and minor version; check each field of the output
+                        // against that transition (which preserves headMp and the major version).
+                        val expected = unresolvedDatum.resolve(commitment, versionMinor)
                         require(
-                          inputMajor == outputMajor &&
-                              inputMinor == outputMinor,
+                          treasuryOutputDatum.version === expected.version,
                           ResolveVersionCheck
                         )
-                        // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.evacuationActive === commitment,
+                          treasuryOutputDatum.evacuationActive === expected.evacuationActive,
                           ResolveUtxoActiveCheck
                         )
-
-                // 8. treasuryInput and treasuryOutput must match on all other fields.
-                require(
-                  unresolvedDatum.headMp === treasuryOutputDatum.headMp,
-                  ResolveTreasuryInputOutputHeadMp
-                )
+                        require(
+                          treasuryOutputDatum.headMp === expected.headMp,
+                          ResolveTreasuryInputOutputHeadMp
+                        )
 
             // ===================================
             // Evacuate redeemer
@@ -369,7 +363,7 @@ object RuleBasedTreasuryValidator extends Validator {
                 // pairing check, so the ref input must be one of the seven rungs, which sit at
                 // outputs 0-6 of the anchor's transaction.
                 val setupRefInput = tx.referenceInputs !! setupRefInputIdx
-                val ladderAnchor = findRegimeReference(tx, headMp).setupLadder
+                val ladderAnchor = findRegimeReference(tx, headMp).setupG2Ladder
                 require(
                   setupRefInput.outRef.id === ladderAnchor.id
                       && setupRefInput.outRef.idx < 7,
@@ -403,20 +397,21 @@ object RuleBasedTreasuryValidator extends Validator {
                         case _: Unresolved => fail(ResolveNeedsResolvedDatumInOutput)
                         case d: Resolved   => d
 
+                // The only valid Evacuate output advances the accumulator to `proof` and preserves
+                // the identity-binding fields (foundation I6 Preservation): headMp anchors the
+                // regime-utxo lookup and beacon checks; version pins the resolved commitment
+                // lineage. Check each field of the output against that transition.
+                val expectedOutput = resolvedDatum.evacuate(proof)
                 require(
-                  outputResolvedDatum.evacuationActive == proof,
+                  outputResolvedDatum.evacuationActive == expectedOutput.evacuationActive,
                   EvacuateOutputAccumulatorUpdated
                 )
-
-                // Identity-binding fields must be preserved across the Evacuate transition
-                // (foundation I6 Preservation). headMp anchors the regime-utxo lookup and the
-                // beacon checks; version pins the resolved commitment lineage.
                 require(
-                  outputResolvedDatum.headMp === resolvedDatum.headMp,
+                  outputResolvedDatum.headMp === expectedOutput.headMp,
                   EvacuateHeadMpShouldBePreserved
                 )
                 require(
-                  outputResolvedDatum.version === resolvedDatum.version,
+                  outputResolvedDatum.version === expectedOutput.version,
                   EvacuateVersionShouldBePreserved
                 )
 

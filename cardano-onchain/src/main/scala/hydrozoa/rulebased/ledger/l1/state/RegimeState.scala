@@ -13,7 +13,7 @@ object RegimeState:
       * HRWT beacon token) instead of being inlined in every treasury datum. The utxo's beacon
       * policy is the head multisig policy, so `headMp` is not repeated here.
       *
-      * `setupLadder` is the outRef of rung 0 of the deployed G2 setup ladder; the seven rungs are
+      * `setupG2Ladder` is the outRef of rung 0 of the deployed G2 setup ladder; the seven rungs are
       * outputs 0-6 of its transaction. It authenticates the setup reference input used by Evacuate
       * (the datum itself is trusted because the regime utxo is produced by the all-peers-signed
       * FallbackTx).
@@ -24,7 +24,7 @@ object RegimeState:
         headPeersN: BigInt,
         coilPeers: List[VerificationKey],
         coilQuorum: BigInt,
-        setupLadder: TxOutRef
+        setupG2Ladder: TxOutRef
     )
 
     given FromData[RuleBasedRegimeDatum] = FromData.derived

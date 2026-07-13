@@ -66,7 +66,7 @@ case object RuleBasedRegimeOutput {
       headPeersN = BigInt(config.nHeadPeers.toInt),
       coilPeers = PList.from(config.coilPeerVKeys),
       coilQuorum = BigInt(config.coilQuorum),
-      setupLadder = {
+      setupG2Ladder = {
           val anchor = config.setupLadderAnchor
           TxOutRef(
             TxId(ByteString.fromArray(anchor.transactionId.bytes)),

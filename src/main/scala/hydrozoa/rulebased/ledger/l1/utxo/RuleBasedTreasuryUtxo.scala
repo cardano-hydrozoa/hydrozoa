@@ -154,11 +154,7 @@ object RuleBasedTreasuryOutput {
 
             datum <- Try(fromData[RuleBasedTreasuryDatum](d2.data)) match {
                 case Success(d) =>
-                    val headMp = d match {
-                        case RuleBasedTreasuryDatum.Unresolved(mp, _, _) => mp
-                        case RuleBasedTreasuryDatum.Resolved(mp, _, _)   => mp
-                    }
-                    if headMp == config.headMultisigScript.policyId then Right(d)
+                    if d.headMp == config.headMultisigScript.policyId then Right(d)
                     else
                         Left(
                           TreasuryDatumDeserializationError(

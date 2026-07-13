@@ -196,14 +196,14 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
           )
         )
         // Regime reference input: HRWT beacon under headMp + head-identity datum whose
-        // setupLadder anchor is the ladder ref input's outRef (authenticating the rung).
+        // setupG2Ladder anchor is the ladder ref input's outRef (authenticating the rung).
         val regimeDatum = RuleBasedRegimeDatum(
           disputeId = ByteString.fromHex("01ff" + "aa" * 30),
           headPeers = List.empty,
           headPeersN = BigInt(0),
           coilPeers = List.empty,
           coilQuorum = BigInt(0),
-          setupLadder = ladderOutRef
+          setupG2Ladder = ladderOutRef
         )
         val regimeRefInput = TxInInfo(
           TxOutRef(TxId(ByteString.fromHex("ee" * 32)), BigInt(0)),
