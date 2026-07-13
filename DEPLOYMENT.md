@@ -1,5 +1,29 @@
 # Hydrozoa Deployment Guide — Multi-Peer Head (Head + Coil Peers)
 
+> ## ⚠️ Never use this deployment in production
+>
+> What this guide sets up is a **demo**. It cuts corners that are outright disqualifying for
+> anything holding real value (a later revision will split out a hardened default bootstrap; the
+> restrictions below are the gap it has to close):
+>
+> - **Single-operator key custody.** `keygen-fleet` generates *every* peer's signing keys in one
+>   pass on one machine — there is no multi-party negotiation, and whoever runs it holds the whole
+>   head. Key generation itself is insecure (keys are written unencrypted to disk).
+> - **Multi-peer head on a single host.** One `docker-compose.yml` runs all peers; there are no
+>   separate per-peer configs or hosts yet, so the "multi-party" head has a single point of
+>   failure and a single administrator.
+> - **Only the built-in `cardano-eutxo` L2 ledger** (and `l2Ledger` / `identityIsomorphism` are
+>   pinned in code, not operator-configurable).
+> - **Only head peer 0 funds the head** — seed, funding utxos, and (by default) all equity come
+>   from head peer 0's address.
+> - **Plaintext secrets, default credentials, no TLS.** Private configs carry signing keys and the
+>   Blockfrost key in clear JSON; the template ships `admin`/`welcome` admin credentials; the HTTP
+>   API and the WS mesh are unencrypted.
+> - **Ephemeral state, single-use head config.** No volumes are mounted — any restart means
+>   re-initializing a fresh head on L1 (§5b) — and `head-config.json` embeds real utxos +
+>   wall-clock anchors, so it cannot be reused.
+> - **Preview testnet via Blockfrost only** — a trusted third party between every node and L1.
+
 Deploys a multi-party Hydrozoa head running the **built-in EUTXO L2 ledger** (`l2Ledger =
 cardano-eutxo`): the ledger runs in-process inside every node, so a node is a single container —
 no ledger sidecar, no external database, no separate API service or UI. (The `any-remote` backend
@@ -103,7 +127,7 @@ There is no publish/deploy CI — GitHub Actions runs checks only.
 `Main` reads **no env vars** (`Main.scala:40-43`); everything comes from two files:
 
 **(a) Shared `head-config.json`** — identical on every node, head and coil alike (coil peers reuse
-`HeadConfig` wholesale). Produced once by `BuildHeadConfig` from a `bootstrap.json` (§5). It embeds
+`HeadConfig` wholesale). Produced once by `BuildHeadConfig` from the bootstrap directory (§5). It embeds
 the peer topology, the L1 network, `scriptReferenceUtxos`, the peer-agreed `HeadParameters`
 (including `l2Ledger` and `identityIsomorphism`, hashed into the treasury datum), the head id, and
 the **pre-built initialization + fallback transactions** with their wall-clock timing anchors — so
@@ -130,20 +154,20 @@ Producer: **keygen** (`just keygen` / `just keygen-fleet`, §5) fills the commit
   the EUTXO ledger enforces the `headId` metadata pin on every L2 tx (pin check
   `eutxol2/HeadIdPin.scala`). `true` (*identity* isomorphism) runs the exact L1 tx unchanged and
   drops the pin; the tooling pins it `false`.
-- **Head parameters + equity.** `bootstrap-defaults.json` carries the full `headParams` (`txTiming`,
+- **Head parameters + equity.** `bootstrap/defaults.json` carries the full `headParams` (`txTiming`,
   `fallbackContingency`, `disputeResolutionConfig`, `settlementConfig`, `coilQuorum`) and the
   per-peer `initialEquityContributions` (indexed by head peer number). `InitBootstrapFiles` seeds
   demo defaults; operators edit them. Equity is therefore read from the config — `build-head-config`
   no longer takes an `--equity` argument.
-- **Network.** Set in `bootstrap-defaults.json` (`cardanoNetwork`, default `preview`) and folded
+- **Network.** Set in `bootstrap/defaults.json` (`cardanoNetwork`, default `preview`) and folded
   into the head config by `BuildHeadConfig` — no longer hard-coded. `BuildHeadConfig` /
   `deploy-reference-scripts` build a Blockfrost backend for that network, so only the Blockfrost
   networks (mainnet / preprod / preview) are supported from the CLI.
-- **Block-zero timing.** Optional. `bootstrap-defaults.json` omits `blockZeroStartTime` /
+- **Block-zero timing.** Optional. `bootstrap/defaults.json` omits `blockZeroStartTime` /
   `blockZeroEndTime` by default, so `BuildHeadConfig` anchors the initial block to wall-clock at
   build time (fresh, since it runs right before bring-up). Operators who need a pinned negotiation
   baseline add both as epoch-millis.
-- **Opening L2 state.** The head's opening ledger state is `initialL2State` in `bootstrap.json` — a
+- **Opening L2 state.** The head's opening ledger state is `bootstrap/l2-cardano-eutxo.json` — a
   human-readable list of CIP-0116 outputs (address + value). `BuildHeadConfig` keys it into the
   initialization tx's evacuation map once the seed utxo is resolved (each output's input reference
   is the seed tx id + its index); the init tx commits to it on-chain (treasury value + datum KZG)
@@ -158,26 +182,22 @@ All commands run inside `nix develop`. The walkthrough uses the docker topology:
 files each node needs:
 
 ```
-   keygen-fleet (one sbt run)
-   ├─ roster.json ─────────────┐  peer topology (head/coil vkeys, ws addresses, hubs)
-   ├─ head-N/private.json      │  per-peer private configs  (+ head-N/address.txt L1 address)
-   ├─ coil-N/private.json      │
-   ├─ bootstrap-defaults.json ─┤  network + head params + per-peer equity  (demo defaults, editable)
-   └─ l2-state.json ───────────┤  opening L2 outputs (one funded output per head peer, editable)
-                               │
-   deploy-reference-scripts    │
-   (head-0 wallet, Blockfrost) │
-   └─ script-refs.json ────────┤  the two on-chain reference-script UTxOs
-                               │
-                               ▼
-   build-bootstrap (pure)   ┌──────────────────┐
-   BuildBootstrapConfig ───►│  bootstrap.json  │  the spec-shaped, human-readable head input
-                            └────────┬─────────┘
-                                     │  + head-0 UTxOs + protocol params   (Blockfrost)
-   build-head-config                 ▼
-   BuildHeadConfig ───────► head-config.json   adds headId + the pre-built initTx/fallback + timing
-                                     │
-                                     ▼
+   keygen-fleet (one sbt run)                      the bootstrap directory (operator-authored)
+   ├─ bootstrap/roster.json ──────────┐  peer topology (head/coil vkeys, ws addresses, hubs)
+   ├─ bootstrap/defaults.json ────────┤  network + head params + per-peer equity  (editable)
+   ├─ bootstrap/l2-cardano-eutxo.json ┤  opening L2 outputs (one per head peer, editable)
+   ├─ private/head-N/private.json     │  per-peer private configs (not part of the bootstrap dir)
+   └─ private/coil-N/private.json     │
+                                      │
+   deploy-reference-scripts           │
+   (head-0 wallet, Blockfrost)        │
+   └─ bootstrap/script-refs.json ─────┤  the two on-chain reference-script UTxOs
+                                      │
+                                      │  + head-0 UTxOs + protocol params   (Blockfrost)
+   build-head-config                  ▼
+   BuildHeadConfig ───► head-config/head-config.json   assembles the four bootstrap files, adds
+                                      │                headId + the pre-built initTx/fallback + timing
+                                      ▼
    distribute head-config.json (shared) + each node's private.json  →  run the nodes (§6)
 ```
 
@@ -200,42 +220,53 @@ One sbt invocation running keygen once per peer, then `InitBootstrapFiles`. Outp
 
 ```
 config/demo/
-├── roster.json                # peer topology BuildBootstrapConfig consumes
-├── bootstrap-defaults.json    # network + head params (coilQuorum, timing…) + per-peer equity — edit if needed
-├── l2-state.json              # opening L2 outputs, one 5-ADA output per head peer — edit to taste
-├── head-0/private.json        # ownHeadWallet identity …
-├── head-0/address.txt         # … and its L1 address (the funding target for head 0)
-├── head-1/…
-└── coil-0/… coil-3/…          # ownCoilWallet identities, hubs assigned round-robin (0,1,0,1)
+├── bootstrap/                     # the operator-facing bootstrap directory (build-head-config input)
+│   ├── roster.json                #   peer topology
+│   ├── defaults.json              #   network + head params (coilQuorum, timing…) + per-peer equity
+│   ├── l2-cardano-eutxo.json      #   opening L2 outputs, one 5-ADA output per head peer — edit to taste
+│   └── script-refs.json           #   written later by deploy-reference-scripts (step 4)
+├── head-config/
+│   └── head-config.json           # written later by build-head-config (step 5)
+└── private/
+    ├── head-0/private.json        # ownHeadWallet identity
+    ├── head-1/…
+    └── coil-0/… coil-3/…          # ownCoilWallet identities, hubs assigned round-robin (0,1,0,1)
 ```
 
-Peer numbering is positional in the roster: `head-N` directory ↔ head peer N; likewise coils.
+Peer numbering is positional in the roster: `private/head-N` ↔ head peer N; likewise coils.
 Per-peer manual runs are also possible (real deployments generate keys on each host so skeys never
-move): `just keygen --roster roster.json --role head --ws-address ws://host:4001 --template
-peer-private.template.json --out private.json` (coil: `--role coil --hub N`). Head peers must be
-registered before the coils that hub off them.
+move): `just keygen --roster bootstrap/roster.json --role head --ws-address ws://host:4001
+--template peer-private.template.json --out private.json` (coil: `--role coil --hub N`). Head peers
+must be registered before the coils that hub off them.
 
-**Step 2b — Adjust the defaults and opening state.** `bootstrap-defaults.json` carries demo defaults
+**Step 2b — Adjust the defaults and opening state.** `bootstrap/defaults.json` carries demo defaults
 for `cardanoNetwork` (`preview`), the full `headParams` (`coilQuorum` = a simple majority, plus
 timing / fallback contingency / dispute / settlement), and the per-peer `initialEquityContributions`
 (head peer 0 funds everything, the rest contribute zero); edit any of them. Add `blockZeroStartTime`
 / `blockZeroEndTime` (epoch millis) only to pin the block-zero window — omitted, it is wall-clock at
-build. `l2-state.json` is the opening L2 ledger — a list of `{ "address", "value" }` outputs (value in
-CIP-0116). The template seeds one 5-ADA output per head peer; replace it with the real opening
-distribution (or leave it empty `[]` for an empty head).
+build. `bootstrap/l2-cardano-eutxo.json` is the opening L2 ledger — a list of `{ "address", "value" }`
+outputs (value in CIP-0116). The template seeds one 5-ADA output per head peer; replace it with the
+real opening distribution (or leave it empty `[]` for an empty head).
 
-**Step 3 — Fund head peer 0** (the sole funder): send Preview tADA to the address in
-`config/demo/head-0/address.txt` (e.g. from the
-[Preview faucet](https://docs.cardano.org/cardano-testnets/tools/faucet); one 10k-tADA drip is
-plenty). It must cover equity + the whole head's fallback contingency + the opening L2 value + tx
-fee; step 5 logs the exact lovelace required and fails with the shortfall if underfunded.
+**Step 3 — Fund head peer 0** (the sole funder): print its address and send Preview tADA to it
+(e.g. from the [Preview faucet](https://docs.cardano.org/cardano-testnets/tools/faucet); one
+10k-tADA drip is plenty):
+
+```bash
+just head-zero-address       # derives the address from bootstrap/{roster,defaults}.json on demand
+```
+
+There are no address files lying around to grab a stale copy from — the target derives the address
+from the roster every time. The funding must cover equity + the whole head's fallback contingency +
+the opening L2 value + tx fee; step 5 logs the exact lovelace required and fails with the shortfall
+if underfunded.
 
 **Step 4 — Deploy the reference scripts** (once per network per script version):
 
 ```bash
 export BLOCKFROST_API_KEY=preview...
-just deploy-reference-scripts config/demo/head-0/private.json
-# -> config/demo/script-refs.json
+just deploy-reference-scripts config/demo/private/head-0/private.json
+# -> config/demo/bootstrap/script-refs.json
 ```
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators as
@@ -244,38 +275,28 @@ scripts: two chained txs funded from head-0's wallet (change returns), each lock
 the unspendable burn address, then writes the reference inputs to `script-refs.json`. Because the
 burn address can never be spent from, **one deployment serves every head and every restart** —
 redeploy only when the compiled scripts change (symptom: `InvalidTreasuryScriptUtxo` /
-`InvalidDisputeScriptUtxo` at step 6 or node start).
+`InvalidDisputeScriptUtxo` at step 5 or node start).
 
-**Step 5 — Assemble `bootstrap.json`** (pure, no backend):
-
-```bash
-just build-bootstrap        # merges config/demo/{roster,bootstrap-defaults,l2-state,script-refs}.json
-# -> config/demo/bootstrap.json
-```
-
-`BuildBootstrapConfig` merges the four files into one validated `bootstrap.json` (the spec-shaped
-head input) and does nothing else — no L1 access. Override any path with
-`just build-bootstrap ROSTER=… SCRIPT_REFS=… DEFAULTS=… L2_STATE=… OUT=…`.
-
-**Step 6 — Build the shared head config:**
+**Step 5 — Build the shared head config:**
 
 ```bash
 export BLOCKFROST_API_KEY=preview...
-just build-head-config config/demo/bootstrap.json config/demo/head-config.json
+just build-head-config       # reads config/demo/bootstrap/, writes config/demo/head-config/head-config.json
 ```
 
-`BuildHeadConfig` talks to L1: it fetches head peer 0's UTxOs (to select funding inputs and verify
-the balance) and the protocol parameters via Blockfrost, then pre-builds the initialization +
-fallback txs into the config. The Blockfrost key comes from `$BLOCKFROST_API_KEY` (`bootstrap.json`
-carries no credentials; the CLI also accepts `--blockfrost-key`). Equity and the head parameters come
-from `bootstrap.json`, so there is no equity argument. Distribute the **same** `head-config.json` to
-every node. It embeds real UTxO references **and wall-clock timing anchors**, so build it **after**
-funding, **right before** bring-up, and treat it as single-use per head (§5b).
+`BuildHeadConfig` assembles the bootstrap directory's four files (roster, defaults, opening L2
+state, script refs) and talks to L1: it fetches head peer 0's UTxOs (to select funding inputs and
+verify the balance) and the protocol parameters via Blockfrost, then pre-builds the initialization
++ fallback txs into the config. The Blockfrost key comes from `$BLOCKFROST_API_KEY` (the bootstrap
+directory carries no credentials; the CLI also accepts `--blockfrost-key`). Equity and the head
+parameters come from `defaults.json`, so there is no equity argument. Distribute the **same**
+`head-config.json` to every node. It embeds real UTxO references **and wall-clock timing anchors**,
+so build it **after** funding, **right before** bring-up, and treat it as single-use per head (§5b).
 
-At this point every node has its two files, and the composition (§6) mounts `head-config.json` +
-that node's `private.json`.
+At this point every node has its two files, and the composition (§6) mounts
+`head-config/head-config.json` + that node's `private/<peer>/private.json`.
 
-**Step 7 — Bring up the head** (see §6):
+**Step 6 — Bring up the head** (see §6):
 
 ```bash
 sbt docker:publishLocal        # hydrozoa image (once, after code changes)
@@ -284,7 +305,7 @@ docker compose up -d
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 
-**Step 8 — Verify.**
+**Step 7 — Verify.**
 - Pods: `docker compose ps` — every `hydrozoa-*` Up (not Restarting).
 - Head peers: `GET /health`, `GET /api/head-info` on `localhost:8080` / `:8081` (head-0/1); watch
   `docker compose logs -f hydrozoa-head-0` for the init tx hash and L1 confirmation on Preview
@@ -293,7 +314,7 @@ Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signi
 - User traffic: `POST /api/l2/submit`, `POST /api/deposit/register`; admin:
   `POST /api/admin/finalize` (basic auth) (`docs/openapi.yaml`).
 - If a `hydrozoa-*` service crash-loops: `docker compose logs hydrozoa-<peer>` — most likely a
-  stale/reused head-config (rebuild step 6) or the Blockfrost placeholder still in the private
+  stale/reused head-config (rebuild step 5) or the Blockfrost placeholder still in the private
   configs (step 1 skipped).
 
 **Teardown / recovery of funds:** to get the head's funds back on L1, **finalize before tearing
@@ -323,17 +344,18 @@ So the restart cycle is:
 # 0. previous head initialized and holds funds? finalize FIRST (§5 teardown), or they stay
 #    locked until the fallback/evacuation path matures.
 docker compose down
-# re-fund config/demo/head-0/address.txt if the previous head consumed it (preview.cexplorer.io)
-just build-head-config config/demo/bootstrap.json config/demo/head-config.json
+# re-fund head peer 0 if the previous head consumed the funding — `just head-zero-address`
+# prints the address; check it on preview.cexplorer.io
+just build-head-config
 docker compose up -d           # right after the build — the config is freshest now
 ```
 
-**Reusable across restarts** (everything in `config/demo/` except `head-config.json`): the roster,
-private configs, `bootstrap-defaults.json`, `l2-state.json`, `script-refs.json`, and `bootstrap.json`
-— identities and keys are not time- or UTxO-bound, `bootstrap.json` is a pure merge, and the
-reference-script UTxOs sit at an unspendable burn address. Regenerate the fleet (`just
-keygen-fleet`) only for fresh identities; that changes head-0's address, so re-fund it. The
-hydrozoa docker image only needs rebuilding after hydrozoa code changes.
+**Reusable across restarts:** the whole `config/demo/bootstrap/` directory and every
+`config/demo/private/` config — identities and keys are not time- or UTxO-bound, and the
+reference-script UTxOs sit at an unspendable burn address. Only `head-config/head-config.json` is
+single-use. Regenerate the fleet (`just keygen-fleet`) only for fresh identities; that changes head
+peer 0's address, so re-fund it. The hydrozoa docker image only needs rebuilding after hydrozoa
+code changes.
 
 ---
 
@@ -410,11 +432,10 @@ multi-head/coil deployment must add:
   `cardano-eutxo` + `identityIsomorphism = false` in `mkSharedHeadConfig` (both `TODO: surface via a
   flag`). Change them by editing `mkSharedHeadConfig` until the flags land.
 - **Simplified bootstrap (demo model, head-0 funds everything).** `headParams`,
-  `initialEquityContributions`, and (optionally) block-zero timing now live in `bootstrap.json`.
-  Still not carried there: `seedUtxo` + `additionalFundingUtxos` (auto-resolved from head-0's L1
-  address at build), so `build-bootstrap` stays pure and `build-head-config` does the seed/funding
-  selection. Folding those in is the remaining GUM-104 work
-  (`design/l2-isomorphism-design-note.md` §6.1, §9 item 8).
+  `initialEquityContributions`, and (optionally) block-zero timing live in the bootstrap
+  directory's `defaults.json`. Still not carried there: `seedUtxo` + `additionalFundingUtxos`
+  (auto-resolved from head-0's L1 address by `build-head-config`). Folding those in is the
+  remaining GUM-104 work (`design/l2-isomorphism-design-note.md` §6.1, §9 item 8).
 - **Doc drift.** The README says Scala 3.3.6 (actual 3.3.7); `design/coil-network.md` §5.1 shows
   `coilPeers` as a number-keyed map, but the implemented decoder + tooling use a **list** (the list
   is authoritative).

@@ -1,5 +1,6 @@
 package hydrozoa.bootstrap
 
+import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackContingencyWithDefaults
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
@@ -9,14 +10,16 @@ import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import io.circe.syntax.*
 import io.circe.{Json, parser}
+import java.nio.file.Files
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.{Coin, Value}
 
-/** Pins the JSON field names the bootstrap tooling reads. A successful decode proves the field
-  * names (verificationKey / webSocketAddress / hubHeadPeerNumber / headPeers / coilPeers) match the
-  * [[Bootstrap.Membership]] decoder, and that [[Bootstrap.BootstrapDefaults]] and
-  * [[Bootstrap.BootstrapConfig]] round-trip through their codecs.
+/** Pins the JSON field names + file names the bootstrap tooling reads. A successful decode proves
+  * the field names (verificationKey / webSocketAddress / hubHeadPeerNumber / headPeers / coilPeers)
+  * match the [[Bootstrap.Membership]] decoder, that [[Bootstrap.BootstrapDefaults]] round-trips,
+  * and that [[Bootstrap.readBootstrapDir]] assembles the bootstrap directory's four files into a
+  * [[Bootstrap.BootstrapConfig]].
   */
 class BootstrapMembershipTest extends AnyFunSuite {
 
@@ -80,12 +83,37 @@ class BootstrapMembershipTest extends AnyFunSuite {
     }
 
     test(
-      "BootstrapConfig decodes a full bootstrap.json (network, head params, script refs, equity)"
+      "readBootstrapDir assembles the four bootstrap files into a BootstrapConfig"
     ) {
-        val config =
-            previewBootstrapJson
-                .as[Bootstrap.BootstrapConfig]
-                .fold(e => fail(s"decode failed: $e"), identity)
+        val network = CardanoNetwork.Preview
+        given CardanoNetwork.Section = network
+        val dir = Files.createTempDirectory("bootstrap-dir-test")
+        Files.writeString(
+          dir.resolve(Bootstrap.BootstrapDir.roster),
+          """{
+            |  "headPeers": [
+            |    { "verificationKey": "85f2378d9af901be0b6d096f8e4b5573274f9bb1d5bfadb86ecac6e51504bbad", "webSocketAddress": "ws://head-0:4001" }
+            |  ],
+            |  "coilPeers": []
+            |}""".stripMargin
+        )
+        Files.writeString(
+          dir.resolve(Bootstrap.BootstrapDir.defaults),
+          mkPreviewDefaults(coilQuorum = 2).asJson.deepDropNullValues.spaces2
+        )
+        Files.writeString(
+          dir.resolve(Bootstrap.BootstrapDir.l2CardanoEutxo),
+          Json.arr().spaces2
+        )
+        Files.writeString(
+          dir.resolve(Bootstrap.BootstrapDir.scriptRefs),
+          """{
+            |  "rulebasedTreasuryScriptInput": "d17362c69150ccf4cf0974ee4223f5f8c84b9171d74cd210aa042860a1a32ecd#0",
+            |  "disputeResolutionScriptInput": "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0"
+            |}""".stripMargin
+        )
+
+        val config = Bootstrap.readBootstrapDir(dir).unsafeRunSync()
         assert(
           config.cardanoNetwork == CardanoNetwork.Preview &&
               config.headParams.coilQuorum == 2 &&
@@ -94,12 +122,6 @@ class BootstrapMembershipTest extends AnyFunSuite {
               config.initialL2State.isEmpty &&
               config.blockZeroStartTime.isEmpty
         )
-    }
-
-    test("BootstrapConfig rejects a Custom (non-Blockfrost) network") {
-        val customJson =
-            previewBootstrapJson.mapObject(_.add("cardanoNetwork", Json.fromString("custom")))
-        assert(customJson.as[Bootstrap.BootstrapConfig].isLeft)
     }
 
     test("L2Output round-trips through its CIP-0116 JSON") {
@@ -133,37 +155,4 @@ class BootstrapMembershipTest extends AnyFunSuite {
         )
     }
 
-    /** A `bootstrap.json` shaped exactly as [[BuildBootstrapConfig]] assembles it: the defaults'
-      * `cardanoNetwork` / `headParams` / `initialEquityContributions` merged with the roster's peer
-      * topology, the deployed script references, and the opening L2 state.
-      */
-    private def previewBootstrapJson: Json = {
-        val network = CardanoNetwork.Preview
-        given CardanoNetwork.Section = network
-        val d = mkPreviewDefaults(coilQuorum = 2).asJson.asObject
-            .getOrElse(fail("defaults did not encode to a JSON object"))
-        Json.obj(
-          "cardanoNetwork" -> d("cardanoNetwork").get,
-          "headParams" -> d("headParams").get,
-          "headPeers" -> Json.arr(
-            Json.obj(
-              "verificationKey" -> Json.fromString(
-                "85f2378d9af901be0b6d096f8e4b5573274f9bb1d5bfadb86ecac6e51504bbad"
-              ),
-              "webSocketAddress" -> Json.fromString("ws://head-0:4001")
-            )
-          ),
-          "coilPeers" -> Json.arr(),
-          "scriptReferenceUtxos" -> Json.obj(
-            "rulebasedTreasuryScriptInput" -> Json.fromString(
-              "d17362c69150ccf4cf0974ee4223f5f8c84b9171d74cd210aa042860a1a32ecd#0"
-            ),
-            "disputeResolutionScriptInput" -> Json.fromString(
-              "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0"
-            )
-          ),
-          "initialL2State" -> Json.arr(),
-          "initialEquityContributions" -> d("initialEquityContributions").get
-        )
-    }
 }

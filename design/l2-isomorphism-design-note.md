@@ -36,7 +36,7 @@ A grouped overview of what branch `feature/isomorphic-l2` changes; the sections 
 - **Bootstrap config — `peers.json` → `bootstrap.json` (§6.1).** A spec-shaped `Bootstrap.BootstrapConfig`
   carrying `cardanoNetwork`, `scriptReferenceUtxos`, and the opening `initialL2State` — folding the
   network, script refs, and opening state out of hard-code / side-files into one agreed artifact,
-  assembled by `BuildBootstrapConfig` and read by `BuildHeadConfig`.
+  read from the bootstrap directory by `BuildHeadConfig`.
 - **Deposit authentication — COSE over `hash(l2Payload)` (§5.5).** Deposits aren't L2 txs and can't
   self-authenticate, so the depositor COSE-signs `hash(l2Payload)` and carries the key+signature in the
   deposit metadata; Hydrozoa verifies it while parsing the deposit tx (before screening). Screening
@@ -528,22 +528,22 @@ outputs), and the keyed `initialEvacuationMap` is what `BuildHeadConfig` derives
 (`InitializationParameters`) — which *does* match the spec's shape. The spec text is left unchanged; this
 is a deliberate representation divergence, not a spec change.
 
-**Landed: a spec-shaped bootstrap config, `peers.json` → `bootstrap.json`.** The whitepaper's
+**Landed: a spec-shaped bootstrap config (the bootstrap directory).** The whitepaper's
 head-initialization section defines a **bootstrap config** (human-authored) that the tooling turns into
 the head config (adding `headId` + the built `initTx`). The tooling now matches that shape:
-`Bootstrap.BootstrapConfig` (`config/demo/bootstrap.json`, read by `BuildHeadConfig`) carries
-`cardanoNetwork`, the peer topology (`headPeers`/`coilPeers`/`coilQuorum`), `scriptReferenceUtxos`, and
-the opening `initialL2State`. It is assembled from four operator-facing files by the pure
-`BuildBootstrapConfig` tool: the `roster.json` peer topology (`GenerateKeyPair`), a
-`bootstrap-defaults.json` (network + coil quorum) and an `l2-state.json` template (one funded output per
-head peer) both emitted by `InitBootstrapFiles`, and the `script-refs.json` from
+`Bootstrap.BootstrapConfig` carries `cardanoNetwork`, the peer topology (`headPeers`/`coilPeers` +
+`coilQuorum` inside `headParams`), `scriptReferenceUtxos`, and the opening `initialL2State`. It is
+assembled by `Bootstrap.readBootstrapDir` from the four operator-facing files of the **bootstrap
+directory** (`config/demo/bootstrap/`): the `roster.json` peer topology (`GenerateKeyPair`), the
+`defaults.json` (network, head params, equity) and `l2-cardano-eutxo.json` template (one funded output
+per head peer) both emitted by `InitBootstrapFiles`, and the `script-refs.json` from
 `deploy-reference-scripts`. This folded three things out of the code / side-files into one agreed
 artifact: the network (was hard-coded `Preview`), the script references (was a separate
 `--script-refs script-refs.json`), and the opening state (was hard-coded in `Bootstrap.scala`).
 
 **Landed 2026-07-12: `headParams` + equity + timing surfaced into the config.** The values
 `mkSharedHeadConfig` used to hard-code are now agreed bootstrap-config fields, seeded with demo
-defaults by `InitBootstrapFiles` into `bootstrap-defaults.json`: the full `headParams` (`txTiming`,
+defaults by `InitBootstrapFiles` into `defaults.json`: the full `headParams` (`txTiming`,
 `fallbackContingency`, `disputeResolutionConfig`, `settlementConfig`, `coilQuorum` — folding the
 standalone `coilQuorum` into `headParams`, per the spec shape) and the per-peer
 `initialEquityContributions` (replacing `BuildHeadConfig`'s `--equity` CLI). Block-zero timing
@@ -552,15 +552,16 @@ initial block to wall-clock at build (kept relaxed — the head config stays iro
 way, since it is built right before bring-up).
 
 **Still simplified / not yet in the config** (the demo's head-0-funds-everything model): only
-`seedUtxo` + `additionalFundingUtxos` remain out — `build-bootstrap` stays pure, so `build-head-config`
-resolves the seed + funding from head peer 0's L1 address at build. Folding those in (which would let
-`build-bootstrap` talk to L1 and carry the *keyed* `initialEvacuationMap`) is the remaining GUM-104
-work.
+`seedUtxo` + `additionalFundingUtxos` remain out — `build-head-config` resolves the seed + funding from
+head peer 0's L1 address at build. Folding those in (which would let the bootstrap config carry the
+*keyed* `initialEvacuationMap`) is the remaining GUM-104 work.
 
-**Open questions.** (a) Whether the pure `BuildBootstrapConfig` merge step earns its place at all, or
-the roster + defaults + l2-state should be assembled another way (e.g. `GenerateKeyPair` writing
-`bootstrap.json` directly). Kept for now. (b) Whether the fallback KZG commitment should fold into
-`l2ParamsHash` rather than being recomputed from the config's evacuation map at build/parse.
+**Resolved (2026-07-13): the pure `BuildBootstrapConfig` merge step did NOT earn its place.** The
+intermediate `bootstrap.json` artifact was meaningless — `BuildHeadConfig` now reads the bootstrap
+directory's four files directly (`Bootstrap.readBootstrapDir`) and the merge tool is gone.
+
+**Open questions.** Whether the fallback KZG commitment should fold into `l2ParamsHash` rather than
+being recomputed from the config's evacuation map at build/parse.
 
 ## 7. Deployment / one-command
 

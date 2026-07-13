@@ -48,39 +48,39 @@ services:
     ports:
       - "8080:8080"   # hydrozoa-head-0 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-0/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/head-0/private.json:/configs/private.json:ro
 
   head-1:
     <<: *hydrozoa
     ports:
       - "8081:8080"   # hydrozoa-head-1 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-1/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/head-1/private.json:/configs/private.json:ro
 
   ## ---------------------------------------------------------- coil peers (dial out only)
 
   coil-0:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/coil-0/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-0/private.json:/configs/private.json:ro
 
   coil-1:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/coil-1/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-1/private.json:/configs/private.json:ro
 
   coil-2:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/coil-2/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-2/private.json:/configs/private.json:ro
 
   coil-3:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/coil-3/private.json:/configs/private.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-3/private.json:/configs/private.json:ro
