@@ -48,11 +48,6 @@ build-werror:
   trap 'just notify "build-werror"' EXIT
   CI=true sbt Test/compile integration/Test/compile
 
-keygen *ARGS:
-  #!/usr/bin/env bash
-  trap 'just notify "keygen"' EXIT
-  sbt "runMain hydrozoa.bootstrap.GenerateKeyPair {{ARGS}}"
-
 # Generate a whole head's keys + configs in one sbt run, into the config layout:
 #   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}   (+ script-refs.json later)
 #   OUTDIR/private/{head,coil}-N/private.json

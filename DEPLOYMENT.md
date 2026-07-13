@@ -89,10 +89,9 @@ Coil peers dial out only; they need no inbound port at all.
 | Multiple **head peers** via the CLI config path | **Supported.** `BuildHeadConfig` accepts N head peers; `Main` runs any of them. Proven in-process/WS by the integration harness, not by a committed multi-host script. |
 | **Coil peers** in the head config / multisig script | **Supported.** The bootstrap config takes `coilPeers` + `coilQuorum`; the threshold script and hub/coil transports are implemented. |
 | Starting a **coil node from JSON configs** | **Supported.** `ownPeerPrivate` dispatches on `ownHeadWallet` / `ownCoilWallet`; `Main` starts a coil node from the standard two files. Keygen writes the coil shape (`--role coil`). |
-| Multi-node orchestration | **Supported for the local docker demo** (`docker-compose.yml`, §6): 2 head + 4 coil single-container nodes on one mesh network. No multi-host automation yet (§7). |
+| Multi-node orchestration | **Supported for the local docker demo** (`docker-compose.yml`, §6): 2 head + 4 coil single-container nodes on one mesh network. No multi-host automation yet. |
 | Coil-peer **persistence** | **Implemented.** |
 | Coil-peer **crash recovery** | **Implemented, not yet tested.** |
-| Coil skip-hard-ack, rule-based handover | Deferred (`design/coil-network.md` §6.1). |
 
 ---
 
@@ -142,8 +141,8 @@ against the head config's vkeys), `nodeOperationEvacuationConfig` (incl. a separ
 **optional and unused for the EUTXO ledger** — it is read only on the `any-remote` path
 (`NodePrivateConfig.scala:42-44`; `Main.scala:200-206`), so an EUTXO node may omit it.
 
-Producer: **keygen** (`just keygen` / `just keygen-fleet`, §5) fills the committed
-`peer-private.template.json` with freshly generated keys.
+Producer: **`just keygen-fleet`** (§5) fills the committed `peer-private.template.json` with
+freshly generated keys for every peer.
 
 ### 4.2 Ledger + network facts
 
@@ -234,10 +233,6 @@ config/demo/
 ```
 
 Peer numbering is positional in the roster: `private/head-N` ↔ head peer N; likewise coils.
-Per-peer manual runs are also possible (real deployments generate keys on each host so skeys never
-move): `just keygen --roster bootstrap/roster.json --role head --ws-address ws://host:4001
---template peer-private.template.json --out private.json` (coil: `--role coil --hub N`). Head peers
-must be registered before the coils that hub off them.
 
 **Step 2b — Adjust the defaults and opening state.** `bootstrap/defaults.json` carries demo defaults
 for `cardanoNetwork` (`preview`), the full `headParams` (`coilQuorum` = a simple majority, plus
@@ -385,57 +380,3 @@ Caveats:
   Blockfrost can fail. If containers have no outbound connectivity at all, restart the daemon
   (`systemctl --user restart docker`) — stale rootlesskit state produces exactly that.
 
----
-
-## 6b. Harness-based multi-peer dry run (no docker, mock L1)
-
-The most exercised end-to-end multi-peer + coil path is the integration harness:
-
-```bash
-sbt "integration/testOnly *Stage4*"     # or: just integration-fast
-```
-
-`Stage4Suite` (`integration/.../stage4/Suite.scala`) parameterizes `nPeers` (default 2),
-`nCoilPeers` (default 0), and `transportMode = Direct | WebSocket`. WebSocket mode runs real
-`NodeWsServer`s + dialers on localhost — the closest committed thing to a real multi-node
-deployment, including 2-head/1-coil runs with the coil co-signing every stack. Mock L1; for real L1,
-stage1 suites run against Yaci DevKit or public Preview.
-
----
-
-## 7. Multi-host deployment (not yet automated)
-
-There is no committed multi-host automation — the docker composition (§6) is single-host. A real
-multi-head/coil deployment must add:
-
-1. **Per-node bring-up** — one `{hydrozoa}` unit per node (compose file, systemd unit, or k8s
-   Deployment), each mounting the shared `head-config.json` and that node's `private.json`.
-2. **Inter-node WS exposure** — each head peer's `webSocketAddress` (the `/head` mesh route and the
-   `/hub` route for its coils) must be reachable from the other peers. Set the `webSocketAddress`
-   hosts in the roster to routable names/addresses before `build-head-config` (bind == dialed
-   address), and open the mesh port in each host's firewall / security group. Coil peers dial out
-   only and need no inbound exposure.
-3. **Secrets** — per-peer signing keys, the `ruleBasedWallet` keypair, Blockfrost keys, and admin
-   creds live in each node's `private.json`; generate keys on each host so skeys never move (§5,
-   per-peer keygen), and keep the private configs out of shared storage.
-4. **Durable state** — decide whether to mount per-node volumes for the two RocksDB stores or accept
-   the re-init-per-restart model (§5b).
-
----
-
-## 8. Known limitations
-
-- **No env-var configuration.** `Main` reads only the two JSON files (`Main.scala:40-43`); there is
-  no `.env` / env-var path. Any launcher that passes config via environment will start a node that
-  fails on missing CLI args.
-- **`l2Ledger` and `identityIsomorphism` are not yet operator-configurable** — the tooling pins
-  `cardano-eutxo` + `identityIsomorphism = false` in `mkSharedHeadConfig` (both `TODO: surface via a
-  flag`). Change them by editing `mkSharedHeadConfig` until the flags land.
-- **Simplified bootstrap (demo model, head-0 funds everything).** `headParams`,
-  `initialEquityContributions`, and (optionally) block-zero timing live in the bootstrap
-  directory's `defaults.json`. Still not carried there: `seedUtxo` + `additionalFundingUtxos`
-  (auto-resolved from head-0's L1 address by `build-head-config`). Folding those in is the
-  remaining GUM-104 work (`design/l2-isomorphism-design-note.md` §6.1, §9 item 8).
-- **Doc drift.** The README says Scala 3.3.6 (actual 3.3.7); `design/coil-network.md` §5.1 shows
-  `coilPeers` as a number-keyed map, but the implemented decoder + tooling use a **list** (the list
-  is authoritative).
