@@ -524,8 +524,7 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
 4. **Native-tx isomorphism — strip the request wrapper (header + COSE `signature` + `userVk`).** ✅
    **DONE** — all of **§5.4** landed (headId pin → tx-validity → ledger screening → drop COSE *for all
    backends* → delete the header entirely → drop `userVk`). Screening does signature/output checks;
-   submission does the stateful checks. ⚠️ Dropping COSE also dropped the deposit `l1Payload`↔`l2Payload`
-   binding it used to enforce — see item 9.
+   submission does the stateful checks.
 5. **slot↔L2-time convention** for interpreting a tx's validity interval on L2 — see §5.4 prerequisites
    (it is the existing per-head `SlotConfig`, to be formalized, not built).
 6. **Deposits (§5.3):** ✅ **DONE (behavioral, deposit-only).** The deposit path now derives
@@ -542,16 +541,6 @@ endpoints are now **EUTXO-only and optional**, a provisional step toward backend
    every node verifies it, see §6.1). Remaining: fold the still-simplified fields into the config
    (`initialEquityContributions`, `seedUtxo` + `additionalFundingUtxos`, block-zero timing, `headParams`)
    and specify the bootstrap config in the whitepaper's initialization section.
-9. **Deposit `l1Payload` ↔ `l2Payload` binding (post-COSE gap).** ⚠️ **regression from item 4 / §5.4
-   Phase 4.** COSE used to sign a deposit's `l1Payload` (the deposit tx) and `l2Payload` (the L2
-   `GenesisObligation`s — the utxos spawned when the deposit is absorbed) *together*, binding them. With
-   COSE gone nothing ties them: `EutxoL2Ledger.screen` passes deposits straight through (`deposit →
-   Right`), so a deposit's `l2Payload` is unauthenticated against its on-chain deposit tx — a submitter
-   could pair a genuine deposit tx with an arbitrary `l2Payload`. **Fix:** pin `hash(l2Payload)` in the
-   deposit tx's L1 **metadata** (the deposit tx *is* the `l1Payload`, so a metadatum carries it — the
-   deposit analogue of the headId pin, §5.4 Phase 1), and have `EutxoL2Ledger.screen` verify the
-   `l2Payload` hashes to that metadatum. This is the `l1Payload`↔`l2Payload` binding §4.1 already lists
-   for deposit screening; it just needs a COSE-free carrier. No rush.
 
 ## 10. Open questions
 
