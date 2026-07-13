@@ -314,11 +314,14 @@ final case class RuleBasedActor(
                     case Some(r: StackEffects.HardConfirmed.Regular) =>
                         RuleBasedActor.lastFallback(r.partitions) match {
                             case None =>
-                                // Minor-only stack: no fallback to anchor from. Walk back;
-                                // stack 0 (Initial) terminates the walk with the initial
-                                // fallback. A Regular stack is always >= 1, so `decrement`
-                                // never underflows.
-                                IO.pure(Left(stack.decrement))
+                                // Minor-only stack: no fallback to anchor from. Walk back.
+                                if stack == StackNumber.first then
+                                    IO.raiseError(
+                                      MissingState(
+                                        s"walked back to $stack with no fallback found"
+                                      )
+                                    )
+                                else IO.pure(Left(stack.decrement))
                             case Some(fallbackTx) =>
                                 loadRegularEvacuationInputs(stack, r, fallbackTx).map(Right(_))
                         }
@@ -402,21 +405,7 @@ final case class RuleBasedActor(
                 collateralUtxo <- getCollateral
                 _ <- disputeUtxos match {
                     case DisputeUtxos.CastVote(ownBallotBox) =>
-                        hasDeadlineElapsed(treasuryUtxo).flatMap {
-                            case true =>
-                                // Own VoteTx/AbstainTx can no longer land — dispatch to residual
-                                // tally/resolve with the full parsed set (own AwaitingVote box
-                                // included; tally handles it via `gateOnVotingDeadline`).
-                                for {
-                                    _ <- traceRight(
-                                      RuleBasedActorEvent.Dispute.VotingDeadlineElapsed
-                                    )
-                                    parsed <- parseDisputeUtxos
-                                    _ <- dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
-                                } yield ()
-                            case false =>
-                                castVote(ownBallotBox, treasuryUtxo, collateralUtxo)
-                        }
+                        castVote(ownBallotBox, treasuryUtxo, collateralUtxo)
                     case DisputeUtxos.Tally(otherUtxos) =>
                         tally(otherUtxos, treasuryUtxo, collateralUtxo)
                     case DisputeUtxos.Resolve(finalVoteUtxo) =>
@@ -459,40 +448,26 @@ final case class RuleBasedActor(
                         if alreadyAtTarget then
                             traceRight(RuleBasedActorEvent.Dispute.Coil.AlreadyAtTarget)
                         else
-                            hasDeadlineElapsed(treasuryUtxo).flatMap {
-                                case true =>
-                                    // RatchetVoteTx's validity range ends at the deadline —
-                                    // skip and let the residual tally path drive resolution.
+                            pickRatchetTarget(parsed, v.sec.versionMinor) match {
+                                case Some(openBox) =>
+                                    traceRight(RuleBasedActorEvent.Dispute.Coil.ParsingRatchet) >>
+                                        buildAndSubmit(
+                                          result = RatchetVoteTx
+                                              .Build(
+                                                openBallotBox = openBox,
+                                                treasuryUtxo = treasuryUtxo,
+                                                collateralUtxo = collateralUtxo,
+                                                sec = v.sec,
+                                                signatures = v.signatures,
+                                                coilSignatures = v.coilSignatures
+                                              )
+                                              .result,
+                                          wrapError = Error.BuildError.RatchetVote(_)
+                                        )
+                                case None =>
                                     traceRight(
-                                      RuleBasedActorEvent.Dispute.VotingDeadlineElapsed
+                                      RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget
                                     ) >> dispatchResidual(parsed, treasuryUtxo, collateralUtxo)
-                                case false =>
-                                    pickRatchetTarget(parsed, v.sec.versionMinor) match {
-                                        case Some(openBox) =>
-                                            traceRight(
-                                              RuleBasedActorEvent.Dispute.Coil.ParsingRatchet
-                                            ) >> buildAndSubmit(
-                                              result = RatchetVoteTx
-                                                  .Build(
-                                                    openBallotBox = openBox,
-                                                    treasuryUtxo = treasuryUtxo,
-                                                    collateralUtxo = collateralUtxo,
-                                                    sec = v.sec,
-                                                    signatures = v.signatures,
-                                                    coilSignatures = v.coilSignatures
-                                                  )
-                                                  .result,
-                                              wrapError = Error.BuildError.RatchetVote(_)
-                                            )
-                                        case None =>
-                                            traceRight(
-                                              RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget
-                                            ) >> dispatchResidual(
-                                              parsed,
-                                              treasuryUtxo,
-                                              collateralUtxo
-                                            )
-                                    }
                             }
                     case DisputeAction.Abstain =>
                         traceRight(RuleBasedActorEvent.Dispute.Coil.NoRatchetTarget) >>
@@ -714,25 +689,6 @@ final case class RuleBasedActor(
                 )
             } yield ()
         }
-
-        /** Wall-clock predicate: has the treasury's voting deadline elapsed? Used by [[handleHead]]
-          * / [[handleCoil]] to short-circuit the own-vote / ratchet path once the corresponding tx
-          * can no longer land on-chain (VoteTx / RatchetVoteTx / AbstainTx have validity ranges
-          * bounded by the deadline).
-          */
-        private def hasDeadlineElapsed(
-            treasuryUtxo: RuleBasedTreasuryUtxo
-        ): EitherT[IO, Error.RecoverableErrors, Boolean] =
-            for {
-                deadline <- treasuryUtxo.parseVotingDeadline match {
-                    case Right(s) => pure(s)
-                    case Left(e) =>
-                        raiseError(Error.ParseError.Treasury.WrappedTreasuryParseError(e))
-                }
-                now <- EitherT.right[Error.RecoverableErrors](
-                  realTimeQuantizedInstant(config.slotConfig)
-                )
-            } yield now.toSlot.slot > deadline.slot
 
         /** Recoverable Left when wall-clock time hasn't crossed the treasury's voting deadline;
           * Right otherwise. `parseVotingDeadline` failure escalates as an unrecoverable spec
