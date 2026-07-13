@@ -145,6 +145,20 @@ lazy val integration: Project = (project in file("integration"))
       )
     )
 
+// Runnable examples + tutorials (Catalyst deliverable). Reuses the integration harness
+// (MultiPeerHeadHarness, TestPeers, mock L1) in test scope; each example is a demo suite run with
+// `sbtn "examples/testOnly *TransientTokenDemo*"`. See examples/README.md.
+lazy val examples: Project = (project in file("examples"))
+    .dependsOn(core % "compile->compile;test->test", integration % "test->test")
+    .settings(
+      name := "hydrozoa-examples",
+      publish / skip := true,
+      libraryDependencies ++= Seq(
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "cats-effect" % "3.6.3" % Test
+      )
+    )
+
 // Latest Scala 3 LTS version
 ThisBuild / scalaVersion := "3.3.7"
 

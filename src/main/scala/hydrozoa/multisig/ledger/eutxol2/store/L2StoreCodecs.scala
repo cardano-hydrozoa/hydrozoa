@@ -9,7 +9,7 @@ import io.circe.generic.semiauto.deriveCodec
 import io.circe.syntax.*
 import io.circe.{Codec, Decoder, DecodingFailure, Encoder, Json}
 import scala.util.Try
-import scalus.cardano.ledger.{Utxo, Utxos}
+import scalus.cardano.ledger.{MultiAsset, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.ByteString
 
 /** JSON codecs for the values the RocksDB [[RocksDbL2Store]] persists: the logged
@@ -95,19 +95,34 @@ object L2StoreCodecs:
       Encoder.encodeList[Utxo].contramap(_.iterator.map((i, o) => Utxo(i, o)).toList)
     )
 
+    private given Codec[MultiAsset] = cborHexCodec[MultiAsset]
+
     given snapshotCodec: Codec[L2Snapshot] = Codec.from(
       Decoder.instance(c =>
           for
               commandNumber <- c.downField("commandNumber").as[Long]
               activeUtxos <- c.downField("activeUtxos").as[Utxos]
+              // transientTokens: list of (TransactionInput, MultiAsset) — no KeyEncoder needed.
+              // Absent field (pre-compartment snapshot) decodes to an empty overlay: none could
+              // have existed before the field did.
+              transientTokens <- c
+                  .downField("transientTokens")
+                  .as[Option[List[(TransactionInput, MultiAsset)]]]
+                  .map(_.getOrElse(Nil))
               // pendingDeposits: list of (RequestId, L2Genesis) — no KeyEncoder[RequestId] needed.
               pendingDeposits <- c.downField("pendingDeposits").as[List[(RequestId, L2Genesis)]]
-          yield L2Snapshot(L2CommandNumber(commandNumber), activeUtxos, pendingDeposits.toMap)
+          yield L2Snapshot(
+            L2CommandNumber(commandNumber),
+            activeUtxos,
+            transientTokens.toMap,
+            pendingDeposits.toMap
+          )
       ),
       Encoder.instance(s =>
           Json.obj(
             "commandNumber" -> (s.commandNumber: Long).asJson,
             "activeUtxos" -> s.activeUtxos.asJson,
+            "transientTokens" -> s.transientTokens.toList.asJson,
             "pendingDeposits" -> s.pendingDeposits.toList.asJson
           )
       )

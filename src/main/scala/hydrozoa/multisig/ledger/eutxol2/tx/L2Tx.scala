@@ -7,9 +7,9 @@ import hydrozoa.multisig.ledger.l1.token.CIP67
 import scala.annotation.unused
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata
-import scalus.cardano.ledger.Metadatum.Int
+import scalus.cardano.ledger.Metadatum.Int as MInt
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{KeepRaw, Metadatum, Transaction, TransactionInput, TransactionOutput, Word64}
+import scalus.cardano.ledger.{KeepRaw, Metadatum, MultiAsset, Sized, Transaction, TransactionInput, TransactionOutput, Word64}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 // TODO: Refactor it using our usual style
@@ -19,6 +19,10 @@ final case class L2Tx(
     tx: Transaction,
     l1utxos: List[(TransactionInput, TransactionOutput)],
     l2utxos: List[(TransactionInput, Babbage)],
+    /** Declared transient token content per output index (the `transientOutputs` metadata field).
+      * Indices absent from the map carry no transient tokens; only L2-bound outputs may appear.
+      */
+    transientOutputs: Map[Int, MultiAsset],
     // TODO: do we need it?
     resolvedUtxos: ResolvedUtxos
 ) {
@@ -35,6 +39,38 @@ final case class L2Tx(
               )
             )
             .sequence
+
+    /** The transient-token compartment entries this transaction creates, keyed by the new utxo ids
+      * (all L2-bound outputs).
+      */
+    def mkTransientUtxos: Map[TransactionInput, MultiAsset] =
+        transientOutputs.map { case (index, bundle) =>
+            TransactionInput(tx.id, index) -> bundle
+        }
+
+    /** The projection of this transaction to the main compartment: the mint field stripped and each
+      * output's value reduced by its declared transient bundle. Balancing the projection against
+      * the main compartment alone proves the post-transaction state stays L1-remittable — and makes
+      * minting or burning main-compartment (L1-native) tokens impossible by arithmetic, with no
+      * policy-id checks anywhere. The projection's changed serialized id is irrelevant: it is fed
+      * only to the value-conservation rule, never signed or hashed against.
+      */
+    def projectMain: Transaction = {
+        val body = tx.body.value
+        val projectedOutputs = body.outputs.zipWithIndex.map { case (sized, index) =>
+            transientOutputs.get(index) match {
+                case Some(bundle) =>
+                    val output = sized.value
+                    Sized(
+                      output.withValue(
+                        output.value.copy(assets = output.value.assets - bundle)
+                      )
+                    )
+                case None => sized
+            }
+        }
+        tx.copy(body = KeepRaw(body.copy(mint = None, outputs = projectedOutputs)))
+    }
 }
 
 object L2Tx:
@@ -51,11 +87,14 @@ private object L2TxOps:
     def parse(bs: Array[Byte], @unused network: CardanoNetwork.Section): Either[String, L2Tx] =
         for {
             tx <- Try(Transaction.fromCbor(bs)).toEither.left.map(_.toString)
-            up <- utxoPartition(tx)
+            parsed <- parseOutputsMetadata(tx)
+            (up, transientOutputs) = parsed
+            _ <- validateTransientDeclarations(tx, up, transientOutputs)
         } yield L2Tx(
           tx = tx,
           l1utxos = up.l1Utxos,
           l2utxos = up.l2Utxos,
+          transientOutputs = transientOutputs,
           // TODO:
           resolvedUtxos = ResolvedUtxos.empty
         )
@@ -65,13 +104,17 @@ private object L2TxOps:
         l2Utxos: List[(TransactionInput, Babbage)]
     )
 
-    /** @param tx
-      * @return
-      *   An error if the metadata cant be parsed, or a pair of lists indicating (l1Bound, l2Bound)
+    /** Parse the head-label metadata into the output partition (L1-bound vs L2-bound) and the
+      * transient-token declarations. Two metadatum shapes are accepted at the head label:
+      *
+      *   - legacy: a bare `List` of per-output `Int(1)` (L1-bound) / `Int(2)` (L2-bound) markers —
+      *     no transient outputs;
+      *   - current: a `Map` with the required `Text("outputs") -> List(...)` marker list and an
+      *     optional `Text("transientOutputs")` field (see [[TransientOutputs]]).
       */
-    def utxoPartition(
+    def parseOutputsMetadata(
         tx: Transaction
-    ): Either[String, UtxoPartition] =
+    ): Either[String, (UtxoPartition, Map[Int, MultiAsset])] =
         for {
             metadataMap <- tx.auxiliaryData match {
                 case Some(keepRawM) =>
@@ -96,13 +139,32 @@ private object L2TxOps:
                 else Left("Non-babbage output found in utxo partition")
             }
 
+            shapes <- metaDatum match {
+                case markers: Metadatum.List => Right((markers, None))
+                case Metadatum.Map(entries) =>
+                    for {
+                        markers <- entries.get(Metadatum.Text("outputs")) match {
+                            case Some(markers: Metadatum.List) => Right(markers)
+                            case other =>
+                                Left(s"Metadata field 'outputs' must be a List, got $other")
+                        }
+                    } yield (markers, entries.get(Metadatum.Text("transientOutputs")))
+                case _ => Left("Malformed head-label metadatum in L2 transaction")
+            }
+            (markers, transientOutputsMetadatum) = shapes
+
             // TODO: This is an idiot-proof way to do it. A better way might be a bitmask -- 0 for L1, 1 for L2
-            l1OrL2 <- metaDatum match {
+            l1OrL2 <- markers match {
                 case Metadatum.List(il: IndexedSeq[Metadatum])
                     if il.length == outputs.length
-                        && il.forall(elem => elem == Int(1) || elem == Int(2)) =>
+                        && il.forall(elem => elem == MInt(1) || elem == MInt(2)) =>
                     Right(il)
                 case _ => Left("Malformed index list in L2 transaction")
+            }
+
+            transientOutputs <- transientOutputsMetadatum match {
+                case Some(metadatum) => TransientOutputs.decodeMetadatum(metadatum)
+                case None            => Right(Map.empty[Int, MultiAsset])
             }
 
             partition = {
@@ -119,7 +181,7 @@ private object L2TxOps:
 
                 // format: ([((l1Input, l1Output), l1orL2)] , [((l2Input, l2Output), l1orL2)])
                 val partitionWithDesignation =
-                    utxosWithDesignation.partition(x => if x._2 == Int(1) then true else false)
+                    utxosWithDesignation.partition(x => if x._2 == MInt(1) then true else false)
 
                 UtxoPartition(
                   partitionWithDesignation._1.map(_._1).toList,
@@ -127,4 +189,42 @@ private object L2TxOps:
                 )
             }
 
-        } yield partition
+        } yield (partition, transientOutputs)
+
+    /** Check the transient declarations against the transaction's outputs:
+      *
+      *   - every declared index refers to an existing output;
+      *   - L1-bound (withdrawal-marked) outputs declare nothing — transient tokens cannot leave the
+      *     head, so a withdrawal carrying them is rejected outright rather than stripped;
+      *   - each declared bundle is a sub-value of its output's assets (component-wise `<=`). This
+      *     per-output check is independent of the projection's conservation rule: a negative asset
+      *     in one projected output could otherwise offset a positive excess in another.
+      */
+    private def validateTransientDeclarations(
+        tx: Transaction,
+        partition: UtxoPartition,
+        transientOutputs: Map[Int, MultiAsset]
+    ): Either[String, Unit] = {
+        val outputs = tx.body.value.outputs
+        val l1BoundIndices =
+            partition.l1Utxos.map { case (input, _) => input.index }.toSet
+        transientOutputs.toList.traverse_ { case (index, bundle) =>
+            for {
+                _ <- Either.cond(
+                  index < outputs.length,
+                  (),
+                  s"transientOutputs: declared index $index out of range (${outputs.length} outputs)"
+                )
+                _ <- Either.cond(
+                  !l1BoundIndices.contains(index),
+                  (),
+                  s"transientOutputs: L1-bound output $index cannot carry transient tokens"
+                )
+                _ <- Either.cond(
+                  (outputs(index).value.value.assets - bundle).negativeAssets.isEmpty,
+                  (),
+                  s"transientOutputs: declared bundle for output $index exceeds the output's assets"
+                )
+            } yield ()
+        }
+    }

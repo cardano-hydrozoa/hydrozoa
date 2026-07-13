@@ -34,22 +34,47 @@ object HydrozoaTransactionMutator {
 
     }
 
+    /** Validate and apply an L2 transaction over the two compartments.
+      *
+      * Validation decomposes into two runs whose conjunction also implies the transient-token
+      * conservation equation (`overlay_in + mint = declared transients`; with zero fees and no
+      * withdrawals the three balances are linearly dependent, so it needs no third run):
+      *
+      *   - the full transaction — scripts, signatures, redeemers, sizes, and value conservation
+      *     with the mint field — validates against the **combined** view (main + transient), the
+      *     only view the Cardano ledger rules ever see;
+      *   - the main projection ([[L2Tx.projectMain]]) re-checks value conservation against the
+      *     **main** compartment alone, which both keeps every reachable state L1-remittable and
+      *     makes minting or burning main-compartment (L1-native) tokens fail by arithmetic.
+      *
+      * The other validators need no projection run: input resolution on main equals resolution on
+      * combined (overlay keys are a subset of main keys), and min-ADA / value-size on the combined
+      * view are at least as strict as on the projection (monotone in value content; coin is
+      * untouched by the split).
+      *
+      * The mutation runs once, over the combined view; the result splits back into compartments by
+      * subtracting the post-transaction overlay (spent entries removed, declared bundles added
+      * under the new utxo ids).
+      */
     def transit(
         config: Config,
         time: QuantizedInstant,
-        state: Utxos,
+        state: Compartments,
         l2Tx: L2Tx
-    ): Either[String | TransactionException, Utxos] = {
+    ): Either[String | TransactionException, Compartments] = {
+
+        val context = CardanoLedgerContext.fromCardanoNetwork(config, time)
+        val combined = TransientTokens.mkCombinedUtxos(state.main, state.transientTokens)
 
         // A helper for mapping the error type and applying arguments
         def helper(v: Validator): Either[String | TransactionException, Unit] =
             v.validate(
-              CardanoLedgerContext.fromCardanoNetwork(config, time),
-              L1State(utxos = state),
+              context,
+              L1State(utxos = combined),
               l2Tx.tx
             )
         for
-            _ <- L2ConformanceValidator.validate(config, state, l2Tx)
+            _ <- L2ConformanceValidator.validate(config, state.main, l2Tx)
             // Upstream validators (applied alphabetically for ease of comparison in a file browser
             // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
             // but I've removed the rules that I'm certain won't apply
@@ -70,16 +95,25 @@ object HydrozoaTransactionMutator {
             _ <- helper(ProtocolParamsViewHashesMatchValidator)
             _ <- helper(WrongNetworkValidator)
             _ <- helper(WrongNetworkInTxBodyValidator)
+            // The projection to the main compartment must balance against it alone
+            _ <- ValueNotConservedUTxOValidator
+                .validate(context, L1State(utxos = state.main), l2Tx.projectMain)
+                .left
+                .map(error => s"main-projection conservation: $error")
             // Upstream mutators: removes inputs, adds all outputs (L1 and L2)
             scalusState <-
                 PlutusScriptsTransactionMutator.transit(
-                  CardanoLedgerContext.fromCardanoNetwork(config, time),
-                  scalus.cardano.ledger.rules.State(state),
+                  context,
+                  scalus.cardano.ledger.rules.State(combined),
                   l2Tx.tx
                 )
             // Native mutators: removes the L1-marked outputs, leaving only L2 outputs
-            state = EvacuatingMutator.transit(config, scalusState.utxos, l2Tx)
-        yield state
+            combinedNext = EvacuatingMutator.transit(config, scalusState.utxos, l2Tx)
+            spentInputs = l2Tx.tx.body.value.inputs.toSet
+            transientTokensNext =
+                state.transientTokens.removedAll(spentInputs) ++ l2Tx.mkTransientUtxos
+            mainNext = TransientTokens.projectMainUtxos(combinedNext, transientTokensNext)
+        yield Compartments(mainNext, transientTokensNext)
     }
 }
 

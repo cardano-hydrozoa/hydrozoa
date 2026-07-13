@@ -9,7 +9,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, debug}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.eutxol2.HydrozoaTransactionMutator
+import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis, L2Tx, genesisObligationDecoder}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
@@ -181,18 +181,20 @@ object Model {
                                          MonadThrow[M].pure(_)
                                        )
                                  )
+                // The model tracks only the main compartment: its generated txs declare no
+                // transient outputs, so the overlay stays empty throughout.
                 mutatorResult  = HydrozoaTransactionMutator.transit(
                                    config = nodeConfig.headConfig,
                                    time = stateAT.currentModelTime,
-                                   state = stateAT.utxosL2Active,
+                                   state = Compartments(stateAT.utxosL2Active, TransientTokens.empty),
                                    l2Tx = l2Tx
                                  )
                 (flag, newL2Utxos, mInvalidMsg) = mutatorResult match {
                     case Left(err) =>
                         (ValidityFlag.Invalid, stateAT.utxosL2Active,
                             Some(s"L2 tx ${cmd.request.requestId} invalid in model: $err"))
-                    case Right(newUtxos) =>
-                        (ValidityFlag.Valid, newUtxos, None)
+                    case Right(compartments) =>
+                        (ValidityFlag.Valid, compartments.main, None)
                 }
                 newState       = stateAT.copy(
                                    utxosL2Active = newL2Utxos,

@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import org.scalacheck.Gen
 import org.scalatest.Assertion
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.{Coin, TransactionInput, TransactionOutput, Value}
 
 /** R2b recovery tests for [[EutxoL2Ledger]] — commandNumber monotonicity, snapshot-interval, and
   * `restoreTo` reproducing the live state at any past commandNumber (snapshot boundary,
@@ -128,6 +129,53 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 genesis = EutxoL2Ledger.State.genesis(config)
             yield assert(
               restored.commandNumber == L2CommandNumber.zero && restored.activeUtxos == genesis.activeUtxos
+            )
+        }
+    }
+
+    test("restoreTo reproduces a non-empty transient-token overlay across a snapshot boundary") {
+        // Command 1 is a real minting transaction (declared transient bundle), followed by enough
+        // no-ops to cross the snapshot boundary — so the snapshot at SnapshotInterval carries a
+        // non-empty overlay. Both restore paths must reproduce it: from the snapshot (target past
+        // the boundary) and from the genesis + log re-fold (target below it).
+        run {
+            import L2TxFixtures.{buildSignedL2Tx, mkApplyTransaction, mkDemoBundle, mkMintDemoStep, peerAddress}
+            val pastBoundary = L2Store.SnapshotInterval.toInt + 2
+            for
+                store <- InMemoryL2Store.create
+                ledger <- EutxoL2Ledger(config, store)
+                genesisState <- ledger.peekState
+                pot = genesisState.activeUtxos.maxBy(_._2.value.coin.value)
+                mintTx = buildSignedL2Tx(
+                  spends = List(pot),
+                  sends = List(
+                    (
+                      TransactionOutput.Babbage(
+                        peerAddress,
+                        pot._2.value + Value(Coin.zero, mkDemoBundle(9))
+                      ),
+                      2
+                    )
+                  ),
+                  mints = List(mkMintDemoStep(9)),
+                  transientOutputs = Map(0 -> mkDemoBundle(9))
+                )
+                _ <- ledger
+                    .sendApplyTransaction(mkApplyTransaction(1, 1, mintTx))
+                    .value
+                    .flatMap(IO.fromEither)
+                _ <- (2 to pastBoundary).toList.traverseVoid(i =>
+                    ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                )
+                live <- ledger.peekState
+                expectedOverlay = Map(TransactionInput(mintTx.id, 0) -> mkDemoBundle(9))
+                fromSnapshot <- restoreFresh(store, L2CommandNumber(pastBoundary.toLong))
+                fromRefold <- restoreFresh(store, L2CommandNumber(1))
+            yield assert(
+              live.transientTokens == expectedOverlay
+                  && fromSnapshot.transientTokens == expectedOverlay
+                  && fromSnapshot.activeUtxos == live.activeUtxos
+                  && fromRefold.transientTokens == expectedOverlay
             )
         }
     }

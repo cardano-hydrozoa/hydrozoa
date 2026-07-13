@@ -56,9 +56,8 @@ import test.Generators.Hydrozoa.{genPolicyId, genPubKeyUtxo}
   *     can still be too large to evacuate, because the `EvacuationTx` must also carry the residual
   *     treasury (whose Resolved datum embeds the ~maxEvac G2 trusted-setup elements) and the KZG
   *     membership proof. The output is then **stranded**. THE GAP.
-  *   - **ada-only** — `l2Validate`'s `TransactionOutput` doc says "can only contain Ada", but
-  *     nothing enforces it; a token-carrying output is accepted. Tokens are value-conserved, so
-  *     this is a doc-vs-code mismatch rather than a safety hole.
+  *   - **token-carrying** — L2 outputs may carry multi-asset values; they are value-conserved and
+  *     form valid payout obligations (carried into the evacuation output unchanged).
   *
   * The two datum-size tests assert the **desired** invariants — every L2-conformant output is
   * L1-evacuable, and `EvacuationTx.Build` terminates — rather than asserting that the gap exists.
@@ -313,7 +312,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
         }
     }
 
-    test("ada-only: l2Validate accepts a token-carrying output despite its 'Ada only' doc") {
+    test("token-carrying: l2Validate accepts a multi-asset output") {
         val tokenValue = Value(Coin.ada(10)) +
             Value.asset(fixed(genPolicyId, 200L), AssetName(ByteString.fromString("L2TOKEN")), 1)
         val out: TransactionOutput =
@@ -321,7 +320,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
 
         val _ = assert(
           l2OutputValidator.l2Validate(out).isRight,
-          "l2Validate's TransactionOutput doc claims 'Ada only' but does not enforce it"
+          "a token-carrying output must pass L2 conformance"
         )
         // Not a safety hole: the token is value-conserved, so it forms a valid payout obligation
         // (and would be carried into the evacuation output unchanged).
