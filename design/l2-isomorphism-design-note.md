@@ -25,9 +25,11 @@ A grouped overview of what branch `feature/isomorphic-l2` changes; the sections 
 
 - **L2 isomorphism — strip the request wrapper (§5.4).** The EUTXO ledger is now drivable by native
   Cardano txs: the `headId` pin moves into a tx metadatum the ledger checks; tx validity comes from the
-  tx's own slot interval; a stateless `L2Ledger.screen()` gates `RequestSequencer` and authenticates the
-  tx's own witnesses; and the COSE envelope, `userVk`, and the whole `UserRequestHeader` are gone — a
-  request is just its body. Deposit accept-by is derived from the deposit tx's TTL (§5.3).
+  tx's own slot interval; a stateless `L2Ledger` screening step gates `RequestSequencer` and
+  authenticates the tx's own witnesses; and the COSE envelope, `userVk`, and the whole
+  `UserRequestHeader` are gone — a transaction request is just its body. Deposit accept-by is derived
+  from the deposit tx's TTL (§5.3). Isomorphism covers L2 *transactions* only — deposits keep an
+  explicit signature (§5.5).
 - **L2 backend selection & config.** `HeadParameters.l2Ledger` (`cardano-eutxo` | `any-remote`) +
   `identityIsomorphism`; `sugarRushUri` → `remoteLedgerUri` (optional); L2 query endpoints gated
   EUTXO-only.
@@ -35,7 +37,14 @@ A grouped overview of what branch `feature/isomorphic-l2` changes; the sections 
   carrying `cardanoNetwork`, `scriptReferenceUtxos`, and the opening `initialL2State` — folding the
   network, script refs, and opening state out of hard-code / side-files into one agreed artifact,
   assembled by `BuildBootstrapConfig` and read by `BuildHeadConfig`.
-- **Wallet cleanup.** Retire the now-dead CIP-30 `signData` chain.
+- **Deposit authentication — COSE over `hash(l2Payload)` (§5.5).** Deposits aren't L2 txs and can't
+  self-authenticate, so the depositor COSE-signs `hash(l2Payload)` and carries the key+signature in the
+  deposit metadata; Hydrozoa verifies it while parsing the deposit tx (before screening). Screening
+  splits into `sendScreenTx` / `sendScreenDeposit`. The CIP-30 `signData` primitives the strip had
+  retired are restored (re-pointed at the deposit, not the old request header).
+- **Proxy removal.** Drop the L2-ledger proxy commands (`ProxyBlockConfirmation` / `ProxyRequestError`)
+  and everything feeding them — the write-only `confirmations` / `errors` ledger state and the
+  `FastConsensusActor` → `JointLedger` soft-confirm fan-out.
 - **Merged from `origin/main`.** fund14-proj69 (`/ready` + `NodeStatus`) and #505 / GUM-129 (init-tx
   parsing; `Bootstrap` moved to `hydrozoa.bootstrap`).
 - **Docs.** This design note (§5.4 roadmap, §5.3 deposits, §6.1 evacuation-map correction +
@@ -48,8 +57,15 @@ Make the EUTXO L2 ledger *isomorphic* to L1, at two strengths:
 1. **Format isomorphism (always):** the head speaks the native Cardano tx format, so you can build
    L2 transactions with any standard Cardano library. The tx may still carry a head-pin annotation.
 2. **Identity isomorphism (opt-in, off by default):** the *exact* transaction an application already
-   uses on L1 runs on L2 unchanged — no head-specific tailoring. Depositing is separate — it's the
-   prerequisite for working on L2, not an L2 tx.
+   uses on L1 runs on L2 unchanged — no head-specific tailoring.
+
+**Isomorphism is over L2 *transactions*, not the boundary crossings.** Deposits (funds entering L2)
+and withdrawals (funds leaving) have no L1 counterpart — they are precisely what stops an L2 from being
+just another L1 — so they can't be isomorphic and keep their own machinery (a deposit carries an
+explicit signature, §5.5; a withdrawal is a specially-marked L2 output settled out on L1). Both are
+avoidable to a degree: a head can open with an initial utxo set instead of taking deposits, and can
+return funds via finalization/evacuation instead of per-tx withdrawals. What's left — moving value
+*within* L2 — is exactly the L2 transactions that isomorphism targets.
 
 ## 2. Why identity isomorphism is optional: cross-head replay
 
@@ -131,7 +147,10 @@ information Gummiworm holds. There is no introspection on the Gummiworm side, so
 Only what's checkable from the request's payload alone, with no ledger state:
 
 - **Transaction (EUTXO):** validate signatures, some output checks.
-- **Deposit:** check the `l1Payload`↔`l2Payload` hash binding and that the deposit tx is well-formed.
+- **Deposit:** the ledger's value checks — the `l2Payload` is well-formed and `depositL2Value` covers
+  its outputs (§5.5). The deposit tx's own well-formedness and the COSE signature over `hash(l2Payload)`
+  are verified *before* screening, while Hydrozoa parses the deposit tx — not here (and there is no
+  `l1Payload`↔`l2Payload` "hash binding" step anymore, §5.5).
 - **`headId` pin:** the ledger knows this head's `headId` (configured from day one), so it checks the
   pin here itself — *if* it's set to (that's the identity-isomorphism toggle, §5.2).
 
@@ -144,7 +163,7 @@ the request — the gate before Gummiworm spends any resources on it. (So `Reque
 not carried in the request.) For a **remote** ledger, screening is an endpoint on `remoteLedgerUri`
 that takes the `l2Payload` and returns yes/no.
 
-### 4.2 Submission — stateful
+### 4.2 Submission (applying) — stateful
 
 The full checks: the tx/deposit is valid-or-not **against a particular ledger state** — where validity
 range and balance/input resolution happen.
@@ -390,29 +409,35 @@ witnesses to check.
 **Design.** Have the depositor — one of the deposit tx's signers — **COSE-sign `hash(l2Payload)`** and put
 the **COSE key + signature into the deposit tx metadata** (replacing the bare `l2PayloadHash`). The COSE
 sig is self-contained, so it is verifiable at screening on the unsigned tx, and its key ties the
-endorsement to a real deposit party rather than a self-declared one. Verification splits in two:
+endorsement to a real deposit party rather than a self-declared one. Screening a deposit has two stages:
 
-- **Hydrozoa's part of screening (before the ledger):** verify the COSE signature over `hash(l2Payload)`.
-  This is Hydrozoa's own screening step, run *before* it hands the payload to the ledger. (`coseKey` must
-  belong to a deposit-tx signer — see the open point on *when* that tie is checked, given the request-time
-  tx is unsigned.)
-- **The ledger's part (`sendScreenDeposit`):** ledger-specific well-formedness — the `l2Payload` matches
-  `depositL2Value` / `depositFee`. For the **EUTXO** ledger: `depositL2Value` covers the `l2Payload`
-  outputs (Σ output values ≤ `depositL2Value`), plus min-ada / parseable `GenesisObligation`s. (Open:
-  the exact value relation — `≤`, `==`, or `== depositL2Value − depositFee` — and whatever else the
+- **Deposit pre-screening — Hydrozoa's stage, a dedicated `DepositPreScreening` module.** Runs *before*
+  the ledger sees the deposit. It (a) **authenticates** the deposit by verifying the COSE signature over
+  `hash(l2Payload)` (the key must belong to a deposit-tx signer — see the open point on *when* that tie is
+  checked, given the request-time tx is unsigned), and (b) runs the **validity_end (accept-by) check**:
+  `block_creation_start < validityEnd`, with `validityEnd` derived from the deposit tx's TTL (§5.3).
+  Deposit-tx well-formedness is established here too — reaching the metadatum + TTL requires parsing the
+  tx.
+- **The ledger's stage (`sendScreenDeposit`):** ledger-specific value / well-formedness — the `l2Payload`
+  matches `depositL2Value` / `depositFee`. For the **EUTXO** ledger: `depositL2Value` covers the
+  `l2Payload` outputs (Σ output values ≤ `depositL2Value`), plus min-ada / parseable `GenesisObligation`s.
+  (Open: the exact value relation — `≤`, `==`, or `== depositL2Value − depositFee` — and whatever else the
   ledger should assert.)
 
 **Two screening entrypoints** on `L2Ledger`, replacing the single `screen(l2Payload, Option[l1Payload])`
 (the `Option` encoded "deposit-or-not" in a nullable arg):
 
-- `sendScreenTx(l2Payload)` — native-tx path (parse + headId pin + witness sigs, §4.1/§5.4).
+- `sendScreenTx(l2Payload)` — native-tx path (parse + headId pin + witness sigs, §4.1/§5.4). A
+  transaction has **no pre-screening stage**: it self-authenticates through its own witnesses, so this
+  ledger stage is the whole of its screening.
 - `sendScreenDeposit(depositId, depositFee, depositL2Value, refundDestination, l2Payload)` — deposit path
   (a `ScreenDeposit` type = `RegisterDeposit` minus the consensus-assigned `{requestId, blockNumber,
-  blockCreationStartTime}`).
+  blockCreationStartTime}`), preceded by deposit pre-screening (above).
 
-**Where COSE is verified.** The key + sig sit in the deposit tx metadata; Hydrozoa extracts and verifies
-them where it handles the deposit tx (today `DepositTx.Parse`). That step does far more than parse — it
-validates and verifies — so it wants a better name.
+**Where pre-screening lives.** The `DepositPreScreening` module parses the deposit tx (reaching the COSE
+key+sig metadatum and the TTL), verifies the COSE signature, and runs the validity_end check — all
+Hydrozoa-side, before `sendScreenDeposit`. (The underlying deposit-tx parse does far more than parse — it
+validates and verifies — so `DepositTx.Parse` wants a better name.)
 
 **Restore the COSE primitives.** The strip deleted the sign/verify crypto (`WalletModule.signCoseCip30`,
 `Cip30SignedData`, the `CIP30DataSigner` verify helper). Resurrect them and re-point at `hash(l2Payload)`
