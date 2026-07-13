@@ -11,7 +11,6 @@ import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, toEpochQuantizedInstant}
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.pollresults.PollResults
 import hydrozoa.multisig.ledger.block.BlockVersion
@@ -20,6 +19,7 @@ import hydrozoa.multisig.ledger.l1.tx.*
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.multisig.persistence.recovery.HardConfirmationScan
+import hydrozoa.multisig.{HeadMultisigRegimeManager, NodeStatus}
 import scala.collection.immutable.{Seq, TreeMap}
 import scala.math.Ordered.orderingToOrdered
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, TransactionHash, TransactionInput}
@@ -57,6 +57,7 @@ object CardanoLiaison:
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
         persistence: Persistence[IO],
         mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
+        advanceNodeStatus: NodeStatus => IO[Unit],
     ): IO[CardanoLiaison] =
         IO(
           new CardanoLiaison(
@@ -65,7 +66,8 @@ object CardanoLiaison:
             pendingConnections,
             tracer,
             persistence,
-            mrmSelf
+            mrmSelf,
+            advanceNodeStatus
           ) {}
         )
 
@@ -353,6 +355,7 @@ trait CardanoLiaison(
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
     mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
+    advanceNodeStatus: NodeStatus => IO[Unit],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
 
@@ -419,6 +422,7 @@ trait CardanoLiaison(
             // `runEffects` re-samples L1, so recover restores only the effect index.
             recovered <- State.recover(persistence)(using config)
             _ <- stateRef.set(recovered)
+            _ <- advanceNodeStatus(nodeStatusOf(recovered.targetState))
             // Immediate + periodic Timeout
             _ <- context.self ! CardanoLiaison.Timeout
             _ <- context.setReceiveTimeout(
@@ -451,6 +455,7 @@ trait CardanoLiaison(
         for {
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsLearned)
             newState <- stateRef.updateAndGet(State.applyInitialEffects(_, eff))
+            _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
             _ <- tracer.traceWith(CardanoLiaisonEvent.InitialStackEffectsState(newState.prettyDump))
         } yield ()
 
@@ -523,10 +528,19 @@ trait CardanoLiaison(
                   )
                 )
                 newState <- stateRef.updateAndGet(State.applyRegularEffects(_, eff))
+                _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
                 _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState.prettyDump))
             } yield ()
         }
     }
+
+    /** The node lifecycle status implied by an L1 target state; reported through
+      * `advanceNodeStatus` at every [[stateRef]] write.
+      */
+    private def nodeStatusOf(target: TargetState): NodeStatus = target match
+        case TargetState.Uninitialized => NodeStatus.Initializing
+        case TargetState.Active(_)     => NodeStatus.Active
+        case TargetState.Finalized(_)  => NodeStatus.Finalized
 
     /** The core part of the liaison that decides whether an action is needed and submits them.
       *

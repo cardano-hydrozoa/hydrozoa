@@ -68,8 +68,7 @@ class MainSmokeTest extends AnyFunSuite:
 
             mockBackend <- CardanoBackendMock.mockIO(
               MockState(initialUtxos =
-                  Map(mnc.headConfig.seedUtxo.toTuple)
-                      ++ mnc.headConfig.additionalFundingUtxos
+                  mnc.headConfig.initializationTx.resolvedUtxos.utxos
                       ++ Map.from(mnc.headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
               )
             )

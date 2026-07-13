@@ -93,6 +93,8 @@ Working design and reference docs live in `docs/`:
 **API**
 - [`l2-query-endpoints.md`](docs/l2-query-endpoints.md) — the user-facing server's read-only L2
   queries: `GET /api/l2/utxos/{address}` and `GET /api/l2/transactions` (EUTXO-only).
+- [`observability-endpoints.md`](docs/observability-endpoints.md) — the user-facing server's
+  `/health` (liveness) and `/ready` (readiness) endpoints and the `NodeStatus` behind them.
 
 **Testing**
 - [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
