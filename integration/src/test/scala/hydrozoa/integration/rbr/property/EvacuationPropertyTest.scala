@@ -4,7 +4,10 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.Durations.InactivityMarginDuration
+import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
@@ -34,7 +37,8 @@ import test.{SeedPhrase, TestPeers}
   * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
   *
   * Scenario:
-  *   1. 2-peer head; per-peer [[FirewalledCardanoBackend]] drops any [[SettlementTx]] with
+  *   1. 3-peer head + 2 coil followers; per-head-peer [[FirewalledCardanoBackend]] drops any
+  *      [[SettlementTx]] with
   *      `versionMajor == 2`, so on-chain lags at v1 while peers hard-confirm through v2 off-chain.
   *   2. Bootstrap L2 request + periodic requests give each Major stack a trailing Minor with SEC.
   *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, HMRM spawns
@@ -52,7 +56,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
-    private val nHeadPeers: Int              = 2
+    private val nHeadPeers: Int              = 3
+    private val nCoilPeers: Int              = 2
     private val scenarioTimeout: FiniteDuration = 5.minutes
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
@@ -60,7 +65,20 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         testProperty(TransportMode.WebSocket)
 
     private def testProperty(transportMode: TransportMode): Prop =
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers)
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
+        val coilWallets = testPeers.coilWallets
+        val coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
+
+        // Widened init window: bringing up 3 head + 2 coil peers over WebSocket takes longer than
+        // the harness default's 5s (bcet + minSettle 2s + inactivityMargin 3s), and the init tx
+        // validity window can elapse before the leader submits it. Bumping inactivityMargin to 10s.
+        val widenedTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
+            MultiPeerHeadHarness.fastTxTiming.run(network).map(
+              _.copy(inactivityMarginDuration =
+                  InactivityMarginDuration(10.seconds.quantize(network.slotConfig))
+              )
+            )
+        }
 
         // Fast voting deadline so TallyTx becomes valid within our scenario budget. The default
         // generator picks 1h..5d — way beyond our reach. `deadlineVoting` is
@@ -83,10 +101,13 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 2.seconds,
+          takeoffOffset = 10.seconds,
+          fastTxTiming = widenedTxTiming,
           disputeResolutionConfig = fastDisputeResolutionConfig,
+          coilPeers = coilPeers,
+          coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -116,9 +137,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
         // Set of peers whose RBA has fired `Evacuation.NoMore`. `evacuationDone` is only
-        // completed once every head peer has fired — waiting for the first NoMore is racy: the
-        // winning-drain peer fires while others may still be mid-submission.
-        peersEvacuationDone: Ref[IO, Set[HeadPeerNumber]],
+        // completed once every head + coil peer has fired — waiting for the first NoMore is
+        // racy: the winning-drain peer fires while others may still be mid-submission.
+        peersEvacuationDone: Ref[IO, Set[PeerId]],
         evacuationDone: Deferred[IO, Unit],
         // First `PayoutsLeft(n)` observed on any peer — the KZG-committed evacuation count at
         // the RBA's read of the resolved treasury. Subsequent PayoutsLeft values are strictly
@@ -200,18 +221,21 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
         testPeers: TestPeers,
+        coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet],
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
             fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
             resolutionSubmitted  <- Resource.eval(Deferred[IO, Unit])
-            peersEvacuationDone  <- Resource.eval(Ref[IO].of(Set.empty[HeadPeerNumber]))
+            peersEvacuationDone  <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
             evacuationDone       <- Resource.eval(Deferred[IO, Unit])
             firstPayoutsLeft     <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
                 .map { case (name, utxos) => name.headPeerNumber -> utxos }
+
+            coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
             startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
                 .convert.instant.toEpochMilli
@@ -233,10 +257,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                       ).map(Some(_))
                   case (_: PeerId.Coil, _) => IO.pure(None)
               },
-              wrapBackend = {
-                  case (PeerId.Head(peerNum), backend) => wrapPeerBackend(peerNum, backend)
-                  case (_: PeerId.Coil, backend)       => backend
-              },
+              wrapBackend = (peerId, backend) => wrapPeerBackend(peerId, backend),
             )
 
             label = s"RBREvacuation-${transportMode.toString.toLowerCase}"
@@ -249,7 +270,7 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
                   transportMode = transportMode,
                 ),
                 multiNodeConfig = multiNodeConfig,
-                coilNodeConfigs = Nil,
+                coilNodeConfigs = coilNodeConfigs,
                 preinitPeerUtxosL1 = preinitPeerUtxosL1,
                 takeoffTime = takeoffTime,
                 startEpochMs = startEpochMs,
@@ -318,18 +339,22 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       * hard-confirm through v2 off-chain is what triggers `Action.FallbackToRuleBased`.
       */
     private def wrapPeerBackend(
-        peerNum: HeadPeerNumber,
+        peerId: PeerId,
         underlying: L1Backend[IO],
     ): L1Backend[IO] =
+        val peerLabel = peerId match {
+            case PeerId.Head(n) => s"head-$n"
+            case PeerId.Coil(n) => s"coil-$n"
+        }
         val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
             Slf4jTracer.sink.contramap {
                 case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
                     hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
                         .warn(s"firewall DROPPED tx $hash")
                 case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
                     hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerNum.toString), "FirewalledCardanoBackend")
+                        .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
                         .info(s"firewall passed tx $hash result=$result")
             }
         FirewalledCardanoBackend(
@@ -345,43 +370,47 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private def observerTracer(
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
-        peersEvacuationDone: Ref[IO, Set[HeadPeerNumber]],
+        peersEvacuationDone: Ref[IO, Set[PeerId]],
         evacuationDone: Deferred[IO, Unit],
         firstPayoutsLeft: Ref[IO, Option[Int]],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
+        // Both HeadRegimeManagerEvent and CoilRegimeManagerEvent embed the same
+        // `CommonChildEvent` and `RuleBasedOnlyChildEvent` cases, so one PF handles either
+        // side.
+        val onEvent: PeerId => Any => IO[Unit] = peer => {
+            case CommonChildEvent.CardanoLiaison(
+                  _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
+                ) =>
+                fallbackDispatched.complete(()).void
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Tx.SubmitSuccess(tx)
+                ) if tx.transactionFamily == "Resolution" =>
+                resolutionSubmitted.complete(()).void
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
+                ) =>
+                firstPayoutsLeft.update(_.orElse(Some(n)))
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Evacuation.NoMore
+                ) =>
+                peersEvacuationDone
+                    .updateAndGet(_ + peer)
+                    .flatMap { seen =>
+                        IO.whenA(seen.size == nHeadPeers + nCoilPeers)(
+                          evacuationDone.complete(()).void
+                        )
+                    }
+
+            case _ => IO.unit
+        }
         ContraTracer[IO, MultiPeerHeadHarness.Event] {
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
-                evt match {
-                    case CommonChildEvent.CardanoLiaison(
-                          _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
-                        ) =>
-                        fallbackDispatched.complete(()).void
-
-                    case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          RuleBasedActorEvent.Tx.SubmitSuccess(tx)
-                        ) if tx.transactionFamily == "Resolution" =>
-                        resolutionSubmitted.complete(()).void
-
-                    case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
-                        ) =>
-                        firstPayoutsLeft.update(_.orElse(Some(n)))
-
-                    case RuleBasedOnlyChildEvent.RuleBasedActor(
-                          RuleBasedActorEvent.Evacuation.NoMore
-                        ) =>
-                        peersEvacuationDone
-                            .updateAndGet(_ + peerNum)
-                            .flatMap { seen =>
-                                IO.whenA(seen.size == nHeadPeers)(
-                                  evacuationDone.complete(()).void
-                                )
-                            }
-
-                    case _ => IO.unit
-                }
-
-            case MultiPeerHeadHarness.Event.Coil(_, _) => IO.unit
+                onEvent(PeerId.Head(peerNum))(evt)
+            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
+                onEvent(PeerId.Coil(coilNum))(evt)
         }
 
     // ------------------------------------------------------------------
@@ -441,12 +470,12 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       *     scenario is to walk the tx graph and mark any output that is later consumed as a
       *     `collateral_input` of some downstream tx — i.e. classify by role in tx history
       *     rather than by content sentinel.
-      *   - `AmbientPlaceId -> nHeadPeers * 2`: each peer maintains two parallel wallet-ADA
+      *   - `AmbientPlaceId -> nHeadPeers * 2 + nCoilPeers`: head peers keep two wallet-ADA
       *     streams at their shelley address — an [[InitializationTx]] change output and a
-      *     [[FallbackTx]] equity payout. Every RBR-side script tx that pays its fee from
-      *     collateral (Vote/Resolution/Evacuation) picks one of these as its collateral
-      *     input and returns it (fee-subtracted) at the same address, so no utxo is
-      *     destroyed — the two streams persist for the full flow.
+      *     [[FallbackTx]] equity payout. Coil peers keep only the init-change stream (no
+      *     fallback equity). Every RBR-side script tx that pays its fee from collateral
+      *     (Vote/Resolution/Evacuation) picks one of these as its collateral input and returns
+      *     it (fee-subtracted) at the same address, so no utxo is destroyed.
       */
     private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
         Map(
@@ -459,5 +488,5 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           CollateralPlaceId         -> 0,
           EvacuationOutputPlaceId   -> evacuationCount,
           PayoutObligationsPlaceId  -> 0,
-          AmbientPlaceId            -> nHeadPeers * 2,
+          AmbientPlaceId            -> (nHeadPeers * 2 + nCoilPeers),
         )
