@@ -50,7 +50,7 @@ class DeploymentTxTest extends AnyFunSuite {
         // 3. Build deploy transaction
         val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
-          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.DeployedScript(scriptRef))
+          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.script(scriptRef))
         )
 
         given CardanoNetwork.Section = network
@@ -133,7 +133,7 @@ class DeploymentTxTest extends AnyFunSuite {
         // 3. Build deploy transaction
         val deployTxBuilder = DeploymentTxOps.Build(
           utxosToSpend = NonEmptyList.one(fundingUtxo),
-          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.DeployedScript(scriptRef))
+          payloads = NonEmptyList.one(DeploymentTxOps.DeployedPayload.script(scriptRef))
         )
 
         given CardanoNetwork.Section = network

@@ -18,8 +18,9 @@ import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
 import scalus.uplc.builtin.Data
 
 /** Deploy tx locks each payload of [[DeploymentTxOps.Build.payloads]] into its own utxo at the
-  * unspendable burn address, at output indices 0 .. n-1 (change is the last output). A payload is
-  * either a reference script or an inline datum (e.g. a rung of the G2 setup ladder).
+  * unspendable burn address, at output indices 0 .. n-1 (change is the last output). A payload
+  * carries a reference script and/or an inline datum (e.g. a rung of the G2 setup ladder) — a
+  * single utxo may hold both.
   *
   * @param deployedUtxos
   *   utxo ids where the payloads are located, in payload order
@@ -40,9 +41,18 @@ private object DeploymentTxOps {
 
     type Config = CardanoNetwork.Section
 
-    enum DeployedPayload:
-        case DeployedScript(ref: ScriptRef)
-        case InlineData(data: Data)
+    /** A deployed utxo's contents: an optional reference script and/or an optional inline datum. A
+      * single utxo may carry both.
+      */
+    final case class DeployedPayload(
+        scriptPayload: Option[ScriptRef],
+        dataPayload: Option[Data]
+    )
+
+    object DeployedPayload {
+        def script(ref: ScriptRef): DeployedPayload = DeployedPayload(Some(ref), None)
+        def data(datum: Data): DeployedPayload = DeployedPayload(None, Some(datum))
+    }
 
     enum Error extends Throwable:
         case SomeError
@@ -72,14 +82,8 @@ private object DeploymentTxOps {
                 TransactionOutput(
                   address = burnAddress,
                   value = Value.zero,
-                  datumOption = payload match {
-                      case DeployedPayload.InlineData(data) => Some(Inline(data))
-                      case _                                => None
-                  },
-                  scriptRef = payload match {
-                      case DeployedPayload.DeployedScript(ref) => Some(ref)
-                      case _                                   => None
-                  }
+                  datumOption = payload.dataPayload.map(Inline(_)),
+                  scriptRef = payload.scriptPayload
                 ).ensureMinAda(config)
             )
 
