@@ -1,29 +1,23 @@
 package hydrozoa.integration.fallbackhandoff
 
-import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.MultiPeerHeadHarness
+import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant}
-import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
-import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
-import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
+import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.Prop
 import scala.concurrent.duration.*
-import scalus.uplc.builtin.ByteString
-import test.{SeedPhrase, TestPeers}
+import scalus.cardano.ledger.Utxos
+import test.{SeedPhrase, TestPeerName, TestPeers}
 
 /** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain
   * treasury lags behind the latest hard-confirmed stack, the RBA must vote with the SEC whose
@@ -43,16 +37,11 @@ import test.{SeedPhrase, TestPeers}
   *      picks the last SEC matching `versionMajor = 1` (the on-chain treasury's). The Vote it
   *      builds and submits passes Plutus and lands on chain.
   */
-object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
-
-    override def overrideParameters(
-        p: org.scalacheck.Test.Parameters
-    ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
+object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version Mismatch"):
 
     private val nHeadPeers: Int = 2
     private val nCoilPeers: Int = 1
     private val scenarioTimeout: FiniteDuration = 90.seconds
-    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     // ------------------------------------------------------------------
     // Test properties
@@ -67,31 +56,14 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
         val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-        // Fast voting deadline so the deadline-gated tally path in RuleBasedActor unblocks well
-        // inside `scenarioTimeout`. The default generator picks 1h..5d; the coil peer's RBA
-        // would sit on `TallyBlockedByAwaitingVote` for that entire window and time the scenario
-        // out. Same pattern as `EvacuationPropertyTest.fastDisputeResolutionConfig`.
-        val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
-            ReaderT { network =>
-                Gen.const(
-                  DisputeResolutionConfig(
-                    votingDuration = QuantizedFiniteDuration(
-                      slotConfig = network.slotConfig,
-                      finiteDuration = 5.seconds,
-                    )
-                  )
-                )
-            }
-
         val resource = MultiPeerHeadHarness.mkResource(
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 10.seconds,
-          disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeerToUtxos, coilWallets, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -110,10 +82,17 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             // 1a. Submit one minimal `TransactionRequest` to peer 0's `RequestSequencer`. Once block 1
             // lands via this request, the `forcedMajorBlockWakeupTime` deadman on each header
             // takes over and force-completes empty major blocks until we reach major 2.
-            _ <- lift(submitOneUserRequest(ctx))
+            _ <- lift(
+              MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.multiNodeConfig, ctx.harness)
+            )
 
             // 1b. Background fiber submitting requests at a slow cadence for minor block production.
-            _ <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start.void)
+            _ <- lift(
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitEmptyTransactionRequest(
+                ctx.multiNodeConfig,
+                ctx.harness,
+              )).foreverM.start.void
+            )
 
             // 2. Both head peers hard-confirm through major-2 off-chain.
             _ <- lift(ctx.bothPeersConfirmedMajor2.get.timeout(scenarioTimeout))
@@ -179,8 +158,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     private def buildCtxResource(
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
-        testPeers: TestPeers,
-        coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet],
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        coilWallets: List[PeerWallet],
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
@@ -190,17 +169,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             allHeadsBuildingVote <- Resource.eval(Deferred[IO, Unit])
             allHeadsVoteSubmittedOk    <- Resource.eval(Deferred[IO, Unit])
             allCoilsHandledDispute <- Resource.eval(Deferred[IO, Unit])
-
-            preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-                .map { case (name, utxos) => name.headPeerNumber -> utxos }
-
-            // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
-            // exists (see MultiPeerHeadHarness.PreSystem.testControlPresleep). Anchor to the head's
-            // configured initial block end-time so the model clock is coherent with the head config.
-            startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
-                .convert.instant.toEpochMilli
-
-            coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
             observer <- Resource.eval(
               observerTracer(
@@ -212,38 +180,17 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
               )
             )
 
-            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
-              tracer = humanFormatTracer |+| observer,
-              handle = {
-                  case (PeerId.Head(peerNum), conns) =>
-                      IO.fromOption(conns.requestSequencer)(
-                        new NoSuchElementException(
-                          s"peer $peerNum has no RequestSequencer.Handle in its Connections"
-                        )
-                      ).map(Some(_))
-                  case (_: PeerId.Coil, _) => IO.pure(None)
-              },
+            harness <- MultiPeerHeadHarness.disputeHarnessResource(
+              label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}",
+              transportMode = transportMode,
+              multiNodeConfig = multiNodeConfig,
+              testPeerToUtxos = testPeerToUtxos,
+              coilWallets = coilWallets,
+              takeoffTime = takeoffTime,
+              tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+| observer,
               // Firewall every node — coil CL would otherwise submit the head-dropped v2
               // settlement out-of-band, suppressing the fallback path.
               wrapBackend = (peerId, backend) => wrapNodeBackend(firewall)(peerId, backend),
-            )
-
-            label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}"
-
-            harness <- MultiPeerHeadHarness.resource[Option[RequestSequencer.Handle]](
-              MultiPeerHeadHarness.Inputs(
-                config = MultiPeerHeadHarness.Config(
-                  label = label,
-                  backendMode = MultiPeerHeadHarness.StorageBackend.Mode.InMemory,
-                  transportMode = transportMode,
-                ),
-                multiNodeConfig = multiNodeConfig,
-                coilNodeConfigs = coilNodeConfigs,
-                preinitPeerUtxosL1 = preinitPeerUtxosL1,
-                takeoffTime = takeoffTime,
-                startEpochMs = startEpochMs,
-              ),
-              hooks,
             )
         yield Ctx(
           transportMode = transportMode,
@@ -261,40 +208,6 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // Wiring helpers
     // ------------------------------------------------------------------
 
-    /** Submit one minimal `UserRequest.TransactionRequest` to peer 0's `RequestSequencer` to kick
-      * `BlockWeaver` past block 1's `Leader.AwaitingConfirmation` state so the deadman switch on
-      * subsequent block headers can start force-producing major blocks. The l2 payload is
-      * intentionally empty — `JointLedger` will mark the request `Invalid` but block 1 still
-      * completes, which is all we need.
-      */
-    private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
-        val peerNum    = HeadPeerNumber(0)
-        val slotConfig = ctx.multiNodeConfig.headConfig.cardanoNetwork.slotConfig
-        val body: UserRequestBody.TransactionRequestBody =
-            UserRequestBody.TransactionRequestBody(
-              l2Payload = ByteString.fromArray(Array.empty[Byte])
-            )
-        val userVk     =
-            ctx.multiNodeConfig.nodeConfigs(peerNum).ownWallet.exportVerificationKey
-        for
-            now    <- IO.realTimeInstant
-            header = UserRequestHeader(
-              headId = ctx.multiNodeConfig.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
-              ),
-              validityEnd = RequestValidityEndTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
-              ),
-              bodyHash = body.hash,
-            )
-            userRequest = UserRequest.TransactionRequest(header, body, userVk)
-            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
-              new NoSuchElementException(s"peer $peerNum missing in harness")
-            )
-            _ <- sequencer ?: userRequest
-        yield ()
-
     private def newFirewallState: IO[FirewallState] =
         for
             dropped <- Ref[IO].of(
@@ -305,40 +218,13 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             )
         yield FirewallState(dropped, submitted)
 
-    /** Route every harness event through the existing per-cell human formatters into slf4j so
-      * scenario runs are visible in the console/log without touching each MRM's internal tracer.
-      */
-    private def humanFormatTracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        ContraTracer[IO, MultiPeerHeadHarness.Event] {
-            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
-                Slf4jTracer.sink.traceWith(
-                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)(evt)
-                )
-            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
-                val syntheticLabel = HeadPeerNumber(nHeadPeers + coilNum.convert)
-                Slf4jTracer.sink.traceWith(
-                  CoilMultisigRegimeManagerEventFormat.humanFormat(syntheticLabel, coilNum)(evt)
-                )
-        }
-
-    /** Static drop predicate + per-node event capture. */
+    /** Shared drop rule + slf4j sink, plus per-node event capture into [[FirewallState]]. */
     private def wrapNodeBackend(state: FirewallState)(
         peerId: PeerId,
         underlying: L1Backend[IO],
     ): L1Backend[IO] =
-        val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
-            Slf4jTracer.sink.contramap {
-                case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
-                    hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerId.toString), "FirewalledCardanoBackend")
-                        .warn(s"firewall DROPPED tx $hash")
-                case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
-                    hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerId.toString), "FirewalledCardanoBackend")
-                        .info(s"firewall passed tx $hash result=$result")
-            }
-        val perNodeTracer: ContraTracer[IO, FirewalledCardanoBackendEvent] =
-            slf4jSink |+| ContraTracer[IO, FirewalledCardanoBackendEvent] {
+        val capture: ContraTracer[IO, FirewalledCardanoBackendEvent] =
+            ContraTracer[IO, FirewalledCardanoBackendEvent] {
                 case e: FirewalledCardanoBackendEvent.DroppedOutboundTx =>
                     state.dropped.update(m => m.updated(peerId, m.getOrElse(peerId, Nil) :+ e))
                 case e: FirewalledCardanoBackendEvent.SubmittedTx =>
@@ -346,12 +232,8 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
             }
         FirewalledCardanoBackend(
           underlying = underlying,
-          shouldDrop = etx =>
-              IO.pure(etx match {
-                  case s: SettlementTx => s.majorVersionProduced.convert == 2
-                  case _               => false
-              }),
-          firewallTracer = perNodeTracer,
+          shouldDrop = MultiPeerHeadHarness.DropRule.settlementProducingMajor(2).toGate,
+          firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+| capture,
         )
 
     /** Observer tracer wiring — vote/build signals fire when **every** head peer hits the

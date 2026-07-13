@@ -5,33 +5,25 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.InactivityMarginDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.config.head.network.CardanoNetwork
-import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.MultiPeerHeadHarness
+import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import scala.annotation.unused
-import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
-import hydrozoa.multisig.ledger.l1.tx.SettlementTx
-import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
+import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.classification.Histogram
-import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent, HeadMultisigRegimeManagerEventFormat, RuleBasedOnlyChildEvent}
+import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import org.scalacheck.{Gen, Prop, Properties}
+import org.scalacheck.Prop
 import scala.concurrent.duration.*
 import scalus.cardano.ledger.{Utxo, Utxos}
-import scalus.uplc.builtin.ByteString
-import test.{SeedPhrase, TestPeers}
+import test.{SeedPhrase, TestPeerName, TestPeers}
 
 /** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
   * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
@@ -50,16 +42,11 @@ import test.{SeedPhrase, TestPeers}
   *      terminal event fires.
   *   7. Test asserts the shared-L1 UTxO histogram matches the expected terminal cardinalities.
   */
-object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
-
-    override def overrideParameters(
-        p: org.scalacheck.Test.Parameters
-    ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
+object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation Property"):
 
     private val nHeadPeers: Int              = 3
     private val nCoilPeers: Int              = 2
     private val scenarioTimeout: FiniteDuration = 5.minutes
-    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     val _ = property("ws: fallback→RRM→vote→tally→resolve→evacuate happy path") =
         testProperty(TransportMode.WebSocket)
@@ -80,21 +67,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             )
         }
 
-        // Fast voting deadline so TallyTx becomes valid within our scenario budget. The default
-        // generator picks 1h..5d — way beyond our reach. `deadlineVoting` is
-        // `fallbackValidityStart + votingDuration`, and TallyTx has `validityStart = deadlineVoting`.
-        val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
-            ReaderT { network =>
-                Gen.const(
-                  DisputeResolutionConfig(
-                    votingDuration = QuantizedFiniteDuration(
-                      slotConfig = network.slotConfig,
-                      finiteDuration = 5.seconds
-                    )
-                  )
-                )
-            }
-
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
         val resource = MultiPeerHeadHarness.mkResource(
@@ -103,11 +75,10 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 10.seconds,
           fastTxTiming = widenedTxTiming,
-          disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeers,
           coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeers, coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeerToUtxos, coilWallets, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -151,7 +122,9 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(submitOneUserRequest(ctx))
+            _ <- lift(
+              MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.multiNodeConfig, ctx.harness)
+            )
         yield ()
 
     /** Keep feeding requests so each Major stack has a trailing Minor with an SEC — otherwise
@@ -161,9 +134,14 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
       */
     private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
-            ctx   <- ask
-            fiber <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start)
-            _     <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
+            ctx <- ask
+            fiber <- lift(
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitEmptyTransactionRequest(
+                ctx.multiNodeConfig,
+                ctx.harness,
+              )).foreverM.start
+            )
+            _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
         yield ()
 
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
@@ -220,8 +198,8 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     private def buildCtxResource(
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
-        testPeers: TestPeers,
-        coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet],
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        coilWallets: List[PeerWallet],
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
@@ -232,50 +210,26 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
             firstPayoutsLeft     <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
-            preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-                .map { case (name, utxos) => name.headPeerNumber -> utxos }
-
-            coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
-
-            startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
-                .convert.instant.toEpochMilli
-
-            hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
-              tracer = humanFormatTracer |+| observerTracer(
+            harness <- MultiPeerHeadHarness.disputeHarnessResource(
+              label = s"RBREvacuation-${transportMode.toString.toLowerCase}",
+              transportMode = transportMode,
+              multiNodeConfig = multiNodeConfig,
+              testPeerToUtxos = testPeerToUtxos,
+              coilWallets = coilWallets,
+              takeoffTime = takeoffTime,
+              tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+| observerTracer(
                 fallbackDispatched,
                 resolutionSubmitted,
                 peersEvacuationDone,
                 evacuationDone,
                 firstPayoutsLeft,
               ),
-              handle = {
-                  case (PeerId.Head(peerNum), conns) =>
-                      IO.fromOption(conns.requestSequencer)(
-                        new NoSuchElementException(
-                          s"peer $peerNum has no RequestSequencer.Handle in its Connections"
-                        )
-                      ).map(Some(_))
-                  case (_: PeerId.Coil, _) => IO.pure(None)
-              },
-              wrapBackend = (peerId, backend) => wrapPeerBackend(peerId, backend),
-            )
-
-            label = s"RBREvacuation-${transportMode.toString.toLowerCase}"
-
-            harness <- MultiPeerHeadHarness.resource[Option[RequestSequencer.Handle]](
-              MultiPeerHeadHarness.Inputs(
-                config = MultiPeerHeadHarness.Config(
-                  label = label,
-                  backendMode = MultiPeerHeadHarness.StorageBackend.Mode.InMemory,
-                  transportMode = transportMode,
-                ),
-                multiNodeConfig = multiNodeConfig,
-                coilNodeConfigs = coilNodeConfigs,
-                preinitPeerUtxosL1 = preinitPeerUtxosL1,
-                takeoffTime = takeoffTime,
-                startEpochMs = startEpochMs,
-              ),
-              hooks,
+              wrapBackend = (peerId, backend) =>
+                  FirewalledCardanoBackend(
+                    underlying = backend,
+                    shouldDrop = MultiPeerHeadHarness.DropRule.settlementProducingMajor(2).toGate,
+                    firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId),
+                  ),
             )
         yield Ctx(
           transportMode = transportMode,
@@ -292,80 +246,6 @@ object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
     // ------------------------------------------------------------------
     // Wiring
     // ------------------------------------------------------------------
-
-    private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
-        val peerNum    = HeadPeerNumber(0)
-        val slotConfig = ctx.multiNodeConfig.headConfig.cardanoNetwork.slotConfig
-        val body: UserRequestBody.TransactionRequestBody =
-            UserRequestBody.TransactionRequestBody(
-              l2Payload = ByteString.fromArray(Array.empty[Byte])
-            )
-        val userVk =
-            ctx.multiNodeConfig.nodeConfigs(peerNum).ownWallet.exportVerificationKey
-        for
-            now    <- IO.realTimeInstant
-            header = UserRequestHeader(
-              headId = ctx.multiNodeConfig.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
-              ),
-              validityEnd = RequestValidityEndTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
-              ),
-              bodyHash = body.hash,
-            )
-            userRequest = UserRequest.TransactionRequest(header, body, userVk)
-            sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
-              new NoSuchElementException(s"peer $peerNum missing in harness")
-            )
-            _ <- sequencer ?: userRequest
-        yield ()
-
-    private def humanFormatTracer: ContraTracer[IO, MultiPeerHeadHarness.Event] =
-        ContraTracer[IO, MultiPeerHeadHarness.Event] {
-            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
-                Slf4jTracer.sink.traceWith(
-                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)(evt)
-                )
-            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
-                val syntheticLabel = HeadPeerNumber(nHeadPeers + coilNum.convert)
-                Slf4jTracer.sink.traceWith(
-                  CoilMultisigRegimeManagerEventFormat.humanFormat(syntheticLabel, coilNum)(evt)
-                )
-        }
-
-    /** Drop any settlement whose produced treasury datum has `versionMajor == 2` — that's the
-      * settlement that would take on-chain from v1 to v2. Keeping on-chain at v1 while peers
-      * hard-confirm through v2 off-chain is what triggers `Action.FallbackToRuleBased`.
-      */
-    private def wrapPeerBackend(
-        peerId: PeerId,
-        underlying: L1Backend[IO],
-    ): L1Backend[IO] =
-        val peerLabel = peerId match {
-            case PeerId.Head(n) => s"head-$n"
-            case PeerId.Coil(n) => s"coil-$n"
-        }
-        val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
-            Slf4jTracer.sink.contramap {
-                case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
-                    hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .warn(s"firewall DROPPED tx $hash")
-                case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
-                    hydrozoa.lib.logging.LogEvent
-                        .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .info(s"firewall passed tx $hash result=$result")
-            }
-        FirewalledCardanoBackend(
-          underlying = underlying,
-          shouldDrop = etx =>
-              IO.pure(etx match {
-                  case s: SettlementTx => s.majorVersionProduced.convert == 2
-                  case _               => false
-              }),
-          firewallTracer = slf4jSink,
-        )
 
     private def observerTracer(
         fallbackDispatched: Deferred[IO, Unit],
