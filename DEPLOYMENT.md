@@ -450,9 +450,9 @@ To get the head's funds back on L1, **finalize before tearing down** — the hea
 multisig (`AllOf(headVKeys) ∧ AtLeast(coilQuorum, coilVKeys)`), so once the peers are gone nothing
 can spend from it except the pre-signed fallback/evacuation path.
 
-**Known bug:** a head that has processed no L2 traffic is stuck on block 1 (the first block waits
-for a user request), and finalization waits with it. Submit any L2 tx first as a kick — e.g.
-`just submit-l2-tx` (above) — then finalize.
+**Known bug:** the finalize request does not push a block out by itself — it rides the next
+block. After calling finalize, submit any L2 tx as a kick (e.g. `just submit-l2-tx`, above) or
+wait for the head to force a block on its own; the finalization follows with that block.
 
 Finalize on any head peer (basic auth, the template's default credentials shown):
 
