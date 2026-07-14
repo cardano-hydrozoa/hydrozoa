@@ -105,7 +105,7 @@ deploy-reference-scripts WALLET OUT="config/demo/bootstrap/script-refs.json":
 
 # Build the shared head-config.json from the bootstrap directory's four files (roster, defaults,
 # l2-cardano-eutxo, script-refs). Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's
-# address must be funded on Preview first (the tool logs the exact lovelace required and fails
+# address must be funded on the target network first (the tool logs the exact lovelace required and fails
 # with the shortfall if not).
 build-head-config BOOTSTRAP_DIR="config/demo/bootstrap" OUT="config/demo/head-config/head-config.json":
   #!/usr/bin/env bash

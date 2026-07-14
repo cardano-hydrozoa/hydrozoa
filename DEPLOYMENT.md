@@ -22,7 +22,8 @@
 > - **Ephemeral state, single-use head config.** No data volumes are mounted (config comes in via
 >   read-only bind mounts), so any restart means re-initializing a fresh head on L1 (§4) — and
 >   `head-config.json` embeds real utxos + wall-clock anchors, so it cannot be reused.
-> - **Preview testnet via Blockfrost only** — a trusted third party between every node and L1.
+> - **Public testnet (Preview / Preprod) via Blockfrost only** — a trusted third party between
+>   every node and L1.
 
 Deploys a multi-party Hydrozoa head running the **built-in EUTXO L2 ledger** (`l2Ledger =
 cardano-eutxo`): the ledger runs in-process inside every node, so a node is a single container —
@@ -35,10 +36,10 @@ here.)
 ## 1. System overview
 
 A running head is N **head peers** and M **coil peers** (optional). Each peer is one `hydrozoa`
-process talking to Cardano L1 (Preview by default) via Blockfrost:
+process talking to Cardano L1 (a public testnet) via Blockfrost:
 
 ```
-                       Cardano L1 (Preview) via Blockfrost
+                       Cardano L1 (testnet) via Blockfrost
                      ▲                 ▲                  ▲
                      │                 │                  │
              ┌───────┴──────┐   ┌──────┴───────┐   ┌──────┴───────┐
@@ -214,9 +215,9 @@ opening L2 ledger — a list of `{ "address", "value" }` outputs (value in CIP-0
 seeds one 5-ADA output per head peer; replace it with the real opening distribution, or leave it
 empty (`[]`) for an empty head.
 
-**Step 3 — Fund head peer 0** (the sole funder): print its address and send Preview tADA to it
-(e.g. from the [Preview faucet](https://docs.cardano.org/cardano-testnets/tools/faucet); one
-10k-tADA drip is plenty):
+**Step 3 — Fund head peer 0** (the sole funder): print its address and send testnet tADA to it
+(e.g. from the [testnet faucet](https://docs.cardano.org/cardano-testnets/tools/faucet) — pick
+your network there; one 10k-tADA drip is plenty):
 
 ```bash
 just head-zero-address       # derives the address from bootstrap/{roster,defaults}.json on demand
@@ -229,14 +230,15 @@ tx fee; step 5 logs the exact lovelace required and fails with the shortfall if 
 network comes from the Blockfrost key):
 
 ```bash
-export BLOCKFROST_API_KEY=preview...
+export BLOCKFROST_API_KEY=preview...   # or preprod...
 just deploy-reference-scripts config/demo/private/head-0/private.json
 # -> config/demo/bootstrap/script-refs.json
 ```
 
 **This step is optional when a committed default exists for the network**: with no
 `bootstrap/script-refs.json`, `build-head-config` falls back to
-`config/script-refs/<network>.json` (Preview's is committed). Deploy yourself only for a network
+`config/script-refs/<network>.json` (Preview's and Preprod's are committed). Deploy yourself only
+for a network
 without a default, or after the compiled scripts change.
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators as
@@ -251,7 +253,7 @@ about invalid treasury/dispute script utxos).
 **Step 5 — Build the shared head config:**
 
 ```bash
-export BLOCKFROST_API_KEY=preview...
+export BLOCKFROST_API_KEY=preview...   # or preprod...
 just build-head-config       # reads config/demo/bootstrap/, writes config/demo/head-config/head-config.json
 ```
 
@@ -323,7 +325,7 @@ So the restart cycle is:
 # 0. head still holds funds? finalize first (see above)
 docker compose down
 # re-fund head peer 0 if the previous head consumed the funding — `just head-zero-address`
-# prints the address; check it on preview.cexplorer.io
+# prints the address; check it in the network's explorer
 just build-head-config
 docker compose up -d           # right after the build — the config is freshest now
 ```
@@ -440,6 +442,7 @@ Finalize on any head peer (basic auth, the template's default credentials shown)
 curl -u admin:welcome -X POST http://localhost:8080/api/admin/finalize
 ```
 
-The finalization tx pays the L2 state and equity back out on L1 (watch `preview.cexplorer.io`).
+The finalization tx pays the L2 state and equity back out on L1 (watch the network's explorer,
+e.g. `preview.cexplorer.io` / `preprod.cexplorer.io`).
 Then `docker compose down`. Leftover change at head peer 0's own L1 address (not head-locked) can
 be swept with its single key at any time.
