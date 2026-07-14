@@ -27,11 +27,14 @@ import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
-import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent}
+import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
+import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import java.nio.file.{Files, Path}
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import org.http4s.client.Client as Http4sClient
 import org.http4s.client.websocket.WSClient
+import org.http4s.implicits.*
 import org.http4s.jdkhttpclient.JdkWSClient
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.{HttpRoutes, Uri}
@@ -163,10 +166,13 @@ object MultiPeerHeadHarness:
                         ),
                         coilPeers = coilPeers,
                       ),
-                      generateInitialBlock = bootstrap =>
+                      generateInitialBlock = (bootstrap, funding) =>
                           generateInitialBlock(
                             genHeadConfigBootstrap = ReaderT
-                                .pure[Gen, TestPeers, HeadConfig.Bootstrap](bootstrap),
+                                .pure[Gen, TestPeers, (
+                                    HeadConfig.Bootstrap,
+                                    hydrozoa.bootstrap.InitializationFunding
+                                )]((bootstrap, funding)),
                             generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
                           ),
                     ),
@@ -215,47 +221,54 @@ object MultiPeerHeadHarness:
      * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
       * `connectionsDeferred` resolves.
       */
-    case class Hooks[H, C](
+    /** Test-side wiring — one `PeerId`-keyed hook per concern. Callers that only need a head-side
+      * handle can use `H = Option[HeadHandle]` and return `None` from the coil branch; likewise
+      * `wrapBackend` can pattern-match on `PeerId.Head` / `PeerId.Coil` when the wrap differs
+      * (e.g. only head peers get firewalled).
+      */
+    case class Hooks[H](
         tracer: ContraTracer[IO, Event],
-        peerHandle: (HeadPeerNumber, HeadMultisigRegimeManager.Connections) => IO[H],
-        coilHandle: (CoilPeerNumber, HeadMultisigRegimeManager.Connections) => IO[C],
+        handle: (PeerId, HeadMultisigRegimeManager.Connections) => IO[H],
         // Wrap the shared mock backend per peer (e.g. FirewalledCardanoBackend). Identity default.
-        wrapPeerBackend: (HeadPeerNumber, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
+        wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO] = (_, b) => b,
     )
 
-    /** Per-peer artifacts exposed to callers: resolved connections, persistence backend, and the
-      * caller-derived handle.
+    /** Per-head-peer artifacts exposed to callers: resolved connections, persistence backend, the
+      * in-process [[SubmissionClient]] (bound to this peer's [[HydrozoaRoutes]] via
+      * `Client.fromHttpApp`), and the caller-derived handle.
       */
     case class Peer[H](
+        connections: HeadMultisigRegimeManager.Connections,
+        backendStore: BackendStore[IO],
+        submissionClient: SubmissionClient,
+        handle: H,
+    )
+
+    case class Coil[H](
         connections: HeadMultisigRegimeManager.Connections,
         backendStore: BackendStore[IO],
         handle: H,
     )
 
-    case class Coil[C](
-        connections: HeadMultisigRegimeManager.Connections,
-        backendStore: BackendStore[IO],
-        handle: C,
-    )
-
     /** Everything the harness yields. `sutErrors` is appended to by the error drainer (one entry
       * per uncaught actor exception); callers read it post-run.
       */
-    case class Harness[H, C](
+    case class Harness[H](
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
+        l1Snapshot: IO[Utxos],
         peers: Map[HeadPeerNumber, Peer[H]],
-        coils: Map[CoilPeerNumber, Coil[C]],
+        coils: Map[CoilPeerNumber, Coil[H]],
         sutErrors: Ref[IO, List[String]],
     )
 
     /** Build a fully-wired multi-peer head + coil followers. The returned resource owns
       * everything; release cancels the CL tick fibers and the error drainer.
       */
-    def resource[H, C](
+    def resource[H](
         inputs: Inputs,
-        hooks: Hooks[H, C],
-    ): Resource[IO, Harness[H, C]] =
+        hooks: Hooks[H],
+    ): Resource[IO, Harness[H]] =
         import inputs.*
         import inputs.config.*
         val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
@@ -267,14 +280,15 @@ object MultiPeerHeadHarness:
                      PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
                  )
 
-            system         <- ActorSystem[IO](label)
-            cardanoBackend <- Resource.eval(
-                                  CardanoBackend.mkMock(
-                                    preinitPeerUtxosL1,
-                                    multiNodeConfig.headConfig.scriptReferenceUtxos,
-                                    multiNodeConfig.headConfig.cardanoInfo,
-                                  )
-                              )
+            system                     <- ActorSystem[IO](label)
+            backendAndSnapshot         <- Resource.eval(
+                                              CardanoBackend.mkMock(
+                                                preinitPeerUtxosL1,
+                                                multiNodeConfig.headConfig.scriptReferenceUtxos,
+                                                multiNodeConfig.headConfig.cardanoInfo,
+                                              )
+                                          )
+            (cardanoBackend, l1Snapshot) = backendAndSnapshot
             transports <- Transport.setup(
                               transportMode,
                               multiNodeConfig,
@@ -287,7 +301,7 @@ object MultiPeerHeadHarness:
                                     .buildPeer(
                                       peerNum,
                                       system,
-                                      hooks.wrapPeerBackend(peerNum, cardanoBackend),
+                                      hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
                                       multiNodeConfig,
                                       backendMode,
                                       transports.headNetworks(peerNum),
@@ -304,7 +318,7 @@ object MultiPeerHeadHarness:
                                       coilConfig,
                                       coilNum,
                                       system,
-                                      cardanoBackend,
+                                      hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
                                       multiNodeConfig,
                                       transports.coilUplinks(coilNum),
                                       hooks.tracer.contramap(Event.Coil(coilNum, _)),
@@ -350,18 +364,24 @@ object MultiPeerHeadHarness:
                  )
             peerEntries <- Resource.eval(
                                peerConnections.toList.traverse { case (peerNum, conns) =>
-                                   hooks.peerHandle(peerNum, conns).map { h =>
-                                       peerNum -> Peer(
-                                         connections = conns,
-                                         backendStore = peerMrms(peerNum).backendStore,
-                                         handle = h,
-                                       )
-                                   }
+                                   for
+                                       submissionClient <- Http.mkPeerSubmissionClient(
+                                                               peerNum,
+                                                               conns,
+                                                               multiNodeConfig,
+                                                           )
+                                       h <- hooks.handle(PeerId.Head(peerNum), conns)
+                                   yield peerNum -> Peer(
+                                     connections = conns,
+                                     backendStore = peerMrms(peerNum).backendStore,
+                                     submissionClient = submissionClient,
+                                     handle = h,
+                                   )
                                }
                            )
             coilEntries <- Resource.eval(
                                coilConnections.toList.traverse { case (coilNum, conns) =>
-                                   hooks.coilHandle(coilNum, conns).map { h =>
+                                   hooks.handle(PeerId.Coil(coilNum), conns).map { h =>
                                        coilNum -> Coil(
                                          connections = conns,
                                          backendStore = coilMrms(coilNum).backendStore,
@@ -373,6 +393,7 @@ object MultiPeerHeadHarness:
         yield Harness(
           system = system,
           cardanoBackend = cardanoBackend,
+          l1Snapshot = l1Snapshot,
           peers = peerEntries.toMap,
           coils = coilEntries.toMap,
           sutErrors = sutErrors,
@@ -448,11 +469,11 @@ object MultiPeerHeadHarness:
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
             scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
-        ): IO[L1Backend[IO]] =
+        ): IO[(L1Backend[IO], IO[Utxos])] =
             val genesisUtxos: Utxos =
                 preinitPeerUtxosL1.values.reduce(_ ++ _) ++
                     scriptReferenceUtxos.toList.map(_.toTuple).toMap
-            CardanoBackendMock.mockIO(
+            CardanoBackendMock.mockIOWithSnapshot(
               initialState = MockState(genesisUtxos),
               mkContext = slot =>
                   Context(
@@ -902,6 +923,53 @@ object MultiPeerHeadHarness:
                            )
                     _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
                 yield Coil(mrm, backendStore, coilConfig)
+            }
+
+    // ===================================
+    // Http — per-peer in-memory HydrozoaRoutes + SubmissionClient
+    // ===================================
+
+    object Http:
+        /** Placeholder authority for the in-process HTTP client. `Client.fromHttpApp` dispatches
+          * by path against the wrapped `HttpApp`, so the authority never hits a socket.
+          */
+        private val InProcBaseUri: Uri = uri"http://harness"
+
+        /** Build a peer's [[HydrozoaRoutes]] and wrap it in an in-memory http4s
+          * [[org.http4s.client.Client]] via `Client.fromHttpApp`, then return a
+          * [[SubmissionClient]] that signs each request with the peer's own wallet.
+          */
+        def mkPeerSubmissionClient(
+            peerNum: HeadPeerNumber,
+            conns: HeadMultisigRegimeManager.Connections,
+            multiNodeConfig: MultiNodeConfig,
+        ): IO[SubmissionClient] =
+            val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
+            val requestSequencer = conns.requestSequencer.getOrElse(
+              throw new IllegalStateException(
+                s"head peer $peerNum missing RequestSequencer; cannot build SubmissionClient"
+              )
+            )
+            val serverConfig = HydrozoaServer.Config(
+              adminUsername = "harness-admin",
+              adminPassword = "harness-admin",
+            )
+            val httpTracer: ContraTracer[IO, HydrozoaHttpEvent] =
+                Slf4jTracer.sink.contramap(HydrozoaHttpEventFormat.humanFormat)
+            HydrozoaRoutes(
+              requestSequencer,
+              conns.blockWeaver,
+              // The harness runs no head lifecycle, so readiness is a constant Active.
+              IO.pure(NodeStatus.Active),
+              // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
+              None,
+              nodeConfig.headConfig,
+              serverConfig,
+              httpTracer,
+            ).map { hydrozoaRoutes =>
+                val client: Http4sClient[IO] =
+                    Http4sClient.fromHttpApp(hydrozoaRoutes.routes.orNotFound)
+                SubmissionClient.http(client, InProcBaseUri, nodeConfig.ownWallet)
             }
 
     // ===================================

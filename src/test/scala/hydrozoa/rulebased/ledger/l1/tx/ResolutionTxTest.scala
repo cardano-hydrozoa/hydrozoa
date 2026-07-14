@@ -12,7 +12,7 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo}
 import org.scalacheck.{Arbitrary, Gen, Prop, Properties}
 import scala.annotation.unused
 import scalus.cardano.ledger.*
@@ -89,6 +89,10 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
           voter = AddrKeyHash(blake2b_224(config.headPeerVKeys.head))
         )
 
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the resolution tx
+        regimeTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
+
         collateralUtxo <- genCollateralUtxo(
           multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
@@ -96,6 +100,7 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
     } yield ResolutionTx.Build(
       talliedBallotBox = talliedBallotBox,
       treasuryUtxo = treasuryUtxo,
+      regimeUtxo = regimeUtxo,
       collateralUtxo = collateralUtxo,
     )(using multiNodeConfig.nodeConfigs.head._2)
 

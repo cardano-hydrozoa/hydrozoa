@@ -5,9 +5,9 @@ import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineD
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.TallyRedeemer.{Continuing, Removed}
-import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.cip67BeaconTokenPrefix
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.UnresolvedOnchain
+import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{cip67BeaconTokenPrefix, findRegimeReference}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus, secFromData, secToData}
@@ -64,13 +64,13 @@ object DisputeResolutionValidator extends Validator {
     private inline val VoteRatchetNotMonotonic =
         "Open-phase ratchet must strictly increase versionMinor"
     private inline val VoteMustBeSignedByPeer = "Transaction must be signed by peer"
-    private inline val VoteOneRefInputTreasury = "Only one ref input (treasury) is required"
+    private inline val VoteOneRefInputTreasury = "Treasury reference input was not found"
     private inline val VoteTreasuryBeacon = "Treasury should contain beacon token"
     private inline val VoteHeadIdMismatch =
         "sec.headId must equal the treasury reference input's HYDR token name"
     private inline val VoteTreasuryDatum = "Treasury datum is missing"
     private inline val VoteTreasuryDatumHeadMp = "Treasury datum headMp mismatch"
-    private inline val VoteTreasuryDatumDisputeId = "Treasury datum disputeId mismatch"
+    private inline val VoteRegimeDatumDisputeId = "Regime datum disputeId mismatch"
     private inline val VoteTimeValidityCheck =
         "The transaction validity upper bound must not exceed the deadlineVoting"
     private inline val VoteMultisigCheck =
@@ -107,8 +107,8 @@ object DisputeResolutionValidator extends Validator {
         "Treasury datum should be unresolved"
     private inline val TreasuryDatumMatchesHeadMp =
         "Treasury datum should match voting inputs on head policy"
-    private inline val TreasuryDatumMatchesDisputeId =
-        "Treasury datum should match voting inputs on dispute id"
+    private inline val RegimeDatumMatchesDisputeId =
+        "Regime datum should match voting inputs on dispute id"
     private inline val TallyValidityStartRequired =
         "Tally tx must specify the validity start (to prove deadline has elapsed)"
     private inline val TallyOnlyAfterVotingDeadline =
@@ -243,15 +243,19 @@ object DisputeResolutionValidator extends Validator {
                         require(voteRedeemer.sec.headId === tokenName, VoteHeadIdMismatch)
                     case _ => fail(VoteTreasuryBeacon)
 
-                //  headMp and disputeId must match the corresponding fields of the Unresolved datum in treasury.
+                //  headMp must match the corresponding field of the Unresolved datum in treasury.
                 val treasuryDatum =
                     treasuryReference.resolved
-                        .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
-                        case u: UnresolvedOnchain => u
-                        case _                    => fail(VoteTreasuryDatum)
+                        .inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                        case u: Unresolved => u
+                        case _             => fail(VoteTreasuryDatum)
                     }
                 require(treasuryDatum.headMp === headMp, VoteTreasuryDatumHeadMp)
-                require(treasuryDatum.disputeId === disputeId, VoteTreasuryDatumDisputeId)
+
+                // The immutable head-identity fields (disputeId, peers, quorum) come from the
+                // regime reference input, located by the HRWT beacon under the same headMp.
+                val regimeDatum = findRegimeReference(tx, headMp)
+                require(regimeDatum.disputeId === disputeId, VoteRegimeDatumDisputeId)
 
                 // The transaction’s time -validity upper bound must not exceed the deadlineVoting
                 // field of treasury.
@@ -262,10 +266,11 @@ object DisputeResolutionValidator extends Validator {
                 }
 
                 // The multisig field of voteRedeemer must have signatures of the blockHeader
-                // field of voteRedeemer for all the public keys in the headPeers field of treasury.
+                // field of voteRedeemer for all the public keys in the headPeers field of the
+                // regime datum.
                 val msg = voteRedeemer.sec.toData |> serialiseData
                 require(
-                  treasuryDatum.headPeers.length == voteRedeemer.headMultisig.length,
+                  regimeDatum.headPeers.length == voteRedeemer.headMultisig.length,
                   VoteMultisigCheck
                 )
 
@@ -282,7 +287,7 @@ object DisputeResolutionValidator extends Validator {
                                 case Nil => ()
                         case Nil => ()
 
-                verifySignatures(treasuryDatum.headPeers, voteRedeemer.headMultisig)
+                verifySignatures(regimeDatum.headPeers, voteRedeemer.headMultisig)
 
                 // The coilMultisig field is sparse and position-aligned to coilPeers. It does NOT
                 // need to contain the exact length of entries; no more than coilQuorum signatures
@@ -300,7 +305,7 @@ object DisputeResolutionValidator extends Validator {
                     sigs: List[Option[ByteString]],
                     count: BigInt
                 ): BigInt = {
-                    if count == treasuryDatum.coilQuorum
+                    if count == regimeDatum.coilQuorum
                     then count
                     else
                         keys match
@@ -322,11 +327,11 @@ object DisputeResolutionValidator extends Validator {
                 }
 
                 val coilSigCount = verifyCoilSignatures(
-                  treasuryDatum.coilPeers,
+                  regimeDatum.coilPeers,
                   voteRedeemer.coilMultisig,
                   BigInt(0)
                 )
-                require(coilSigCount == treasuryDatum.coilQuorum, VoteCoilQuorumCheck)
+                require(coilSigCount == regimeDatum.coilQuorum, VoteCoilQuorumCheck)
 
                 // The versionMajor field must match between treasury and voteRedeemer.
                 require(
@@ -476,17 +481,20 @@ object DisputeResolutionValidator extends Validator {
                     }
                     .getOrFail(TreasuryReferenceInputExists)
 
-                // headMp and disputeId must match the corresponding fields of the Unresolved
-                // datum in treasury
+                // headMp must match the corresponding field of the Unresolved datum in treasury;
+                // disputeId lives in the regime reference input.
                 val treasuryDatum =
                     treasuryReference.resolved
-                        .inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
-                        case u: UnresolvedOnchain => u
-                        case _                    => fail(TreasuryDatumIsUnresolved)
+                        .inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                        case u: Unresolved => u
+                        case _             => fail(TreasuryDatumIsUnresolved)
                     }
 
                 require(treasuryDatum.headMp === contCs, TreasuryDatumMatchesHeadMp)
-                require(treasuryDatum.disputeId === contTn, TreasuryDatumMatchesDisputeId)
+                require(
+                  findRegimeReference(tx, contCs).disputeId === contTn,
+                  RegimeDatumMatchesDisputeId
+                )
 
                 tx.validRange.from.boundType match {
                     case IntervalBoundType.Finite(fromTime) =>
@@ -544,7 +552,7 @@ object DisputeResolutionValidator extends Validator {
                 log("Resolve")
 
                 val voteInput = tx.inputs.find(_.outRef === ownRef).get
-                val (headMp, disputeId, _) = voteInput.resolved.value.onlyNonAdaAsset
+                val (headMp, _, _) = voteInput.resolved.value.onlyNonAdaAsset
 
                 // Let treasury be a spent input that holds a head beacon token of headMp and CIP-67
                 // prefix 4937.
@@ -566,15 +574,15 @@ object DisputeResolutionValidator extends Validator {
 
                 // TODO: This is checked by the treasury validator
                 val treasuryDatum =
-                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match {
-                        case u: UnresolvedOnchain => u
-                        case _                    => fail(ResolveDatumIsUnresolved)
+                    treasuryInput.resolved.inlineDatumOfType[RuleBasedTreasuryDatum] match {
+                        case u: Unresolved => u
+                        case _             => fail(ResolveDatumIsUnresolved)
                     }
 
-                // headMp and disputeId must match the corresponding fields of the Unresolved datum
-                // in treasury.
+                // headMp must match the corresponding field of the Unresolved datum in treasury.
+                // disputeId is not re-checked here: the treasury validator's Resolve branch
+                // already matches the vote input against the regime datum's disputeId.
                 require(treasuryDatum.headMp === headMp, ResolveTreasuryVoteMatch)
-                require(treasuryDatum.disputeId === disputeId, ResolveTreasuryVoteMatch)
 
             case DisputeRedeemer.Abstain =>
                 log("Abstain")
