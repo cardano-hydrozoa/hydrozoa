@@ -13,7 +13,7 @@ import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as Trans
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import scala.annotation.unused
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
@@ -23,7 +23,7 @@ import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.Prop
 import scala.concurrent.duration.*
 import scalus.cardano.ledger.{Utxo, Utxos}
-import test.{SeedPhrase, TestPeerName, TestPeers}
+import test.{SeedPhrase, TestPeers}
 
 /** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
   * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
@@ -76,7 +76,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
           coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
           coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeerToUtxos, testPeers.coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -191,8 +191,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def buildCtxResource(
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
-        testPeerToUtxos: Map[TestPeerName, Utxos],
-        coilWallets: List[PeerWallet],
+        testPeers: TestPeers,
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
@@ -207,8 +206,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
               label = s"RBREvacuation-${transportMode.toString.toLowerCase}",
               transportMode = transportMode,
               multiNodeConfig = multiNodeConfig,
-              testPeerToUtxos = testPeerToUtxos,
-              coilWallets = coilWallets,
+              testPeers = testPeers,
               takeoffTime = takeoffTime,
               tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+| observerTracer(
                 fallbackDispatched,

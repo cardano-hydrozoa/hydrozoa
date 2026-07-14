@@ -21,9 +21,9 @@ import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperatio
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
-import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
@@ -254,29 +254,30 @@ object MultiPeerHeadHarness:
             _ <- sequencer ?: userRequest
         yield ()
 
-    /** Stand up the head + coil peers for a dispute-flow test: derive pre-init UTxOs, coil node
-      * configs, and the TestControl start epoch from `multiNodeConfig`, wire the standard
-      * `RequestSequencer.Handle` hook, and apply the caller's `tracer` / `wrapBackend`.
+    /** Stand up the head + coil peers for a dispute-flow test: derive pre-init UTxOs and coil
+      * wallets from `testPeers`, coil node configs and the TestControl start epoch from
+      * `multiNodeConfig`, wire the standard `RequestSequencer.Handle` hook, and apply the caller's
+      * `tracer` / `wrapBackend`.
       */
     def disputeHarnessResource(
         label: String,
         transportMode: Transport.Mode,
         multiNodeConfig: MultiNodeConfig,
-        testPeerToUtxos: Map[TestPeerName, Utxos],
-        coilWallets: List[PeerWallet],
+        testPeers: TestPeers,
         takeoffTime: Option[Instant],
         tracer: ContraTracer[IO, Event],
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO],
     ): Resource[IO, Harness[Option[RequestSequencer.Handle]]] =
-        val preinitPeerUtxosL1 = testPeerToUtxos.map { case (name, utxos) =>
-            name.headPeerNumber -> utxos
-        }
+        val preinitPeerUtxosL1 =
+            yaciTestSauceGenesis(testPeers.cardanoNetwork.network)(testPeers).map {
+                case (name, utxos) => name.headPeerNumber -> utxos
+            }
         // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
         // exists (see PreSystem.testControlPresleep). Anchor to the head's configured initial block
         // end-time so the model clock is coherent with the head config.
         val startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
             .convert.instant.toEpochMilli
-        val coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
+        val coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(testPeers.coilWallets)
         resource[Option[RequestSequencer.Handle]](
           Inputs(
             config = Config(

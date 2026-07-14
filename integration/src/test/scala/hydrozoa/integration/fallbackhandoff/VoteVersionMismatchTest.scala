@@ -8,7 +8,7 @@ import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHa
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId, PeerWallet}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
@@ -16,8 +16,7 @@ import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.Prop
 import scala.concurrent.duration.*
-import scalus.cardano.ledger.Utxos
-import test.{SeedPhrase, TestPeerName, TestPeers}
+import test.{SeedPhrase, TestPeers}
 
 /** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain
   * treasury lags behind the latest hard-confirmed stack, the RBA must vote with the SEC whose
@@ -61,7 +60,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
           takeoffOffset = 10.seconds,
           coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeerToUtxos, testPeers.coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -149,8 +148,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
     private def buildCtxResource(
         transportMode: TransportMode,
         multiNodeConfig: MultiNodeConfig,
-        testPeerToUtxos: Map[TestPeerName, Utxos],
-        coilWallets: List[PeerWallet],
+        testPeers: TestPeers,
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
@@ -175,8 +173,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
               label = s"VoteVersionMismatch-${transportMode.toString.toLowerCase}",
               transportMode = transportMode,
               multiNodeConfig = multiNodeConfig,
-              testPeerToUtxos = testPeerToUtxos,
-              coilWallets = coilWallets,
+              testPeers = testPeers,
               takeoffTime = takeoffTime,
               tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+| observer,
               // Firewall every node — coil CL would otherwise submit the head-dropped v2
