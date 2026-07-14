@@ -7,13 +7,14 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.integration.harness.KickRequest
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent, UserRequest, UserRequestBody}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer, SlowConsensusActorEvent}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.l1.tx.SettlementTx
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects}
@@ -21,7 +22,6 @@ import hydrozoa.multisig.{CoilMultisigRegimeManagerEventFormat, CommonChildEvent
 import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.*
-import scalus.uplc.builtin.ByteString
 import test.{SeedPhrase, TestPeers}
 
 /** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain
@@ -260,19 +260,14 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
     // Wiring helpers
     // ------------------------------------------------------------------
 
-    /** Submit one minimal `UserRequest.TransactionRequest` to peer 0's `RequestSequencer` to kick
-      * `BlockWeaver` past block 1's `Leader.AwaitingConfirmation` state so the deadman switch on
-      * subsequent block headers can start force-producing major blocks. The l2 payload is
-      * intentionally empty — `JointLedger` will mark the request `Invalid` but block 1 still
-      * completes, which is all we need.
+    /** Submit one [[KickRequest]] to peer 0's `RequestSequencer` to kick `BlockWeaver` past block
+      * 1's `Leader.AwaitingConfirmation` state so the deadman switch on subsequent block headers
+      * can start force-producing major blocks. The request screens cleanly but is marked `Invalid`
+      * at apply — block 1 still completes, which is all we need.
       */
     private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
-        val peerNum    = HeadPeerNumber(0)
-        val body: UserRequestBody.TransactionRequestBody =
-            UserRequestBody.TransactionRequestBody(
-              l2Payload = ByteString.fromArray(Array.empty[Byte])
-            )
-        val userRequest = UserRequest.TransactionRequest(body)
+        val peerNum     = HeadPeerNumber(0)
+        val userRequest = KickRequest.mkKickTransactionRequest(ctx.multiNodeConfig, peerNum)
         for
             sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peerNum missing in harness")
