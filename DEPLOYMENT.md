@@ -156,11 +156,17 @@ files each node needs:
    distribute head-config.json (shared) + each node's private.json  →  run the nodes (§4)
 ```
 
-**Step 1 — Set the Blockfrost key.** Copy `config/template/peer-private.template.json` to
-`config/template/peer-private.template.json.local` (gitignored) and set `blockfrostApiKey` there.
-keygen-fleet reads only the `.local` file and refuses to run without it, so the real key never
-lands in a committed file. The template is read at generation time — regenerating means fresh
-keys, so re-funding.
+**Step 1 — Set the defaults.** Two decisions live here, made with one edit: copy
+`config/template/peer-private.template.json` to `config/template/peer-private.template.json.local`
+(gitignored) and set `blockfrostApiKey` there.
+
+- **Blockfrost key** — keygen-fleet reads only the `.local` file and refuses to run without it,
+  so the real key never lands in a committed file.
+- **Cardano network** — the key's prefix (`preview…` / `preprod…` / `mainnet…`) selects the
+  network for everything downstream: the `cardanoNetwork` seeded into `defaults.json` and the
+  target of `deploy-reference-scripts`.
+
+The template is read at generation time — regenerating means fresh keys, so re-funding.
 
 **Step 2 — Generate keys, roster, and defaults in one run:**
 
@@ -192,10 +198,9 @@ Peer numbering is positional in the roster: `private/head-N` ↔ head peer N; li
 **Step 2b — Set the head parameters.** `bootstrap/defaults.json` carries demo defaults; edit any
 of them:
 
-- `cardanoNetwork` (default `preview`) — `build-head-config` talks to Blockfrost for this
-  network, so only the Blockfrost networks (mainnet / preprod / preview) are supported. Keep it
-  consistent with the Blockfrost key from step 1 (`deploy-reference-scripts` derives its target
-  network from that key).
+- `cardanoNetwork` — seeded from the Blockfrost key's network (step 1); `build-head-config`
+  talks to Blockfrost for it, so only the Blockfrost networks (mainnet / preprod / preview) are
+  supported.
 - `headParams` — `coilQuorum` (the QUORUM argument passed to keygen-fleet; 2 here), timing,
   fallback contingency, dispute resolution, settlement.
 - `initialEquityContributions` — per head peer; the demo default is head peer 0 funds
@@ -237,7 +242,8 @@ without a default, or after the compiled scripts change.
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators as
 **reference scripts** from two L1 UTxOs at startup. This target deploys the currently compiled
 scripts: two chained txs funded from head-0's wallet (change returns), each locking one script at
-the unspendable burn address, then writes the reference inputs to `script-refs.json`. Because the
+the unspendable burn address, then writes the reference inputs to `script-refs.json` — the
+bootstrap directory's own refs take precedence over the committed defaults. Because the
 burn address can never be spent from, **one deployment serves every head and every restart** —
 redeploy only when the compiled scripts change (symptom: step 5 or node start fails complaining
 about invalid treasury/dispute script utxos).
@@ -437,4 +443,3 @@ curl -u admin:welcome -X POST http://localhost:8080/api/admin/finalize
 The finalization tx pays the L2 state and equity back out on L1 (watch `preview.cexplorer.io`).
 Then `docker compose down`. Leftover change at head peer 0's own L1 address (not head-locked) can
 be swept with its single key at any time.
-

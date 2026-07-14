@@ -49,7 +49,7 @@ build-werror:
   CI=true sbt Test/compile integration/Test/compile examples/Test/compile
 
 # Generate a whole head's keys + configs in one sbt run, into the config layout:
-#   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}   (+ script-refs.json later)
+#   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
 #   OUTDIR/private/{head,coil}-N/private.json
 # Coil peers are hubbed round-robin across the head peers. Next: `just head-zero-address` and fund
 # it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-reference-scripts`, then
@@ -68,6 +68,14 @@ keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
     echo "error: $template not found — copy config/template/peer-private.template.json to it and set blockfrostApiKey" >&2
     exit 1
   fi
+  key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template")
+  case "$key" in
+    preview*) network=preview;;
+    preprod*) network=preprod;;
+    mainnet*) network=mainnet;;
+    *) echo "error: cannot derive the network from blockfrostApiKey in $template (expected a preview…/preprod…/mainnet… key)" >&2; exit 1;;
+  esac
+  echo "network (from the Blockfrost key): $network"
   cmds=()
   for i in $(seq 0 $(( {{HEADS}} - 1 ))); do
     cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role head --ws-address ws://head-$i:4001 --template $template --out $outdir/private/head-$i/private.json")
@@ -75,7 +83,7 @@ keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
   for i in $(seq 0 $(( {{COILS}} - 1 ))); do
     cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role coil --hub $(( i % {{HEADS}} )) --template $template --out $outdir/private/coil-$i/private.json")
   done
-  cmds+=("runMain hydrozoa.bootstrap.InitBootstrapFiles $outdir/bootstrap/roster.json --out-dir $outdir/bootstrap --coil-quorum {{QUORUM}}")
+  cmds+=("runMain hydrozoa.bootstrap.InitBootstrapFiles $outdir/bootstrap/roster.json --out-dir $outdir/bootstrap --coil-quorum {{QUORUM}} --cardano-network $network")
   sbt "${cmds[@]}"
 
 # Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no

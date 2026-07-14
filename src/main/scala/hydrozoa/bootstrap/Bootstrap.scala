@@ -980,7 +980,7 @@ end Migrate
   *
   * Reads the bootstrap directory's four operator-facing files — `roster.json` (the peer topology
   * keygen writes), `defaults.json` (network, head params, equity, optional block-zero timing),
-  * `l2-cardano-eutxo.json` (the opening L2 state), and `script-refs.json` (from
+  * `l2-cardano-eutxo.json` (the opening L2 state), and `preprod.json` (from
   * [[DeployReferenceScripts]]) — assembles them into the [[Bootstrap.BootstrapConfig]], funds the
   * head from head peer 0's L1 address (via the Blockfrost backend), and writes the resulting
   * [[HeadConfig]] as JSON to `--out` (default `head-config.json`). Every node then loads this same
@@ -1097,19 +1097,29 @@ object InitBootstrapFiles
     private val coilQuorumOpt: Opts[Option[Int]] =
         Opts.option[Int]("coil-quorum", "Coil quorum (default: a simple majority of coil peers)")
             .orNone
+    private val cardanoNetworkOpt: Opts[CardanoNetwork] =
+        Opts.option[String](
+          "cardano-network",
+          "Target network: preview | preprod | mainnet (default preview)"
+        ).mapValidated {
+            case "preview" => Validated.validNel(CardanoNetwork.Preview)
+            case "preprod" => Validated.validNel(CardanoNetwork.Preprod)
+            case "mainnet" => Validated.validNel(CardanoNetwork.Mainnet)
+            case other     => Validated.invalidNel(s"unknown network: $other")
+        }.withDefault(CardanoNetwork.Preview)
 
     override def main: Opts[IO[ExitCode]] =
-        (rosterArg, outDirOpt, coilQuorumOpt).mapN(init)
+        (rosterArg, outDirOpt, coilQuorumOpt, cardanoNetworkOpt).mapN(init)
 
     private def init(
         rosterPath: Path,
         outDir: Path,
-        coilQuorumOverride: Option[Int]
+        coilQuorumOverride: Option[Int],
+        network: CardanoNetwork
     ): IO[ExitCode] =
         for {
             rosterStr <- IO.blocking(Files.readString(rosterPath))
             roster <- IO.fromEither(parser.decode[Bootstrap.Membership](rosterStr))
-            network = CardanoNetwork.Preview
             // Default coil quorum: a simple majority of the coil peers.
             coilQuorum = coilQuorumOverride.getOrElse(roster.coilPeers.size / 2 + 1)
             // Demo head parameters: the same values BuildHeadConfig used to hard-code, now surfaced
