@@ -3,7 +3,7 @@ package hydrozoa.rulebased.ledger.l1.script.plutus
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import java.io.File
 import scalus.cardano.address.Network
@@ -28,7 +28,7 @@ object Export {
         )
 
         // Create RuleBasedTreasury validator blueprint
-        val treasuryValidator = Blueprint.plutusV3[RuleBasedTreasuryDatumOnchain, TreasuryRedeemer](
+        val treasuryValidator = Blueprint.plutusV3[RuleBasedTreasuryDatum, TreasuryRedeemer](
           title = "Rule-Based Treasury Validator",
           description = "Manages the Hydrozoa treasury during rule-based regime. " +
               "Handles dispute resolution, UTXO evacuation with KZG membership proofs, and head deinitialization.",

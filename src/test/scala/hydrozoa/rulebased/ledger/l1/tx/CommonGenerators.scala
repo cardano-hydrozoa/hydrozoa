@@ -7,7 +7,6 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
@@ -16,7 +15,6 @@ import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.U
 import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Gen
-import scala.annotation.unused
 import scalus.cardano.address.{ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.Babbage
@@ -26,7 +24,6 @@ import scalus.cardano.onchain.plutus.v3.TokenName
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 import test.*
 
 /** Common test generators for rule-based transaction tests */
@@ -71,20 +68,17 @@ object CommonGenerators {
     def genTreasuryUnresolvedDatum(
         versionMajor: BigInt
     )(using
-        @unused config: hydrozoa.config.head.HeadConfig.Section
+        config: hydrozoa.config.head.HeadConfig.Section
     ): Gen[Unresolved] =
         for {
             deadlineVoting <- Gen
                 .choose(600_000, 1800_000)
                 .map(BigInt(_))
                 .map(System.currentTimeMillis() + _.abs)
-            setup = TrustedSetup
-                .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                .map(p2 => G2Element(p2).toCompressedByteString)
         } yield Unresolved(
+          headMp = config.headMultisigScript.policyId,
           deadlineVoting = deadlineVoting,
-          versionMajor = versionMajor,
-          setupG2 = setup
+          versionMajor = versionMajor
         )
 
     def genRuleBasedTreasuryUtxo(

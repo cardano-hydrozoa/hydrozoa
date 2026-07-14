@@ -69,6 +69,7 @@ private object RatchetVoteTxOps {
     final case class Build(
         openBallotBox: BallotBox[Voted | Abstain.type],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -118,6 +119,7 @@ private object RatchetVoteTxOps {
                     openBallotBox.spend(redeemer),
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
+                    regimeUtxo.referenceOutput,
                     ValidityEndSlot(votingDeadline.slot)
                   )
                 )

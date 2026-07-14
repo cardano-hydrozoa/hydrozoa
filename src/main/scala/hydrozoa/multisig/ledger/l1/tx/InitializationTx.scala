@@ -241,7 +241,7 @@ object InitializationTx {
                               config.totalFallbackContingency,
                               MultiAsset.asset(
                                 expectedHNS.policyId,
-                                config.headTokenNames.multisigRegimeTokenName,
+                                config.headTokenNames.regimeWitnessTokenName,
                                 1
                               )
                             )
@@ -291,7 +291,7 @@ object InitializationTx {
                     case Some(_) =>
                         Left(InvalidTransactionError("multiple head tokens minted"))
                 }
-                _ <- mintInner.get(config.headTokenNames.multisigRegimeTokenName) match {
+                _ <- mintInner.get(config.headTokenNames.regimeWitnessTokenName) match {
                     case None     => Left(InvalidTransactionError("MR token not minted"))
                     case Some(1L) => Right(())
                     case Some(_) =>

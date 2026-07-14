@@ -9,24 +9,24 @@ import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import monocle.{Focus, Lens}
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{Script, ScriptHash, ScriptRef, Timelock, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
+import scalus.cardano.ledger.{Script, ScriptRef, Timelock, Transaction, TransactionInput, TransactionOutput, Utxo, Value}
 import scalus.cardano.txbuilder.SomeBuildError
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Send, Spend}
+import scalus.uplc.builtin.Data
 
-/** Deploy tx deploys one script [[scriptDeployed]] into [[refScriptUtxo]] at a time. It uses
-  * so-called burn address to lock the utxo so it cannot be spent.
+/** Deploy tx locks each payload of [[DeploymentTxOps.Build.payloads]] into its own utxo at the
+  * unspendable burn address, at output indices 0 .. n-1 (change is the last output). A payload
+  * carries a reference script and/or an inline datum (e.g. a rung of the G2 setup ladder) — a
+  * single utxo may hold both.
   *
-  * @param scriptDeployed
-  *   the hash of the script deployed
-  * @param refScriptUtxo
-  *   utxo id where the script is located
+  * @param deployedUtxos
+  *   utxo ids where the payloads are located, in payload order
   */
 final case class DeploymentTx(
-    scriptDeployed: ScriptHash,
-    // TODO: we may split up [[ScriptReferenceUtxos]] tp make it more specific
-    refScriptUtxo: TransactionInput,
+    deployedUtxos: NonEmptyList[TransactionInput],
     override val tx: Transaction,
     override val txLens: Lens[DeploymentTx, Transaction] = Focus[DeploymentTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos
@@ -34,12 +34,25 @@ final case class DeploymentTx(
 
 object DeploymentTx {
     given TxFamily[DeploymentTx] = TxFamily.of("DeploymentTx")
-    export DeploymentTxOps.{Build, Config}
+    export DeploymentTxOps.{Build, Config, DeployedPayload, mkBurnAddress}
 }
 
 private object DeploymentTxOps {
 
     type Config = CardanoNetwork.Section
+
+    /** A deployed utxo's contents: an optional reference script and/or an optional inline datum. A
+      * single utxo may carry both.
+      */
+    final case class DeployedPayload(
+        scriptPayload: Option[ScriptRef],
+        dataPayload: Option[Data]
+    )
+
+    object DeployedPayload {
+        def script(ref: ScriptRef): DeployedPayload = DeployedPayload(Some(ref), None)
+        def data(datum: Data): DeployedPayload = DeployedPayload(None, Some(datum))
+    }
 
     enum Error extends Throwable:
         case SomeError
@@ -51,48 +64,50 @@ private object DeploymentTxOps {
             case SomeError => "An error occurred during deployment"
 
     /** @param utxosToSpend
-      *   utxos to pay the tx fees and storage fees for a script deployed AKA min ADA, should be
+      *   utxos to pay the tx fees and storage fees for the payloads deployed AKA min ADA, should be
       *   key-locked. The change is sent back to the address of the first utxo.
-      * @param scriptToDeploy
-      *   the script we are deploying
+      * @param payloads
+      *   the payloads we are deploying, one utxo each
       */
     final case class Build(
         utxosToSpend: NonEmptyList[Utxo],
-        scriptToDeploy: ScriptRef
+        payloads: NonEmptyList[DeployedPayload]
     ) {
 
         def result(using config: Config): Either[SomeBuildError | Error, DeploymentTx] = {
 
             val burnAddress = mkBurnAddress(config.network)
 
-            val refScriptOutput = TransactionOutput(
-              address = burnAddress,
-              value = Value.zero,
-              datumOption = None,
-              scriptRef = Some(scriptToDeploy)
+            val payloadOutputs = payloads.map(payload =>
+                TransactionOutput(
+                  address = burnAddress,
+                  value = Value.zero,
+                  datumOption = payload.dataPayload.map(Inline(_)),
+                  scriptRef = payload.scriptPayload
+                ).ensureMinAda(config)
             )
-                .ensureMinAda(config)
 
             val changeOutput = Babbage(
               address = utxosToSpend.head.output.address,
               value = Value.combine(utxosToSpend.toList.map(_.output.value))
-                  - refScriptOutput.value
+                  - Value.combine(payloadOutputs.toList.map(_.value))
             )
 
             for {
                 context <- build(
                   utxosToSpend.toList.map(u => Spend(u))
-                      :+ Send(refScriptOutput)
+                      ++ payloadOutputs.toList.map(Send(_))
                       :+ Send(changeOutput)
                 )
 
                 finalized <- context.finalizeContext(
-                  diffHandler = Change.changeOutputDiffHandler(1),
+                  diffHandler = Change.changeOutputDiffHandler(payloads.size.toInt),
                   validators = nonSigningValidators
                 )
             } yield DeploymentTx(
-              scriptDeployed = scriptToDeploy.script.scriptHash,
-              refScriptUtxo = TransactionInput(finalized.transaction.id, 0),
+              deployedUtxos = payloads.zipWithIndex.map((_, i) =>
+                  TransactionInput(finalized.transaction.id, i)
+              ),
               tx = finalized.transaction,
               resolvedUtxos = finalized.resolvedUtxos
             )

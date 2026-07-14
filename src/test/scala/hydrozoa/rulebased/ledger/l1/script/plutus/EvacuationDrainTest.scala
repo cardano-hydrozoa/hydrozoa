@@ -8,12 +8,11 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuanti
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
@@ -23,7 +22,6 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
 import scalus.cardano.ledger.rules.{CardanoMutator, State, UtxoEnv}
 import scalus.testing.ImmutableEmulator
-import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.genEvacuationMap
 
 /** Evacuation-map drain test for the rule-based regime (test "B").
@@ -80,11 +78,9 @@ class EvacuationDrainTest extends AnyFunSuite {
     // Resolved treasury: accumulator = full-set commitment; value = base (beacon + min-ada +
     // buffer) + M.totalValue, so draining all of M leaves exactly `treasuryBaseValue`.
     private val resolvedDatum = Resolved(
+      headMp = env.headConfig.headMultisigScript.policyId,
       evacuationActive = evacMap.kzgCommitment,
-      version = (BigInt(100), BigInt(2)),
-      setupG2 = TrustedSetup
-          .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-          .map(p2 => G2Element(p2).toCompressedByteString)
+      version = (BigInt(100), BigInt(2))
     )
     private val treasuryBaseValue = Value(Coin.ada(5)) + treasuryToken + Value(Coin.ada(200))
     private val treasury = RuleBasedTreasuryUtxo(
@@ -97,10 +93,15 @@ class EvacuationDrainTest extends AnyFunSuite {
     // fee-paying input and returns it (fee-subtracted) at index 0 for the next step to consume.
     private val collateral = fixed(genCollateralUtxo(ownKeyHash)(using env.headConfig), 4)
 
+    // The regime utxo (HRWT beacon + head-identity datum incl. the ladder anchor) referenced by
+    // every EvacuationTx.
+    private val regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(fallbackTxId, 9))
+
     private val initialUtxos: Utxos = (
       Map(
         (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
-        (collateral.input, collateral.collateralOutput.toOutput(using env))
+        (collateral.input, collateral.collateralOutput.toOutput(using env)),
+        regimeUtxo.toUtxo(using env.headConfig).toTuple
       )
           ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
     )
@@ -125,6 +126,7 @@ class EvacuationDrainTest extends AnyFunSuite {
             val evac = EvacuationTx
                 .Build(
                   inputTreasuryUtxo = treasury,
+                  regimeUtxo = regimeUtxo,
                   evacuateesToTryNext = subset,
                   allRemainingEvacuatees = remaining,
                   collateralUtxo = collateral

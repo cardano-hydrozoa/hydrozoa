@@ -10,7 +10,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo}
 import org.scalacheck.{Gen, Properties}
 import scala.annotation.unused
 import scalus.cardano.ledger.*
@@ -119,6 +119,10 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
           AddrKeyHash(blake2b_224(config.headPeers.headPeerVKeys.toList(1))),
         )
 
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the tally tx
+        regimeTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
+
         collateralUtxo <- genCollateralUtxo(
           multiNodeConfig.addrKeyHashOf(HeadPeerNumber.zero)
         )
@@ -127,6 +131,7 @@ def genTallyTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[TallyTx.Build
       continuingBallotBox = continuingBallotBox,
       removedBallotBox = removedBallotBox,
       treasuryUtxo = treasuryUtxo,
+      regimeUtxo = regimeUtxo,
       collateralUtxo = collateralUtxo
     )
 

@@ -6,14 +6,13 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, shelleyAddress}
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
@@ -32,7 +31,6 @@ import scalus.serialization.cbor.Cbor
 import scalus.testing.ImmutableEmulator
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.{genPolicyId, genPubKeyUtxo}
 
 /** Test "C" — are L2-conformant outputs actually **L1-evacuable**?
@@ -54,8 +52,7 @@ import test.Generators.Hydrozoa.{genPolicyId, genPubKeyUtxo}
   *     datum; the per-output validators only measure the *value*, not the datum; only the whole-tx
   *     `TransactionSizeValidator` bounds it. A datum small enough to ride in its own L2 transaction
   *     can still be too large to evacuate, because the `EvacuationTx` must also carry the residual
-  *     treasury (whose Resolved datum embeds the ~maxEvac G2 trusted-setup elements) and the KZG
-  *     membership proof. The output is then **stranded**. THE GAP.
+  *     treasury and the KZG membership proof. The output is then **stranded**. THE GAP.
   *   - **ada-only** — `l2Validate`'s `TransactionOutput` doc says "can only contain Ada", but
   *     nothing enforces it; a token-carrying output is accepted. Tokens are value-conserved, so
   *     this is a doc-vs-code mismatch rather than a safety hole.
@@ -138,11 +135,9 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
           utxoId = TransactionInput(fallbackTxId, 0),
           treasuryOutput = RuleBasedTreasuryOutput(
             Resolved(
+              headMp = env.headConfig.headMultisigScript.policyId,
               evacuationActive = m.kzgCommitment,
-              version = (BigInt(100), BigInt(2)),
-              setupG2 = TrustedSetup
-                  .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                  .map(p2 => G2Element(p2).toCompressedByteString)
+              version = (BigInt(100), BigInt(2))
             ),
             treasuryBaseValue + m.totalValue
           )
@@ -155,12 +150,17 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
       * NB: do not call this on a map whose obligations cannot fit even one-per-tx —
       * `EvacuationTx.Build.result` loops forever in that case (see the class doc).
       */
+    // The regime utxo (HRWT beacon + head-identity datum incl. the ladder anchor) referenced by
+    // every EvacuationTx.
+    private val regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(fallbackTxId, 9))
+
     private def evacuateAllOnce(m: EvacuationMap, fee: Utxo): Either[String, EvacuationTx] = {
         val treasury = mkResolvedTreasury(m)
         val initialUtxos: Utxos = (
           Map(
             (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
             (collateral.input, collateral.collateralOutput.toOutput(using env)),
+            regimeUtxo.toUtxo(using env.headConfig).toTuple,
             fee.toTuple
           )
               ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
@@ -169,6 +169,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
         EvacuationTx
             .Build(
               inputTreasuryUtxo = treasury,
+              regimeUtxo = regimeUtxo,
               evacuateesToTryNext = m,
               allRemainingEvacuatees = m,
               collateralUtxo = collateral
@@ -262,10 +263,11 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
         }
         val baselineTxSize = Cbor.encode(evac.tx).length
 
-        // A "large but L2-legal" inline datum: 12 KiB — well under maxTxSize, so it rides happily in
-        // its own single-output L2 transaction, yet it pushes an otherwise-identical evacuation over.
+        // A "large but L2-legal" inline datum: 15.5 KiB — under maxTxSize, so it rides in its own
+        // single-output L2 transaction, yet it pushes an otherwise-identical evacuation over. (The
+        // slim treasury datum leaves ~15.7 KiB of headroom, so the datum must nearly fill the tx.)
         val smallOut: TransactionOutput = smallObligation.utxo.value
-        val attackerDatumBytes = 12 * 1024
+        val attackerDatumBytes = 15872
         val bigDatum = ByteString.fromArray(new Array[Byte](attackerDatumBytes))
         val bigOut: TransactionOutput =
             ensureMinAda(
@@ -305,7 +307,7 @@ class L2OutputEvacuabilityTest extends AnyFunSuite {
         // Await returns and pendingUntilFixed fails to flag the fix. (fork := true + the global EC's
         // daemon threads mean the spinning worker dies with the test JVM.)
         pendingUntilFixed {
-            val bigDatum = ByteString.fromArray(new Array[Byte](12 * 1024))
+            val bigDatum = ByteString.fromArray(new Array[Byte](15872))
             val bigObligation = obligationOf(Value(Coin.ada(50)), Some(Inline(bigDatum.toData)))
             val attempt = Future(evacuateAllOnce(singletonMap(300L, bigObligation), feeUtxo(301L)))
             val result = Await.result(attempt, Duration(12, "s"))

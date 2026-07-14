@@ -76,14 +76,17 @@ keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
   cmds[-1]+=" --coil-quorum {{QUORUM}}"
   sbt "${cmds[@]}"
 
-# Deploy the treasury + dispute validators as reference scripts on Preview, funded by
-# WALLET (a keygen private config, e.g. config/demo/head-0/private.json; change returns
-# to it). Writes the reference inputs to OUT for build-head-config. One deployment
-# serves every head until the compiled scripts change. Reads $BLOCKFROST_API_KEY.
-deploy-reference-scripts WALLET OUT="config/demo/script-refs.json":
+# Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder) on
+# Preview, funded by WALLET (a keygen private config, e.g. config/demo/head-0/private.json;
+# change returns to it). Writes the reference inputs to OUT for build-head-config. Pass
+# LADDER_REFS (an existing script-refs.json) to reuse the already-deployed ladder and
+# redeploy only the validators. Reads $BLOCKFROST_API_KEY.
+deploy-scripts-and-g2-setup WALLET OUT="config/demo/script-refs.json" LADDER_REFS="":
   #!/usr/bin/env bash
-  trap 'just notify "deploy-reference-scripts"' EXIT
-  sbt "runMain hydrozoa.app.DeployReferenceScripts --wallet {{WALLET}} --out {{OUT}}"
+  trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
+  args=(--wallet {{WALLET}} --out {{OUT}})
+  [ -n "{{LADDER_REFS}}" ] && args+=(--ladder-refs {{LADDER_REFS}})
+  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[@]}"
 
 # Build the shared head-config.json from a keygen-fleet roster + deployed script refs.
 # Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address must be

@@ -8,10 +8,11 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpec
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
+import hydrozoa.multisig.ledger.l1.utxo.MultisigRegimeOutput
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
 import hydrozoa.rulebased.ledger.l1.tx.DeinitTxOps.Build.Error.*
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.{BlockHeader as _, *}
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -20,10 +21,12 @@ import scalus.uplc.builtin.ByteString.hex
 
 final case class DeinitTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
+    override val regimeUtxoSpent: RuleBasedRegimeUtxo,
     override val tx: Transaction,
     override val txLens: Lens[DeinitTx, Transaction] = Focus[DeinitTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos
-) extends EnrichedTx[DeinitTx] {}
+) extends RuleBasedRegimeUtxo.Spent,
+      EnrichedTx[DeinitTx] {}
 
 /** The deinit tx spends an empty (i.e. not containing any l2 utxos) treasury utxo, distributing the
   * residual _head equity_ according to peers' shares. If a share happens to be less than min ada,
@@ -58,6 +61,7 @@ private object DeinitTxOps {
 
     final case class Build(
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
     ) {
 
@@ -91,12 +95,17 @@ private object DeinitTxOps {
                     config.referenceTreasury,
                     // Spend the treasury utxo
                     treasuryUtxo.spendAttached(TreasuryRedeemer.Deinit),
+                    // Spend the regime utxo (native multisig, script attached by value)
+                    regimeUtxo.spend,
                     // Fees are covered by the collateral to simplify the balancing
                     collateralUtxo.spend,
                     collateralUtxo.add,
                     // Send collateral back as the first output
                     collateralUtxo.collateralOutput.send
                   ) ++ treasuryUtxo.treasuryOutput.burnHeadTokens
+                  // Burn the regime utxo's HRWT. Uses an attached-script witness, so it must
+                  // come after burnHeadTokens, whose steps attach the multisig script by value.
+                      :+ MultisigRegimeOutput.burnRegimeWitnessToken
                 )
 
                 // Head tokens are burned under the multisig native script; declare its signers as
@@ -112,6 +121,7 @@ private object DeinitTxOps {
 
             } yield DeinitTx(
               treasuryUtxoSpent = treasuryUtxo,
+              regimeUtxoSpent = regimeUtxo,
               tx = finalized.transaction,
               resolvedUtxos = finalized.resolvedUtxos
             )

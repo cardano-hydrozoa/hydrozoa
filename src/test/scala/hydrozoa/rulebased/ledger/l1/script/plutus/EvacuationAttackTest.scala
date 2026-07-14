@@ -7,15 +7,14 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, shelleyAddress}
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import org.scalacheck.rng.Seed
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.funsuite.AnyFunSuite
@@ -29,7 +28,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.rules.{CardanoMutator, State, UtxoEnv}
 import scalus.testing.ImmutableEmulator
 import scalus.uplc.builtin.Data.{fromData, toData}
-import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.{genEvacuationMap, genPubKeyUtxo}
 
 /** Adversarial evacuation test for the rule-based regime.
@@ -46,8 +44,8 @@ import test.Generators.Hydrozoa.{genEvacuationMap, genPubKeyUtxo}
   *   - '''redirect an evacuee payout''' — send an evacuated obligation to the attacker. The payout
   *     is bound to the map by the KZG membership proof (the hash covers the output), so the proof
   *     no longer validates → `EvacuateMembershipValidationFailed`;
-  *   - '''corrupt the output `setupG2`''' — the documented degenerate-setup attack (corrupt the
-  *     trusted setup so later evacuations pass any pairing) → `EvacuateSetupG2ShouldBePreserved`;
+  *   - '''degenerate setup''' — the treasury datum no longer carries `setupG2`; the successor
+  *     attack (reference a maliciously crafted setup-ladder datum) is pending on ladder auth;
   *   - '''positional-parse insertion''' — the `Evacuate` branch reads outputs positionally
   *     (`change, treasury, evacuees…`); inserting an output shifts the treasury slot onto the
   *     attacker's change output, which is not at the treasury script address →
@@ -89,11 +87,9 @@ class EvacuationAttackTest extends AnyFunSuite {
     private val evacMap: EvacuationMap = fixed(genEvacuationMap(numEvacuees)(using env), 2)
 
     private val resolvedDatum = Resolved(
+      headMp = env.headConfig.headMultisigScript.policyId,
       evacuationActive = evacMap.kzgCommitment,
-      version = (BigInt(100), BigInt(2)),
-      setupG2 = TrustedSetup
-          .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-          .map(p2 => G2Element(p2).toCompressedByteString)
+      version = (BigInt(100), BigInt(2))
     )
     private val treasuryBaseValue = Value(Coin.ada(5)) + treasuryToken + Value(Coin.ada(200))
     private val treasury = RuleBasedTreasuryUtxo(
@@ -115,10 +111,15 @@ class EvacuationAttackTest extends AnyFunSuite {
         )
     private val collateral = fixed(genCollateralUtxo(ownKeyHash)(using env.headConfig), 4)
 
+    // The regime utxo (HRWT beacon + head-identity datum incl. the ladder anchor) referenced by
+    // every EvacuationTx.
+    private val regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(fallbackTxId, 9))
+
     private val initialUtxos: Utxos = (
       Map(
         (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
-        (collateral.input, collateral.collateralOutput.toOutput(using env))
+        (collateral.input, collateral.collateralOutput.toOutput(using env)),
+        regimeUtxo.toUtxo(using env.headConfig).toTuple
       )
           ++ feeUtxos.map(_.toTuple)
           ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
@@ -136,6 +137,7 @@ class EvacuationAttackTest extends AnyFunSuite {
         EvacuationTx
             .Build(
               inputTreasuryUtxo = treasuryUtxo,
+              regimeUtxo = regimeUtxo,
               evacuateesToTryNext = subset,
               allRemainingEvacuatees = allRemaining,
               collateralUtxo = collateral
@@ -250,33 +252,80 @@ class EvacuationAttackTest extends AnyFunSuite {
         assertRejected("payout-redirect", mutated, "Evacuatees membership check failed")
     }
 
-    test("evacuate must preserve setupG2 (no degenerate-setup downgrade)") {
-        val mutated = withBody(legitTx) { b =>
-            b.copy(outputs = b.outputs.map { s =>
-                s.value match {
-                    case bb: Babbage if bb.address == treasuryAddr =>
-                        bb.datumOption match {
-                            case Some(Inline(d)) =>
-                                fromData[RuleBasedTreasuryDatumOnchain](d) match {
-                                    case r: RuleBasedTreasuryDatumOnchain.ResolvedOnchain =>
-                                        val corrupted: RuleBasedTreasuryDatumOnchain =
-                                            r.copy(setupG2 = r.setupG2.dropRight(1))
-                                        Sized[TransactionOutput](
-                                          bb.copy(datumOption = Some(Inline(toData(corrupted))))
-                                        )
-                                    case _ => s
-                                }
-                            case _ => s
-                        }
-                    case _ => s
+    test("evacuate rejects a setup-ladder reference not anchored in the regime datum") {
+        // Successor of the old "corrupt the output setupG2" attack: the setup now lives in a
+        // ladder reference input, authenticated against the anchor in the regime datum. Reference
+        // a byte-identical COPY of the legit rung at a foreign tx id — only the anchor check can
+        // tell it apart, so the rejection proves the authentication (not the pairing) fires.
+        val rungUtxo = config.setupRungUtxo(1).toOption.get
+        val forgedInput =
+            TransactionInput(fixed(Arbitrary.arbitrary[TransactionHash], 30), 0)
+
+        val b0 = legitTx.body.value
+        val newRefInputs =
+            b0.referenceInputs.toSeq.map(i => if i == rungUtxo.input then forgedInput else i)
+        val newIdx = BigInt(newRefInputs.sorted.indexOf(forgedInput))
+
+        // Point the redeemer at the forged rung's (possibly shifted) sorted position and
+        // recompute the script-data hash the redeemer change invalidates.
+        val treasuryIdx = b0.inputs.toIndexedSeq.indexOf(treasury.utxoId)
+        val ws0 = legitTx.witnessSetRaw.value
+        val retargeted = ws0.redeemers.toList.flatMap(_.value.toSeq).map { r =>
+            if r.tag == RedeemerTag.Spend && r.index == treasuryIdx then
+                fromData[TreasuryRedeemer](r.data) match {
+                    case TreasuryRedeemer.Evacuate(er) =>
+                        r.copy(data =
+                            toData(
+                              TreasuryRedeemer.Evacuate(er.copy(setupRefInputIdx = newIdx))
+                            )
+                        )
+                    case _ => r
                 }
-            })
+            else r
         }
-        assertRejected(
-          "setupG2-corrupt",
-          mutated,
-          "setupG2 in treasuryInput and treasuryOutput must match"
+        val ws1 = ws0.copy(redeemers = Some(KeepRaw(Redeemers.from(retargeted))))
+        val newHash = ScriptDataHashGenerator.computeScriptDataHash(
+          ws1,
+          env.headConfig.cardanoProtocolParams,
+          TreeSet(Language.PlutusV3),
+          ws1.redeemers,
+          ws1.plutusData
         )
+        val mutated = legitTx.copy(
+          body = KeepRaw(
+            b0.copy(
+              referenceInputs = TaggedSortedSet.from(newRefInputs),
+              scriptDataHash = newHash
+            )
+          ),
+          witnessSetRaw = KeepRaw(ws1)
+        )
+
+        // Seed the emulator with the forged rung copy and submit.
+        val emu = ImmutableEmulator(
+          state = State(utxos = initialUtxos + (forgedInput -> rungUtxo.output)),
+          env = UtxoEnv(
+            now.toSlot.slot,
+            env.headConfig.cardanoProtocolParams,
+            certState = CertState.empty,
+            env.headConfig.network
+          ),
+          slotConfig = env.headConfig.slotConfig,
+          evaluatorMode = EvaluateAndComputeCost,
+          validators = Seq.empty,
+          mutators = Seq(CardanoMutator)
+        )
+        emu.submit(ownWallet.signTx(mutated)) match {
+            case Right(_) =>
+                fail("forged-ladder: expected rejection but the transaction was accepted")
+            case Left(err) =>
+                val _ = assert(
+                  err.toString.contains(
+                    "Setup reference input is not one of the ladder outRefs in the regime datum"
+                  ),
+                  s"forged-ladder: rejected, but not by the anchor check. Got: ${err.toString.take(300)}"
+                )
+        }
     }
 
     test("evacuate positional parse: an inserted output shifts the treasury slot off the beacon") {
@@ -319,9 +368,9 @@ class EvacuationAttackTest extends AnyFunSuite {
                     case bb: Babbage if bb.address == treasuryAddr =>
                         bb.datumOption match {
                             case Some(Inline(d)) =>
-                                fromData[RuleBasedTreasuryDatumOnchain](d) match {
-                                    case r: RuleBasedTreasuryDatumOnchain.ResolvedOnchain =>
-                                        val stale: RuleBasedTreasuryDatumOnchain =
+                                fromData[RuleBasedTreasuryDatum](d) match {
+                                    case r: RuleBasedTreasuryDatum.Resolved =>
+                                        val stale: RuleBasedTreasuryDatum =
                                             r.copy(evacuationActive = evacMap.kzgCommitment)
                                         Sized[TransactionOutput](
                                           bb.copy(datumOption = Some(Inline(toData(stale))))
@@ -400,9 +449,9 @@ class EvacuationAttackTest extends AnyFunSuite {
                 case bb: Babbage if bb.address == treasuryAddr =>
                     bb.datumOption match {
                         case Some(Inline(d)) =>
-                            fromData[RuleBasedTreasuryDatumOnchain](d) match {
-                                case r: RuleBasedTreasuryDatumOnchain.ResolvedOnchain =>
-                                    val forged: RuleBasedTreasuryDatumOnchain =
+                            fromData[RuleBasedTreasuryDatum](d) match {
+                                case r: RuleBasedTreasuryDatum.Resolved =>
+                                    val forged: RuleBasedTreasuryDatum =
                                         r.copy(evacuationActive = forgedProof)
                                     Sized[TransactionOutput](
                                       bb.copy(datumOption = Some(Inline(toData(forged))))
