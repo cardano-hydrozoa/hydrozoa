@@ -839,7 +839,7 @@ end Migrate
   * (via the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out`
   * (default `head-config.json`). Every node then loads this same artifact.
   *
-  * `--script-refs` names the file [[DeployReferenceScripts]] wrote: the L1 inputs of the treasury
+  * `--script-refs` names the file [[DeployScriptsAndG2Setup]] wrote: the L1 inputs of the treasury
   * and dispute reference-script UTxOs. They are resolved and hash-checked against
   * [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every node's
   * startup.
@@ -873,7 +873,7 @@ object BuildHeadConfig
     private val scriptRefsOpt: Opts[Path] =
         Opts.option[String](
           "script-refs",
-          "The script-refs.json written by DeployReferenceScripts",
+          "The script-refs.json written by DeployScriptsAndG2Setup",
           short = "s"
         ).map(Path.of(_))
     private val outOpt: Opts[Path] =
@@ -916,7 +916,7 @@ object BuildHeadConfig
                           r.left.map(e =>
                               RuntimeException(
                                 s"Failed to resolve script reference UTxOs from $scriptRefsPath: " +
-                                    s"$e (redeploy with DeployReferenceScripts?)"
+                                    s"$e (redeploy with DeployScriptsAndG2Setup?)"
                               )
                           )
                         )

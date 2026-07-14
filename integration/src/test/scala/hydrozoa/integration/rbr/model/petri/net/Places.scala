@@ -25,6 +25,8 @@ object RBRPlaceId {
 enum RBRPlaceId:
     case TreasuryRefPlaceId
     case DisputeRefPlaceId
+    case RegimeRefPlaceId
+    case SetupLadderRefPlaceId
     case UnresolvedTreasuryPlaceId
     case ResolvedTreasuryPlaceId
     case UnvotedPlaceId
@@ -51,6 +53,37 @@ case class TreasuryRefPlace(
     override def markingError: Option[MarkingError] =
         if marking.toInt != 1 then Some(TreasuryRefPlace.OnlyOneTokenAllowed) else None
 
+}
+
+object RegimeRefPlace {
+    case object OnlyOneTokenAllowed extends MarkingError {
+        override def getMessage: String = "RegimeRef place must have exactly one token"
+    }
+}
+
+/** The rule-based regime utxo (HRWT beacon + head-identity datum): created by fallback, read by
+  * the dispute-side txs, consumed only at deinit.
+  */
+case class RegimeRefPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(1),
+    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(1)),
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): RegimeRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): RegimeRefPlace =
+        copy(finalMarking = m)
+
+    override def markingError: Option[MarkingError] =
+        if marking.toInt != 1 then Some(RegimeRefPlace.OnlyOneTokenAllowed) else None
+}
+
+/** The seven deployed-once G2 setup-ladder rungs, read (one per tx) by evacuations. */
+case class SetupLadderRefPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(7),
+    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(7)),
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): SetupLadderRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): SetupLadderRefPlace =
+        copy(finalMarking = m)
 }
 
 case class ResolvedPlace(

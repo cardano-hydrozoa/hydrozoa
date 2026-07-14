@@ -49,6 +49,8 @@ class RBRClassifier(using env: MultiNodeConfig)
         val voteToken             = env.headConfig.headTokenNames.voteTokenName
         val treasuryScriptInput   = env.headConfig.rulebasedTreasuryScriptInput
         val disputeScriptInput    = env.headConfig.disputeResolutionScriptInput
+        val setupLadderInputs     = env.headConfig.setupLadderInputs.toSet
+        val regimeWitnessToken    = env.headConfig.headTokenNames.regimeWitnessTokenName
         val collateralDatumMarker = toData(ByteString.fromString("collateral"))
         val evacuationDatumMarker = toData(ByteString.fromString("evacuation"))
 
@@ -61,9 +63,14 @@ class RBRClassifier(using env: MultiNodeConfig)
         def hasInlineDatum(marker: Data)(out: TransactionOutput): Boolean =
             out.datumOption.exists { case Inline(data) => data == marker; case _ => false }
 
+        def hasRegimeToken(out: TransactionOutput): Boolean =
+            out.value.assets.assets.get(policyId).exists(_.contains(regimeWitnessToken))
+
         List(
             (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryRefPlaceId),
             (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeRefPlaceId),
+            (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadderRefPlaceId),
+            (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRefPlaceId),
             // ResolvedTreasuryPlaceId / UnresolvedTreasuryPlaceId: carries treasury token; parse datum to distinguish
             (u: Utxo) =>
                 Option
