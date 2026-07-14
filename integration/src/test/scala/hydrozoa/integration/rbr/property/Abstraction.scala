@@ -28,6 +28,16 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Script reference UTxOs are identified by their known [[scalus.cardano.ledger.TransactionInput]] keys
   *   - Everything else falls into the [[AmbientPlaceId]] default bucket
   *
+  * TODO: the `"collateral"` sentinel only exists in the synthetic `InitialDisputeUtxos`
+  * fixture — the real rule-based tx builders (`VoteTx`, `TallyTx`, `ResolutionTx`,
+  * `AbstainTx`, `RatchetVoteTx`, `EvacuationTx`) draw collateral from plain Ada wallet
+  * UTxOs whose `datumOption` is `None`, so content-based detection fails in end-to-end
+  * scenarios and collateral outputs land in [[AmbientPlaceId]]. The right fix is to bucket
+  * collateral by role in the tx graph — mark any output that is later consumed as a
+  * `collateral_input` of some downstream tx — rather than by a content sentinel. That
+  * requires shifting the classifier from `Utxo => Option[Bucket]` to a form that has
+  * access to the surrounding tx history.
+  *
   * Usage: `Histogram.empty(RBRClassifier(using env)).addAll(utxos.map(Utxo(_, _)))`
   */
 class RBRClassifier(using env: MultiNodeConfig)
@@ -39,6 +49,8 @@ class RBRClassifier(using env: MultiNodeConfig)
         val voteToken             = env.headConfig.headTokenNames.voteTokenName
         val treasuryScriptInput   = env.headConfig.rulebasedTreasuryScriptInput
         val disputeScriptInput    = env.headConfig.disputeResolutionScriptInput
+        val setupLadderInputs     = env.headConfig.setupLadderInputs.toSet
+        val regimeWitnessToken    = env.headConfig.headTokenNames.regimeWitnessTokenName
         val collateralDatumMarker = toData(ByteString.fromString("collateral"))
         val evacuationDatumMarker = toData(ByteString.fromString("evacuation"))
 
@@ -51,9 +63,14 @@ class RBRClassifier(using env: MultiNodeConfig)
         def hasInlineDatum(marker: Data)(out: TransactionOutput): Boolean =
             out.datumOption.exists { case Inline(data) => data == marker; case _ => false }
 
+        def hasRegimeToken(out: TransactionOutput): Boolean =
+            out.value.assets.assets.get(policyId).exists(_.contains(regimeWitnessToken))
+
         List(
             (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryRefPlaceId),
             (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeRefPlaceId),
+            (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadderRefPlaceId),
+            (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRefPlaceId),
             // ResolvedTreasuryPlaceId / UnresolvedTreasuryPlaceId: carries treasury token; parse datum to distinguish
             (u: Utxo) =>
                 Option

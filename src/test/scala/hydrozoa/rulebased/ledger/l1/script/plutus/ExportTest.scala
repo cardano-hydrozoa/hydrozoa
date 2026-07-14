@@ -143,10 +143,10 @@ class ExportTest extends AnyFunSuite {
         // Check Rule-Based Treasury schemas
         val treasuryValidator = blueprint.validators(1)
         val treasuryDatum = treasuryValidator.datum.get
-        assert(treasuryDatum.schema.title.contains("RuleBasedTreasuryDatumOnchain"))
+        assert(treasuryDatum.schema.title.contains("RuleBasedTreasuryDatum"))
         assert(
           treasuryDatum.schema.anyOf.isDefined,
-          "RuleBasedTreasuryDatumOnchain should be an enum"
+          "RuleBasedTreasuryDatum should be an enum"
         )
 
         val treasuryRedeemer = treasuryValidator.redeemer.get

@@ -11,7 +11,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{Abstain, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
@@ -72,6 +72,10 @@ def genRatchetVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Ratchet
           ArbitraryInstances.given_Arbitrary_Value.arbitrary
         )
 
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the ratchet tx
+        regimeTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
+
         blockHeader <- genOnchainBlockHeader(versionMajor).suchThat(_.versionMinor > 0)
         voteDatum <- genOpenPhaseVoteDatum(blockHeader.versionMinor)
         openBox <- genOpenBallotBox(fallbackTxId = fallbackTxId, voteDatum = voteDatum)
@@ -86,6 +90,7 @@ def genRatchetVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Ratchet
     } yield RatchetVoteTx.Build(
       openBallotBox = openBox,
       treasuryUtxo = treasuryUtxo,
+      regimeUtxo = regimeUtxo,
       collateralUtxo = collateralUtxo,
       sec = blockHeader,
       signatures = signatures.toList,
@@ -111,6 +116,10 @@ def genStaleRatchetBuilder(using
           treasuryDatum,
           ArbitraryInstances.given_Arbitrary_Value.arbitrary
         )
+
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the ratchet tx
+        regimeTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
 
         prevMinor <- Gen.choose(1L, 100L).map(BigInt(_))
         secMinor <- Gen.choose(0L, prevMinor.toLong).map(BigInt(_)) // secMinor <= prevMinor
@@ -139,6 +148,7 @@ def genStaleRatchetBuilder(using
     } yield RatchetVoteTx.Build(
       openBallotBox = openBox,
       treasuryUtxo = treasuryUtxo,
+      regimeUtxo = regimeUtxo,
       collateralUtxo = collateralUtxo,
       sec = secHeader,
       signatures = signatures.toList,

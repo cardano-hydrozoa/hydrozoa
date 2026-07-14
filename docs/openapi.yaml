@@ -1,0 +1,215 @@
+openapi: 3.1.0
+info:
+  title: Hydrozoa node API
+  version: 0.1.0
+paths:
+  /api/l2/submit:
+    post:
+      description: Submit a signed L2 transaction (a JSON UserRequest with a COSE
+        signature).
+      operationId: postApiL2Submit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestAcceptedResponse'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/deposit/register:
+    post:
+      description: Register an L1 deposit (a JSON UserRequest with a COSE signature).
+      operationId: postApiDepositRegister
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestAcceptedResponse'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/head-info:
+    get:
+      description: Head parameters plus the current node time.
+      operationId: getApiHead-info
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeadInfoResponse'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /health:
+    get:
+      description: Liveness — always 200 while the process is serving HTTP.
+      operationId: getHealth
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /ready:
+    get:
+      description: Readiness — 200 only while the head is Active (open on L1); 503
+        with the lifecycle status otherwise.
+      operationId: getReady
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /api/admin/finalize:
+    post:
+      description: Trigger head finalization (admin only).
+      operationId: postApiAdminFinalize
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FinalizeResponse'
+        default:
+          description: ''
+          headers:
+            WWW-Authenticate:
+              required: false
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - {}
+      - httpAuth: []
+components:
+  schemas:
+    ErrorResponse:
+      title: ErrorResponse
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    FinalizeResponse:
+      title: FinalizeResponse
+      type: object
+      required:
+      - status
+      - message
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+    HeadInfoResponse:
+      title: HeadInfoResponse
+      type: object
+      required:
+      - headId
+      - headAddress
+      - multisigRegimeUtxo
+      - treasuryBeaconToken
+      - submissionDurationSeconds
+      - absorptionStartOffsetSeconds
+      - refundStartOffsetSeconds
+      - currentTimePosixSeconds
+      - maxNonPlutusTxFee
+      properties:
+        headId:
+          type: string
+        headAddress:
+          type: string
+        multisigRegimeUtxo:
+          $ref: '#/components/schemas/TxInputView'
+        treasuryBeaconToken:
+          type: string
+        submissionDurationSeconds:
+          type: integer
+          format: int64
+        absorptionStartOffsetSeconds:
+          type: integer
+          format: int64
+        refundStartOffsetSeconds:
+          type: integer
+          format: int64
+        currentTimePosixSeconds:
+          type: integer
+          format: int64
+        maxNonPlutusTxFee:
+          type: string
+    HealthResponse:
+      title: HealthResponse
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+    ReadinessResponse:
+      title: ReadinessResponse
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+    RequestAcceptedResponse:
+      title: RequestAcceptedResponse
+      type: object
+      required:
+      - requestId
+      properties:
+        requestId:
+          type: integer
+          format: int64
+    TxInputView:
+      title: TxInputView
+      type: object
+      required:
+      - transaction_id
+      - index
+      properties:
+        transaction_id:
+          type: string
+        index:
+          type: integer
+          format: int32
+  securitySchemes:
+    httpAuth:
+      type: http
+      scheme: basic

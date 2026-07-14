@@ -132,7 +132,9 @@ case class Stage4Suite(
             // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
             submittedRequestIds <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
 
-            hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
+            // Hooks.handle is unused now — each head peer's SubmissionClient is built by the
+            // harness against its in-process HydrozoaRoutes and exposed on Peer[H].submissionClient.
+            hooks = MultiPeerHeadHarness.Hooks[Unit](
                       tracer = Plugin.tracerOf(
                         perPeer,
                         perCoil,
@@ -142,15 +144,7 @@ case class Stage4Suite(
                         effectsLandedSignal,
                         fallbackEnteredSignal,
                       ),
-                      peerHandle = (peerNum, conns) =>
-                          IO.pure(
-                            Stage4PeerHandle(
-                              conns.requestSequencer.getOrElse(
-                                sys.error(s"head peer $peerNum missing RequestSequencer")
-                              )
-                            )
-                          ),
-                      coilHandle = (_, _) => IO.unit,
+                      handle = (_, _) => IO.unit,
                     )
             harness <- MultiPeerHeadHarness.resource(
                            MultiPeerHeadHarness.Inputs(
@@ -168,7 +162,7 @@ case class Stage4Suite(
           static = Stage4SutStatic(
             system = harness.system,
             cardanoBackend = harness.cardanoBackend,
-            peers = harness.peers.map { case (n, p) => n -> p.handle },
+            peers = harness.peers.map { case (n, p) => n -> p.submissionClient },
             backendStores = harness.peers.map { case (n, p) => n -> p.backendStore },
             log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
           ),
@@ -835,10 +829,13 @@ object Stage4Suite:
 
         val generateHeadConfig_ = generateHeadConfig(
           genHeadConfigBootstrap = generateHeadConfigBootstrap_,
-          generateInitialBlock = bootstrap =>
+          generateInitialBlock = (bootstrap, funding) =>
               generateInitialBlock(
                 genHeadConfigBootstrap = ReaderT
-                    .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                    .pure[Gen, TestPeers, (
+                        hydrozoa.config.head.HeadConfig.Bootstrap,
+                        hydrozoa.bootstrap.InitializationFunding
+                    )]((bootstrap, funding)),
                 generateBlockCreationEndTime = generateHeadStartTime
               )
         )
