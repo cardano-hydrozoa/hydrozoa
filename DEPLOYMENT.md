@@ -230,7 +230,6 @@ tx fee; step 5 logs the exact lovelace required and fails with the shortfall if 
 network comes from the Blockfrost key):
 
 ```bash
-export BLOCKFROST_API_KEY=preview...   # or preprod...
 just deploy-reference-scripts config/demo/private/head-0/private.json
 # -> config/demo/bootstrap/script-refs.json
 ```
@@ -253,7 +252,6 @@ about invalid treasury/dispute script utxos).
 **Step 5 — Build the shared head config:**
 
 ```bash
-export BLOCKFROST_API_KEY=preview...   # or preprod...
 just build-head-config       # reads config/demo/bootstrap/, writes config/demo/head-config/head-config.json
 ```
 
@@ -261,8 +259,8 @@ The build assembles the bootstrap directory's four files (roster, defaults, open
 script refs) and talks to L1: it fetches head peer 0's UTxOs (to select funding inputs and verify
 the balance) and the protocol parameters via Blockfrost, then pre-builds the initialization tx
 into the config (each node derives the fallback tx from it when reading the config). The
-Blockfrost key comes from `$BLOCKFROST_API_KEY` (the bootstrap directory carries no credentials;
-the CLI also accepts `--blockfrost-key`).
+Blockfrost key comes from the `.local` template (step 1); the build fails fast if the key's
+network does not match the bootstrap config's `cardanoNetwork`.
 
 At this point every node has its two files, and the composition (§4) mounts
 `head-config/head-config.json` + that node's `private/<peer>/private.json`.

@@ -95,23 +95,33 @@ head-zero-address BOOTSTRAP_DIR="config/demo/bootstrap":
 
 # Deploy the treasury + dispute validators as reference scripts, funded by WALLET (a keygen
 # private config, e.g. config/demo/private/head-0/private.json; change returns to it). The
-# network is derived from the Blockfrost key ($BLOCKFROST_API_KEY). Writes the reference inputs
-# to OUT for build-head-config. One deployment serves every head until the compiled scripts
-# change.
+# network is derived from the Blockfrost key (read from the .local template, else
+# $BLOCKFROST_API_KEY). Writes the reference inputs to OUT for build-head-config. One deployment
+# serves every head until the compiled scripts change.
 deploy-reference-scripts WALLET OUT="config/demo/bootstrap/script-refs.json":
   #!/usr/bin/env bash
+  set -euo pipefail
   trap 'just notify "deploy-reference-scripts"' EXIT
-  sbt "runMain hydrozoa.app.DeployReferenceScripts --wallet {{WALLET}} --out {{OUT}}"
+  template="config/template/peer-private.template.json.local"
+  key="${BLOCKFROST_API_KEY:-}"
+  if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
+  if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
+  sbt "runMain hydrozoa.app.DeployReferenceScripts --wallet {{WALLET}} --blockfrost-key $key --out {{OUT}}"
 
 # Build the shared head-config.json from the bootstrap directory's four files (roster, defaults,
-# l2-cardano-eutxo, script-refs). Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's
-# address must be funded on the target network first (the tool logs the exact lovelace required and fails
-# with the shortfall if not).
+# l2-cardano-eutxo, script-refs). Reads the Blockfrost key from the .local template (else
+# $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network first (the
+# tool logs the exact lovelace required and fails with the shortfall if not).
 build-head-config BOOTSTRAP_DIR="config/demo/bootstrap" OUT="config/demo/head-config/head-config.json":
   #!/usr/bin/env bash
+  set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
+  template="config/template/peer-private.template.json.local"
+  key="${BLOCKFROST_API_KEY:-}"
+  if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
+  if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
   mkdir -p "$(dirname {{OUT}})"
-  sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP_DIR}} --out {{OUT}}"
+  sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP_DIR}} --blockfrost-key $key --out {{OUT}}"
 
 # Interactively build, sign, and submit an L2 transaction to a running head: pick a peer key,
 # pick one of its L2 utxos, enter destination + value.

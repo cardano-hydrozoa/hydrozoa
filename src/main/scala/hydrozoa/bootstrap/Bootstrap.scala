@@ -980,11 +980,11 @@ end Migrate
   *
   * Reads the bootstrap directory's four operator-facing files — `roster.json` (the peer topology
   * keygen writes), `defaults.json` (network, head params, equity, optional block-zero timing),
-  * `l2-cardano-eutxo.json` (the opening L2 state), and `preprod.json` (from
-  * [[DeployReferenceScripts]]) — assembles them into the [[Bootstrap.BootstrapConfig]], funds the
-  * head from head peer 0's L1 address (via the Blockfrost backend), and writes the resulting
-  * [[HeadConfig]] as JSON to `--out` (default `head-config.json`). Every node then loads this same
-  * artifact.
+  * `l2-cardano-eutxo.json` (the opening L2 state), and `script-refs.json` (from
+  * [[DeployReferenceScripts]], with committed per-network defaults as the fallback) — assembles
+  * them into the [[Bootstrap.BootstrapConfig]], funds the head from head peer 0's L1 address (via
+  * the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out` (default
+  * `head-config.json`). Every node then loads this same artifact.
   *
   * The script reference utxos are the L1 inputs of the treasury and dispute reference-script UTxOs
   * that [[DeployReferenceScripts]] deployed. They are resolved and hash-checked against
@@ -1025,6 +1025,15 @@ object BuildHeadConfig
         for {
             bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir)
             cardanoNetwork = bootstrapConfig.cardanoNetwork
+            // Fail fast on a key/network mismatch — a Blockfrost key only works on its own
+            // network, and a mismatch otherwise surfaces as an opaque 403 mid-build (the usual
+            // culprit: a stale $BLOCKFROST_API_KEY export for another network).
+            _ <- IO.raiseWhen(!keyMatchesNetwork(blockfrostKey, cardanoNetwork))(
+              RuntimeException(
+                s"the Blockfrost key's network prefix does not match the bootstrap config's " +
+                    s"cardanoNetwork ($cardanoNetwork) — stale BLOCKFROST_API_KEY export?"
+              )
+            )
             _ <- logger.info(
               s"Building shared head config: ${bootstrapConfig.headPeers.size} head peer(s), " +
                   s"${bootstrapConfig.coilPeers.size} coil peer(s), " +
@@ -1064,6 +1073,15 @@ object BuildHeadConfig
             _ <- IO.blocking(Files.writeString(outPath, headConfig.asJson.spaces2))
             _ <- logger.info(s"Wrote shared head config to $outPath")
         } yield ExitCode.Success
+
+    /** A Blockfrost project key starts with its network's name, so a standard network can be
+      * checked against the key upfront; a custom network cannot, and skips the check.
+      */
+    private def keyMatchesNetwork(key: String, network: CardanoNetwork): Boolean =
+        network match {
+            case CardanoNetwork.Custom(_, _) => true
+            case standard                    => key.startsWith(standard.toString.toLowerCase)
+        }
 
 end BuildHeadConfig
 
