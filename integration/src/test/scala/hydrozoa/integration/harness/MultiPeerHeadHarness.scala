@@ -225,10 +225,10 @@ object MultiPeerHeadHarness:
       * the block still completes — which is all these scenarios need.
       */
     def submitEmptyTransactionRequest(
-        multiNodeConfig: MultiNodeConfig,
         harness: Harness[Option[RequestSequencer.Handle]],
         peer: HeadPeerNumber = HeadPeerNumber(0),
     ): IO[Unit] =
+        val multiNodeConfig = harness.multiNodeConfig
         val slotConfig = multiNodeConfig.headConfig.cardanoNetwork.slotConfig
         val body: UserRequestBody.TransactionRequestBody =
             UserRequestBody.TransactionRequestBody(
@@ -427,6 +427,8 @@ object MultiPeerHeadHarness:
       * per uncaught actor exception); callers read it post-run.
       */
     case class Harness[H](
+        transportMode: Transport.Mode,
+        multiNodeConfig: MultiNodeConfig,
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
         l1Snapshot: IO[Utxos],
@@ -564,6 +566,8 @@ object MultiPeerHeadHarness:
                                }
                            )
         yield Harness(
+          transportMode = transportMode,
+          multiNodeConfig = multiNodeConfig,
           system = system,
           cardanoBackend = cardanoBackend,
           l1Snapshot = l1Snapshot,

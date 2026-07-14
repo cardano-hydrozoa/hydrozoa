@@ -53,8 +53,6 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
 
     private def testProperty(transportMode: TransportMode): Prop =
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
-        val coilWallets = testPeers.coilWallets
-        val coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
         // Widened init window: bringing up 3 head + 2 coil peers over WebSocket takes longer than
         // the harness default's 5s (bcet + minSettle 2s + inactivityMargin 3s), and the init tx
@@ -75,10 +73,10 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 10.seconds,
           fastTxTiming = widenedTxTiming,
-          coilPeers = coilPeers,
+          coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
           coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeerToUtxos, coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeerToUtxos, testPeers.coilWallets, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -102,8 +100,6 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
 
     /** State + handles threaded between steps. */
     private final case class Ctx(
-        transportMode: TransportMode,
-        multiNodeConfig: MultiNodeConfig,
         harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
         fallbackDispatched: Deferred[IO, Unit],
         resolutionSubmitted: Deferred[IO, Unit],
@@ -122,9 +118,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(
-              MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.multiNodeConfig, ctx.harness)
-            )
+            _ <- lift(MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.harness))
         yield ()
 
     /** Keep feeding requests so each Major stack has a trailing Minor with an SEC — otherwise
@@ -137,8 +131,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
             ctx <- ask
             fiber <- lift(
               (IO.sleep(1.second) >> MultiPeerHeadHarness.submitEmptyTransactionRequest(
-                ctx.multiNodeConfig,
-                ctx.harness,
+                ctx.harness
               )).foreverM.start
             )
             _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
@@ -172,7 +165,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
             _      <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
             _      <- lift(IO.sleep(quiescenceDelay))
             utxos  <- lift(ctx.harness.l1Snapshot)
-            actual <- lift(runClassifier(utxos)(using ctx.multiNodeConfig))
+            actual <- lift(runClassifier(utxos)(using ctx.harness.multiNodeConfig))
             expectedEvacCount <- lift(ctx.firstPayoutsLeft.get.flatMap(
               IO.fromOption(_)(
                 new IllegalStateException(
@@ -232,8 +225,6 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
                   ),
             )
         yield Ctx(
-          transportMode = transportMode,
-          multiNodeConfig = multiNodeConfig,
           harness = harness,
           fallbackDispatched = fallbackDispatched,
           resolutionSubmitted = resolutionSubmitted,

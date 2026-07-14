@@ -52,8 +52,6 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
 
     private def testProperty(transportMode: TransportMode): Prop =
         val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
-        val coilWallets = testPeers.coilWallets
-        val coilPeersConfig = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
         val resource = MultiPeerHeadHarness.mkResource(
@@ -61,9 +59,9 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
           takeoffOffset = 10.seconds,
-          coilPeers = coilPeersConfig,
+          coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
         ) { (takeoffTime, mnc) =>
-            buildCtxResource(transportMode, mnc, testPeerToUtxos, coilWallets, takeoffTime)
+            buildCtxResource(transportMode, mnc, testPeerToUtxos, testPeers.coilWallets, takeoffTime)
         }
 
         test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
@@ -79,19 +77,14 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
         for
             ctx <- ask
 
-            // 1a. Submit one minimal `TransactionRequest` to peer 0's `RequestSequencer`. Once block 1
-            // lands via this request, the `forcedMajorBlockWakeupTime` deadman on each header
-            // takes over and force-completes empty major blocks until we reach major 2.
+            // 1. Background fiber submitting one minimal `TransactionRequest` to peer 0's
+            // `RequestSequencer` every second. Once block 1 lands via the first request, the
+            // `forcedMajorBlockWakeupTime` deadman on each header takes over and force-completes
+            // empty major blocks until we reach major 2; the trailing requests keep minor blocks
+            // flowing.
             _ <- lift(
-              MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.multiNodeConfig, ctx.harness)
-            )
-
-            // 1b. Background fiber submitting requests at a slow cadence for minor block production.
-            _ <- lift(
-              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitEmptyTransactionRequest(
-                ctx.multiNodeConfig,
-                ctx.harness,
-              )).foreverM.start.void
+              (MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.harness)
+                  >> IO.sleep(1.second)).foreverM.start.void
             )
 
             // 2. Both head peers hard-confirm through major-2 off-chain.
@@ -126,8 +119,6 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
 
     /** State + handles threaded between steps. */
     private final case class Ctx(
-        transportMode: TransportMode,
-        multiNodeConfig: MultiNodeConfig,
         firewall: FirewallState,
         harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
         fallbackDispatched: Deferred[IO, Unit],
@@ -193,8 +184,6 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
               wrapBackend = (peerId, backend) => wrapNodeBackend(firewall)(peerId, backend),
             )
         yield Ctx(
-          transportMode = transportMode,
-          multiNodeConfig = multiNodeConfig,
           firewall = firewall,
           harness = harness,
           fallbackDispatched = fallbackDispatched,
