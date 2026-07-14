@@ -87,7 +87,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 10.seconds,
+          takeoffOffset = 60.seconds,
           disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>
