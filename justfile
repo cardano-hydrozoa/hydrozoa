@@ -63,12 +63,17 @@ keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
     echo "error: $outdir/bootstrap/roster.json already exists; move it away or pick another OUTDIR" >&2
     exit 1
   fi
+  template="config/template/peer-private.template.json.local"
+  if [ ! -f "$template" ]; then
+    echo "error: $template not found — copy config/template/peer-private.template.json to it and set blockfrostApiKey" >&2
+    exit 1
+  fi
   cmds=()
   for i in $(seq 0 $(( {{HEADS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role head --ws-address ws://head-$i:4001 --template peer-private.template.json --out $outdir/private/head-$i/private.json")
+    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role head --ws-address ws://head-$i:4001 --template $template --out $outdir/private/head-$i/private.json")
   done
   for i in $(seq 0 $(( {{COILS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role coil --hub $(( i % {{HEADS}} )) --template peer-private.template.json --out $outdir/private/coil-$i/private.json")
+    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role coil --hub $(( i % {{HEADS}} )) --template $template --out $outdir/private/coil-$i/private.json")
   done
   cmds+=("runMain hydrozoa.bootstrap.InitBootstrapFiles $outdir/bootstrap/roster.json --out-dir $outdir/bootstrap --coil-quorum {{QUORUM}}")
   sbt "${cmds[@]}"
@@ -80,10 +85,11 @@ head-zero-address BOOTSTRAP_DIR="config/demo/bootstrap":
   trap 'just notify "head-zero-address"' EXIT
   sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress --bootstrap-dir {{BOOTSTRAP_DIR}}"
 
-# Deploy the treasury + dispute validators as reference scripts on Preview, funded by
-# WALLET (a keygen private config, e.g. config/demo/private/head-0/private.json; change returns
-# to it). Writes the reference inputs to OUT for build-head-config. One deployment
-# serves every head until the compiled scripts change. Reads $BLOCKFROST_API_KEY.
+# Deploy the treasury + dispute validators as reference scripts, funded by WALLET (a keygen
+# private config, e.g. config/demo/private/head-0/private.json; change returns to it). The
+# network is derived from the Blockfrost key ($BLOCKFROST_API_KEY). Writes the reference inputs
+# to OUT for build-head-config. One deployment serves every head until the compiled scripts
+# change.
 deploy-reference-scripts WALLET OUT="config/demo/bootstrap/script-refs.json":
   #!/usr/bin/env bash
   trap 'just notify "deploy-reference-scripts"' EXIT

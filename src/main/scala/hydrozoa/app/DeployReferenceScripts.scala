@@ -5,7 +5,7 @@ import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -37,20 +37,20 @@ import scalus.uplc.builtin.ByteString
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
-  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`.
+  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`, and
+  * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
+  * `mainnet…`).
   */
 object DeployReferenceScripts
     extends CommandIOApp(
       name = "deploy-reference-scripts",
-      header = "Deploy the treasury + dispute validators as reference scripts on Preview"
+      header = "Deploy the treasury + dispute validators as reference scripts on L1"
     ):
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(
           Slf4jMsgFormat.humanFormat("hydrozoa.app.DeployReferenceScripts")
         )
-
-    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preview
 
     private val walletOpt: Opts[Path] =
         Opts.option[String](
@@ -80,15 +80,30 @@ object DeployReferenceScripts
         walletPath: Path,
         blockfrostKey: String,
         outPath: Path
-    ): IO[ExitCode] = {
-        given CardanoNetwork.Section = cardanoNetwork
+    ): IO[ExitCode] = IO
+        .fromEither[StandardCardanoNetwork](
+          networkOfBlockfrostKey(blockfrostKey)
+        )
+        .flatMap { (cardanoNetwork: StandardCardanoNetwork) =>
+            given CardanoNetwork.Section = cardanoNetwork
+            deployOn(cardanoNetwork, walletPath, blockfrostKey, outPath)
+        }
+
+    private def deployOn(
+        cardanoNetwork: StandardCardanoNetwork,
+        walletPath: Path,
+        blockfrostKey: String,
+        outPath: Path
+    )(using CardanoNetwork.Section): IO[ExitCode] = {
         for {
+            _ <- log.info(s"Target network (from the Blockfrost key): $cardanoNetwork")
+
             wallet <- readWallet(walletPath)
             address = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- log.info(s"Funding wallet address: ${address.toBech32.get}")
 
             backend <- CardanoBackendBlockfrost(
-              Left(CardanoNetwork.Preview),
+              Left(cardanoNetwork),
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
@@ -147,10 +162,31 @@ object DeployReferenceScripts
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
             _ <- log.info(
-              s"Explorer: https://preview.cexplorer.io/tx/${treasuryTx.refScriptUtxo.transactionId.toHex}"
+              s"Explorer: https://$explorerHost/tx/${treasuryTx.refScriptUtxo.transactionId.toHex}"
             )
         } yield ExitCode.Success
     }
+
+    /** Derive the target network from the Blockfrost key's network prefix. */
+    private def networkOfBlockfrostKey(key: String): Either[Throwable, StandardCardanoNetwork] =
+        if key.startsWith("preview") then Right(CardanoNetwork.Preview)
+        else if key.startsWith("preprod") then Right(CardanoNetwork.Preprod)
+        else if key.startsWith("mainnet") then Right(CardanoNetwork.Mainnet)
+        else
+            Left(
+              RuntimeException(
+                "cannot derive the network from the Blockfrost key: expected a preview…/preprod…/" +
+                    "mainnet… project key"
+              )
+            )
+
+    /** The cexplorer host for the target network. */
+    private def explorerHost(using network: CardanoNetwork.Section): String =
+        network.cardanoNetwork match {
+            case CardanoNetwork.Preview => "preview.cexplorer.io"
+            case CardanoNetwork.Preprod => "preprod.cexplorer.io"
+            case _                      => "cexplorer.io"
+        }
 
     /** Load the signing wallet from a keygen private config, reading only the `ownHeadWallet`
       * fields — a full [[hydrozoa.config.node.NodePrivateConfig]] decode would require the head

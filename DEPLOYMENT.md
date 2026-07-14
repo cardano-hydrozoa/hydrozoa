@@ -145,7 +145,8 @@ files each node needs:
                                       │
    deploy-reference-scripts           │
    (head-0 wallet, Blockfrost)        │
-   └─ bootstrap/script-refs.json ─────┤  the two on-chain reference-script UTxOs
+   └─ bootstrap/script-refs.json ─────┤  the two on-chain reference-script UTxOs (optional —
+                                      │  falls back to config/script-refs/<network>.json)
                                       │
                                       │  + head-0 UTxOs + protocol params   (Blockfrost)
                                       ▼
@@ -155,9 +156,11 @@ files each node needs:
    distribute head-config.json (shared) + each node's private.json  →  run the nodes (§4)
 ```
 
-**Step 1 — Set the Blockfrost key.** In `peer-private.template.json`, set `blockfrostApiKey` (the
-template ships a zeroed `preview000…0` value). Do it before generating: the template is read at
-generation time, and regenerating means fresh keys, so re-funding.
+**Step 1 — Set the Blockfrost key.** Copy `config/template/peer-private.template.json` to
+`config/template/peer-private.template.json.local` (gitignored) and set `blockfrostApiKey` there.
+keygen-fleet reads only the `.local` file and refuses to run without it, so the real key never
+lands in a committed file. The template is read at generation time — regenerating means fresh
+keys, so re-funding.
 
 **Step 2 — Generate keys, roster, and defaults in one run:**
 
@@ -174,7 +177,8 @@ config/demo/
 │   ├── roster.json                #   peer topology
 │   ├── defaults.json              #   network + head params (coilQuorum, timing…) + per-peer equity
 │   ├── l2-cardano-eutxo.json      #   opening L2 outputs, one 5-ADA output per head peer — edit to taste
-│   └── script-refs.json           #   written later by deploy-reference-scripts (step 4)
+│   └── script-refs.json           #   written by deploy-reference-scripts (step 4; optional —
+│                                  #   committed per-network defaults are the fallback)
 ├── head-config/
 │   └── head-config.json           # written later by build-head-config (step 5)
 └── private/
@@ -189,9 +193,9 @@ Peer numbering is positional in the roster: `private/head-N` ↔ head peer N; li
 of them:
 
 - `cardanoNetwork` (default `preview`) — `build-head-config` talks to Blockfrost for this
-  network, so only the Blockfrost networks (mainnet / preprod / preview) are supported.
-  `deploy-reference-scripts` is pinned to Preview regardless (step 4), so a non-preview network
-  needs its reference scripts deployed by other means.
+  network, so only the Blockfrost networks (mainnet / preprod / preview) are supported. Keep it
+  consistent with the Blockfrost key from step 1 (`deploy-reference-scripts` derives its target
+  network from that key).
 - `headParams` — `coilQuorum` (the QUORUM argument passed to keygen-fleet; 2 here), timing,
   fallback contingency, dispute resolution, settlement.
 - `initialEquityContributions` — per head peer; the demo default is head peer 0 funds
@@ -216,14 +220,19 @@ just head-zero-address       # derives the address from bootstrap/{roster,defaul
 The funding must cover equity + the whole head's fallback contingency + the opening L2 value +
 tx fee; step 5 logs the exact lovelace required and fails with the shortfall if underfunded.
 
-**Step 4 — Deploy the reference scripts** (once per script version; the target deploys on Preview
-only — step 2b):
+**Step 4 — Deploy the reference scripts** (once per network per script version; the target
+network comes from the Blockfrost key):
 
 ```bash
 export BLOCKFROST_API_KEY=preview...
 just deploy-reference-scripts config/demo/private/head-0/private.json
 # -> config/demo/bootstrap/script-refs.json
 ```
+
+**This step is optional when a committed default exists for the network**: with no
+`bootstrap/script-refs.json`, `build-head-config` falls back to
+`config/script-refs/<network>.json` (Preview's is committed). Deploy yourself only for a network
+without a default, or after the compiled scripts change.
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators as
 **reference scripts** from two L1 UTxOs at startup. This target deploys the currently compiled

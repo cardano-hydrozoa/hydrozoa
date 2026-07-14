@@ -199,29 +199,37 @@ object Bootstrap:
         val defaults = "defaults.json"
         val l2CardanoEutxo = "l2-cardano-eutxo.json"
         val scriptRefs = "script-refs.json"
+
+        /** The committed per-network script-refs defaults (`preview.json`, `preprod.json`, …) that
+          * [[readBootstrapDir]] falls back to when the bootstrap directory carries no
+          * [[scriptRefs]] file.
+          */
+        val defaultScriptRefsDir: Path = Path.of("config", "script-refs")
     }
 
     /** Read the bootstrap directory's four files ([[BootstrapDir]]) and assemble them into the
       * [[BootstrapConfig]]. The defaults decode against their own `cardanoNetwork` (the timing
       * codecs re-quantize against its slot config), so the network is read first and the rest
-      * decoded with it in scope.
+      * decoded with it in scope. A missing `script-refs.json` falls back to the committed default
+      * for the network ([[BootstrapDir.defaultScriptRefsDir]]).
       */
     def readBootstrapDir(dir: Path): IO[BootstrapConfig] = {
-        def readJson(name: String): IO[Json] =
-            IO.blocking(Files.readString(dir.resolve(name)))
+        def readJson(path: Path): IO[Json] =
+            IO.blocking(Files.readString(path))
                 .flatMap(s => IO.fromEither(parser.parse(s)))
         for {
-            rosterJson <- readJson(BootstrapDir.roster)
+            rosterJson <- readJson(dir.resolve(BootstrapDir.roster))
             roster <- IO.fromEither(rosterJson.as[Membership])
-            defaultsJson <- readJson(BootstrapDir.defaults)
+            defaultsJson <- readJson(dir.resolve(BootstrapDir.defaults))
             network <- IO.fromEither(defaultsJson.hcursor.get[CardanoNetwork]("cardanoNetwork"))
             defaults <- {
                 given CardanoNetwork.Section = network
                 IO.fromEither(defaultsJson.as[BootstrapDefaults])
             }
-            l2StateJson <- readJson(BootstrapDir.l2CardanoEutxo)
+            l2StateJson <- readJson(dir.resolve(BootstrapDir.l2CardanoEutxo))
             l2State <- IO.fromEither(l2StateJson.as[List[L2Output]])
-            scriptRefsJson <- readJson(BootstrapDir.scriptRefs)
+            scriptRefsPath <- resolveScriptRefsPath(dir, network)
+            scriptRefsJson <- readJson(scriptRefsPath)
             scriptRefs <- IO.fromEither(scriptRefsJson.as[ScriptReferenceUtxos.Unresolved])
         } yield BootstrapConfig(
           cardanoNetwork = defaults.cardanoNetwork,
@@ -234,6 +242,25 @@ object Bootstrap:
           blockZeroStartTime = defaults.blockZeroStartTime,
           blockZeroEndTime = defaults.blockZeroEndTime
         )
+    }
+
+    /** Pick the script-refs source: the bootstrap directory's own `script-refs.json` when present,
+      * else the committed per-network default. Fails naming both candidates when neither exists —
+      * the network has no default yet, so run `just deploy-reference-scripts` first.
+      */
+    private def resolveScriptRefsPath(dir: Path, network: CardanoNetwork): IO[Path] = {
+        val own = dir.resolve(BootstrapDir.scriptRefs)
+        val default = BootstrapDir.defaultScriptRefsDir
+            .resolve(s"${network.toString.toLowerCase}.json")
+        IO.blocking {
+            if Files.exists(own) then own
+            else if Files.exists(default) then default
+            else
+                throw RuntimeException(
+                  s"no script refs: neither $own nor the committed default $default exists — " +
+                      "run `just deploy-reference-scripts` first"
+                )
+        }
     }
 
     /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
@@ -504,7 +531,7 @@ end Bootstrap
   * {{{
   *   sbt "runMain hydrozoa.bootstrap.GenerateKeyPair \
   *     --roster nodes/roster.json --role head --ws-address ws://head-0:4001 \
-  *     --template peer-private.template.json --out nodes/head-0/private.json"
+  *     --template config/template/peer-private.template.json --out nodes/head-0/private.json"
   * }}}
   */
 object GenerateKeyPair
