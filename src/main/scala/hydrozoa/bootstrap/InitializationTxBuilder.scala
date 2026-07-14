@@ -112,7 +112,7 @@ object InitializationTxBuilder {
 
                 private val mintMultisigRegimeToken = Mint(
                   config.headMultisigScript.script.scriptHash,
-                  config.headTokenNames.multisigRegimeTokenName,
+                  config.headTokenNames.regimeWitnessTokenName,
                   1,
                   config.headMultisigScript.witnessAttached
                 )

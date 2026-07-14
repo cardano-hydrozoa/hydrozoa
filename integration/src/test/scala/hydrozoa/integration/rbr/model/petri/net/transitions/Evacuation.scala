@@ -15,6 +15,7 @@ import hydrozoa.lib.petri.net.components.{Arc, Transition}
 enum RBRArcId:
     case ReadTreasury
     case ReadResolved
+    case ReadSetupLadder
     case SpendAmbient
     case FulfillPayoutObligation
     case SendEvacuationOutput
@@ -110,6 +111,7 @@ object EvacuationNet {
                 finalMarking = Some(NonNegativeInt.unsafeApply(1)),
               ),
             )
+            _ <- addPlace(SetupLadderRefPlaceId, SetupLadderRefPlace())
             _ <- addPlace(AmbientPlaceId, AmbientPlace(marking = numAmbientUtxos))
             _ <- addPlace(
               PayoutObligationsPlaceId,
@@ -140,6 +142,11 @@ object EvacuationNet {
             _ <- addArc(
               RBRArcId.ReadResolved,
               EvacuationReadArc(ResolvedTreasuryPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
+            )
+            // Each evacuation reads exactly one setup-ladder rung
+            _ <- addArc(
+              RBRArcId.ReadSetupLadder,
+              EvacuationReadArc(SetupLadderRefPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
             )
             // PT(3)+TP(1) on Ambient collapses to net -2
             _ <- addArc(

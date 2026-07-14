@@ -240,8 +240,8 @@ Each routing key is a distinct SLF4J logger name. To see (or silence) a per-comp
 add a matching `<logger name="…">` to **every** `logback.xml` in the subproject — keep them in
 sync:
 
-- root: `src/main/resources/logback.xml` and `src/test/resources/logback.xml`
-- `integration`: `integration/src/test/resources/logback.xml`
+- root: `src/main/resources/logback.xml` and `src/test/resources/logback-test.xml`
+- `integration`: `integration/src/test/resources/logback-test.xml`
 
 The `hydrozoa.trace` logger captures every `HTRACE|…` line across all actors; route it to its
 own file appender when you want a structured event log.

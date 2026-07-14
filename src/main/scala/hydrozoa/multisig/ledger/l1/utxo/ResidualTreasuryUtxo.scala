@@ -10,7 +10,7 @@ import scalus.cardano.ledger.{AssetName, TransactionInput, Utxo, Value}
   */
 final case class ResidualTreasuryUtxo(
     treasuryTokenName: AssetName,
-    multisigRegimeTokenName: AssetName,
+    regimeWitnessTokenName: AssetName,
     utxoId: TransactionInput,
     address: ShelleyAddress,
     value: Value

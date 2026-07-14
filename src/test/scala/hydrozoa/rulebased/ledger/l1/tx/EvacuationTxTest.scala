@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.Prop.propBoolean
@@ -55,18 +55,15 @@ def genResolvedTreasuryUtxo(
 
 /** Generator for resolved treasury datum */
 def genTreasuryResolvedDatum(
-    @unused headMp: PolicyId,
+    headMp: PolicyId,
     utxosCommitment: KzgCommitment.KzgCommitment,
 ): Gen[Resolved] =
     for {
         version <- genVersion
-        setup = TrustedSetup
-            .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-            .map(p2 => G2Element(p2).toCompressedByteString)
     } yield Resolved(
+      headMp = headMp,
       evacuationActive = utxosCommitment,
-      version = version,
-      setupG2 = setup
+      version = version
     )
 
 /** Generator for EvacuationTx transaction recipe */
@@ -124,8 +121,12 @@ def genEvacuationTxBuild(using config: MultiNodeConfig): Gen[EvacuationTx.Build]
 
         collateralUtxo <- genCollateralUtxo(addr.payment.asInstanceOf[Key].hash)(using config)
 
+        // The regime utxo (HRWT beacon + head-identity datum incl. the ladder anchor)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(fallbackTxId, 9))
+
     } yield EvacuationTx.Build(
       inputTreasuryUtxo = adjustedTreasuryUtxo,
+      regimeUtxo = regimeUtxo,
       evacuateesToTryNext = evacuatees,
       allRemainingEvacuatees = evacMap,
       collateralUtxo = collateralUtxo

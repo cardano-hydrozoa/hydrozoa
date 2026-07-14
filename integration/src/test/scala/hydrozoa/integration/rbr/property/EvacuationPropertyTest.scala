@@ -361,6 +361,8 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
         Map(
           TreasuryRefPlaceId        -> 1,
           DisputeRefPlaceId         -> 1,
+          RegimeRefPlaceId          -> 1,
+          SetupLadderRefPlaceId     -> 7,
           ResolvedTreasuryPlaceId   -> 1,
           UnresolvedTreasuryPlaceId -> 0,
           VotedPlaceId              -> 0,

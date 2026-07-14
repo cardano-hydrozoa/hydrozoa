@@ -7,13 +7,12 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.addrKeyHash
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import org.scalacheck.Gen
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.DatumOption.Inline
@@ -22,7 +21,6 @@ import scalus.cardano.onchain.plutus.v3.PubKeyHash
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 import test.Generators.Hydrozoa.genEvacuationMap
 
 /** All UTxOs that exist in the shared mock backend at the start of the dispute scenario. This
@@ -30,6 +28,8 @@ import test.Generators.Hydrozoa.genEvacuationMap
   */
 case class InitialDisputeUtxos(
     treasury: RuleBasedTreasuryUtxo,
+    // The rule-based regime utxo (HRWT beacon + head-identity datum) produced by the fallback
+    regimeUtxo: RuleBasedRegimeUtxo,
     // One AwaitingVote UTxO per peer, indexed by HeadPeerNumber
     peerVoteUtxos: Map[HeadPeerNumber, BallotBox[VoteStatus.AwaitingVote]],
     // Pre-voted default vote: key=0, link=1
@@ -51,12 +51,15 @@ case class InitialDisputeUtxos(
 
         val treasuryEntry =
             treasury.utxoId -> treasury.treasuryOutput.toOutput(using env.headConfig)
+        val regimeEntry =
+            regimeUtxo.input -> RuleBasedRegimeOutput.toOutput(using env.headConfig)
         val peerVotes = peerVoteUtxos.values.map(v => v.input -> v.toUtxo.output)
         val defaultVote = defaultVoteUtxo.input -> defaultVoteUtxo.toUtxo.output
         val collaterals = collateralUtxos.values.map(c =>
             c.input -> c.collateralOutput.toOutput(using env.headConfig)
         )
-        (Map(treasuryEntry, defaultVote) ++ peerVotes ++ collaterals ++ refScriptUtxos).toMap
+        (Map(treasuryEntry, regimeEntry, defaultVote) ++ peerVotes ++ collaterals
+            ++ refScriptUtxos).toMap
 
 object InitialDisputeUtxos:
     /** @param now
@@ -80,11 +83,6 @@ object InitialDisputeUtxos:
         val nPeers = env.headConfig.nHeadPeers.convert
         val votingDeadline: BigInt = now.toPosixTime + votingDuration.toMillis
 
-        // [SYNTHETIC] KZG G2 setup (reuses the same approach as the existing DisputeActorTest)
-        val setup = TrustedSetup
-            .takeSrsG2(65)
-            .map(p2 => G2Element(p2).toCompressedByteString)
-
         // Evacuation UTxOs carry a fixed sentinel datum ("evacuation") rather than real
         // per-output data. The DisputeClassifier abstraction function keys on this sentinel
         // to identify evacuation outputs without needing to decode production-format datums.
@@ -103,12 +101,15 @@ object InitialDisputeUtxos:
             treasury <- CommonGenerators.genRuleBasedTreasuryUtxo(
               fallbackTxId,
               Unresolved(
+                headMp = env.headConfig.headMultisigScript.policyId,
                 deadlineVoting = votingDeadline,
-                versionMajor = BigInt(1),
-                setupG2 = setup
+                versionMajor = BigInt(1)
               ),
               Gen.const(treasuryValue)
             )(using env.headConfig)
+
+            // [SYNTHETIC] Regime utxo at output index 2*nPeers+2 of the (synthetic) fallback tx
+            regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(fallbackTxId, 2 * nPeers + 2))
 
             // [SYNTHETIC] Peer vote UTxOs at output indices nPeers+1 .. 2*nPeers
             // Key/link chain: peer i → key=i+1, link=i+2 (last peer links back to 0)
@@ -158,6 +159,7 @@ object InitialDisputeUtxos:
                 .toMap
         yield InitialDisputeUtxos(
           treasury,
+          regimeUtxo,
           peerVoteUtxos,
           defaultVoteUtxo,
           collateralUtxos,

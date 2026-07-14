@@ -7,15 +7,13 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartT
 import hydrozoa.lib.cardano.scalus.contextualscalus.Change
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpectedSigners, build, finalizeContext}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
-import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
-import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import io.circe.*
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
@@ -28,7 +26,6 @@ import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.cardano.txbuilder.TransactionBuilderStep.*
 import scalus.uplc.builtin.Builtins.blake2b_224
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 import scalus.uplc.builtin.{ByteString, Data}
 import scalus.|>
 
@@ -37,12 +34,14 @@ import scalus.|>
   *   - Collateral Utxos (n)
   *   - Peer Vote Utxos (n)
   *   - Public Vote Utxo
+  *   - Rule-based Regime Utxo
   */
 final case class FallbackTx(
     fallbackTxStartTime: FallbackTxStartTime,
     override val treasurySpent: MultisigTreasuryUtxo,
     override val treasuryProduced: RuleBasedTreasuryUtxo,
     override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
+    override val regimeUtxoProduced: RuleBasedRegimeUtxo,
     override val tx: Transaction,
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos,
@@ -53,6 +52,7 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
+      RuleBasedRegimeUtxo.Produced,
       EnrichedTx[FallbackTx] {}
 
 object FallbackTx {
@@ -120,8 +120,10 @@ private object FallbackTxOps {
             }
 
             object Mints {
+                // The HRWT is not burned: it moves from the multisig regime input to the
+                // rule-based regime output.
                 def apply(): List[Mint] =
-                    List(MultisigRegimeOutput.burnMultisigRegimeTokens, MintVotes())
+                    List(MintVotes())
 
                 private object MintVotes {
                     def apply() = Mint(
@@ -134,23 +136,23 @@ private object FallbackTxOps {
             }
 
             object Sends {
-                def apply(): List[Send] = List(Treasury()) ++ Collaterals().toList ++ Votes().toList
+                def apply(): List[Send] =
+                    List(Treasury()) ++ Collaterals().toList ++ Votes().toList :+ Regime()
+
+                object Regime {
+                    def apply(): Send = RuleBasedRegimeOutput.send
+                }
 
                 object Treasury {
                     def apply(): Send = output.send
 
                     val datum: Unresolved = {
                         Unresolved(
+                          headMp = config.headMultisigScript.policyId,
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
-                          versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                          // Size the G2 prefix to cover the largest EvacuationTx the treasury will
-                          // ever validate (evacuatedUtxos.length + 1 elements per tx, capped at
-                          // maxEvacuationsPerTx).
-                          setupG2 = TrustedSetup
-                              .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                              .map(p2 => G2Element(p2).toCompressedByteString)
+                          versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt
                         )
                     }
 
@@ -265,6 +267,9 @@ private object FallbackTxOps {
                     treasuryOutput = treasuryOutputProduced
                   ),
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,
+                  regimeUtxoProduced = RuleBasedRegimeUtxo(
+                    TransactionInput(txId, 2 + config.headPeerIds.length * 2)
+                  ),
                   tx = finalized.transaction,
                   resolvedUtxos = finalized.resolvedUtxos,
                   // Ordering:
@@ -272,6 +277,7 @@ private object FallbackTxOps {
                   // - Collateral  (n)
                   // - Peer votes (n)
                   // - Public vote (1)
+                  // - Rule-based regime (1)
                   peerBallotBoxesProduced = {
                       val inputs = List
                           .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)

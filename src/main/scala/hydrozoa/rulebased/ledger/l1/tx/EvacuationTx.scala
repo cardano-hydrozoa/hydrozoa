@@ -10,11 +10,12 @@ import hydrozoa.multisig.ledger.joint.{EvacuationMap, evacuationKeyOrdering}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer, given}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
+import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, evacuate}
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx.Assumptions
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTxOps.Build.Error.BuilderError
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scala.annotation.tailrec
 import scalus.cardano.ledger.*
@@ -22,7 +23,7 @@ import scalus.cardano.ledger.TransactionException.{ExUnitsExceedMaxException, In
 import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
-import scalus.cardano.txbuilder.TransactionBuilderStep.Send
+import scalus.cardano.txbuilder.TransactionBuilderStep.{ReferenceOutput, Send}
 
 final case class EvacuationTx(
     treasuryUtxoSpent: RuleBasedTreasuryUtxo,
@@ -57,6 +58,7 @@ private object EvacuationTxOps {
             case NoEvacuatees
             case NotASubset(evacuatees: EvacuationMap, evaucationMap: EvacuationMap)
             case MembershipError(wrapped: Membership.MembershipCheckError)
+            case SetupLadderError(wrapped: SetupLadder.UncoveredEvacuationCount)
             case BuilderError(wrapped: (SomeBuildError, String))
 
             override def toString: String = getMessage
@@ -76,6 +78,8 @@ private object EvacuationTxOps {
                                 -- evacuationMap.evacuationMap.keySet}"
                 case MembershipError(wrapped) =>
                     s"Membership error: ${wrapped}"
+                case SetupLadderError(wrapped) =>
+                    s"Setup ladder error: ${wrapped.getMessage}"
                 case BuilderError((buildError, explanation)) =>
                     s"Builder error: $explanation - $buildError"
     }
@@ -91,6 +95,7 @@ private object EvacuationTxOps {
       */
     final case class Build(
         inputTreasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         evacuateesToTryNext: EvacuationMap,
         allRemainingEvacuatees: EvacuationMap,
         collateralUtxo: CollateralUtxo,
@@ -155,6 +160,23 @@ private object EvacuationTxOps {
                     .left
                     .map(Build.Error.MembershipError(_))
 
+                // The smallest setup-ladder rung covering this batch (recomputed per halving
+                // retry, since the batch size changes).
+                setupRungUtxo <- config
+                    .setupRungUtxo(evacuatingNow.size)
+                    .left
+                    .map(Build.Error.SetupLadderError(_))
+
+                // Reference inputs are canonically ordered in the tx body, so the redeemer index
+                // of the rung is its position within the sorted set of all reference inputs.
+                setupRefInputIdx = BigInt(
+                  List(
+                    config.rulebasedTreasuryScriptInput,
+                    regimeUtxo.input,
+                    setupRungUtxo.input
+                  ).sorted.indexOf(setupRungUtxo.input)
+                )
+
                 // From this point we should choose and stick to a particular order of withdrawals, so
                 // the order of outputs in the tx (starting from index 1) and the order of utxo ids in
                 // the redeemer should be the same.
@@ -165,11 +187,12 @@ private object EvacuationTxOps {
                     evacuationKeys = SList.from(
                       evacuationList.map(_._1)
                     ),
-                    proof = membershipProof
+                    proof = membershipProof,
+                    setupRefInputIdx = setupRefInputIdx
                   )
                 )
 
-                newTreasuryDatum = treasuryDatum.copy(evacuationActive = membershipProof)
+                newTreasuryDatum = treasuryDatum.evacuate(membershipProof)
 
                 // evacuation outputs
                 evacuationOutputs = evacuationList.map(_._2.utxo.value)
@@ -190,6 +213,10 @@ private object EvacuationTxOps {
                 context <- build(
                   List(
                     config.referenceTreasury,
+                    // The treasury validator authenticates the rung against the ladder anchor
+                    // in the regime datum
+                    regimeUtxo.referenceOutput,
+                    ReferenceOutput(setupRungUtxo),
                     inputTreasuryUtxo.spendAttached(evacuationRedeemer),
                     // Spend the collateral utxo as a regular input; the returned
                     // collateral output absorbs the tx fee via the index-0 diff handler.
