@@ -32,6 +32,7 @@ sealed trait FinalizationTx
 }
 
 object FinalizationTx {
+    given TxFamily[FinalizationTx] = TxFamily.of("FinalizationTx")
     export FinalizationTxOps.Build
     export FinalizationTxOps.Result
     export FinalizationTxOps.Error
@@ -241,7 +242,7 @@ private object FinalizationTxOps {
 
             private val burnMultisigRegimeToken = Mint(
               config.headMultisigScript.script.scriptHash,
-              config.headTokenNames.multisigRegimeTokenName,
+              config.headTokenNames.regimeWitnessTokenName,
               -1,
               config.headMultisigScript.witnessAttached
             )

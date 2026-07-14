@@ -28,12 +28,11 @@ final case class DepositTx(
     submissionDeadline: QuantizedInstant,
     override val tx: Transaction,
     override val txLens: Lens[DepositTx, Transaction] = Focus[DepositTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[DepositTx] {
-    override def transactionFamily: String = "DepositTx"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[DepositTx] {}
 
 object DepositTx {
+    given TxFamily[DepositTx] = TxFamily.of("DepositTx")
     export DepositTxOps.{Build, Parse}
 }
 
@@ -136,9 +135,10 @@ private object DepositTxOps {
                       config.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
                 )
             } yield DepositTx(
-              depositProduced,
-              submissionDeadline,
-              tx
+              depositProduced = depositProduced,
+              submissionDeadline = submissionDeadline,
+              tx = tx,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }
@@ -279,7 +279,13 @@ private object DepositTxOps {
                             .left
                             .map(DepositUtxoError(_))
 
-                    } yield DepositTx(depositUtxo, submissionDeadline, tx)
+                    } yield DepositTx(
+                      depositProduced = depositUtxo,
+                      submissionDeadline = submissionDeadline,
+                      tx = tx,
+                      // Parsed from CBOR bytes; ledger context isn't available at parse time.
+                      resolvedUtxos = ResolvedUtxos.empty
+                    )
                 case Failure(e) => Left(TxCborDeserializationFailed(e))
             }
         }

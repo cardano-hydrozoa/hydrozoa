@@ -8,7 +8,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Resolved
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import monocle.syntax.all.*
 import org.scalacheck.{Arbitrary, Gen, Properties}
@@ -28,15 +28,13 @@ def genEmptyResolvedTreasuryUtxo(
     val g1Generator =
         hex"97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
 
-    val dummySetup = scalus.cardano.onchain.plutus.prelude.List.empty
+    val headMp = config.headMultisigScript.policyId
 
     val emptyResolvedDatum = Resolved(
+      headMp = headMp,
       evacuationActive = g1Generator,
-      version = (BigInt(1), BigInt(0)),
-      setupG2 = dummySetup
+      version = (BigInt(1), BigInt(0))
     )
-
-    val headMp = config.headMultisigScript.policyId
     val beaconTokenName = config.headTokenNames.treasuryTokenName
     val voteTokenName = config.headTokenNames.voteTokenName
 
@@ -98,12 +96,16 @@ def genSimpleDeinitTxBuilder(using
           fallbackTxId,
           config.nHeadPeers.toInt + 1
         )
+        // The regime utxo spent (and its HRWT beacon burned) alongside the treasury
+        regimeTxId <- Arbitrary.arbitrary[TransactionHash]
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
         akh <- Arbitrary.arbitrary[AddrKeyHash]
         collateralUtxo <- genCollateralUtxo(akh)(using config)
 
     } yield {
         DeinitTx.Build(
           treasuryUtxo = treasuryUtxo,
+          regimeUtxo = regimeUtxo,
           collateralUtxo = collateralUtxo
         )
     }
@@ -111,7 +113,7 @@ def genSimpleDeinitTxBuilder(using
 object DeinitTxTest extends Properties("Deinit Tx Test") {
     import MultiNodeConfig.*
 
-    val _ = property("Deinit Simple Happy Path") = runDefault(
+    val _ = property("Deinit Simple Happy Path") = runWithCoil(nCoil = 5, quorum = 0)(
       for {
           env <- ask
           _ <- {

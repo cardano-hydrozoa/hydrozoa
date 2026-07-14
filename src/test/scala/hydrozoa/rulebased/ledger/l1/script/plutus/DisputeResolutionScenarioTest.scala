@@ -10,6 +10,7 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.rulebased.ledger.l1.DisputeActorTestHelpers.{mkBallotBoxUtxoPure, mkRuleBasedTreasuryPure}
+import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.mkRegimeUtxoPure
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
@@ -74,11 +75,7 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
     private val peerPkh = ownWallet.exportVerificationKey.pubKeyHash
     private val disputeAddr: Address = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
 
-    private val treasuryToken = Value.asset(
-      env.headConfig.headMultisigScript.policyId,
-      env.headConfig.headTokenNames.treasuryTokenName,
-      1
-    )
+    private val treasuryToken = env.headConfig.treasuryToken
     private val fallbackTxId = fixed(Arbitrary.arbitrary[TransactionHash], 1)
     private val x1Commitment = fixed(genByteStringOfN(48), 2)
     private val x2Commitment = fixed(genByteStringOfN(48).suchThat(_ != x1Commitment), 3)
@@ -96,12 +93,17 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
     // Treasury (Unresolved). Deadline in the FUTURE so votes (to <= deadline) are valid now and the
     // tally (from >= deadline) becomes valid once the scenario sleeps past it.
     private val treasury = mkRuleBasedTreasuryPure(
+      env.headConfig,
       versionMajor,
       treasuryToken + Value(Coin.ada(100)),
       TransactionInput(fallbackTxId, 0),
       votingDeadline = now.toPosixTime + 600_000
     )
     private val deadlineSlot: Slot = treasury.parseVotingDeadline(using config).toOption.get
+
+    // The regime utxo (HRWT beacon + head-identity datum) referenced by every dispute-flow tx.
+    private val regimeUtxo =
+        mkRegimeUtxoPure(TransactionInput(fixed(Arbitrary.arbitrary[TransactionHash], 5), 0))
 
     // One collateral per awaiting box (each vote consumes its own) plus one for the tally/resolve
     // chain (TallyTx only references collateral, so the chain can reuse a single one).
@@ -144,7 +146,8 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
     private val initialUtxos: Utxos = (
       Map(
         (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
-        (collateral.input, collateral.collateralOutput.toOutput(using env))
+        (collateral.input, collateral.collateralOutput.toOutput(using env)),
+        regimeUtxo.toUtxo(using env.headConfig).toTuple
       )
           ++ voteCollaterals.map(c => c.input -> c.collateralOutput.toOutput(using env))
           ++ boxUtxos.map(u => u.input -> u.output)
@@ -182,6 +185,7 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
                                 .Build(
                                   box,
                                   treasury,
+                                  regimeUtxo,
                                   voteCollateral,
                                   sec,
                                   signatures,
@@ -227,7 +231,7 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
         val _ = assert(
           results.forall { case (_, (datum, anyVoted)) =>
               datum match {
-                  case RuleBasedTreasuryDatum.Resolved(c, (_, m), _) =>
+                  case RuleBasedTreasuryDatum.Resolved(_, c, (_, m)) =>
                       if anyVoted then c == x2Commitment && m == x2Minor
                       else c == x1Commitment && m == BigInt(1)
                   case _ => false
@@ -293,7 +297,12 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
         async[Scenario] {
             if bs.size == 1 then {
                 val resolution = ResolutionTx
-                    .Build(bs.head.asInstanceOf[BallotBox[Voted]], treasury, collateral)(using
+                    .Build(
+                      bs.head.asInstanceOf[BallotBox[Voted]],
+                      treasury,
+                      regimeUtxo,
+                      collateral
+                    )(using
                       config
                     )
                     .result
@@ -305,7 +314,7 @@ class DisputeResolutionScenarioTest extends AnyFunSuite {
             } else {
                 val (cont, rem) = Scenario.fromCollection(tallyPairs(bs)).await
                 val tally = TallyTx
-                    .Build(cont, rem, treasury, collateral)(using config)
+                    .Build(cont, rem, treasury, regimeUtxo, collateral)(using config)
                     .result
                     .toOption
                     .get

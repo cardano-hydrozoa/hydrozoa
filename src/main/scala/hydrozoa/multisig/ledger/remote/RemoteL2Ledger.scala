@@ -168,6 +168,7 @@ class RemoteL2Ledger private (
     /** Unsupported — see [[currentCommandNumber]]. */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
         EitherT.leftT(L2LedgerError("restoreTo is not supported by RemoteL2Ledger"))
+
 }
 
 object RemoteL2Ledger {

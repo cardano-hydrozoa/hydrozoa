@@ -11,8 +11,8 @@ import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.block.BlockHeader
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor
 import hydrozoa.multisig.ledger.block.BlockHeader.Minor.HeaderSignature
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, VoteRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
@@ -36,12 +36,11 @@ final case class VoteTx(
     ballotBoxProduced: BallotBox[VoteStatus.Voted],
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[VoteTx] {
-    override def transactionFamily: String = "VoteTx"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[VoteTx] {}
 
 object VoteTx {
+    given TxFamily[VoteTx] = TxFamily.of("VoteTx")
     export VoteTxOps.{Build, Config}
 }
 
@@ -70,6 +69,7 @@ private object VoteTxOps {
     final case class Build(
         uncastBallotBox: BallotBox[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -158,6 +158,7 @@ private object VoteTxOps {
                     // Send back to the vote contract address with updated datum
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
+                    regimeUtxo.referenceOutput,
                     ValidityEndSlot(votingDeadline.slot)
                   )
                 )
@@ -177,7 +178,8 @@ private object VoteTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

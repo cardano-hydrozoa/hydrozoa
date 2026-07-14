@@ -9,8 +9,8 @@ import hydrozoa.lib.cardano.scalus.contextualscalus
 import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addRequiredSigners, finalizeContext}
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.tx.AbstainTxOps.Build.Error
@@ -31,12 +31,11 @@ final case class AbstainTx(
     ballotBoxProduced: BallotBox[VoteStatus.Abstain.type],
     override val tx: Transaction,
     override val txLens: Lens[AbstainTx, Transaction] = Focus[AbstainTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
-) extends EnrichedTx[AbstainTx] {
-    override def transactionFamily: String = "AbstainTx"
-}
+    override val resolvedUtxos: ResolvedUtxos
+) extends EnrichedTx[AbstainTx] {}
 
 object AbstainTx {
+    given TxFamily[AbstainTx] = TxFamily.of("AbstainTx")
     export AbstainTxOps.{Build, Config}
 }
 
@@ -101,7 +100,8 @@ private object AbstainTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 abstainOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

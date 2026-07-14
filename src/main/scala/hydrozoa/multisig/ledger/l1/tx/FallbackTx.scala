@@ -9,18 +9,17 @@ import hydrozoa.lib.cardano.scalus.contextualscalus.TransactionBuilder.{addExpec
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
 import hydrozoa.multisig.ledger.l1.tx.Metadata.Fallback
-import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeOutput, MultisigRegimeUtxo, MultisigTreasuryUtxo}
+import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtxo}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteDatum as VD
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import io.circe.*
 import monocle.{Focus, Lens}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{Mint as _, TransactionOutput, *}
-import scalus.cardano.onchain.plutus.prelude.List as SList
 import scalus.cardano.onchain.plutus.v1.PubKeyHash
 import scalus.cardano.txbuilder.*
 import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
@@ -35,12 +34,14 @@ import scalus.|>
   *   - Collateral Utxos (n)
   *   - Peer Vote Utxos (n)
   *   - Public Vote Utxo
+  *   - Rule-based Regime Utxo
   */
 final case class FallbackTx(
     fallbackTxStartTime: FallbackTxStartTime,
     override val treasurySpent: MultisigTreasuryUtxo,
     override val treasuryProduced: RuleBasedTreasuryUtxo,
     override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
+    override val regimeUtxoProduced: RuleBasedRegimeUtxo,
     override val tx: Transaction,
     override val txLens: Lens[FallbackTx, Transaction] = Focus[FallbackTx](_.tx),
     override val resolvedUtxos: ResolvedUtxos,
@@ -51,11 +52,11 @@ final case class FallbackTx(
 ) extends MultisigTreasuryUtxo.Spent,
       MultisigRegimeUtxo.Spent,
       RuleBasedTreasuryUtxo.Produced,
-      EnrichedTx[FallbackTx] {
-    override def transactionFamily: String = "FallbackTx"
-}
+      RuleBasedRegimeUtxo.Produced,
+      EnrichedTx[FallbackTx] {}
 
 object FallbackTx {
+    given TxFamily[FallbackTx] = TxFamily.of("FallbackTx")
     export FallbackTxOps.Build
 
     given fallbackTxEncoder: Encoder[FallbackTx] =
@@ -119,8 +120,10 @@ private object FallbackTxOps {
             }
 
             object Mints {
+                // The HRWT is not burned: it moves from the multisig regime input to the
+                // rule-based regime output.
                 def apply(): List[Mint] =
-                    List(MultisigRegimeOutput.burnMultisigRegimeTokens, MintVotes())
+                    List(MintVotes())
 
                 private object MintVotes {
                     def apply() = Mint(
@@ -133,25 +136,30 @@ private object FallbackTxOps {
             }
 
             object Sends {
-                def apply(): List[Send] = List(Treasury()) ++ Collaterals().toList ++ Votes().toList
+                def apply(): List[Send] =
+                    List(Treasury()) ++ Collaterals().toList ++ Votes().toList :+ Regime()
+
+                object Regime {
+                    def apply(): Send = RuleBasedRegimeOutput.send
+                }
 
                 object Treasury {
                     def apply(): Send = output.send
 
                     val datum: Unresolved = {
                         Unresolved(
+                          headMp = config.headMultisigScript.policyId,
                           deadlineVoting =
                               config.slotConfig.slotToTime(validityStartTime.toSlot.slot) +
                                   config.votingDuration.finiteDuration.toMillis,
-                          versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt,
-                          // TODO: pull the onchain G2 prefix from the head's TrustedSetup
-                          setupG2 = SList.empty
+                          versionMajor = Steps.Spends.Treasury.datum.versionMajor.toInt
                         )
                     }
 
                     // TODO: Partial, hacked in during a refactor
                     private val output = {
-                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                        val v = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                            Value(config.collectiveContingency.minAdaForTreasury)
                         RuleBasedTreasuryOutput(
                           value = v,
                           datum = datum,
@@ -180,7 +188,6 @@ private object FallbackTxOps {
                             mkBallotBox(
                               VD.public(treasuryUtxoSpent.kzgCommitment).toData,
                               config.collectiveContingency.publicVoteDeposit
-                                  + config.collectiveContingency.minAdaForTreasury
                             )
                         }
                     }
@@ -243,7 +250,8 @@ private object FallbackTxOps {
                 // FIXME: Partial, introduced during a refactor where RuleBasedTreasuryOutput began to verify
                 // that the constructed output did indeed have a valid treasury token
                 val treasuryOutputProduced = {
-                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin)
+                    val value = treasuryUtxoSpent.value - Value(treasuryUtxoSpent.equity.coin) +
+                        Value(config.collectiveContingency.minAdaForTreasury)
                     RuleBasedTreasuryOutput(
                       datum = Steps.Sends.Treasury.datum,
                       value = value
@@ -259,6 +267,9 @@ private object FallbackTxOps {
                     treasuryOutput = treasuryOutputProduced
                   ),
                   multisigRegimeUtxoSpent = multisigRegimeUtxo,
+                  regimeUtxoProduced = RuleBasedRegimeUtxo(
+                    TransactionInput(txId, 2 + config.headPeerIds.length * 2)
+                  ),
                   tx = finalized.transaction,
                   resolvedUtxos = finalized.resolvedUtxos,
                   // Ordering:
@@ -266,6 +277,7 @@ private object FallbackTxOps {
                   // - Collateral  (n)
                   // - Peer votes (n)
                   // - Public vote (1)
+                  // - Rule-based regime (1)
                   peerBallotBoxesProduced = {
                       val inputs = List
                           .range(1 + config.headPeerIds.length, 1 + config.headPeerIds.length * 2)

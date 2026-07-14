@@ -1,8 +1,9 @@
 package hydrozoa.multisig.backend.cardano
 
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, Transaction, TransactionHash, TransactionInput, Utxo, Utxos}
+import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, TransactionHash, TransactionInput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 
 /** Notes:
@@ -61,10 +62,11 @@ trait CardanoBackend[F[_]]:
         after: TransactionHash
     ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]]
 
-    /** Submits a transaction.
-      * @return
+    /** Submits a transaction. The caller passes an [[EnrichedTx]] so wrappers (e.g. the firewall)
+      * can statically dispatch on the tx family — implementations extract `etx.tx` before hitting
+      * the chain.
       */
-    def submitTx(tx: Transaction): F[Either[Error, Unit]]
+    def submitTx(etx: EnrichedTx[?]): F[Either[Error, Unit]]
 
     /** Retrieve the latest protocol parameters.
       */
