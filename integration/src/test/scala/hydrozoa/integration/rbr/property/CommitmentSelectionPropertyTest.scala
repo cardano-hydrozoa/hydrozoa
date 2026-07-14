@@ -4,8 +4,6 @@ import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.Durations.InactivityMarginDuration
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -16,7 +14,6 @@ import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.classification.Histogram
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
@@ -81,16 +78,6 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         val coilWallets = testPeers.coilWallets
         val coilPeers   = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
-        val widenedTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
-            MultiPeerHeadHarness.fastTxTiming
-                .run(network)
-                .map(
-                  _.copy(inactivityMarginDuration =
-                      InactivityMarginDuration(10.seconds.quantize(network.slotConfig))
-                  )
-                )
-        }
-
         val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
             ReaderT { network =>
                 Gen.const(
@@ -109,8 +96,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 10.seconds,
-          fastTxTiming = widenedTxTiming,
+          takeoffOffset = 60.seconds,
           disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeers,
           coilQuorum = nCoilPeers
