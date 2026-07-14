@@ -7,6 +7,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.CoilPeerWsTransportEventFormat
 import hydrozoa.multisig.consensus.{BlockWeaverEventFormat, CardanoLiaisonEventFormat, FastConsensusActorEventFormat, SlowConsensusActorEventFormat, StackComposerEventFormat}
 import hydrozoa.multisig.ledger.joint.JointLedgerEventFormat
+import hydrozoa.rulebased.RuleBasedActorEventFormat
 
 /** Top-level formatter for the (coil, multisig) cell, delegating by category trait then by
   * per-actor format.
@@ -21,7 +22,7 @@ object CoilMultisigRegimeManagerEventFormat:
     def humanFormat(
         syntheticLabel: HeadPeerNumber,
         coilNum: CoilPeerNumber,
-    )(e: CoilMultisigRegimeManagerEvent): LogEvent = {
+    )(e: CoilRegimeManagerEvent): LogEvent = {
         val ev = LogEvent.From.forPeer("CoilMultisigRegimeManager", syntheticLabel)
         import ev.*
         e match
@@ -49,4 +50,6 @@ object CoilMultisigRegimeManagerEventFormat:
                 LimiterEventFormat.humanFormat("BlockWeaver")(bwl)
             case MultisigOnlyChildEvent.StackComposerLimiter(scl) =>
                 LimiterEventFormat.humanFormat("StackComposer")(scl)
+            case RuleBasedOnlyChildEvent.RuleBasedActor(rba) =>
+                RuleBasedActorEventFormat.humanFormat(syntheticLabel)(rba)
     }

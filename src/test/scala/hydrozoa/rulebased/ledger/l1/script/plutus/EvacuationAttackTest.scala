@@ -81,11 +81,7 @@ class EvacuationAttackTest extends AnyFunSuite {
 
     private val numEvacuees = 2
 
-    private val treasuryToken = Value.asset(
-      env.headConfig.headMultisigScript.policyId,
-      env.headConfig.headTokenNames.treasuryTokenName,
-      1
-    )
+    private val treasuryToken = env.headConfig.treasuryToken
     private val fallbackTxId = fixed(Arbitrary.arbitrary[TransactionHash], 1)
     private val now = realTimeQuantizedInstant(env.headConfig.slotConfig).unsafeRunSync()
 
@@ -128,14 +124,13 @@ class EvacuationAttackTest extends AnyFunSuite {
           ++ config.scriptReferenceUtxos.toList.map(_.toTuple)
     )
 
-    /** Build an EvacuationTx draining the single obligation `key` from `treasuryUtxo` (paying fee
-      * from `feeUtxo`), as the `allRemaining` map sees it.
+    /** Build an EvacuationTx draining the single obligation `key` from `treasuryUtxo`, as the
+      * `allRemaining` map sees it. Fees come from the collateral utxo.
       */
     private def buildEvacuation(
         treasuryUtxo: RuleBasedTreasuryUtxo,
         key: EvacuationKey,
-        allRemaining: EvacuationMap,
-        feeUtxo: Utxo
+        allRemaining: EvacuationMap
     ): Either[EvacuationTx.Build.Error, EvacuationTx] = {
         val subset = allRemaining.removedAll(allRemaining.keys.filter(_ != key))
         EvacuationTx
@@ -143,15 +138,14 @@ class EvacuationAttackTest extends AnyFunSuite {
               inputTreasuryUtxo = treasuryUtxo,
               evacuateesToTryNext = subset,
               allRemainingEvacuatees = allRemaining,
-              collateralUtxo = collateral,
-              feeUtxos = Map(feeUtxo.toTuple)
+              collateralUtxo = collateral
             )
             .result(using config)
     }
 
     /** An otherwise-valid EvacuationTx draining the first obligation of `M` (unsigned). */
     private val legitTx: Transaction =
-        buildEvacuation(treasury, evacMap.keys.head, evacMap, feeUtxos.head)
+        buildEvacuation(treasury, evacMap.keys.head, evacMap)
             .fold(e => throw new AssertionError(s"legit evacuation build failed: $e"), _.tx)
 
     /** The current treasury input in the emulator (the single utxo at the treasury address). */
@@ -350,7 +344,7 @@ class EvacuationAttackTest extends AnyFunSuite {
     test("treasury value-conservation prevents double-draining the same obligation") {
         val key = evacMap.keys.head
         // tx1: legitimately drain `key`.
-        val evac1 = buildEvacuation(treasury, key, evacMap, feeUtxos(0))
+        val evac1 = buildEvacuation(treasury, key, evacMap)
             .fold(e => fail(s"tx1 build failed: $e"), identity)
         val emu2 = mkEmulator().submit(ownWallet.signTx(evac1.tx)) match {
             case Right((_, e)) => e
@@ -362,7 +356,7 @@ class EvacuationAttackTest extends AnyFunSuite {
         // the value invariant (treasuryInput = treasuryOutput + Σ evacuated) makes the obligation
         // un-payable — the builder refuses; were a tx hand-crafted, the script's membership check
         // (against the advanced accumulator) would reject it.
-        buildEvacuation(residual, key, evacMap, feeUtxos(1)) match {
+        buildEvacuation(residual, key, evacMap) match {
             case Left(_) => () // expected: cannot re-pay a drained obligation from the residual
             case Right(evac2) =>
                 emu2.submit(ownWallet.signTx(evac2.tx)) match {

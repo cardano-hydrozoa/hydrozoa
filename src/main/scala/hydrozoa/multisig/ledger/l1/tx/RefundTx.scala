@@ -33,13 +33,15 @@ object RefundTx {
         override val tx: Transaction,
         refundStart: QuantizedInstant,
         refundDestination: Destination,
-        requestId: RequestId
+        requestId: RequestId,
+        override val resolvedUtxos: ResolvedUtxos
     ) extends RefundTx,
           EnrichedTx[PostDated] {
         override val txLens: Lens[PostDated, Transaction] = Focus[PostDated](_.tx)
-        override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    }
 
-        override def transactionFamily: String = "RefundTx.PostDated"
+    object PostDated {
+        given TxFamily[PostDated] = TxFamily.of("RefundTx.PostDated")
     }
 }
 
@@ -97,10 +99,12 @@ private object RefundTxOps {
 
                     tx = finalized.transaction
                 } yield RefundTx.PostDated(
-                  tx,
-                  refundInstructions.validityStart,
-                  Destination(refundInstructions.address, refundInstructions.mbDatum),
-                  requestId
+                  tx = tx,
+                  refundStart = refundInstructions.validityStart,
+                  refundDestination =
+                      Destination(refundInstructions.address, refundInstructions.mbDatum),
+                  requestId = requestId,
+                  resolvedUtxos = finalized.resolvedUtxos
                 )
         }
     }

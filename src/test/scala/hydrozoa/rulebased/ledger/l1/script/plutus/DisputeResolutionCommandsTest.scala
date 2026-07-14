@@ -145,11 +145,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
     private val disputeAddr: Address = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
     private val treasuryAddr: Address = HydrozoaBlueprint.mkTreasuryAddress(env.headConfig.network)
 
-    private val treasuryToken = Value.asset(
-      env.headConfig.headMultisigScript.policyId,
-      env.headConfig.headTokenNames.treasuryTokenName,
-      1
-    )
+    private val treasuryToken = env.headConfig.treasuryToken
     private val fallbackTxId = fixed(Arbitrary.arbitrary[TransactionHash], 1)
     private val x1Commitment = fixed(genByteStringOfN(48), 2)
     private val x2Commitment = fixed(genByteStringOfN(48).suchThat(_ != x1Commitment), 3)

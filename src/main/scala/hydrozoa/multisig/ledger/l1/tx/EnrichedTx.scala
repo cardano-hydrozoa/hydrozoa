@@ -19,14 +19,22 @@ import scalus.uplc.builtin.{ByteString, platform}
 import scalus.|>
 import sourcecode.*
 
+/** Type-level family name for an [[EnrichedTx]] subtype — reachable from `T` alone. */
+trait TxFamily[T] {
+    def name: String
+}
+
+object TxFamily {
+    def apply[T](using f: TxFamily[T]): TxFamily[T] = f
+    def of[T](n: String): TxFamily[T] = new TxFamily[T] { val name: String = n }
+}
+
 // FIXME: This trait and parts of the companion object are applicable to the rulebased regime.
 //   Lets move it out
-trait EnrichedTx[Self <: EnrichedTx[Self]] extends HasResolvedUtxos { self: Self =>
+trait EnrichedTx[Self <: EnrichedTx[Self]](using val family: TxFamily[Self])
+    extends HasResolvedUtxos { self: Self =>
 
-    /** A human-readable name, primarily for error reporting
-      */
-    // TODO: Is there a performant way to do this automatically?
-    def transactionFamily: String
+    def transactionFamily: String = family.name
 
     def tx: Transaction
 

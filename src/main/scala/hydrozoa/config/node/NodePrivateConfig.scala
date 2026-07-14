@@ -1,13 +1,12 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import io.circe.*
 import io.circe.generic.semiauto.*
-import scala.annotation.unused
 
 final case class NodePrivateConfig(
     override val ownPeerPrivate: OwnPeerPrivate,
@@ -56,6 +55,6 @@ object NodePrivateConfig {
 
     given nodePrivateConfigDecoder(using
         headPeers: HeadPeers.Section,
-        @unused network: CardanoNetwork.Section
+        coilPeers: CoilPeers
     ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
 }

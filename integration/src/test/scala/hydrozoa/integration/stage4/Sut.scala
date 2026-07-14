@@ -9,12 +9,14 @@ import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.stack.Stack
 import hydrozoa.multisig.persistence.BackendStore
+import hydrozoa.multisig.server.SubmissionClient
 import org.scalacheck.commands.SutCommand
 import scalus.cardano.ledger.TransactionHash
 
@@ -22,18 +24,17 @@ import scalus.cardano.ledger.TransactionHash
 // Stage 4 SUT
 // ===================================
 
-/** Per-peer actor handles exposed to SUT commands. */
-case class Stage4PeerHandle(
-    requestSequencer: RequestSequencer.Handle,
-)
-
 /** Immutable, set-once resources of a running stage4 SUT. Allocated during `sutResource`,
   * referenced from anywhere thereafter — no field on this case class ever changes.
+  *
+  * `peers` holds each head peer's [[SubmissionClient]] — built by the harness against that peer's
+  * in-process [[hydrozoa.multisig.server.HydrozoaRoutes]] via `Client.fromHttpApp`, so submissions
+  * exercise the real HTTP/JSON codec surface without binding a socket.
   */
 case class Stage4SutStatic(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
-    peers: Map[HeadPeerNumber, Stage4PeerHandle],
+    peers: Map[HeadPeerNumber, SubmissionClient],
     /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
       * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
@@ -83,28 +84,32 @@ object PerCoilCaptures:
   */
 case class Stage4SutMutable(
     sutErrors: Ref[IO, List[String]],
+    submittedRequestIds: Ref[IO, Vector[RequestId]],
+
     perPeer: Capture[Map[HeadPeerNumber, PerPeerCaptures]],
     // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA arm
     // (same mechanism as `perPeer.state(_).stacks` on the head side). Empty for a pure-head run.
     // Used to assert the coil peer participates in the slow cycle.
     perCoil: Capture[Map[CoilPeerNumber, PerCoilCaptures]],
-    submittedRequestIds: Ref[IO, Vector[RequestId]],
+    /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
+     * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
+     */
+    landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
+
     fastSettlementSignal: Signal[Unit],
-    slowCoverageSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] with the final submitted ID set; the JL predicate arm reads it
-      * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
-      * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
-      */
+     * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
+     * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
+     */
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
+
+    slowCoverageSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
       * the SCA predicate arm reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
-    /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
-      * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
-      */
-    landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
-    /** Fires when the same condition `EffectsLanded.propEffectsLanded` checks is satisfied —
+
+    /** Fires when the same condit2ion `EffectsLanded.propEffectsLanded` checks is satisfied —
       * i.e. every backbone expectation completed via happy path or competing fallback. Anchored
       * on `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
       * [[slowCoverageSignal]] which fires on consensus reach. The gap between the two is the
@@ -117,6 +122,7 @@ case class Stage4SutMutable(
       * and only fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
+
     /** Fires on the first successful `FallbackToRuleBased` dispatch; `beforeFinalize` races it
       * against the happy-path drain. See the package docstring for the contract.
       */
@@ -141,28 +147,29 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's RequestSequencer.
-    // Result is always Valid (trivial); oracle check in shutdownSut compares model
-    // predictions against actual block-brief outcomes.
+    // L2 tx: submit via the peer's SubmissionClient (in-memory http4s round-trip through the
+    // harness's HydrozoaRoutes). Result is always Valid (trivial); oracle check in shutdownSut
+    // compares model predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
                 _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
-    // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
+    // Deposit: submit via the peer's SubmissionClient (in-memory http4s round-trip) AND submit
+    // the signed deposit tx to the shared mock L1 backend so CardanoLiaison can observe it
+    // on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
                 _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
-                _ <- sut.static.cardanoBackend.submitTx(cmd.depositTxBytesSigned)
+                _ <- sut.static.cardanoBackend.submitTx(RawTx(cmd.depositTxBytesSigned))
             } yield ValidityFlag.Valid
         }
     }

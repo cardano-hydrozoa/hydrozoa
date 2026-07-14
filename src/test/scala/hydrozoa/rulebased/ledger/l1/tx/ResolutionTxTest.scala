@@ -102,41 +102,42 @@ def genResolutionTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[Resoluti
 object ResolutionTxTest extends Properties("Resolution Tx Test") {
     import MultiNodeConfig.*
 
-    val _ = property("Resolution Builder generator works") = runDefault(for {
-        config <- ask
-        _ <- {
-            given MultiNodeConfig = config
-            for {
-                builder <- pick(genResolutionTxBuilder)
-                tx <- failLeft(builder.result)
-                // Basic smoke test assertions
-                _ <- assertWith(
-                  tx.talliedBallotBox != null,
-                  "Tallied ballot box should not be null"
-                )
-                _ <- assertWith(
-                  tx.treasuryUnresolvedUtxoSpent != null,
-                  "Treasury unresolved UTXO spent should not be null"
-                )
-                _ <- assertWith(
-                  tx.treasuryResolvedUtxoProduced != null,
-                  "Treasury resolved UTXO produced should not be null"
-                )
-                _ <- assertWith(tx.tx != null, "Transaction should not be null")
+    val _ = property("Resolution Builder generator works") =
+        runWithCoil(nCoil = 5, quorum = 0)(for {
+            config <- ask
+            _ <- {
+                given MultiNodeConfig = config
+                for {
+                    builder <- pick(genResolutionTxBuilder)
+                    tx <- failLeft(builder.result)
+                    // Basic smoke test assertions
+                    _ <- assertWith(
+                      tx.talliedBallotBox != null,
+                      "Tallied ballot box should not be null"
+                    )
+                    _ <- assertWith(
+                      tx.treasuryUnresolvedUtxoSpent != null,
+                      "Treasury unresolved UTXO spent should not be null"
+                    )
+                    _ <- assertWith(
+                      tx.treasuryResolvedUtxoProduced != null,
+                      "Treasury resolved UTXO produced should not be null"
+                    )
+                    _ <- assertWith(tx.tx != null, "Transaction should not be null")
 
-                // Verify the spent treasury UTXO matches the recipe input
-                _ <- assertWith(
-                  tx.treasuryUnresolvedUtxoSpent == builder.treasuryUtxo,
-                  "Spent treasury UTXO should match recipe input"
-                )
+                    // Verify the spent treasury UTXO matches the recipe input
+                    _ <- assertWith(
+                      tx.treasuryUnresolvedUtxoSpent == builder.treasuryUtxo,
+                      "Spent treasury UTXO should match recipe input"
+                    )
 
-                // Verify treasury state transition from Unresolved to Resolved
-                _ <- assertWith(
-                  tx.treasuryUnresolvedUtxoSpent.treasuryOutput.datum.isInstanceOf[Unresolved],
-                  "Input treasury should be Unresolved"
-                )
-            } yield ()
-        }
+                    // Verify treasury state transition from Unresolved to Resolved
+                    _ <- assertWith(
+                      tx.treasuryUnresolvedUtxoSpent.treasuryOutput.datum.isInstanceOf[Unresolved],
+                      "Input treasury should be Unresolved"
+                    )
+                } yield ()
+            }
 
-    } yield true)
+        } yield true)
 }

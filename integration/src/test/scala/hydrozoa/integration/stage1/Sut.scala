@@ -21,6 +21,7 @@ import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.joint
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
+import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.address.ShelleyAddress
@@ -227,7 +228,9 @@ object SutCommands:
                     val id = cmd.request.requestId
                     val tx = cmd.depositTxBytesSigned
 
-                    sut.cardanoBackend.submitTx(tx) >>= (ret => IO.pure((id, tx) -> ret))
+                    sut.cardanoBackend.submitTx(RawTx(tx)) >>= (ret =>
+                        IO.pure((id, tx) -> ret)
+                    )
                 })
 
                 submissionErrors = ret.filter(_._2.isLeft)

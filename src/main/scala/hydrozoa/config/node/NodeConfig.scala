@@ -5,6 +5,8 @@ import cats.effect.*
 import cats.syntax.contravariant.*
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.head.peers.HeadPeers
@@ -64,10 +66,17 @@ object NodeConfig {
                 )
                 parser.decode(headConfigStr)
             }
+            coilPeers <- EitherT.fromEither[IO] {
+                given onlyCoilPeers: Decoder[CoilPeers] =
+                    Decoder.instance(c =>
+                        c.downField("coilPeers").as[CoilPeers](using coilPeersDecoder)
+                    )
+                parser.decode(headConfigStr)
+            }
 
             privateConfig <- EitherT.fromEither[IO] {
                 given HeadPeers = headPeers
-                given CardanoNetwork = network
+                given CoilPeers = coilPeers
                 io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
             }
 
@@ -140,7 +149,7 @@ object NodeConfig {
         httpHost: String,
         httpPort: String,
     ): Option[NodeConfig] = for {
-        ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeerVKeys)
+        ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeers)
         nodePrivateConfig = NodePrivateConfig(
           ownCoilPeerPrivate,
           nodeOperationEvacuationConfig,
@@ -156,7 +165,7 @@ object NodeConfig {
 
     /** Read both config files and decode the resulting [[NodeConfig]] together with the Blockfrost
       * backend the decoder constructs. Shared by every CLI that needs to act as a configured peer
-      * ([[hydrozoa.app.Main]], [[hydrozoa.app.Migrate]]).
+      * ([[hydrozoa.app.Main]], [[hydrozoa.bootstrap.Migrate]]).
       *
       * @param backendOverride
       *   if `Some`, used in place of the Blockfrost backend the decoder would otherwise build from

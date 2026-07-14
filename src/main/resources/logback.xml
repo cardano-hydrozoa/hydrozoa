@@ -30,8 +30,7 @@
     <logger name="JointLedger" level="trace"/>
     <logger name="HeadMultisigRegimeManager" level="trace"/>
     <logger name="CoilMultisigRegimeManager" level="trace"/>
-    <logger name="DisputeActor" level="trace"/>
-    <logger name="EvacuationActor" level="trace"/>
+    <logger name="RuleBasedActor" level="trace"/>
     <logger name="Limiter" level="trace"/>
     <logger name="RemoteL2Ledger" level="trace"/>
     <logger name="HydrozoaHttp" level="trace"/>

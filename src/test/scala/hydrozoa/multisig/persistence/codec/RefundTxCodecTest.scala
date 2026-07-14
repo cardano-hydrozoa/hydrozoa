@@ -15,6 +15,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.{AddrKeyHash, Transaction}
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 
 /** Round-trip test for [[RefundTx.PostDated]]'s persistence codec. */
 class RefundTxCodecTest extends AnyFunSuite:
@@ -37,7 +38,13 @@ class RefundTxCodecTest extends AnyFunSuite:
           datum = None
         )
         val requestId = RequestId(HeadPeerNumber(2), RequestNumber(42L))
-        val refund = RefundTx.PostDated(tx, refundStart, refundDestination, requestId)
+        val refund = RefundTx.PostDated(
+          tx = tx,
+          refundStart = refundStart,
+          refundDestination = refundDestination,
+          requestId = requestId,
+          resolvedUtxos = ResolvedUtxos.empty
+        )
 
         val json = refund.asJson.noSpaces
         val back = decode[RefundTx.PostDated](json)
