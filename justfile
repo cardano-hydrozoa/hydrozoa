@@ -46,7 +46,7 @@ test:
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt Test/compile integration/Test/compile
+  CI=true sbt Test/compile integration/Test/compile examples/Test/compile
 
 # Generate a whole head's keys + configs in one sbt run, into the config layout:
 #   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}   (+ script-refs.json later)
@@ -98,6 +98,16 @@ build-head-config BOOTSTRAP_DIR="config/demo/bootstrap" OUT="config/demo/head-co
   trap 'just notify "build-head-config"' EXIT
   mkdir -p "$(dirname {{OUT}})"
   sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP_DIR}} --out {{OUT}}"
+
+# Interactively build, sign, and submit an L2 transaction to a running head: pick a peer key,
+# pick one of its L2 utxos, enter destination + value.
+submit-l2-tx CONFIG_DIR="config/demo" HEAD_URI="http://localhost:8080":
+  sbt "examples/runMain hydrozoa.examples.demo.SubmitL2Transaction --config-dir {{CONFIG_DIR}} --head-uri {{HEAD_URI}}"
+
+# Interactively deposit into a running head: pick a peer key, pick one of its L1 utxos, enter the
+# L2 outputs to spawn; registers with the head, then submits the deposit tx to L1 via Blockfrost.
+deposit CONFIG_DIR="config/demo" HEAD_URI="http://localhost:8080":
+  sbt "examples/runMain hydrozoa.examples.demo.SubmitDeposit --config-dir {{CONFIG_DIR}} --head-uri {{HEAD_URI}}"
 
 export:
   #!/usr/bin/env bash

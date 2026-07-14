@@ -387,3 +387,89 @@ Caveats:
   Blockfrost can fail. If containers have no outbound connectivity at all, restart the daemon
   (`systemctl --user restart docker`) — stale rootlesskit state produces exactly that.
 
+
+---
+
+## 7. Demo: drive the running head
+
+Two interactive targets (the `examples` sbt module, `hydrozoa.examples.demo.*`) exercise the head
+end-to-end after `docker compose up`. Both are limited to the demo peers' keys (they read
+`config/demo/private/`), prompt for everything else, and talk to a head peer's HTTP API (default
+`http://localhost:8080`; override with `HEAD_URI=...`). Useful read-only checks alongside them:
+
+```bash
+curl "http://localhost:8080/api/l2/transactions?count=10"      # recent applied L2 txs, newest first
+curl "http://localhost:8080/api/l2/utxos/<bech32-address>"     # current L2 utxos at an address
+```
+
+**Submit an L2 transaction:**
+
+```bash
+just submit-l2-tx        # or: just submit-l2-tx config/demo http://localhost:8081
+```
+
+Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /api/l2/utxos/{address}`
+— the opening `l2-cardano-eutxo.json` outputs sit at the head peers' addresses), enter a
+destination (bech32, or a peer name like `head-1`) and a value. The tool builds the zero-fee
+native tx (with the CIP-67 output designations and the headId pin in the metadata), signs it with
+the peer wallet, and posts it to `POST /api/l2/submit`. An example session — send 2 of head-0's
+opening 5 ADA to head-1:
+
+```
+Select a peer (its key signs everything below):
+    1) coil-0
+    ...
+    5) head-0
+    6) head-1
+Enter 1..6: 5
+
+Peer head-0, L2 address: addr_test1...
+
+L2 utxos at head-0:
+    1) 63f37fc38e5b3652…#0  5.000000 ADA
+Enter 1..1: 1
+Destination (bech32 address, or a peer name like head-1): head-1
+Value to send (whole ADA, available 5.000000 ADA): 2
+Built + signed L2 tx 8de4...
+Accepted: requestId=... . Watch GET http://localhost:8080/api/l2/utxos/... for the result.
+```
+
+Verify with `curl http://localhost:8080/api/l2/utxos/<address>` for both peers — head-1 gains a
+2-ADA utxo, head-0 keeps 3 ADA change.
+
+**Deposit into the head:**
+
+```bash
+just deposit
+```
+
+Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
+is head peer 0, the funded one), and enter the L2 outputs the deposit should spawn. The tool
+serializes the L2 payload, COSE-signs its hash with the peer wallet (the depositor endorsement
+carried in the deposit tx metadata, design note §5.5), registers the deposit with
+`POST /api/deposit/register`, then signs the deposit tx and submits it to L1 via Blockfrost,
+polling until the utxo lands. An example session — deposit 3 ADA from head-0's L1 funds to
+coil-0's L2 address:
+
+```
+Select a peer (its key signs everything below):
+Enter 1..6: 5
+
+Peer head-0, L1 address: addr_test1...
+
+L1 utxos at head-0:
+    1) 09d34beadf03c8b7…#1  9737.297159 ADA
+Enter 1..1: 1
+
+L2 outputs the deposit spawns on absorption:
+Destination (bech32 address, or a peer name like head-1): coil-0
+Value (whole ADA): 3
+Add another output? [y/N]: n
+Built deposit TransactionInput(...#0) (3.000000 ADA to L2, accept-by ...)
+Registered with the head: requestId=...
+Submitted deposit tx ... to L1; waiting for the utxo…
+Deposit is on L1. The head absorbs it after maturity — watch GET .../api/l2/utxos/{destination}
+```
+
+The head absorbs the deposit after maturity (a few minutes with the demo timing) — then
+`curl http://localhost:8080/api/l2/utxos/<coil-0 address>` shows the spawned 3-ADA output.

@@ -126,6 +126,17 @@ lazy val core: Project = (project in file("."))
       run / fork := true,
     )
 
+// Interactive demo targets that drive a running head (DEPLOYMENT.md §7).
+lazy val examples: Project = (project in file("examples"))
+    .dependsOn(core)
+    .settings(
+      name := "hydrozoa-examples",
+      publish / skip := true,
+      run / fork := true,
+      // Wire stdin through to the forked JVM — the demo targets read prompts from the console.
+      run / connectInput := true,
+    )
+
 // Integration tests
 lazy val integration: Project = (project in file("integration"))
     .dependsOn(core % "compile->compile;test->test")
@@ -172,10 +183,10 @@ addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVers
 //addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
 //addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
 //addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
-addCommandAlias("fmtAll", ";core/scalafmtAll")
-addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ")
-addCommandAlias("lintAll", ";core/scalafixAll ")
-addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;")
+addCommandAlias("fmtAll", ";core/scalafmtAll ;examples/scalafmtAll")
+addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;examples/scalafmtCheckAll")
+addCommandAlias("lintAll", ";core/scalafixAll ;examples/scalafixAll")
+addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;examples/scalafixAll --check")
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")

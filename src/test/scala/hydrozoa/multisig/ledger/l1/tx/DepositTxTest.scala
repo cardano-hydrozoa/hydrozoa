@@ -15,9 +15,9 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
