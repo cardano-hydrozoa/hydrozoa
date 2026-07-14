@@ -33,21 +33,28 @@ A grouped overview of what branch `feature/isomorphic-l2` changes; the sections 
 - **L2 backend selection & config.** `HeadParameters.l2Ledger` (`cardano-eutxo` | `any-remote`) +
   `identityIsomorphism`; `sugarRushUri` → `remoteLedgerUri` (optional); L2 query endpoints gated
   EUTXO-only.
-- **Bootstrap config — `peers.json` → `bootstrap.json` (§6.1).** A spec-shaped `Bootstrap.BootstrapConfig`
-  carrying `cardanoNetwork`, `scriptReferenceUtxos`, and the opening `initialL2State` — folding the
-  network, script refs, and opening state out of hard-code / side-files into one agreed artifact,
-  read from the bootstrap directory by `BuildHeadConfig`.
+- **Bootstrap config — the spec-shaped bootstrap directory (§6.1).** The operator authors
+  `bootstrap/{roster, defaults, l2-cardano-eutxo, script-refs}.json` — peer topology, network + head
+  params + per-peer equity (+ optional block-zero timing), the opening `initialL2State`, and the
+  deployed script references — and `BuildHeadConfig` assembles them directly (the intermediate
+  `bootstrap.json` merge step was dropped). Opening-utxo references key off a genesis hash of the
+  whole seed input.
 - **Deposit authentication — COSE over `hash(l2Payload)` (§5.5).** Deposits aren't L2 txs and can't
   self-authenticate, so the depositor COSE-signs `hash(l2Payload)` and carries the key+signature in the
-  deposit metadata; Hydrozoa verifies it while parsing the deposit tx (before screening). Screening
-  splits into `sendScreenTx` / `sendScreenDeposit`. The CIP-30 `signData` primitives the strip had
-  retired are restored (re-pointed at the deposit, not the old request header).
+  deposit metadata; `DepositPreScreening` (parse + COSE + accept-by) gates the deposit path before the
+  ledger's `sendScreenDeposit` value checks. The CIP-30 `signData` primitives the strip had retired are
+  restored (re-pointed at the deposit, not the old request header).
 - **Proxy removal.** Drop the L2-ledger proxy commands (`ProxyBlockConfirmation` / `ProxyRequestError`)
   and everything feeding them — the write-only `confirmations` / `errors` ledger state and the
   `FastConsensusActor` → `JointLedger` soft-confirm fan-out.
-- **Merged from `origin/main`.** fund14-proj69 (`/ready` + `NodeStatus`) and #505 / GUM-129 (init-tx
-  parsing; `Bootstrap` moved to `hydrozoa.bootstrap`).
-- **Docs.** This design note (§5.4 roadmap, §5.3 deposits, §6.1 evacuation-map correction +
+- **Deployment rework.** DEPLOYMENT.md rewritten for the EUTXO head (with a never-use-in-production
+  disclaimer), a single-container-per-node docker compose, the `config/demo/{bootstrap,head-config,
+  private}` layout, and `just head-zero-address` replacing address files.
+- **Interactive demo (`examples` module).** `just submit-l2-tx` and `just deposit` drive a running
+  head end-to-end (DEPLOYMENT.md §7).
+- **Merged from `origin/main`.** fund14-proj69 (`/ready` + `NodeStatus`), #505 / GUM-129 (init-tx
+  parsing; `Bootstrap` moved to `hydrozoa.bootstrap`), and #529 (evac-property coil expansion).
+- **Docs.** This design note (§5.4 roadmap, §5.3 deposits, §5.5 deposit authentication, §6.1
   bootstrap-config revision).
 
 ## 1. Isomorphism goal (EUTXO)
