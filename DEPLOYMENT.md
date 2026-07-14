@@ -300,6 +300,26 @@ docker compose up -d
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 
+To watch the head land on L1, run `docker compose logs <any service>` (e.g. `head-0`) and find
+this section:
+
+```
+23:18:05.107 TRACE CardanoLiaison.0
+[peer=0] current time=1784071085000 utxoIds= state=State(
+  targetState: Active(treasuryUtxoId=TransactionInput("c8bac56e7be7438bd766760a277ed0518fcf390e90cdb30e76eb9cff72254ba2",0))
+  effectInputs (0 entries):
+
+  happyPathEffects (1 entries):
+  (0,0) -> txHash="c8bac56e7be7438bd766760a277ed0518fcf390e90cdb30e76eb9cff72254ba2"
+  fallbackEffects (1 entries):
+  0 -> txHash="a9fe26149502e8c88ba13440976cc8a938bcace5fc33bcd2e4ab06f301e28675"
+)
+```
+
+The `(0,0)` entry under `happyPathEffects` is the initialization tx — open its hash in the
+network's explorer to check it out. Every following happy-path effect (settlements, the
+finalization) appears in the same section as the head progresses.
+
 ### Restarting the head
 
 **Teardown first:** if the previous head initialized and still holds funds, finalize before
