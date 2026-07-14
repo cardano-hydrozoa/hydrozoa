@@ -4,6 +4,7 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.given
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
@@ -31,8 +32,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             cardanoBackend <- lift(
               CardanoBackendMock.mockIO(
                 MockState(initialUtxos =
-                    Map(headConfig.seedUtxo.toTuple)
-                        ++ headConfig.additionalFundingUtxos
+                    headConfig.initializationTx.resolvedUtxos.utxos
                         ++ Map.from(headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
                 )
               )
@@ -76,6 +76,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             mnc <- ask
             _ <- {
                 given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
+                given CoilPeers = mnc.headConfig.coilPeers
                 val npc = mnc.nodePrivateConfigs.head._2
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson

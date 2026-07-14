@@ -5,8 +5,10 @@ import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.TxOutExtension.inlineD
 import hydrozoa.lib.cardano.scalus.cardano.onchain.plutus.ValueExtension.*
 import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer.{Deinit, Evacuate, Resolve}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain.{ResolvedOnchain, UnresolvedOnchain}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatumOnchain}
+import hydrozoa.rulebased.ledger.l1.state.RegimeState.RuleBasedRegimeDatum
+import hydrozoa.rulebased.ledger.l1.state.RegimeState.given
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{MembershipProof, RuleBasedTreasuryDatum, evacuate, resolve}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.*
 import scalus.*
@@ -44,7 +46,10 @@ object RuleBasedTreasuryValidator extends Validator {
     case class EvacuateRedeemer(
         evacuationKeys: List[EvacuationKey],
         // membership proof for evacuation keys and the updated accumulator at the same time
-        proof: MembershipProof
+        proof: MembershipProof,
+        // index (within tx.referenceInputs) of the setup-ladder utxo whose datum holds the
+        // G2 setup prefix used by the membership check
+        setupRefInputIdx: BigInt
     )
 
     given evacuationKeyToData: ToData[EvacuationKey] with {
@@ -64,6 +69,8 @@ object RuleBasedTreasuryValidator extends Validator {
     // Common errors
     private inline val DatumIsMissing =
         "Treasury datum should be present"
+    private inline val RegimeReferenceNotFound =
+        "Rule-based regime reference input was not found"
 
     // Resolve redeemer
     private inline val ResolveNeedsUnresolvedDatumInInput =
@@ -80,8 +87,6 @@ object RuleBasedTreasuryValidator extends Validator {
         "The activeUtxo in resolved treasury must match voting results"
     private inline val ResolveTreasuryInputOutputHeadMp =
         "headMp in treasuryInput and treasuryOutput must match"
-    private inline val ResolveTreasuryInputOutputSetupG2 =
-        "setupG2 in treasuryInput and treasuryOutput must match"
     private inline val ResolveTreasuryOutputFailure =
         "Exactly one treasury output should present"
     private inline val ResolveUnexpectedAwaitingVote =
@@ -97,7 +102,9 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val EvacuateBeaconTokenFailure =
         "Treasury should contain exactly one beacon token"
     private inline val EvacuateSetupIsNotBigEnough =
-        "Trusted setup in the treasury is not big enough"
+        "Referenced trusted setup is not big enough"
+    private inline val EvacuateSetupNotAuthenticated =
+        "Setup reference input is not one of the ladder outRefs in the regime datum"
     private inline val EvacuateMembershipValidationFailed =
         "Evacuatees membership check failed"
     private inline val EvacuateBeaconTokenShouldBePreserved =
@@ -110,8 +117,6 @@ object RuleBasedTreasuryValidator extends Validator {
         "headMp in treasuryInput and treasuryOutput must match"
     private inline val EvacuateVersionShouldBePreserved =
         "version in treasuryInput and treasuryOutput must match"
-    private inline val EvacuateSetupG2ShouldBePreserved =
-        "setupG2 in treasuryInput and treasuryOutput must match"
     private inline val EvacuateTreasuryWrongAddress =
         "Treasury output must remain at the treasury script address"
     private inline val EvacuateMustMakeProgress =
@@ -129,6 +134,31 @@ object RuleBasedTreasuryValidator extends Validator {
 
     def cip67BeaconTokenPrefix = hex"01349900"
 
+    // CIP-67 prefix of the HRWT (Hydrozoa regime witness token), tag 4798
+    def cip67RegimeTokenPrefix = hex"012be4e0"
+
+    /** Finds the rule-based regime reference input — the one holding exactly one `headMp` token
+      * with the HRWT CIP-67 prefix — and parses its inline datum. The token policy is the
+      * authentication: only the head multisig script can mint under `headMp`, and it mints
+      * exactly one HRWT.
+      */
+    def findRegimeReference(tx: TxInfo, headMp: PolicyId): RuleBasedRegimeDatum =
+        tx.referenceInputs
+            .find(i =>
+                i.resolved.value.toSortedMap.get(headMp) match
+                    case Some(tokens) =>
+                        tokens.toList match
+                            case List.Cons(tokenNameAndAmount, tail) =>
+                                tail.isEmpty
+                                    && tokenNameAndAmount._2 == BigInt(1)
+                                    && tokenNameAndAmount._1.take(4) == cip67RegimeTokenPrefix
+                            case _ => false
+                    case None => false
+            )
+            .getOrFail(RegimeReferenceNotFound)
+            .resolved
+            .inlineDatumOfType[RuleBasedRegimeDatum]
+
     // Entry point
     override inline def spend(
         datum: Option[Data],
@@ -140,8 +170,8 @@ object RuleBasedTreasuryValidator extends Validator {
         log("TreasuryValidator")
 
         // Parse datum
-        val treasuryDatum: RuleBasedTreasuryDatumOnchain = datum match
-            case Some(d) => d.to[RuleBasedTreasuryDatumOnchain]
+        val treasuryDatum: RuleBasedTreasuryDatum = datum match
+            case Some(d) => d.to[RuleBasedTreasuryDatum]
             case None    => fail(DatumIsMissing)
 
         // ===================================
@@ -154,8 +184,11 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury datum should be an "unresolved" one
                 val unresolvedDatum = treasuryDatum match
-                    case d: UnresolvedOnchain => d
-                    case _                    => fail(ResolveNeedsUnresolvedDatumInInput)
+                    case d: Unresolved => d
+                    case _             => fail(ResolveNeedsUnresolvedDatumInInput)
+
+                // Immutable head-identity fields come from the regime reference input
+                val regimeDatum = findRegimeReference(tx, unresolvedDatum.headMp)
 
                 // TODO: pass vote input's outRef in the redeemer?
                 // Vote input
@@ -163,8 +196,8 @@ object RuleBasedTreasuryValidator extends Validator {
                     .find(e =>
                         e.resolved.value.containsExactlyOneAsset(
                           unresolvedDatum.headMp,
-                          unresolvedDatum.disputeId,
-                          unresolvedDatum.headPeersN + 1
+                          regimeDatum.disputeId,
+                          regimeDatum.headPeersN + 1
                         )
                     )
                     .getOrFail(ResolveVoteInputNotFound)
@@ -196,9 +229,9 @@ object RuleBasedTreasuryValidator extends Validator {
                 )
 
                 val treasuryOutputDatum =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match
-                        case _: UnresolvedOnchain => fail(ResolveNeedsResolvedDatumInOutput)
-                        case d: ResolvedOnchain   => d
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
+                        case _: Unresolved => fail(ResolveNeedsResolvedDatumInOutput)
+                        case d: Resolved   => d
 
                 val voteDatum = voteInput.inlineDatumOfType[VoteDatum]
 
@@ -212,45 +245,34 @@ object RuleBasedTreasuryValidator extends Validator {
                     case AwaitingVote(_) => fail(ResolveUnexpectedAwaitingVote)
                     case Abstain         => fail(ResolveUnexpectedAbstain)
                     case Voted(commitment, versionMinor) =>
-                        val inputMajor = unresolvedDatum.versionMajor
-                        val inputMinor = versionMinor
-                        val outputMajor = treasuryOutputDatum.version._1
-                        val outputMinor = treasuryOutputDatum.version._2
-                        // (a) Let versionMinor be the corresponding field in voteStatus.
-                        // (b) The version field of treasuryOutput must match (versionMajor, versionMinor).
+                        // The only valid Resolve output is the unresolved input transitioned to
+                        // this vote's commitment and minor version; check each field of the output
+                        // against that transition (which preserves headMp and the major version).
+                        val expected = unresolvedDatum.resolve(commitment, versionMinor)
                         require(
-                          inputMajor == outputMajor &&
-                              inputMinor == outputMinor,
+                          treasuryOutputDatum.version === expected.version,
                           ResolveVersionCheck
                         )
-                        // (c) voteStatus and treasuryOutput must match on utxosActive.
                         require(
-                          treasuryOutputDatum.evacuationActive === commitment,
+                          treasuryOutputDatum.evacuationActive === expected.evacuationActive,
                           ResolveUtxoActiveCheck
                         )
-
-                // 8. treasuryInput and treasuryOutput must match on all other fields.
-                require(
-                  unresolvedDatum.headMp === treasuryOutputDatum.headMp,
-                  ResolveTreasuryInputOutputHeadMp
-                )
-
-                require(
-                  unresolvedDatum.setupG2 === treasuryOutputDatum.setupG2,
-                  ResolveTreasuryInputOutputSetupG2
-                )
+                        require(
+                          treasuryOutputDatum.headMp === expected.headMp,
+                          ResolveTreasuryInputOutputHeadMp
+                        )
 
             // ===================================
             // Evacuate redeemer
             // ===================================
 
-            case Evacuate(EvacuateRedeemer(evacuationKeys, proof)) =>
+            case Evacuate(EvacuateRedeemer(evacuationKeys, proof, setupRefInputIdx)) =>
                 log("Evacuate")
 
                 // Treasury datum should be "resolved" one
                 val resolvedDatum = treasuryDatum match
-                    case d: ResolvedOnchain => d
-                    case _                  => fail(EvacuateNeedsResolvedDatum)
+                    case d: Resolved => d
+                    case _           => fail(EvacuateNeedsResolvedDatum)
 
                 // headMp and headId
 
@@ -334,14 +356,30 @@ object RuleBasedTreasuryValidator extends Validator {
                 val acc = bls12_381_G1_uncompress(resolvedDatum.evacuationActive)
                 val proof_ = bls12_381_G1_uncompress(proof)
 
+                // The G2 setup prefix comes from a setup-ladder reference input, deployed once
+                // and pointed at by the redeemer. It is authenticated against the ladder anchor
+                // recorded in the regime datum (written by the all-peers-signed FallbackTx): a
+                // degenerate setup (e.g. all G2 identity points) would trivially satisfy the
+                // pairing check, so the ref input must be one of the seven rungs, which sit at
+                // outputs 0-6 of the anchor's transaction.
+                val setupRefInput = tx.referenceInputs !! setupRefInputIdx
+                val ladderAnchor = findRegimeReference(tx, headMp).setupG2Ladder
                 require(
-                  resolvedDatum.setupG2.length > evacuatedUtxos.length,
+                  setupRefInput.outRef.id === ladderAnchor.id
+                      && setupRefInput.outRef.idx < 7,
+                  EvacuateSetupNotAuthenticated
+                )
+                val setupG2 =
+                    setupRefInput.resolved.inlineDatumOfType[List[ByteString]]
+
+                require(
+                  setupG2.length > evacuatedUtxos.length,
                   EvacuateSetupIsNotBigEnough
                 )
 
                 // Extract the G2 setup prefix of needed length and decompress for pairing.
                 val uncompressedSetup =
-                    resolvedDatum.setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
+                    setupG2.take(evacuatedUtxos.length + 1).map(G2.uncompress)
 
                 //// trace hashes
                 // evacuatednUtxos.foreach( s =>
@@ -355,32 +393,26 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Accumulator updated commitment
                 val outputResolvedDatum =
-                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatumOnchain] match
-                        case _: UnresolvedOnchain => fail(ResolveNeedsResolvedDatumInOutput)
-                        case d: ResolvedOnchain   => d
+                    treasuryOutput.inlineDatumOfType[RuleBasedTreasuryDatum] match
+                        case _: Unresolved => fail(ResolveNeedsResolvedDatumInOutput)
+                        case d: Resolved   => d
 
+                // The only valid Evacuate output advances the accumulator to `proof` and preserves
+                // the identity-binding fields (foundation I6 Preservation): headMp anchors the
+                // regime-utxo lookup and beacon checks; version pins the resolved commitment
+                // lineage. Check each field of the output against that transition.
+                val expectedOutput = resolvedDatum.evacuate(proof)
                 require(
-                  outputResolvedDatum.evacuationActive == proof,
+                  outputResolvedDatum.evacuationActive == expectedOutput.evacuationActive,
                   EvacuateOutputAccumulatorUpdated
                 )
-
-                // Identity-binding fields must be preserved across the Evacuate transition
-                // (foundation I6 Preservation). Without these, an attacker could land one
-                // legitimate Evacuate, corrupt the output's setupG2 to a degenerate value
-                // (e.g., all G2 identity points, which trivially satisfy any pairing check),
-                // then drain the treasury via subsequent Evacuates that pass checkMembership
-                // for arbitrary (subset, proof). Equivalent risks exist for headMp and version.
                 require(
-                  outputResolvedDatum.headMp === resolvedDatum.headMp,
+                  outputResolvedDatum.headMp === expectedOutput.headMp,
                   EvacuateHeadMpShouldBePreserved
                 )
                 require(
-                  outputResolvedDatum.version === resolvedDatum.version,
+                  outputResolvedDatum.version === expectedOutput.version,
                   EvacuateVersionShouldBePreserved
-                )
-                require(
-                  outputResolvedDatum.setupG2 === resolvedDatum.setupG2,
-                  EvacuateSetupG2ShouldBePreserved
                 )
 
                 // treasuryInput must hold the sum of all tokens in treasuryOutput and the outputs of
@@ -403,8 +435,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
                 // Treasury should be resolved
                 val (headMp, utxosActive) = treasuryDatum match
-                    case d: ResolvedOnchain   => (d.headMp, d.evacuationActive)
-                    case _: UnresolvedOnchain => fail(DeinitRequiresResolvedTreasury)
+                    case d: Resolved   => (d.headMp, d.evacuationActive)
+                    case _: Unresolved => fail(DeinitRequiresResolvedTreasury)
 
                 // TODO: factor out
                 val treasuryInput = tx.inputs
@@ -422,12 +454,22 @@ object RuleBasedTreasuryValidator extends Validator {
                   DeinitTokensNotFound
                 )
 
-                // All head tokens should be burned, which means that all peers sign the tx.
+                // All treasury head tokens should be burned, which means that all peers sign the
+                // tx. The burn map may contain more `headMp` burns than the treasury's own tokens
+                // (the same DeinitTx also burns the HRWT held by the regime utxo), so require
+                // inclusion rather than equality.
                 val headTokensMint = (-tx.mint).toSortedMap
                     .get(headMp)
                     .getOrFail(DeinitTokensNotBurned)
 
-                require(headTokensInput === headTokensMint, DeinitTokensNotBurned)
+                require(
+                  headTokensInput.toList.forall(tokenNameAndAmount =>
+                      headTokensMint.get(tokenNameAndAmount._1) match
+                          case Some(burned) => burned == tokenNameAndAmount._2
+                          case None         => false
+                  ),
+                  DeinitTokensNotBurned
+                )
 
                 // All utxos should be evacuated
                 // TODO: comparing as bytestrings is more efficient, we want to have this constant in Scalus

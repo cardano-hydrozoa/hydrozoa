@@ -36,7 +36,7 @@ final case class RatchetVoteTx(
     ballotBoxProduced: BallotBox[Voted],
     override val tx: Transaction,
     override val txLens: Lens[RatchetVoteTx, Transaction] = Focus[RatchetVoteTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[RatchetVoteTx] {}
 
 object RatchetVoteTx {
@@ -69,6 +69,7 @@ private object RatchetVoteTxOps {
     final case class Build(
         openBallotBox: BallotBox[Voted | Abstain.type],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -118,6 +119,7 @@ private object RatchetVoteTxOps {
                     openBallotBox.spend(redeemer),
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
+                    regimeUtxo.referenceOutput,
                     ValidityEndSlot(votingDeadline.slot)
                   )
                 )
@@ -139,7 +141,8 @@ private object RatchetVoteTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

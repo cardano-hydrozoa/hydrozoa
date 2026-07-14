@@ -54,16 +54,16 @@ case object MultisigRegimeOutput {
       value = Value(config.totalFallbackContingency) +
           Value.asset(
             config.headMultisigScript.policyId,
-            config.headTokenNames.multisigRegimeTokenName,
+            config.headTokenNames.regimeWitnessTokenName,
             1L
           ),
       datumOption = None,
       scriptRef = Some(ScriptRef(config.headMultisigScript.script))
     )
 
-    def burnMultisigRegimeTokens(using config: Config) = Mint(
+    def burnRegimeWitnessToken(using config: Config) = Mint(
       config.headMultisigScript.policyId,
-      config.headTokenNames.multisigRegimeTokenName,
+      config.headTokenNames.regimeWitnessTokenName,
       -1,
       config.headMultisigScript.witnessAttached
     )

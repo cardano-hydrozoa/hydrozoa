@@ -264,18 +264,22 @@ trait HeadMultisigRegimeManager(
             )
         } yield ()
 
+    // Idempotent: `Nil` from `getAndSet` means we've already handed off.
     override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
-        for {
-            refs <- nonClChildren.getAndSet(Nil)
-            _ <- refs.traverse_(context.stop)
-            _ <- context.actorOf(
-              RuleBasedRegimeManager(
-                cardanoBackend = cardanoBackend,
-                persistence = persistence,
-                tracer = tracers.ruleBasedActor,
-              )(using config)
-            )
-        } yield ()
+        nonClChildren.getAndSet(Nil).flatMap {
+            case Nil => IO.unit
+            case refs =>
+                refs.traverse_(context.stop) >>
+                    context
+                        .actorOf(
+                          RuleBasedRegimeManager(
+                            cardanoBackend = cardanoBackend,
+                            persistence = persistence,
+                            tracer = tracers.ruleBasedActor,
+                          )(using config)
+                        )
+                        .void
+        }
 }
 
 /** Multisig regime manager starts-up and monitors all the actors of the multisig regime.

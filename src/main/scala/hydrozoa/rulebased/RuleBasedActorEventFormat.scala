@@ -14,6 +14,8 @@ object RuleBasedActorEventFormat:
                 warn(s"Backend error querying dispute UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorTreasuryUtxos(err) =>
                 warn(s"Backend error querying treasury UTxOs. Will retry.\n\tError: $err")
+            case Backend.ErrorRegimeUtxos(err) =>
+                warn(s"Backend error querying regime UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorPeerUtxos(err) =>
                 warn(s"Backend error querying peer UTxOs. Will retry.\n\tError: $err")
             case Backend.ErrorFeeUtxos(err) =>
@@ -30,13 +32,21 @@ object RuleBasedActorEventFormat:
             case Treasury.ParsedUnresolved => info("Treasury is Unresolved")
             case Treasury.ParsedResolved   => info("Treasury is Resolved")
 
-            case Collateral.Querying(addr) =>
-                debug(s"Querying collateral utxos at address $addr")
+            case Regime.Querying => debug("Querying regime utxo")
+            case Regime.Found    => debug("Found regime utxo")
+            case Regime.NotFound => debug("Regime utxo not found, retrying")
+
+            case Collateral.Querying(address) =>
+                debug(s"Querying collateral utxos at address $address")
             case Collateral.Found => debug("Found collateral utxo")
-            case Collateral.NotFound(peerLabel) =>
-                error(s"Could not find a collateral utxo for peer $peerLabel")
-            case Collateral.NoFeeCollateralUtxo =>
-                debug("No fee/collateral UTxO found at wallet address, retrying")
+            case Collateral.NotFound(address) =>
+                error(
+                  s"No ADA-only utxo found at $address. " +
+                      "Please send an ADA-only utxo for collateral to this address."
+                )
+
+            case Fee.Querying(address) =>
+                debug(s"Querying fee utxos at address $address")
 
             case Dispute.Querying          => debug("Querying dispute utxos")
             case Dispute.Parsing           => debug("Parsing dispute utxos")
@@ -44,6 +54,13 @@ object RuleBasedActorEventFormat:
             case Dispute.ParsingTally      => info("Dispute state: ready to tally")
             case Dispute.ParsingResolve    => info("Dispute state: ready to resolve")
             case Dispute.ParsingEmptyVotes => warn("Dispute state: no vote utxos (unexpected)")
+            case Dispute.WaitingForVotesBeforeDeadline =>
+                info("Dispute state: awaiting peer votes; deadline not yet elapsed")
+            case Dispute.VotingDeadlineElapsed =>
+                info(
+                  "Dispute state: voting deadline elapsed; skipping our own vote/ratchet " +
+                      "and dispatching to residual tally/resolve"
+                )
 
             case Dispute.Coil.ParsingRatchet =>
                 info("Coil dispute state: ratcheting a public ballot box")

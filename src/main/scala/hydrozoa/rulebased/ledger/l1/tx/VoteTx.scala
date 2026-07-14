@@ -36,7 +36,7 @@ final case class VoteTx(
     ballotBoxProduced: BallotBox[VoteStatus.Voted],
     override val tx: Transaction,
     override val txLens: Lens[VoteTx, Transaction] = Focus[VoteTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[VoteTx] {}
 
 object VoteTx {
@@ -69,6 +69,7 @@ private object VoteTxOps {
     final case class Build(
         uncastBallotBox: BallotBox[VoteStatus.AwaitingVote],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
         sec: StandaloneEvacuationCommitment.Onchain,
         signatures: List[BlockHeader.Minor.HeaderSignature],
@@ -157,6 +158,7 @@ private object VoteTxOps {
                     // Send back to the vote contract address with updated datum
                     votedOutput.send,
                     treasuryUtxo.referenceOutput,
+                    regimeUtxo.referenceOutput,
                     ValidityEndSlot(votingDeadline.slot)
                   )
                 )
@@ -176,7 +178,8 @@ private object VoteTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 votedOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

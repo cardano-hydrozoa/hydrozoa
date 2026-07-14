@@ -351,10 +351,13 @@ case class Suite(
 
             generateHeadConfig = hydrozoa.config.head.generateHeadConfig(
               genHeadConfigBootstrap = generateHeadConfigBootstrap,
-              generateInitialBlock = bootstrap =>
+              generateInitialBlock = (bootstrap, funding) =>
                   hydrozoa.config.head.initialization.generateInitialBlock(
                     genHeadConfigBootstrap = ReaderT
-                        .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                        .pure[Gen, TestPeers, (
+                            hydrozoa.config.head.HeadConfig.Bootstrap,
+                            hydrozoa.bootstrap.InitializationFunding
+                        )]((bootstrap, funding)),
                     generateBlockCreationEndTime = generateHeadStartTime
                   )
             )
@@ -531,6 +534,9 @@ case class Suite(
                     clTracer,
                     persistence,
                     mrmSelf = mrmSelfStub,
+                    // Stage1 runs no user-facing HTTP server, so the readiness status has
+                    // no reader.
+                    advanceNodeStatus = _ => IO.unit,
                   )
                 )
                 // Request sequencer stub

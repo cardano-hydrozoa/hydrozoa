@@ -5,7 +5,9 @@ import hydrozoa.multisig.ledger.commitment.{KzgCommitment, TrustedSetup}
 import hydrozoa.multisig.ledger.joint.EvacuationKey
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
+import hydrozoa.rulebased.ledger.l1.state.RegimeState.RuleBasedRegimeDatum
+import hydrozoa.rulebased.ledger.l1.state.RegimeState.given
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.given
 import org.scalatest.funsuite.AnyFunSuite
 import scala.annotation.nowarn
@@ -169,12 +171,11 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         treasuryOutputAddr: Address,
         treasuryOutputValue: Value
     ): scala.util.Try[Unit] = {
-        def datum(acc: ByteString): RuleBasedTreasuryDatumOnchain =
-            RuleBasedTreasuryDatumOnchain.ResolvedOnchain(
+        def datum(acc: ByteString): RuleBasedTreasuryDatum =
+            RuleBasedTreasuryDatum.Resolved(
               headMp = headMp,
               evacuationActive = acc,
-              version = (BigInt(1), BigInt(0)),
-              setupG2 = setupG2
+              version = (BigInt(1), BigInt(0))
             )
         val treasuryInput = TxInInfo(
           treasuryRef,
@@ -182,6 +183,35 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
             treasuryScriptAddr,
             treasuryInValue,
             OutputDatum.OutputDatum(datum(inAccumulator).toData)
+          )
+        )
+        // Setup-ladder reference input: inline List[ByteString] datum with the G2 setup prefix.
+        val ladderOutRef = TxOutRef(TxId(ByteString.fromHex("ef" * 32)), BigInt(0))
+        val ladderRefInput = TxInInfo(
+          ladderOutRef,
+          TxOut(
+            Address.fromScriptHash(ByteString.fromHex("22" * 28)),
+            Value.lovelace(BigInt(5_000_000)),
+            OutputDatum.OutputDatum(setupG2.toData)
+          )
+        )
+        // Regime reference input: HRWT beacon under headMp + head-identity datum whose
+        // setupG2Ladder anchor is the ladder ref input's outRef (authenticating the rung).
+        val regimeDatum = RuleBasedRegimeDatum(
+          disputeId = ByteString.fromHex("01ff" + "aa" * 30),
+          headPeers = List.empty,
+          headPeersN = BigInt(0),
+          coilPeers = List.empty,
+          coilQuorum = BigInt(0),
+          setupG2Ladder = ladderOutRef
+        )
+        val regimeRefInput = TxInInfo(
+          TxOutRef(TxId(ByteString.fromHex("ee" * 32)), BigInt(0)),
+          TxOut(
+            Address.fromScriptHash(ByteString.fromHex("33" * 28)),
+            Value.lovelace(BigInt(2_000_000))
+                + Value(headMp, ByteString.fromHex("012be4e0" + "bb" * 28), BigInt(1)),
+            OutputDatum.OutputDatum(regimeDatum.toData)
           )
         )
         val changeOutput = TxOut(attackerAddr, Value.lovelace(BigInt(2_000_000)))
@@ -192,12 +222,17 @@ class RuleBasedTreasuryScriptTest extends AnyFunSuite {
         )
         val txInfo = TxInfo(
           inputs = List(treasuryInput),
+          referenceInputs = List.Cons(ladderRefInput, List.single(regimeRefInput)),
           outputs = List.Cons(changeOutput, List.Cons(treasuryOutput, evacuationOutputs)),
           id = TxId(ByteString.fromHex("cd" * 32))
         )
         val redeemer: TreasuryRedeemer =
             TreasuryRedeemer.Evacuate(
-              EvacuateRedeemer(evacuationKeys = evacuationKeys, proof = proof)
+              EvacuateRedeemer(
+                evacuationKeys = evacuationKeys,
+                proof = proof,
+                setupRefInputIdx = BigInt(0)
+              )
             )
         scala.util.Try(
           RuleBasedTreasuryValidator.spend(

@@ -1,62 +1,66 @@
 package hydrozoa.rulebased.ledger.l1.utxo
 
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
-import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
+import org.scalacheck.Gen
+import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.utils.MinCoinSizedTransactionOutput
 import scalus.cardano.ledger.{AssetName, Coin, Sized, TransactionOutput, Value}
-import scalus.uplc.builtin.bls12_381.G2Element
+import scalus.uplc.builtin.ByteString
 import test.TestPeersSpec
 
-/** Prints a table of (setupSize, cborBytes, minAda lovelace) for Unresolved treasury outputs.
+/** Measures the CBOR size and minAda of no-liabilities treasury outputs.
   *
-  * Used to determine the minimum ADA that must be reserved in the treasury at resolution time so
-  * that every subsequent EvacuationTx output respects minAda without the balancer needing to add
-  * ADA (which would break the value-conservation invariant).
+  * The treasury datum is constant-size (the G2 setup and head-identity fields live in the setup
+  * ladder / regime utxos), so a single measurement per datum shape suffices. The measured size
+  * informs `FallbackContingency.Assumptions.maxNoLiabilitiesTreasuryUtxoBytes`.
   */
 class TreasuryOutputSizeTest extends AnyFunSuite:
 
-    test("Unresolved treasury output CBOR size and minAda vs setup size (0 to 65)"):
-        val env = MultiNodeConfig.generate(TestPeersSpec.default)().sample.get
+    test("no-liabilities treasury output CBOR size and minAda (Unresolved and Resolved)"):
+        val env = MultiNodeConfig
+            .generate(TestPeersSpec.default)()
+            .pureApply(Gen.Parameters.default, Seed(0L))
         val config = env.headConfig
-
-        // Convert to a Scala List so we can use .take(n) cleanly
-        val allG2Points: List[scalus.uplc.builtin.ByteString] =
-            TrustedSetup
-                .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-                .toScalaList
-                .map(p2 => G2Element(p2).toCompressedByteString)
+        val headMp = config.headMultisigScript.policyId
 
         val beaconToken = Value.asset(
-          config.headMultisigScript.policyId,
+          headMp,
           AssetName(config.headTokenNames.treasuryTokenName.bytes),
           1
         )
         // Minimal realistic value: 2 ADA + treasury beacon token.
         val baseValue = Value(Coin.ada(2)) + beaconToken
 
-        println(f"\n${"setupSize"}%10s  ${"cborBytes"}%10s  ${"minAda (lovelace)"}%20s")
-        println("-" * 46)
+        val unresolved = Unresolved(
+          headMp = headMp,
+          deadlineVoting = BigInt(2_000_000_000L),
+          versionMajor = BigInt(1)
+        )
+        // A KZG membership proof is a compressed G1 point (48 bytes).
+        val resolved = Resolved(
+          headMp = headMp,
+          evacuationActive = ByteString.fromArray(Array.fill(48)(0xff.toByte)),
+          version = (BigInt(1), BigInt(2))
+        )
 
-        val rows: IndexedSeq[(Int, Int, Coin)] =
-            (0 to (EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)).map { n =>
-                val setup = scalus.cardano.onchain.plutus.prelude.List.from(allG2Points.take(n))
-                val datum = Unresolved(
-                  deadlineVoting = BigInt(2_000_000_000L),
-                  versionMajor = BigInt(1),
-                  setupG2 = setup
-                )
-                // Upcast to TransactionOutput so the scalus Encoder[TransactionOutput] is resolved
-                val output: TransactionOutput =
-                    RuleBasedTreasuryOutput(datum, baseValue).toOutput(using config)
-                val sized = Sized(output)
-                val minAda =
-                    MinCoinSizedTransactionOutput.ensureMinAda(sized, config.cardanoProtocolParams)
-                println(f"$n%10d  ${sized.size}%10d  ${minAda.value}%20d")
-                (n, sized.size, minAda)
-            }
+        val rows = List("Unresolved" -> unresolved, "Resolved" -> resolved).map { (name, datum) =>
+            val output: TransactionOutput =
+                RuleBasedTreasuryOutput(datum, baseValue).toOutput(using config)
+            val sized = Sized(output)
+            val minAda =
+                MinCoinSizedTransactionOutput.ensureMinAda(sized, config.cardanoProtocolParams)
+            println(f"$name%12s  cborBytes=${sized.size}%5d  minAda=${minAda.value}%9d lovelace")
+            (name, sized.size, minAda)
+        }
 
-        val _ = assert(rows(0)._2 < rows(65)._2, "CBOR size should grow with setup length")
-        assert(rows.forall(_._3.value > 0), "minAda must be positive for all setup sizes")
+        // The slim datum makes the treasury output small and constant-size; assert a generous
+        // upper bound well under FallbackContingency's 6960-byte assumption.
+        rows.foreach { (name, size, minAda) =>
+            val _ = assert(
+              size <= 400,
+              s"$name treasury output measured $size CBOR bytes; expected <= 400"
+            )
+            assert(minAda.value > 0, s"$name minAda must be positive (was ${minAda.value})")
+        }
