@@ -280,7 +280,7 @@ object CommandGenerators:
                                         )
 
                                         // The depositor's COSE endorsement of the L2 payload
-                                        // (design note §5.5); the submitting peer plays the
+                                        // (docs/l2-isomorphism.md); the submitting peer plays the
                                         // depositor.
                                         l2PayloadSerialized = GenesisObligation.serialize(l2Outputs)
                                         l2PayloadCose = config

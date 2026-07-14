@@ -10,8 +10,8 @@ import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{KeepRaw, Transaction}
 
-/** The headId pin (§5.2 of the L2-isomorphism design note): an L2 tx must carry this head's headId
-  * metadatum, unless the head runs in identity-isomorphism mode.
+/** The headId pin (docs/l2-isomorphism.md): an L2 tx must carry this head's headId metadatum,
+  * unless the head runs in identity-isomorphism mode.
   */
 object HeadIdPinTest extends Properties("headId pin") {
 

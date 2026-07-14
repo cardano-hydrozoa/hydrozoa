@@ -44,6 +44,9 @@ object L2LedgerState:
   * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
   * from the perspective of the _consumer_.
   *
+  * Every implementation must be deterministic: consensus feeds each peer's replica the same ordered
+  * commands, so a non-deterministic ledger diverges across peers and breaks consensus.
+  *
   * NOTE:
   *   - The constructor of [[L2LedgerState]] is private. The only way to construct a new state is
   *     via the [[L2LedgerState.empty]] method in the companion object.
@@ -90,16 +93,16 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    /** Stateless pre-RequestId screening of a transaction request (§4.1 / §5.4): decide whether the
-      * native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to consensus —
-      * reject a malformed or replay-pinned tx before it consumes resources. A transaction has no
-      * pre-screening stage: it self-authenticates through its own witnesses, so this is the whole
-      * of its screening. Conservative: only definite, stateless failures; stateful checks (balance,
-      * inputs, completeness) stay at submission.
+    /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
+      * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
+      * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
+      * transaction has no pre-screening stage: it self-authenticates through its own witnesses, so
+      * this is the whole of its screening. Conservative: only definite, stateless failures;
+      * stateful checks (balance, inputs, completeness) stay at submission.
       */
     def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
 
-    /** Stateless pre-RequestId screening of a deposit request (§5.5) — the ledger's stage, after
+    /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
       * Hydrozoa's deposit pre-screening (COSE authentication + the accept-by check) has passed. The
       * ledger checks that the `l2Payload` is well-formed for it and consistent with the deposit's
       * reference data — for the EUTXO ledger, that `depositL2Value` covers the `l2Payload` outputs.

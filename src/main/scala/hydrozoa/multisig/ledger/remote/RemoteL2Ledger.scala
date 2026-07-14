@@ -148,8 +148,8 @@ class RemoteL2Ledger private (
     }
 
     /** Passthrough for now: the remote ledger accepts every request and does its own screening at
-      * submission. A dedicated remote screening endpoint (§9 item 3) replaces this so a remote node
-      * also rejects pre-RequestId.
+      * submission. A dedicated remote screening endpoint (docs/l2-isomorphism.md, Limitations)
+      * replaces this so a remote node also rejects pre-RequestId.
       */
     override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
         EitherT.rightT[IO, L2LedgerError](())

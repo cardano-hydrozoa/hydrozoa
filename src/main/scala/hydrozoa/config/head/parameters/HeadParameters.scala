@@ -52,9 +52,9 @@ object HeadParameters {
         def l2Ledger: L2LedgerKind = headParameters.l2Ledger
 
         /** Identity isomorphism: when `true`, the exact L1 tx runs on L2 unchanged — the ledger
-          * does NOT enforce the `headId` pin (which reopens cross-head replay, §5.2). Default
-          * `false` (format isomorphism only; pin enforced). Agreed by all peers — it changes the
-          * trust model.
+          * does NOT enforce the `headId` pin, which reopens cross-head replay
+          * (docs/l2-isomorphism.md). Default `false` (format isomorphism only; pin enforced).
+          * Agreed by all peers — it changes the trust model.
           */
         def identityIsomorphism: Boolean = headParameters.identityIsomorphism
 

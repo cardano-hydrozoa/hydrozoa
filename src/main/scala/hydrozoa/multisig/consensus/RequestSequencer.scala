@@ -83,11 +83,12 @@ trait RequestSequencer(
             req.request.handleSync(
               req,
               (userRequest: UserRequest) => {
-                  // §4.1 screening: decide whether this request is worth a RequestId. On a No,
-                  // reject before assigning one — no id, no CR1 persist, no consensus fan-out.
-                  // A transaction goes straight to the ledger (it self-authenticates through its
-                  // own witnesses); a deposit first runs Hydrozoa's pre-screening (§5.5: COSE
-                  // authentication + the accept-by gate), then the ledger's value checks.
+                  // Screening (docs/l2-isomorphism.md): decide whether this request is worth a
+                  // RequestId. On a No, reject before assigning one — no id, no CR1 persist, no
+                  // consensus fan-out. A transaction goes straight to the ledger (it
+                  // self-authenticates through its own witnesses); a deposit first runs Hydrozoa's
+                  // pre-screening (COSE authentication + the accept-by gate), then the ledger's
+                  // value checks.
                   val screened: IO[Either[String, Unit]] = userRequest.body match {
                       case UserRequestBody.TransactionRequestBody(l2Payload) =>
                           l2Ledger.sendScreenTx(l2Payload).value.map(_.left.map(_.message))

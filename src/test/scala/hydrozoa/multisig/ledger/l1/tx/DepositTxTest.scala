@@ -103,7 +103,7 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         l2Payload = GenesisObligation.serialize(l2Outputs)
         // The depositor endorses the L2 payload: COSE-sign its hash with the depositor's wallet
-        // (design note §5.5).
+        // (docs/l2-isomorphism.md).
         l2PayloadCose = multiNodeConfig
             .nodeConfigs(depositor)
             .ownWallet

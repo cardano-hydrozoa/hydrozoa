@@ -45,7 +45,7 @@ private object DepositTxOps {
         utxosFunding: NonEmptyList[Utxo],
         l2Payload: ByteString,
         /** The depositor's CIP-30 COSE endorsement of `blake2b_256(l2Payload)` — carried in the
-          * deposit metadata so the head can authenticate the L2 payload (design note §5.5).
+          * deposit metadata so the head can authenticate the L2 payload (docs/l2-isomorphism.md).
           */
         l2PayloadCose: Cip30SignedData,
         l2Value: Value,
@@ -223,7 +223,7 @@ private object DepositTxOps {
 
                         // Verify the depositor's COSE endorsement: the signature must be valid,
                         // and it must cover blake2b_256(l2Payload) — binding the out-of-band L2
-                        // payload to this on-chain deposit (design note §5.5).
+                        // payload to this on-chain deposit (docs/l2-isomorphism.md).
                         coseVerified <- Cip30Verify
                             .verify(coseKey.toHex, coseSignature.toHex)
                             .left

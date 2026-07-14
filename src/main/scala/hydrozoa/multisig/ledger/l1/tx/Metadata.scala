@@ -92,7 +92,7 @@ object Metadata {
       * @param coseSignature
       *   The CBOR bytes of the depositor's COSE_Sign1 over `blake2b_256(l2Payload)` — the L2
       *   payload itself is passed out-of-band, and the parse verifies this signature binds it to
-      *   the deposit (design note §5.5).
+      *   the deposit (docs/l2-isomorphism.md).
       */
     case class Deposit(
         depositIx: Int,

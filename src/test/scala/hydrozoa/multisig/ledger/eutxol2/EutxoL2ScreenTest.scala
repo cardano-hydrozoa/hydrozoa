@@ -14,8 +14,8 @@ import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genGenesisObligation
 
-/** EUTXO stateless screening (§4.1/§5.5): a transaction payload must parse (and carry the headId
-  * pin, tested separately in [[HeadIdPinTest]]); a deposit's l2Payload must decode to
+/** EUTXO stateless screening (docs/l2-isomorphism.md): a transaction payload must parse (and carry
+  * the headId pin, tested separately in [[HeadIdPinTest]]); a deposit's l2Payload must decode to
   * GenesisObligations whose total value is covered by depositL2Value. The accept path for
   * well-formed transactions is covered by the stage integration suites; deposit pre-screening (COSE
   * + accept-by) is Hydrozoa-side and out of the ledger's scope.

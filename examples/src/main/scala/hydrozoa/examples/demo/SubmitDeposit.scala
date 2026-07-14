@@ -33,9 +33,9 @@ import scalus.uplc.builtin.ByteString
   * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
   * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload,
   * COSE-signs its hash with the peer wallet (the depositor's endorsement carried in the deposit tx
-  * metadata, design note §5.5), registers the deposit with the head (`POST /api/deposit/register`),
-  * then signs the deposit tx and submits it to L1 via Blockfrost, polling until the deposit utxo
-  * lands. The head absorbs it after maturity.
+  * metadata, docs/l2-isomorphism.md), registers the deposit with the head (`POST
+  * /api/deposit/register`), then signs the deposit tx and submits it to L1 via Blockfrost, polling
+  * until the deposit utxo lands. The head absorbs it after maturity.
   *
   * Usage:
   * {{{
@@ -105,8 +105,8 @@ object SubmitDeposit
                 l2Payload = GenesisObligation.serialize(obligations)
                 l2Value = Value.combine(obligations.map(_.l2OutputValue).toList)
 
-                // The depositor's endorsement of the L2 payload (design note §5.5), carried in
-                // the deposit tx metadata and verified by the head's deposit pre-screening.
+                // The depositor's endorsement of the L2 payload (docs/l2-isomorphism.md), carried
+                // in the deposit tx metadata and verified by the head's deposit pre-screening.
                 l2PayloadCose = config.ownWallet.signCoseCip30(blake2b_256(l2Payload).bytes)
 
                 now <- IO.realTimeInstant

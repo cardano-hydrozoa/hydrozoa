@@ -6,9 +6,9 @@ import scalus.cardano.ledger.AuxiliaryData.Metadata
 import scalus.cardano.ledger.{Metadatum, Transaction, Word64}
 
 /** The headId pin: every L2 transaction carries the head's `headId` in a dedicated transaction
-  * metadatum so the ledger can reject cross-head replay (§5.2 of the L2-isomorphism design note).
-  * The value follows the L1 convention (`Metadatum.Text(headId.toHex)`); the label is **distinct**
-  * from the CIP-67 head tag (4937), which carries the per-output L1/L2 designation list.
+  * metadatum so the ledger can reject cross-head replay (docs/l2-isomorphism.md). The value follows
+  * the L1 convention (`Metadatum.Text(headId.toHex)`); the label is **distinct** from the CIP-67
+  * head tag (4937), which carries the per-output L1/L2 designation list.
   */
 object HeadIdPin {
 

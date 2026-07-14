@@ -12,6 +12,7 @@ PDF). For project-wide conventions, start with the style guide.
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
 | [fast-consensus.md](fast-consensus.md) | The fast cycle: per-peer soft-confirmation of block headers, eager signature collection, BlockWeaver / JointLedger / FastConsensusActor roles. |
 | [integration-stages.md](integration-stages.md) | The two integration test stages under `integration/`: which stage tests what, where to add a test, what each property checks. |
+| [l2-isomorphism.md](l2-isomorphism.md) | L2 isomorphism: driving the EUTXO ledger with native Cardano txs — the headId pin, mandatory tx metadata, screening vs submission, deposit authentication (COSE), and the `cardano-eutxo` / `any-remote` backend selection. |
 | [l2-query-endpoints.md](l2-query-endpoints.md) | The user-facing server's read-only L2 queries: `GET /api/l2/utxos/{address}` (CIP-0116 utxos) and `GET /api/l2/transactions` (recent activity); EUTXO-only, empty on a remote-ledger node. |
 | [logging-tracing.md](logging-tracing.md) | Contextual logging and tracing: Tracer, IOLocal-carried context, routing keys, migration off SLF4J MDC. |
 | [observability-endpoints.md](observability-endpoints.md) | The user-facing server's `/health` (liveness) and `/ready` (readiness) endpoints: semantics, status mapping, how `NodeStatus` is maintained. |

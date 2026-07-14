@@ -13,15 +13,15 @@ import scala.language.implicitConversions
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.uplc.builtin.ByteString
 
-/** Deposit pre-screening — Hydrozoa's stage of deposit screening (design note §5.5), run before the
-  * ledger's [[hydrozoa.multisig.ledger.l2.L2Ledger.sendScreenDeposit]]. A deposit is not an L2 tx
-  * and cannot self-authenticate, so unlike transactions (which have no pre-screening stage) it is
-  * authenticated and time-gated here:
+/** Deposit pre-screening — Hydrozoa's stage of deposit screening (docs/l2-isomorphism.md), run
+  * before the ledger's [[hydrozoa.multisig.ledger.l2.L2Ledger.sendScreenDeposit]]. A deposit is not
+  * an L2 tx and cannot self-authenticate, so unlike transactions (which have no pre-screening
+  * stage) it is authenticated and time-gated here:
   *
   *   - the deposit tx must parse — [[DepositTx.Parse]] establishes well-formedness and verifies the
   *     depositor's endorsement of the `l2Payload` carried in the tx metadata;
   *   - the deposit must not be past its accept-by deadline (`now < validityEnd`, with `validityEnd`
-  *     derived from the deposit tx's TTL, §5.3). The block-time accept-by check at application
+  *     derived from the deposit tx's TTL). The block-time accept-by check at application
   *     (`JointLedger.registerDeposit`) still runs; this is the earlier, wall-clock gate.
   *
   * On success it yields the [[L2LedgerCommand.ScreenDeposit]] reference data the ledger's screening

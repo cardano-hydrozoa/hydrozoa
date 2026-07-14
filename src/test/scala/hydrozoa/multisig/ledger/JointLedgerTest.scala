@@ -389,8 +389,8 @@ object JointLedgerTestHelpers {
 
                 depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
-                  // The depositor's COSE endorsement of the L2 payload (design note §5.5); head
-                  // peer 0 plays the depositor in this test.
+                  // The depositor's COSE endorsement of the L2 payload (docs/l2-isomorphism.md);
+                  // head peer 0 plays the depositor in this test.
                   l2PayloadCose = env.multiNodeConfig
                       .nodeConfigs(HeadPeerNumber.zero)
                       .ownWallet

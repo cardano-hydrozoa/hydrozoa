@@ -119,8 +119,8 @@ private object DepositRefundTxSeqOps {
       */
     final case class Build(
         l2Payload: ByteString,
-        /** The depositor's CIP-30 COSE endorsement of `blake2b_256(l2Payload)` (design note §5.5),
-          * threaded into the deposit tx metadata.
+        /** The depositor's CIP-30 COSE endorsement of `blake2b_256(l2Payload)`
+          * (docs/l2-isomorphism.md), threaded into the deposit tx metadata.
           */
         l2PayloadCose: Cip30SignedData,
         l2Value: Value,

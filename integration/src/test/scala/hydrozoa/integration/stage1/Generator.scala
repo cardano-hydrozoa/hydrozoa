@@ -505,7 +505,8 @@ object CommandGenerators:
                                         )
 
                                         // The depositor's COSE endorsement of the L2 payload
-                                        // (design note §5.5); head peer 0 plays the depositor.
+                                        // (docs/l2-isomorphism.md); head peer 0 plays the
+                                        // depositor.
                                         l2PayloadSerialized = GenesisObligation.serialize(l2Outputs)
                                         l2PayloadCose = multiNodeConfig
                                             .nodeConfigs(HeadPeerNumber.zero)

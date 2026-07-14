@@ -44,8 +44,9 @@ object UserRequest {
 
     type Sync = SyncRequest.Envelope[IO, UserRequest, Either[Rejected, RequestId]]
 
-    /** A request rejected at stateless screening (§4.1), before a `RequestId` is assigned — the
-      * ledger judged it malformed or replay-pinned. Surfaced to the submitter instead of an id.
+    /** A request rejected at stateless screening (docs/l2-isomorphism.md), before a `RequestId` is
+      * assigned — the ledger judged it malformed or replay-pinned. Surfaced to the submitter
+      * instead of an id.
       */
     final case class Rejected(reason: String)
 
