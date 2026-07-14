@@ -85,8 +85,8 @@ object HydrozoaTransactionMutator {
         yield state
     }
 
-    /** Stateless auth pre-check for ledger screening: verify the L2 tx's vkey witnesses over its id,
-      * reusing the exact validator [[transit]] runs at submission
+    /** Stateless auth pre-check for ledger screening: verify the L2 tx's vkey witnesses over its
+      * id, reusing the exact validator [[transit]] runs at submission
       * ([[VerifiedSignaturesInWitnessesValidator]]). Signature verification reads neither the utxo
       * state nor the block time, so an empty state and a placeholder time are safe (and keep the
       * result byte-identical to the submission-time check).
