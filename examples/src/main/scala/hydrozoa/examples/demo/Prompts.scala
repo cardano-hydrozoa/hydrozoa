@@ -150,7 +150,11 @@ object Prompts {
         promptRetryingIO(prompt)(line => IO.fromEither(parse(line).left.map(RuntimeException(_))))
 
     private def promptRetryingIO[A](prompt: String)(parse: String => IO[A]): IO[A] =
-        (IO.print(s"$prompt: ") >> IO.readLine.map(_.trim).flatMap(parse)).handleErrorWith(e =>
-            IO.println(s"  ✗ ${e.getMessage}") >> promptRetryingIO(prompt)(parse)
-        )
+        (IO.print(s"$prompt: ") >> IO.readLine.map(_.trim).flatMap(parse)).handleErrorWith {
+            // Retrying on a closed stdin would loop forever — abort instead.
+            case _: java.io.EOFException =>
+                IO.raiseError(RuntimeException("stdin closed — aborting"))
+            case e =>
+                IO.println(s"  ✗ ${e.getMessage}") >> promptRetryingIO(prompt)(parse)
+        }
 }

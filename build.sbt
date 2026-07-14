@@ -135,6 +135,9 @@ lazy val examples: Project = (project in file("examples"))
       run / fork := true,
       // Wire stdin through to the forked JVM — the demo targets read prompts from the console.
       run / connectInput := true,
+      // Forked runs resolve relative paths (config/demo) from the repo root, not examples/.
+      Compile / run / forkOptions := (Compile / run / forkOptions).value
+          .withWorkingDirectory((ThisBuild / baseDirectory).value),
     )
 
 // Integration tests
