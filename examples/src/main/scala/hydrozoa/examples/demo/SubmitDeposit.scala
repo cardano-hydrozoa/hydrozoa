@@ -50,8 +50,8 @@ object SubmitDeposit
     ):
 
     /** The accept-by margin: the head must learn the deposit within this window, so it has to
-      * comfortably exceed the interactive prompting + L1 submission time. Absorption is anchored
-      * on the accept-by time, so a wider margin directly delays the deposit landing on L2.
+      * comfortably exceed the interactive prompting + L1 submission time. Absorption is anchored on
+      * the accept-by time, so a wider margin directly delays the deposit landing on L2.
       */
     private val acceptByMargin = 3.minutes
 
