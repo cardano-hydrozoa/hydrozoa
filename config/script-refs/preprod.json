@@ -1,0 +1,13 @@
+{
+  "rulebasedTreasuryScriptInput" : "64e88f53ec93e892866f9b91061f2090d7bcc96ae657a9450696bc4dbf4fc7a6#0",
+  "disputeResolutionScriptInput" : "dd9678a3dda37d4474764f299a195f7af98bd8c2b5bc75ee40d0fa82de80c80c#0",
+  "setupLadderInputs" : [
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#0",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#1",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#2",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#3",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#4",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#5",
+    "d084fecdf2e6ef1d0b1a0192add5e9d9699716081bef9b33d543d658b3d5e36b#6"
+  ]
+}

@@ -237,8 +237,8 @@ just deploy-scripts-and-g2-setup config/demo/private/head-0/private.json
 
 **This step is optional when a committed default exists for the network**: with no
 `bootstrap/script-refs.json`, `build-head-config` falls back to
-`config/script-refs/<network>.json`. After a deployment, commit the fresh refs there so the next
-head on that network can skip this step (none are committed at the moment).
+`config/script-refs/<network>.json` (Preview's and Preprod's are committed). After a fresh
+deployment, commit the refs there so the next head on that network can skip this step.
 
 The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
 the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
