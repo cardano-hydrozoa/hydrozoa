@@ -1,12 +1,8 @@
 package hydrozoa.integration.rbr.property
 
-import cats.data.ReaderT
 import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import hydrozoa.config.head.multisig.timing.TxTiming
-import hydrozoa.config.head.multisig.timing.TxTiming.Durations.InactivityMarginDuration
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
@@ -54,25 +50,13 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def testProperty(transportMode: TransportMode): Prop =
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
 
-        // Widened init window: bringing up 3 head + 2 coil peers over WebSocket takes longer than
-        // the harness default's 5s (bcet + minSettle 2s + inactivityMargin 3s), and the init tx
-        // validity window can elapse before the leader submits it. Bumping inactivityMargin to 10s.
-        val widenedTxTiming: test.GenWithTestPeers[TxTiming] = ReaderT { network =>
-            MultiPeerHeadHarness.fastTxTiming.run(network).map(
-              _.copy(inactivityMarginDuration =
-                  InactivityMarginDuration(10.seconds.quantize(network.slotConfig))
-              )
-            )
-        }
-
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
         val resource = MultiPeerHeadHarness.mkResource(
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 10.seconds,
-          fastTxTiming = widenedTxTiming,
+          takeoffOffset = 60.seconds,
           coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
           coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>

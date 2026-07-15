@@ -113,10 +113,10 @@ object MultiPeerHeadHarness:
           TxTiming(
             minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
             // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
-            // = 5s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // = 32s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
             // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
             inactivityMarginDuration =
-                InactivityMarginDuration(3.seconds.quantize(network.slotConfig)),
+                InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
             silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),
             depositSubmissionDuration =
                 DepositSubmissionDuration(1.second.quantize(network.slotConfig)),
