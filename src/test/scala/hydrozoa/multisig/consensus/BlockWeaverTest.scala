@@ -1,10 +1,11 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
+import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.HeadConfig
@@ -15,7 +16,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import java.time.Instant
@@ -76,6 +77,27 @@ object BlockWeaverTestHelpers {
             tracer = Slf4jTracer.sink.contramap(BlockWeaverEventFormat.humanFormat(peerNumber))
             actor <- lift(env.system.actorOf(BlockWeaver(config, connections, tracer)))
         } yield actor
+
+    /** Empty final block brief for block 1, so Carol reproduces the head's last block and then arms
+      * as leader of block 2.
+      */
+    def mkDummyFinalBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Final] =
+        lift(
+          for {
+              now <- realTimeQuantizedInstant(config.slotConfig)
+          } yield BlockBrief.Final(
+            BlockHeader.Final(
+              blockNum = BlockNumber(1),
+              blockVersion = BlockVersion.Full(1, 0),
+              startTime = BlockCreationStartTime(now),
+              endTime = BlockCreationEndTime(now + 1.second)
+            ),
+            BlockBody.Final(
+              events = List.empty,
+              depositsRefunded = List.empty
+            )
+          )
+        )
 
     /** Empty block brief for block 1, so Carol starts working on block 2. */
     def mkDummyBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Next] =
@@ -331,6 +353,51 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- settle(env.jointLedgerMock.events.get.contains(anyLedgerEvent))
           eventsContainsRequest <- lift(IO(env.jointLedgerMock.events.get.contains(anyLedgerEvent)))
           _ <- assertWith(eventsContainsRequest, "Event should be fed through to joint ledger")
+      } yield true
+    )
+
+    // ===================================
+    // Carol (2) retires after reproducing the final block; a Final confirmation is harmless
+    // ===================================
+    val _ = property(
+      "Carol (2) retires after reproducing the final block; a Final confirmation is harmless"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          errors <- lift(Ref[IO].of(List.empty[String]))
+          drainer <- lift(
+            env.system.eventStream.take
+                .flatMap {
+                    case e: ActorError if e.cause != ActorError.NoCause =>
+                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                    case _ => IO.unit
+                }
+                .foreverM
+                .start
+          )
+          weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
+          finalBrief <- mkDummyFinalBlockBrief1(
+            env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber).headConfig
+          )
+          // Carol reproduces final block 1 as a follower and retires (no block will follow);
+          // the Final confirmation sent next must dead-letter or retire her — never panic.
+          _ <- lift((weaver ! finalBrief) >> env.system.waitForIdle())
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) { case _: CompleteBlockFinal =>
+              ()
+          })
+          _ <- lift(
+            (weaver ! Block.SoftConfirmed.Final(finalBrief, headerMultiSigned = List.empty)) >>
+                env.system.waitForIdle()
+          )
+          // Give the event-stream drainer a beat to observe a panic before reading.
+          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
+          collected <- lift(errors.get)
+          _ <- lift(drainer.cancel)
+          _ <- assertWith(
+            collected.isEmpty,
+            s"the final confirmation must retire the armed leader, not panic it: $collected"
+          )
       } yield true
     )
 

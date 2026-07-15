@@ -385,7 +385,7 @@ object BlockWeaver {
 
                 export Follower.ProcessingReadyRequests.NextReactiveState
 
-                def act(config: Config): IO[Some[NextReactiveState]] = for {
+                def act(config: Config): IO[Option[NextReactiveState]] = for {
                     _ <- logStateTransition
                     _ <- connections.jointLedger ! StartBlock(
                       reproducingBlockBrief.blockNum,
@@ -397,8 +397,19 @@ object BlockWeaver {
                             val nextBlockNumber = reproducingBlockBrief.blockNum.increment
                             for {
                                 _ <- sendCompleteBlockAsFollower(reproducingBlockBrief)
-                                newState <- DecidingRole(this, survivingMempool, nextBlockNumber)
-                                    .act(config)
+                                newState <- reproducingBlockBrief match {
+                                    // The reproduced block was the final one: no further block
+                                    // will ever be woven, so retire instead of arming to lead.
+                                    case _: BlockBrief.Final =>
+                                        tracer.traceWith(
+                                          BlockWeaverEvent.RetiredOnFinalBlock(
+                                            reproducingBlockBrief.blockNum
+                                          )
+                                        ) >> IO.pure(None)
+                                    case _ =>
+                                        DecidingRole(this, survivingMempool, nextBlockNumber)
+                                            .act(config)
+                                }
                             } yield newState
                         case result: Mempool.Extraction.Incomplete =>
                             pure(Follower.AwaitingRequest(this, reproducingBlockBrief, result))
@@ -488,17 +499,31 @@ object BlockWeaver {
                                                         _ <- sendCompleteBlockAsFollower(
                                                           reproducingBlockBrief
                                                         )
-                                                        // Replay buffered later-block briefs in
-                                                        // order; they re-enter from the next
-                                                        // AwaitingBlockBrief.
-                                                        _ <- stashedBriefs.traverse_(
-                                                          connections.blockWeaver ! _
-                                                        )
-                                                        newState <- DecidingRole(
-                                                          this,
-                                                          survivingMempool,
-                                                          nextBlockNumber
-                                                        ).act(config)
+                                                        newState <- reproducingBlockBrief match {
+                                                            // The reproduced block was the final
+                                                            // one: no further block will ever be
+                                                            // woven, so retire (dropping any
+                                                            // buffered briefs) instead of arming
+                                                            // to lead.
+                                                            case _: BlockBrief.Final =>
+                                                                tracer.traceWith(
+                                                                  BlockWeaverEvent
+                                                                      .RetiredOnFinalBlock(
+                                                                        reproducingBlockBrief.blockNum
+                                                                      )
+                                                                ) >> IO.pure(None)
+                                                            case _ =>
+                                                                // Replay buffered later-block
+                                                                // briefs in order; they re-enter
+                                                                // from the next AwaitingBlockBrief.
+                                                                stashedBriefs.traverse_(
+                                                                  connections.blockWeaver ! _
+                                                                ) >> DecidingRole(
+                                                                  this,
+                                                                  survivingMempool,
+                                                                  nextBlockNumber
+                                                                ).act(config)
+                                                        }
                                                     } yield newState
                                                 case result: Mempool.Extraction.Incomplete =>
                                                     // Still missing a request — keep waiting, but
@@ -770,6 +795,14 @@ object BlockWeaver {
                                     )
                             }
 
+                        case bc: Block.SoftConfirmed.Final =>
+                            // Defensive: the weaver retires when it completes the final block, so
+                            // a Final confirmation should not reach an armed leader — but a late
+                            // or duplicate fan-out must retire it, not panic the node.
+                            tracer.traceWith(
+                              BlockWeaverEvent.RetiredOnFinalBlock(bc.blockNum)
+                            ) >> stop()
+
                         case pr: PollResults =>
                             tracer.traceWith(BlockWeaverEvent.PollResultsUpdated) >>
                                 pure(copy(pollResults = pr))
@@ -843,8 +876,7 @@ object BlockWeaver {
                 type NextReactiveState = DecidingRole.NextReactiveState |
                     Leader.AwaitingConfirmation | Leader.AwaitingRequest
 
-                type Unexpected = PreStart.type | BlockBrief.Next |
-                    (Block.SoftConfirmed & BlockType.Final)
+                type Unexpected = PreStart.type | BlockBrief.Next
 
                 private[State] def apply(
                     state: State,
