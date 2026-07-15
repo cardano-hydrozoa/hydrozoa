@@ -42,13 +42,10 @@ class HydrozoaRoutes(
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
 
-    private given HeadConfig = headConfig
-
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
 
-    /** The COSE-validating decoder for user requests (deposit registrations and L2 transactions).
-      */
+    /** The decoder for user requests (deposit registrations and L2 transactions). */
     private val userRequestDecoder: UserRequestDecoder = UserRequestDecoder()
 
     /** The shared error output: an HTTP status plus an `{ error }` body. */
@@ -77,7 +74,8 @@ class HydrozoaRoutes(
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Submit a signed L2 transaction (a JSON UserRequest with a COSE signature)."
+              "Submit an L2 transaction (a JSON UserRequest whose L2 payload is a native, " +
+                  "self-authenticating Cardano transaction)."
             )
             .serverLogic(body => acceptUserRequest("POST /api/l2/submit", body))
 
@@ -87,7 +85,10 @@ class HydrozoaRoutes(
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
-            .description("Register an L1 deposit (a JSON UserRequest with a COSE signature).")
+            .description(
+              "Register an L1 deposit (a JSON UserRequest whose L2 payload is a native, " +
+                  "self-authenticating Cardano transaction)."
+            )
             .serverLogic(body => acceptUserRequest("POST /api/deposit/register", body))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
@@ -280,8 +281,8 @@ class HydrozoaRoutes(
 
     // ---- Handlers ----
 
-    /** Parse + COSE-validate a user request, forward it to the sequencer, and return the assigned
-      * id — preserving the body / decode-error / failure tracing. Any failure is a 400.
+    /** Parse a user request, forward it to the sequencer, and return the assigned id — preserving
+      * the body / decode-error / failure tracing. Any failure is a 400.
       */
     private def acceptUserRequest(
         path: String,
@@ -305,7 +306,11 @@ class HydrozoaRoutes(
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
-                requestId <- requestSequencer ?: userRequest
+                requestId <- (requestSequencer ?: userRequest).flatMap {
+                    case Right(id) => IO.pure(id)
+                    // A screen rejection surfaces as a 400 via handleErrorWith below.
+                    case Left(rejected) => IO.raiseError(new RuntimeException(rejected.reason))
+                }
             } yield ApiDto.mkRequestAcceptedResponse(requestId)
 
         handled

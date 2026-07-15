@@ -21,7 +21,7 @@ import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.BlockWeaver.LocalFinalizationTrigger
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{FastConsensusActor, StackComposer, UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Requests.*
 import hydrozoa.multisig.ledger.JointLedgerTestHelpers.Scenarios.*
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
@@ -46,7 +46,7 @@ import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.ledger.{Block as _, BlockHeader as _, *}
-import scalus.crypto.ed25519.Signature
+import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -326,8 +326,7 @@ object JointLedgerTestHelpers {
           */
         def deposit(
             requestValidityEndTime: RequestValidityEndTime,
-            requestId: RequestId,
-            blockCreationStartTime: BlockCreationStartTime
+            requestId: RequestId
         ): JLTest[
           (DepositRefundTxSeq, UserRequestWithId, NonEmptyList[GenesisObligation])
         ] = {
@@ -390,6 +389,12 @@ object JointLedgerTestHelpers {
 
                 depositRefundSeqBuilder = DepositRefundTxSeq.Build(
                   l2Payload = l2OutputsBytes,
+                  // The depositor's COSE endorsement of the L2 payload (docs/l2-isomorphism.md);
+                  // head peer 0 plays the depositor in this test.
+                  l2PayloadCose = env.multiNodeConfig
+                      .nodeConfigs(HeadPeerNumber.zero)
+                      .ownWallet
+                      .signCoseCip30(blake2b_256(l2OutputsBytes).bytes),
                   l2Value = l2OutputsValue,
                   depositFee = Coin.zero,
                   utxosFunding = utxosFunding,
@@ -426,28 +431,8 @@ object JointLedgerTestHelpers {
                   l2Payload = GenesisObligation.serialize(l2Outputs)
                 )
 
-                header = UserRequestHeader(
-                  headId = env.config.headId,
-                  validityStart = RequestValidityStartTime(blockCreationStartTime),
-                  validityEnd = depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime,
-                  bodyHash = body.hash
-                )
-
-                userWallet = env.multiNodeConfig
-                    .nodePrivateConfigs(HeadPeerNumber.zero)
-                    .ownWallet
-
-                userVk = userWallet.exportVerificationKey
-
-                _: Signature =
-                    Signature.unsafeFromArray(
-                      IArray.genericWrapArray(userWallet.signMsg(IArray.from(header.bytes))).toArray
-                    )
-
                 request = UserRequest.DepositRequest(
-                  header = header,
-                  body = body,
-                  userVk = userVk
+                  body = body
                 )
 
                 req =
@@ -568,8 +553,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                                   requestValidityEndTime = RequestValidityEndTime(
                                     blockCreationStartTime + requestValidityEndTimeOffset
                                   ),
-                                  requestId = RequestId(peer, lastRequestID.increment),
-                                  blockCreationStartTime = blockCreationStartTime
+                                  requestId = RequestId(peer, lastRequestID.increment)
                                 )
                               )
                             )
@@ -684,8 +668,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
           )
           seqAndReq <- deposit(
             requestValidityEndTime = firstDepositValidityEnd,
-            requestId = RequestId(0, 1),
-            blockCreationStartTime = firstBlockCreationStartTime
+            requestId = RequestId(0, 1)
           )
           (depositRefundTxSeq, depositReq, _) = seqAndReq
           depositProduced = depositRefundTxSeq.depositTx.depositProduced
@@ -846,8 +829,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               seqAndReq <- deposit(
                 requestValidityEndTime = requestValidityEndTime,
-                RequestId(0, 1),
-                blockStartTime
+                RequestId(0, 1)
               )
 
               (depositRefundTxSeq, depositReq, _) = seqAndReq
@@ -891,8 +873,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
 
               seqAndReq <- deposit(
                 requestValidityEndTime = requestValidityEndTime,
-                RequestId(0, 1),
-                blockStartTime
+                RequestId(0, 1)
               )
 
               (_, depositReq, _) = seqAndReq

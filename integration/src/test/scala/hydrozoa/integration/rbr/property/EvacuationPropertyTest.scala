@@ -102,7 +102,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _ <- lift(MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.harness))
+            _ <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
         yield ()
 
     /** Keep feeding requests so each Major stack has a trailing Minor with an SEC — otherwise
@@ -114,7 +114,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
         for
             ctx <- ask
             fiber <- lift(
-              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitEmptyTransactionRequest(
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(
                 ctx.harness
               )).foreverM.start
             )

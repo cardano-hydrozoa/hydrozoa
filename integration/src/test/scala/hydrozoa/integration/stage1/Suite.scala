@@ -573,7 +573,6 @@ case class Suite(
                   cardanoLiaison = cardanoLiaison,
                   requestSequencer = Some(requestSequencerStub),
                   headPeerLiaisons = List.empty,
-                  jointLedger = jointLedger,
                   stackComposer = stackComposerStub,
                 )
                 consensusActor <- system.actorOf(

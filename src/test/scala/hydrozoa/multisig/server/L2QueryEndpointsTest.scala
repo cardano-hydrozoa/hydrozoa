@@ -100,6 +100,38 @@ class L2QueryEndpointsTest extends AnyFunSuite:
             }
             .unsafeRunSync()
 
+    /** Build the routes with **no** L2 reader — the wiring an `any-remote` node gets — and run
+      * `check`. No ledger is seeded because a remote-ledger node exposes no L2-query state.
+      */
+    private def withNoReaderRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
+        ActorSystem[IO]("L2QueryEndpointsTest-noReader")
+            .use { system =>
+                for {
+                    requestSequencerStub <- system.actorOf(
+                      new Actor[IO, RequestSequencer.Request] {
+                          override def receive: Receive[IO, RequestSequencer.Request] =
+                              _ => IO.pure(())
+                      }
+                    )
+                    blockWeaverStub <- system.actorOf(
+                      new Actor[IO, BlockWeaver.Request] {
+                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                      }
+                    )
+                    routes <- HydrozoaRoutes(
+                      requestSequencerStub,
+                      blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
+                      None,
+                      multiNodeConfig.headConfig,
+                      HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
+                    )
+                    _ <- check(routes.routes.orNotFound)
+                } yield ()
+            }
+            .unsafeRunSync()
+
     private def get(app: HttpApp[IO], path: String): IO[(Status, Json)] =
         for {
             resp <- app.run(Request[IO](Method.GET, Uri.unsafeFromString(path)))
@@ -266,6 +298,48 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 )
                 _ <- IO(
                   assert(resp.status == Status.BadRequest, s"expected 400, got ${resp.status}")
+                )
+            } yield ()
+        }
+    }
+
+    test("with no L2 reader (an any-remote node), the L2 query routes are absent (404)") {
+        // A well-formed bech32 address the L2 endpoints would happily answer (200) if mounted; with
+        // reader=None the routes are not mounted at all, so it must be a 404. A core route (admin)
+        // still answers with a 401 challenge, proving only the L2 endpoints were dropped.
+        val validAddr = multiNodeConfig.headConfig.headMultisigAddress.toBech32
+            .getOrElse(fail("head multisig address is not bech32-encodable"))
+        val badAuth =
+            org.http4s.headers.Authorization(org.http4s.BasicCredentials("admin", "wrong"))
+        withNoReaderRoutes { app =>
+            for {
+                utxos <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString(s"/api/l2/utxos/$validAddr"))
+                )
+                _ <- IO(
+                  assert(
+                    utxos.status == Status.NotFound,
+                    s"expected 404 for /api/l2/utxos with no reader, got ${utxos.status}"
+                  )
+                )
+                txs <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/api/l2/transactions"))
+                )
+                _ <- IO(
+                  assert(
+                    txs.status == Status.NotFound,
+                    s"expected 404 for /api/l2/transactions with no reader, got ${txs.status}"
+                  )
+                )
+                admin <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+                      .putHeaders(badAuth)
+                )
+                _ <- IO(
+                  assert(
+                    admin.status == Status.Unauthorized,
+                    s"a core route should still be mounted (401), got ${admin.status}"
+                  )
                 )
             } yield ()
         }

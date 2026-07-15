@@ -84,7 +84,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             // empty major blocks until we reach major 2; the trailing requests keep minor blocks
             // flowing.
             _ <- lift(
-              (MultiPeerHeadHarness.submitEmptyTransactionRequest(ctx.harness)
+              (MultiPeerHeadHarness.submitKickRequest(ctx.harness)
                   >> IO.sleep(1.second)).foreverM.start.void
             )
 

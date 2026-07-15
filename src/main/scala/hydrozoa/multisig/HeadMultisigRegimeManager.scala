@@ -65,7 +65,13 @@ trait HeadMultisigRegimeManager(
             )
 
             requestSequencer <- context.actorOf(
-              RequestSequencer(config, pendingConnections, tracers.eventSequencer, persistence)
+              RequestSequencer(
+                config,
+                pendingConnections,
+                l2Ledger,
+                tracers.eventSequencer,
+                persistence
+              )
             )
 
             // Throttles the SlowConsensusActor → StackComposer hard-stack-confirmation lane.

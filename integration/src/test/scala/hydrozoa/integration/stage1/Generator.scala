@@ -25,7 +25,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, trace}
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.event.RequestId
@@ -43,6 +43,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
+import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 
 // ===================================
@@ -398,26 +399,11 @@ object CommandGenerators:
               l2Payload = ByteString.fromArray(txSigned.toCbor)
             )
 
-            header = UserRequestHeader(
-              headId = config.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                state.getCurrentTime.instant - 5.seconds
-              ),
-              validityEnd = RequestValidityEndTime(
-                state.getCurrentTime.instant + 2.minutes
-              ),
-              bodyHash = body.hash
-            )
-
-            userVk = config.nodeConfigs(HeadPeerNumber.zero).ownWallet.exportVerificationKey
-
         } yield L2TxCommand(
           request = UserRequestWithId.TransactionRequest(
             requestId = state.nextRequestId,
             request = UserRequest.TransactionRequest(
-              header = header,
-              body = body.asInstanceOf[TransactionRequestBody],
-              userVk = userVk
+              body = body.asInstanceOf[TransactionRequestBody]
             )
           ),
           txStrategy = txStrategy,
@@ -518,9 +504,19 @@ object CommandGenerators:
                                           )
                                         )
 
+                                        // The depositor's COSE endorsement of the L2 payload
+                                        // (docs/l2-isomorphism.md); head peer 0 plays the
+                                        // depositor.
+                                        l2PayloadSerialized = GenesisObligation.serialize(l2Outputs)
+                                        l2PayloadCose = multiNodeConfig
+                                            .nodeConfigs(HeadPeerNumber.zero)
+                                            .ownWallet
+                                            .signCoseCip30(blake2b_256(l2PayloadSerialized).bytes)
+
                                         depositRefundSeq = DepositRefundTxSeq
                                             .Build(
-                                              l2Payload = GenesisObligation.serialize(l2Outputs),
+                                              l2Payload = l2PayloadSerialized,
+                                              l2PayloadCose = l2PayloadCose,
                                               depositFee = Coin.zero,
                                               utxosFunding = NonEmptyList
                                                   .fromListUnsafe(fundingUtxos.asUtxoList),
@@ -552,28 +548,12 @@ object CommandGenerators:
                                           l2Payload = GenesisObligation.serialize(l2Outputs)
                                         )
 
-                                        header = UserRequestHeader(
-                                          headId = multiNodeConfig.headConfig.headId,
-                                          validityStart = RequestValidityStartTime(
-                                            state.getCurrentTime.instant - 5.seconds
-                                          ),
-                                          validityEnd = requestValidityEndTime,
-                                          bodyHash = body.hash
-                                        )
-
-                                        userVk = multiNodeConfig
-                                            .nodeConfigs(HeadPeerNumber.zero)
-                                            .ownWallet
-                                            .exportVerificationKey
-
                                     } yield Some(
                                       RegisterDepositCommand(
                                         request = UserRequestWithId.DepositRequest(
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
-                                            header = header,
-                                            body = body.asInstanceOf[DepositRequestBody],
-                                            userVk = userVk
+                                            body = body.asInstanceOf[DepositRequestBody]
                                           )
                                         ),
                                         depositRefundTxSeq = depositRefundSeq,
@@ -606,8 +586,9 @@ object CommandGenerators:
                           ))
             selected  = registeredDeposits.take(n)
             partition = selected.partition { registered =>
-                            val submissionDeadline = registered.cmd.request.request.header.validityEnd
-                            val submissionRunway   = state.getCurrentTime.instant + 20.seconds
+                            val submissionDeadline =
+                                registered.cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
+                            val submissionRunway = state.getCurrentTime.instant + 20.seconds
                             submissionDeadline.convert > submissionRunway
                         }
             _         <- run(log.trace(

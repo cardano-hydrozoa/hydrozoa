@@ -1,8 +1,6 @@
 package hydrozoa.multisig.server
 
 import cats.effect.IO
-import hydrozoa.lib.cardano.wallet.Cip30SignedData
-import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.server.ApiResponse.RequestAccepted
@@ -29,22 +27,25 @@ object SubmissionClient:
     def direct(handle: RequestSequencer.Handle): SubmissionClient =
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
-                handle ?: userRequest
+                (handle ?: userRequest).flatMap {
+                    case Right(id) => IO.pure(id)
+                    case Left(rejected) =>
+                        IO.raiseError(new RuntimeException(s"request rejected: ${rejected.reason}"))
+                }
 
-    /** http4s-based impl: signs the [[UserRequestHeader]] with `wallet` as a CIP-30 COSE_Sign1,
-      * routes the request to the deposit-register or l2-submit endpoint by variant, and expects a
-      * [[RequestAccepted]] JSON response. `client` can be a real http4s `Client[IO]` or an
-      * in-memory `Client.fromHttpApp` — the harness uses the latter so no socket is bound.
+    /** http4s-based impl: posts the request body (no header, no signature envelope — auth is the
+      * native tx's own witnesses, verified at the ledger's screening) to the deposit-register or
+      * l2-submit endpoint by variant, and expects a [[RequestAccepted]] JSON response. `client` can
+      * be a real http4s `Client[IO]` or an in-memory `Client.fromHttpApp` — the harness uses the
+      * latter.
       */
     def http(
         client: Client[IO],
         baseUri: Uri,
-        wallet: PeerWallet,
     ): SubmissionClient =
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
-                val signed = wallet.signCoseCip30(userRequest.header.bytes)
-                val bodyJson = signedRequestJson(userRequest, signed)
+                val bodyJson = requestJson(userRequest)
                 val path = pathFor(userRequest)
                 val req = Http4sRequest[IO](Method.POST, baseUri.withPath(path))
                     .withEntity(bodyJson)
@@ -55,16 +56,7 @@ object SubmissionClient:
             case _: UserRequest.DepositRequest => Uri.Path.unsafeFromString("/api/deposit/register")
             case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/api/l2/submit")
 
-    private def signedRequestJson(
-        request: UserRequest,
-        signed: Cip30SignedData,
-    ): Json =
-        val bodyField: (String, Json) = request.body match
-            case b: UserRequestBody.DepositRequestBody     => "deposit" -> b.asJson
-            case b: UserRequestBody.TransactionRequestBody => "transaction" -> b.asJson
-        Json.obj(
-          "header" -> request.header.asJson,
-          bodyField,
-          "coseKey" -> Json.fromString(signed.coseKeyCborHex),
-          "coseSignature" -> Json.fromString(signed.coseSignatureCborHex),
-        )
+    private def requestJson(request: UserRequest): Json =
+        request.body match
+            case b: UserRequestBody.DepositRequestBody     => Json.obj("deposit" -> b.asJson)
+            case b: UserRequestBody.TransactionRequestBody => Json.obj("transaction" -> b.asJson)

@@ -70,11 +70,9 @@ trait WalletModule:
     ): IArray[Byte]
 
     /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1, returning a [[Cip30SignedData]] wrapping
-      * the (coseKey, coseSignature) CBOR-hex pair — the shape
-      * [[hydrozoa.multisig.server.JsonCodecs]] expects on the request wire. The COSE "address"
-      * header is derived internally as an enterprise address of `verificationKey`'s payment
-      * credential; bloxbean's `CIP30DataSigner.verify` walks back to that credential when
-      * validating the signature.
+      * the (coseKey, coseSignature) CBOR-hex pair. The COSE "address" header is derived internally
+      * as an enterprise address of `verificationKey`'s payment credential; bloxbean's
+      * `CIP30DataSigner.verify` walks back to that credential when validating the signature.
       */
     def signCoseCip30(
         payload: Array[Byte],

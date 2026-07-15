@@ -11,7 +11,6 @@ import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, 
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -19,10 +18,10 @@ import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, gen
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, QuantizedInstant, quantize}
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer, UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
@@ -45,7 +44,6 @@ import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.{DurationLong, FiniteDuration}
 import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
-import scalus.uplc.builtin.ByteString
 import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
 /** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
@@ -220,34 +218,17 @@ object MultiPeerHeadHarness:
         case (_: PeerId.Coil, _) => IO.pure(None)
     }
 
-    /** Submit one minimal empty-payload `TransactionRequest` to `peer`'s `RequestSequencer`,
-      * kicking block production past block 1. `JointLedger` marks the empty request `Invalid`, but
-      * the block still completes — which is all these scenarios need.
+    /** Submit one [[KickRequest]] to `peer`'s `RequestSequencer` to kick `BlockWeaver` past block
+      * 1's `Leader.AwaitingConfirmation` so the deadman switch on subsequent block headers can
+      * force-produce major blocks. The request screens cleanly but is marked `Invalid` at apply —
+      * the block still completes, which is all these scenarios need.
       */
-    def submitEmptyTransactionRequest(
+    def submitKickRequest(
         harness: Harness[Option[RequestSequencer.Handle]],
         peer: HeadPeerNumber = HeadPeerNumber(0),
     ): IO[Unit] =
-        val multiNodeConfig = harness.multiNodeConfig
-        val slotConfig = multiNodeConfig.headConfig.cardanoNetwork.slotConfig
-        val body: UserRequestBody.TransactionRequestBody =
-            UserRequestBody.TransactionRequestBody(
-              l2Payload = ByteString.fromArray(Array.empty[Byte])
-            )
-        val userVk = multiNodeConfig.nodeConfigs(peer).ownWallet.exportVerificationKey
+        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
         for
-            now <- IO.realTimeInstant
-            header = UserRequestHeader(
-              headId = multiNodeConfig.headConfig.headId,
-              validityStart = RequestValidityStartTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond - 5L)
-              ),
-              validityEnd = RequestValidityEndTime(
-                QuantizedInstant.ofEpochSeconds(slotConfig, now.getEpochSecond + 300L)
-              ),
-              bodyHash = body.hash,
-            )
-            userRequest = UserRequest.TransactionRequest(header, body, userVk)
             sequencer <- IO.fromOption(harness.peers.get(peer).flatMap(_.handle))(
               new NoSuchElementException(s"peer $peer missing in harness")
             )
@@ -1147,7 +1128,7 @@ object MultiPeerHeadHarness:
             ).map { hydrozoaRoutes =>
                 val client: Http4sClient[IO] =
                     Http4sClient.fromHttpApp(hydrozoaRoutes.routes.orNotFound)
-                SubmissionClient.http(client, InProcBaseUri, nodeConfig.ownWallet)
+                SubmissionClient.http(client, InProcBaseUri)
             }
 
     // ===================================

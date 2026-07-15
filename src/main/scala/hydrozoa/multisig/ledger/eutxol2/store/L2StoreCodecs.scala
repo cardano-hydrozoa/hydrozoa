@@ -17,11 +17,10 @@ import scalus.uplc.builtin.ByteString
   * in-memory store needs none of this; these exist only for the on-disk byte form (§R2b).
   *
   * These are deliberately *store-local* and not the codecs `L2LedgerCommand` exports for the
-  * SugarRush wire: those rename fields (`userVKey` → `userVk`) and encode `Destination` as a lossy
-  * object, so they do not round-trip (see the FIXMEs in `L2LedgerCommand`). Persistence needs exact
-  * round-trip, so the command subtypes are re-derived symmetrically here, and the Borer-only leaves
-  * (`Destination`, `L2Genesis`) go through a CBOR-hex string — the same shape the Scalus ledger
-  * leaves already use.
+  * SugarRush wire: those encode `Destination` as a lossy object, so they do not round-trip (see the
+  * FIXMEs in `L2LedgerCommand`). Persistence needs exact round-trip, so the command subtypes are
+  * re-derived symmetrically here, and the Borer-only leaves (`Destination`, `L2Genesis`) go through
+  * a CBOR-hex string — the same shape the Scalus ledger leaves already use.
   */
 object L2StoreCodecs:
 
