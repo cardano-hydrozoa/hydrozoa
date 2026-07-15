@@ -35,6 +35,12 @@ final class PeerWallet(
 
     def signMsg(msg: IArray[Byte]): IArray[Byte] = walletModule.signMsg(msg, signingKey)
 
+    /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1 with this peer's key, returning the
+      * `(coseKey, coseSignature)` CBOR-hex pair.
+      */
+    def signCoseCip30(payload: Array[Byte]): Cip30SignedData =
+        walletModule.signCoseCip30(payload, verificationKey, signingKey)
+
     private lazy val verificationKeysBytes =
         walletModule.exportVerificationKey(verificationKey)
 
@@ -71,13 +77,6 @@ final class PeerWallet(
         headerSerialized: IArray[Byte]
     ): BlockHeader.HeaderSignature =
         BlockHeader.Minor.HeaderSignature(walletModule.signMsg(headerSerialized, signingKey))
-
-    /** Sign `payload` as a CIP-30 `signData()` COSE_Sign1. Returns `(coseKeyCborHex,
-      * coseSignatureCborHex)` — the shape the request-side JSON codec unpacks in
-      * [[hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder.validateCoseSignature]].
-      */
-    def signCoseCip30(payload: Array[Byte]): Cip30SignedData =
-        walletModule.signCoseCip30(payload, verificationKey, signingKey)
 }
 
 object PeerWallet:

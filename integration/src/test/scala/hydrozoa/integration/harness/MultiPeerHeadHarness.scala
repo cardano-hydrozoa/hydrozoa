@@ -969,7 +969,7 @@ object MultiPeerHeadHarness:
             ).map { hydrozoaRoutes =>
                 val client: Http4sClient[IO] =
                     Http4sClient.fromHttpApp(hydrozoaRoutes.routes.orNotFound)
-                SubmissionClient.http(client, InProcBaseUri, nodeConfig.ownWallet)
+                SubmissionClient.http(client, InProcBaseUri)
             }
 
     // ===================================

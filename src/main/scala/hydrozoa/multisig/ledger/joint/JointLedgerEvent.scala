@@ -24,7 +24,6 @@ object JointLedgerEvent:
     // ===== L2 ledger failures =====
 
     final case class L2CommandFailed(err: L2LedgerError) extends JointLedgerEvent
-    final case class L2ProxyCommandFailed(err: Throwable) extends JointLedgerEvent
 
     // ===== Internal-state errors =====
 

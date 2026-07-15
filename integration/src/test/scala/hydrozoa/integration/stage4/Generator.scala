@@ -3,7 +3,7 @@ package hydrozoa.integration.stage4
 import cats.data.NonEmptyList
 import cats.effect.IO
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.integration.stage4.Commands.{*, given}
 import hydrozoa.integration.stage4.Model.{ModelState, given}
 import hydrozoa.integration.stage4.Stage4SutCommands.given
@@ -14,7 +14,7 @@ import hydrozoa.lib.cardano.scalus.ledger.{asUtxoList, withZeroFees}
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestHeader, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
@@ -28,6 +28,7 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionInput, TransactionOutput, Utxo, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
+import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 
 // ===================================
@@ -184,39 +185,13 @@ object CommandGenerators:
 
                 body = TransactionRequestBody(l2Payload = ByteString.fromArray(txSigned.toCbor))
 
-                // Validity is computed against the SUT's virtual time at submission, which equals
-                // `state.currentModelTime + interArrivalDelay` (the model clock right after this
-                // command is run — same value the SUT IO.sleep advances to).
-                submissionTime = state.currentModelTime + interArrivalDelay
-
-                header = UserRequestHeader(
-                  headId = config.headConfig.headId,
-                  validityStart = RequestValidityStartTime(
-                    QuantizedInstant.ofEpochSeconds(
-                      config.slotConfig,
-                      (submissionTime - 5.seconds).getEpochSecond
-                    )
-                  ),
-                  validityEnd = RequestValidityEndTime(
-                    QuantizedInstant.ofEpochSeconds(
-                      config.slotConfig,
-                      (submissionTime + 2.minutes).getEpochSecond
-                    )
-                  ),
-                  bodyHash = body.hash
-                )
-
-                userVk = config.nodeConfigs(peerNum).ownWallet.exportVerificationKey
-
             } yield Some(
               L2TxCommand(
                 peerNum = peerNum,
                 request = UserRequestWithId.TransactionRequest(
                   requestId = state.nextRequestId(peerNum),
                   request = UserRequest.TransactionRequest(
-                    header = header,
-                    body = body.asInstanceOf[TransactionRequestBody],
-                    userVk = userVk
+                    body = body.asInstanceOf[TransactionRequestBody]
                   )
                 ),
                 txStrategy = txStrategy,
@@ -304,9 +279,19 @@ object CommandGenerators:
                                           )
                                         )
 
+                                        // The depositor's COSE endorsement of the L2 payload
+                                        // (docs/l2-isomorphism.md); the submitting peer plays the
+                                        // depositor.
+                                        l2PayloadSerialized = GenesisObligation.serialize(l2Outputs)
+                                        l2PayloadCose = config
+                                            .nodeConfigs(peerNum)
+                                            .ownWallet
+                                            .signCoseCip30(blake2b_256(l2PayloadSerialized).bytes)
+
                                         depositRefundSeq = DepositRefundTxSeq
                                             .Build(
-                                              l2Payload = GenesisObligation.serialize(l2Outputs),
+                                              l2Payload = l2PayloadSerialized,
+                                              l2PayloadCose = l2PayloadCose,
                                               depositFee = Coin.zero,
                                               utxosFunding = NonEmptyList
                                                   .fromListUnsafe(fundingUtxos.asUtxoList),
@@ -333,28 +318,6 @@ object CommandGenerators:
                                           l2Payload = GenesisObligation.serialize(l2Outputs)
                                         )
 
-                                        header = UserRequestHeader(
-                                          headId = config.headConfig.headId,
-                                          validityStart = RequestValidityStartTime(
-                                            QuantizedInstant.ofEpochSeconds(
-                                              config.slotConfig,
-                                              (submissionTime - 5.seconds).getEpochSecond
-                                            )
-                                          ),
-                                          validityEnd = RequestValidityEndTime(
-                                            QuantizedInstant.ofEpochSeconds(
-                                              config.slotConfig,
-                                              requestValidityEndTime.getEpochSecond
-                                            )
-                                          ),
-                                          bodyHash = body.hash
-                                        )
-
-                                        userVk = config
-                                            .nodeConfigs(peerNum)
-                                            .ownWallet
-                                            .exportVerificationKey
-
                                         absorptionStartTime =
                                             config.headConfig.txTiming
                                                 .depositAbsorptionStartTime(requestValidityEndTime)
@@ -369,9 +332,7 @@ object CommandGenerators:
                                         request = UserRequestWithId.DepositRequest(
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
-                                            header = header,
-                                            body = body.asInstanceOf[DepositRequestBody],
-                                            userVk = userVk
+                                            body = body.asInstanceOf[DepositRequestBody]
                                           )
                                         ),
                                         l2Payload =

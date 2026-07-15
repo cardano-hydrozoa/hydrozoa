@@ -32,6 +32,11 @@ object BlockWeaverEvent:
 
     final case class SoftConfirmationIgnored(blockNum: BlockNumber) extends BlockWeaverEvent
 
+    /** The final block (`blockNum`) has been woven on this peer: no further block will ever exist,
+      * so the BlockWeaver retires.
+      */
+    final case class RetiredOnFinalBlock(blockNum: BlockNumber) extends BlockWeaverEvent
+
     final case class RequestAddedToMempool(requestId: RequestId) extends BlockWeaverEvent
 
     final case class AwaitedRequestReceived(requestId: RequestId) extends BlockWeaverEvent

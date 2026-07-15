@@ -248,7 +248,7 @@ object DisputeActorTestHelpers {
             nodeOperationEvacuationConfig = coilEvacConfig,
             nodeOperationMultisigConfig = template.nodeOperationMultisigConfig,
             blockfrostApiKey = template.blockfrostApiKey,
-            sugarRushUri = template.sugarRushUri,
+            remoteLedgerUri = template.remoteLedgerUri,
             adminUsername = template.adminUsername,
             adminPassword = template.adminPassword,
             httpHost = template.httpHost,

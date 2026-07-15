@@ -29,8 +29,6 @@ object JointLedgerEventFormat:
                 )
             case L2CommandFailed(err) =>
                 error(s"L2 command failed: $err")
-            case L2ProxyCommandFailed(err) =>
-                error(s"L2 proxy command failed: $err")
             case InvalidStateExpectedProducing =>
                 error(
                   "Expected a `Producing` State, but got `Done`. This indicates that a request was issued to the JointLedger that is only valid when the hydrozoa node is producing a block."

@@ -9,10 +9,7 @@ import scalus.cardano.ledger.Utxos
 /** The **recoverable subset** of [[EutxoL2Ledger.State]] persisted in a snapshot (§R2b).
   *
   * Only `commandNumber` + `activeUtxos` + `pendingDeposits` are kept — the fields a recovered
-  * ledger needs to resume producing blocks, plus its commit commandNumber. `errors` and
-  * `confirmations` are transient, client-facing proxy data (excluded from the commandNumber + log,
-  * §R2b); a restored ledger starts them empty. Keeping them out also avoids needing a codec for
-  * `EnrichedTx.Serialized` (the `confirmations` value type).
+  * ledger needs to resume producing blocks, plus its commit commandNumber.
   */
 final case class L2Snapshot(
     commandNumber: L2CommandNumber,

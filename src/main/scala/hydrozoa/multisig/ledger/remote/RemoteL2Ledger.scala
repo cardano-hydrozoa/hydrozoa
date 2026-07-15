@@ -18,6 +18,7 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
+import scalus.uplc.builtin.ByteString
 
 /** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
   *
@@ -146,17 +147,18 @@ class RemoteL2Ledger private (
         sendRequest(Request.ApplyTransaction(req)).map(s => (s.evacuationDiffs, s.payouts))
     }
 
-    override def sendProxyBlockConfirmation(
-        req: L2LedgerCommand.ProxyBlockConfirmation
-    ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest(Request.ProxyBlockConfirmation(req)).map(_ => ())
-    }
+    /** Passthrough for now: the remote ledger accepts every request and does its own screening at
+      * submission. A dedicated remote screening endpoint (docs/l2-isomorphism.md, Limitations)
+      * replaces this so a remote node also rejects pre-RequestId.
+      */
+    override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.rightT[IO, L2LedgerError](())
 
-    override def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyRequestError
-    ): EitherT[IO, L2LedgerError, Unit] = {
-        sendRequest(Request.ProxyRequestError(req)).map(_ => ())
-    }
+    /** Passthrough for now — see [[sendScreenTx]]. */
+    override def sendScreenDeposit(
+        req: L2LedgerCommand.ScreenDeposit
+    ): EitherT[IO, L2LedgerError, Unit] =
+        EitherT.rightT[IO, L2LedgerError](())
 
     /** The remote ledger owns its own persistence + recovery behind the WebSocket, so the host does
       * not track its commandNumber (R2b is the EUTXO reference ledger only); always report
@@ -182,10 +184,6 @@ object RemoteL2Ledger {
         final case class ApplyDepositDecisions(command: L2LedgerCommand.ApplyDepositDecisions)
             extends Request
         final case class ApplyTransaction(command: L2LedgerCommand.ApplyTransaction) extends Request
-        final case class ProxyBlockConfirmation(command: L2LedgerCommand.ProxyBlockConfirmation)
-            extends Request
-        final case class ProxyRequestError(command: L2LedgerCommand.ProxyRequestError)
-            extends Request
 
         // Request codecs
         given requestCodec: Codec[Request] = {
@@ -199,10 +197,6 @@ object RemoteL2Ledger {
                       io.circe.Json.obj("ApplyDepositDecisions" -> event.asJson)
                   case Request.ApplyTransaction(event) =>
                       io.circe.Json.obj("ApplyTransaction" -> event.asJson)
-                  case Request.ProxyBlockConfirmation(event) =>
-                      io.circe.Json.obj("ProxyBlockConfirmation" -> event.asJson)
-                  case Request.ProxyRequestError(event) =>
-                      io.circe.Json.obj("ProxyRequestError" -> event.asJson)
               },
               decodeA = c =>
                   c.keys
@@ -223,14 +217,6 @@ object RemoteL2Ledger {
                               c.downField("ApplyTransaction")
                                   .as[L2LedgerCommand.ApplyTransaction]
                                   .map(Request.ApplyTransaction.apply)
-                          case "ProxyBlockConfirmation" =>
-                              c.downField("ProxyBlockConfirmation")
-                                  .as[L2LedgerCommand.ProxyBlockConfirmation]
-                                  .map(Request.ProxyBlockConfirmation.apply)
-                          case "ProxyRequestError" =>
-                              c.downField("ProxyRequestError")
-                                  .as[L2LedgerCommand.ProxyRequestError]
-                                  .map(Request.ProxyRequestError.apply)
                           case other =>
                               Left(
                                 io.circe.DecodingFailure(s"Unknown request type: $other", c.history)

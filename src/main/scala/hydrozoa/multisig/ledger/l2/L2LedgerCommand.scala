@@ -4,7 +4,6 @@ package hydrozoa.multisig.ledger.l2
 
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2
 import io.bullet.borer.derivation.CompactMapBasedCodecs.derived
 import io.bullet.borer.{Cbor, Decoder, Encoder}
@@ -14,7 +13,6 @@ import scala.util.Try
 import scalus.cardano.address.Address
 import scalus.cardano.ledger.{Coin, TransactionInput, Value}
 import scalus.cardano.onchain.plutus.v3.PosixTime
-import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, Data}
 import scodec.bits.ByteVector
 
@@ -61,17 +59,26 @@ sealed trait L2LedgerCommand
 
 object L2LedgerCommand {
     sealed trait Real extends L2LedgerCommand
-    sealed trait Proxy extends L2LedgerCommand
 
     export RegisterDeposit.given
     export ApplyDepositDecisions.given
     export ApplyTransaction.given
-    export ProxyBlockConfirmation.given
-    export ProxyRequestError.given
+
+    /** The deposit-screening request ([[L2Ledger.sendScreenDeposit]]): [[RegisterDeposit]] minus
+      * the consensus-assigned `requestId` / `blockNumber` / `blockCreationStartTime` — those do not
+      * exist yet at screening time. Deliberately not a [[Real]] command: screening is a stateless
+      * query, never logged or replayed.
+      */
+    final case class ScreenDeposit(
+        depositId: TransactionInput,
+        depositFee: Coin,
+        depositL2Value: Value,
+        refundDestination: Destination,
+        l2Payload: ByteString
+    )
 
     final case class RegisterDeposit(
         requestId: RequestId,
-        userVKey: VerificationKey,
         blockNumber: BlockNumber,
         blockCreationStartTime: PosixTime,
         depositId: TransactionInput,
@@ -83,7 +90,6 @@ object L2LedgerCommand {
 
     object RegisterDeposit {
 
-        // TODO: can be removed if we just rename the userVk field?
         given depositRegistrationEncoder: io.circe.Encoder[L2LedgerCommand.RegisterDeposit] = {
             import Destination.given
             import hydrozoa.multisig.ledger.remote.RemoteL2LedgerCodecs.{given_Encoder_Value, given_Encoder_Coin}
@@ -92,7 +98,6 @@ object L2LedgerCommand {
             (r: L2LedgerCommand.RegisterDeposit) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
-                  "userVk" -> summon[io.circe.Encoder[VerificationKey]].apply(r.userVKey),
                   "blockNumber" -> r.blockNumber.asJson,
                   "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
                   "depositId" -> r.depositId.asJson,
@@ -132,7 +137,6 @@ object L2LedgerCommand {
       */
     final case class ApplyTransaction(
         requestId: RequestId,
-        userVKey: VerificationKey,
         blockNumber: BlockNumber,
         blockCreationStartTime: PosixTime,
         l2Payload: ByteString
@@ -143,55 +147,24 @@ object L2LedgerCommand {
         import BlockNumber.given
         import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.given
 
-        // TODO: can be removed if we just rename the userVk field?
         given applyTransactionEncoder: io.circe.Encoder[L2LedgerCommand.ApplyTransaction] =
             (r: L2LedgerCommand.ApplyTransaction) =>
                 io.circe.Json.obj(
                   "requestId" -> r.requestId.asJson,
-                  "userVk" -> summon[io.circe.Encoder[VerificationKey]].apply(r.userVKey),
                   "blockNumber" -> r.blockNumber.asJson,
                   "blockCreationStartTime" -> r.blockCreationStartTime.asJson,
                   "l2Payload" -> summon[io.circe.Encoder[ByteString]].apply(r.l2Payload)
                 )
 
-        // Hand-written to match the encoder's `userVk` key (the case-class field is `userVKey`, so a
-        // derived decoder looks for the wrong key and never round-trips). Ported from PR #465.
         given applyTransactionDecoder: io.circe.Decoder[L2LedgerCommand.ApplyTransaction] =
             io.circe.Decoder.instance(c =>
                 for {
                     rid <- c.downField("requestId").as[RequestId]
-                    vk <- c.downField("userVk").as[VerificationKey]
                     bn <- c.downField("blockNumber").as[BlockNumber]
                     t <- c.downField("blockCreationStartTime").as[PosixTime]
                     p <- c.downField("l2Payload").as[ByteString]
-                } yield L2LedgerCommand.ApplyTransaction(rid, vk, bn, t, p)
+                } yield L2LedgerCommand.ApplyTransaction(rid, bn, t, p)
             )
     }
-
-    object ProxyBlockConfirmation {
-        given Codec[L2LedgerCommand.ProxyBlockConfirmation] = {
-            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
-            import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{coinEncoder as _, coinDecoder as _, valueEncoder as _, valueDecoder as _, given}
-
-            io.circe.generic.semiauto.deriveCodec
-        }
-    }
-
-    final case class ProxyBlockConfirmation(
-        blockNumber: BlockNumber,
-        refundTxs: Vector[(RequestId, EnrichedTx.Serialized)]
-    ) extends L2LedgerCommand.Proxy
-
-    object ProxyRequestError {
-        given Codec[ProxyRequestError] = {
-            import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
-            io.circe.generic.semiauto.deriveCodec
-        }
-    }
-
-    final case class ProxyRequestError(
-        requestId: RequestId,
-        message: String
-    ) extends L2LedgerCommand.Proxy
 
 }
