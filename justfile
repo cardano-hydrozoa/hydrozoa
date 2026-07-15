@@ -109,7 +109,7 @@ deploy-scripts-and-g2-setup WALLET OUT="config/demo/bootstrap/script-refs.json" 
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
   args=(--wallet {{WALLET}} --blockfrost-key "$key" --out {{OUT}})
   if [ -n "{{LADDER_REFS}}" ]; then args+=(--ladder-refs {{LADDER_REFS}}); fi
-  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[@]}"
+  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[*]}"
 
 # Build the shared head-config.json from the bootstrap directory's four files (roster, defaults,
 # l2-cardano-eutxo, script-refs). Reads the Blockfrost key from the .local template (else
