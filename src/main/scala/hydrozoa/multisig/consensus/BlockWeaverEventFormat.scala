@@ -25,6 +25,8 @@ object BlockWeaverEventFormat:
                 trace(s"unexpected wakeup for block ${blockNum: Int}, ignoring")
             case SoftConfirmationIgnored(blockNum) =>
                 trace(s"ignoring soft block confirmation ${blockNum: Int}")
+            case RetiredOnFinalBlock(blockNum) =>
+                info(s"final block ${blockNum: Int} woven — no further blocks, retiring")
             case RequestAddedToMempool(requestId) =>
                 info(s"request $requestId added to mempool")
             case AwaitedRequestReceived(requestId) =>

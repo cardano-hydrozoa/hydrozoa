@@ -36,7 +36,7 @@ object WalletModuleTest extends Properties("WalletModule") {
         new DataSignature(signed.coseSignatureCborHex, signed.coseKeyCborHex)
 
     // Property: bloxbean's own verify accepts what we produce — round-trip through the CIP-30
-    // signData/verify contract that HydrozoaRoutes relies on.
+    // signData/verify contract.
     val _ = property("BloxBean.signCoseCip30 output validates via CIP30DataSigner.verify") =
         forAll(genEntropy, genPayload) { (entropy, payload) =>
             val (vk, sk) = bloxbeanKeys(entropy)
@@ -52,7 +52,7 @@ object WalletModuleTest extends Properties("WalletModule") {
         }
 
     // Property: coseKey's COSE key parameter -2 (OKP curve x-coordinate) is exactly the wallet's
-    // public key — the same field JsonCodecs.validateCoseSignature reads to recover userVk.
+    // public key — the field Cip30Verify.verify reads to recover the signer key.
     val _ = property(
       "BloxBean.signCoseCip30 embeds the public key in the coseKey X header (param -2)"
     ) = forAll(genEntropy, genPayload) { (entropy, payload) =>
@@ -62,6 +62,31 @@ object WalletModuleTest extends Properties("WalletModule") {
         val extractedPubKey = ds.coseKey().otherHeaderAsBytes(-2L)
         extractedPubKey.sameElements(vk.getKeyData)
     }
+
+    // Property: Cip30Verify.verify accepts a signCoseCip30 output and recovers the exact payload +
+    // signer key. This is the sign↔verify contract DepositPreScreening relies on.
+    val _ = property("Cip30Verify.verify recovers the payload + signer vkey (BloxBean)") =
+        forAll(genEntropy, genPayload) { (entropy, payload) =>
+            val (vk, sk) = bloxbeanKeys(entropy)
+            val signed = WalletModule.BloxBean.signCoseCip30(payload, vk, sk)
+            Cip30Verify.verify(signed.coseKeyCborHex, signed.coseSignatureCborHex) match {
+                case Right((vKey, signedPayload)) =>
+                    vKey == ScalusVerificationKey.unsafeFromArray(vk.getKeyData) &&
+                    signedPayload.bytes.sameElements(payload)
+                case Left(_) => false
+            }
+        }
+
+    val _ = property("Cip30Verify.verify recovers the payload + signer vkey (Scalus)") =
+        forAll(genEntropy, genPayload) { (entropy, payload) =>
+            val (vk, sk) = scalusKeys(entropy)
+            val signed = WalletModule.Scalus.signCoseCip30(payload, vk, sk)
+            Cip30Verify.verify(signed.coseKeyCborHex, signed.coseSignatureCborHex) match {
+                case Right((vKey, signedPayload)) =>
+                    vKey == vk && signedPayload.bytes.sameElements(payload)
+                case Left(_) => false
+            }
+        }
 
     // Leak check: the private-key hex must not appear as a substring in either the coseKey or
     // the coseSignature CBOR hex. Collision on 64+ hex chars is astronomical; a positive substring

@@ -21,7 +21,9 @@ final case class HeadParameters(
     // QUESTION: (from Peter to Ilia): I don't think we need to pin the coil quorum here, do we?
     //   It will be in the multisig native script; the hash will change if the peers don't agree.
     override val coilQuorum: Int,
-    override val l2ParamsHash: Hash32
+    override val l2ParamsHash: Hash32,
+    override val l2Ledger: L2LedgerKind,
+    override val identityIsomorphism: Boolean
 ) extends HeadParameters.Section {
     override transparent inline def headParameters: HeadParameters = this
 }
@@ -44,6 +46,17 @@ object HeadParameters {
           * during the negotiation phase.
           */
         def l2ParamsHash: Hash32 = headParameters.l2ParamsHash
+
+        /** Which L2 ledger this head runs — `cardano-eutxo` or `any-remote` (agreed by all peers).
+          */
+        def l2Ledger: L2LedgerKind = headParameters.l2Ledger
+
+        /** Identity isomorphism: when `true`, the exact L1 tx runs on L2 unchanged — the ledger
+          * does NOT enforce the `headId` pin, which reopens cross-head replay
+          * (docs/l2-isomorphism.md). Default `false` (format isomorphism only; pin enforced).
+          * Agreed by all peers — it changes the trust model.
+          */
+        def identityIsomorphism: Boolean = headParameters.identityIsomorphism
 
         def coilQuorum: Int = headParameters.coilQuorum
 

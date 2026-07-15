@@ -46,6 +46,7 @@
           packages = with pkgs; [
             ammonite # modernized scala repl: https://ammonite.io/
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
+            git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
             jdk
             just # command runner, similar to `make`
             libnotify # used in justfile

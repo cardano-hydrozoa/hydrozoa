@@ -1,94 +1,55 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.IO
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{RequestValidityEndTime, RequestValidityStartTime}
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.server.JsonCodecs.given_Encoder_UserRequestHeader
-import io.circe.*
-import io.circe.syntax.*
 import scalus.cardano.ledger.{Hash, Hash32}
-import scalus.crypto.ed25519.{Signature, VerificationKey}
 import scalus.uplc.builtin.Builtins.blake2b_256
-import scalus.uplc.builtin.{ByteString, JVMPlatformSpecific}
+import scalus.uplc.builtin.ByteString
 import scalus.|>
 
 // TODO: move away from server, it doesn't belong in here
-/** A parsed user request with a valid signature and body hash
-  *
-  * @param signature
-  *   Signature of the header, encoded as the bytestring of the UTF-8 representation of json string,
-  *   verifiable by userVK
+/** A parsed user request wrapping its body. There is no separate header: the L2 payload in the body
+  * is a native, self-authenticating Cardano transaction that carries its own validity interval and
+  * headId pin, and its signatures are verified by the ledger's stateless screening.
   */
-enum UserRequest extends SyncRequest[IO, UserRequest, RequestId] {
+enum UserRequest extends SyncRequest[IO, UserRequest, Either[UserRequest.Rejected, RequestId]] {
 
     export UserRequest.Sync
     def ?: : this.Send = SyncRequest.send(_, this)
 
-    def header: UserRequestHeader
     def body: UserRequestBody
-    def userVk: VerificationKey
 
     case DepositRequest private (
-        override val header: UserRequestHeader,
-        override val body: UserRequestBody.DepositRequestBody,
-        override val userVk: VerificationKey
+        override val body: UserRequestBody.DepositRequestBody
     ) extends UserRequest
 
     case TransactionRequest private (
-        override val header: UserRequestHeader,
-        override val body: UserRequestBody.TransactionRequestBody,
-        override val userVk: VerificationKey
+        override val body: UserRequestBody.TransactionRequestBody
     ) extends UserRequest
 }
 
 object UserRequest {
 
     object DepositRequest {
-        def apply(
-            header: UserRequestHeader,
-            body: DepositRequestBody,
-            userVk: VerificationKey
-        ): DepositRequest = new UserRequest.DepositRequest(header, body, userVk)
+        def apply(body: DepositRequestBody): DepositRequest =
+            new UserRequest.DepositRequest(body)
     }
 
     object TransactionRequest {
-        def apply(
-            header: UserRequestHeader,
-            body: TransactionRequestBody,
-            userVk: VerificationKey
-        ): TransactionRequest = new UserRequest.TransactionRequest(header, body, userVk)
+        def apply(body: TransactionRequestBody): TransactionRequest =
+            new UserRequest.TransactionRequest(body)
     }
 
-    type Sync = SyncRequest.Envelope[IO, UserRequest, RequestId]
+    type Sync = SyncRequest.Envelope[IO, UserRequest, Either[Rejected, RequestId]]
 
-}
+    /** A request rejected at stateless screening (docs/l2-isomorphism.md), before a `RequestId` is
+      * assigned — the ledger judged it malformed or replay-pinned. Surfaced to the submitter
+      * instead of an id.
+      */
+    final case class Rejected(reason: String)
 
-/** @param headId
-  *   The blake2b_224 hash of the cbor-encoded seed utxo [[TransactionInput]] appended to the CIP-67
-  *   prefix HYDR. This is the asset name of the treasury token
-  * @param bodyHash
-  *   blake2b_256 hash of the Cbor-encoded
-  * @param validityStart
-  *   Epoch time in seconds, block creation start time must be no earlier than this time in order
-  *   for the request to be actionable
-  * @param validityEnd
-  *   Epoch time in seconds, block creation start time must be before this time in order for the
-  *   request to be actionable
-  */
-case class UserRequestHeader(
-    headId: HeadId,
-    validityStart: RequestValidityStartTime,
-    validityEnd: RequestValidityEndTime,
-    bodyHash: Hash32
-) {
-    def signEd25519(privateKey: ByteString): Signature =
-        Signature.unsafeFromByteString(JVMPlatformSpecific.signEd25519(privateKey, this.byteString))
-    // TODO: do we want to remove it finally?
-    def bytes: Array[Byte] = this.asJson(given_Encoder_UserRequestHeader).toString.getBytes("UTF-8")
-    private def byteString: ByteString = ByteString.fromArray(this.bytes)
 }
 
 enum UserRequestBody {

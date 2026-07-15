@@ -90,6 +90,15 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
                           "=" * 80 + s"\nEncoded:\n\n $encoded \n\n" +
                           "=" * 80 + s"\nDecoded:\n\n $decoded \n\n"
                     )
+                    // A cardano-eutxo node runs its ledger in-process and needs no remote URI, so a
+                    // private config that omits `remoteLedgerUri` must decode to None.
+                    withoutUri = encoded.mapObject(_.remove("remoteLedgerUri"))
+                    decodedNoUri <- failLeft(withoutUri.as[NodePrivateConfig])
+                    _ <- assertWith(
+                      decodedNoUri.remoteLedgerUri.isEmpty,
+                      "an omitted remoteLedgerUri should decode to None, got " +
+                          decodedNoUri.remoteLedgerUri.toString
+                    )
                 } yield ()
             }
 

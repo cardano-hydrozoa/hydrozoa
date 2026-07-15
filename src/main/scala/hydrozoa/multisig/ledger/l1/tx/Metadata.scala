@@ -5,7 +5,8 @@ import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Type
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Hash32, Metadatum, ProtocolVersion, Transaction, Word64}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Metadatum, ProtocolVersion, Transaction, Word64}
+import scalus.uplc.builtin.ByteString
 
 /** The metadata associated with hydrozoa L1 transactions serves two purposes:
   *
@@ -85,19 +86,26 @@ object Metadata {
       *   The output index of the deposit utxo in this transaction
       * @param depositFee
       *   The deposit fee, which the head will absorb from the deposit into equity.
-      * @param l2PayloadHash
-      *   The L2 payload is passed out-of-band. This is the blake2b_256 hash of that payload
+      * @param coseKey
+      *   The CBOR bytes of the depositor's COSE_Key (CIP-30 `signData()`), carrying the key that
+      *   endorsed the deposit's L2 payload.
+      * @param coseSignature
+      *   The CBOR bytes of the depositor's COSE_Sign1 over `blake2b_256(l2Payload)` — the L2
+      *   payload itself is passed out-of-band, and the parse verifies this signature binds it to
+      *   the deposit (docs/l2-isomorphism.md).
       */
     case class Deposit(
         depositIx: Int,
         depositFee: Coin,
-        l2PayloadHash: Hash32,
+        coseKey: ByteString,
+        coseSignature: ByteString,
     ) extends Metadata(EnrichedTx.Type.Deposit) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("depositIx") -> Metadatum.Int(depositIx),
             Metadatum.Text("depositFee") -> Metadatum.Int(depositFee.value),
-            Metadatum.Text("l2PayloadHash") -> Metadatum.Text(l2PayloadHash.toHex)
+            Metadatum.Text("coseKey") -> chunkedBytes(coseKey),
+            Metadatum.Text("coseSignature") -> chunkedBytes(coseSignature)
           )
         )
     }
@@ -105,32 +113,22 @@ object Metadata {
     object Deposit extends Parser[Deposit](EnrichedTx.Type.Deposit) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Deposit] = {
             val innerMapEntries = innerMap.entries
-            for {
-                depositIxRaw <- innerMapEntries
-                    .get(Metadatum.Text("depositIx"))
+
+            def required(key: String): Either[ParseError, Metadatum] =
+                innerMapEntries
+                    .get(Metadatum.Text(key))
                     .toRight(
                       MissingMetadataKeyForTransactionType(
-                        "depositIx",
+                        key,
                         innerMapEntries.keys.map(_.toString).toList
                       )
                     )
 
-                depositFeeRaw <- innerMapEntries
-                    .get(Metadatum.Text("depositFee"))
-                    .toRight(
-                      MissingMetadataKeyForTransactionType(
-                        "depositFee",
-                        innerMapEntries.keys.map(_.toString).toList
-                      )
-                    )
-                l2PayloadHashRaw <- innerMapEntries
-                    .get(Metadatum.Text("l2PayloadHash"))
-                    .toRight(
-                      MissingMetadataKeyForTransactionType(
-                        "l2PayloadHash",
-                        innerMapEntries.keys.map(_.toString).toList
-                      )
-                    )
+            for {
+                depositIxRaw <- required("depositIx")
+                depositFeeRaw <- required("depositFee")
+                coseKeyRaw <- required("coseKey")
+                coseSignatureRaw <- required("coseSignature")
 
                 depositIx <- depositIxRaw match {
                     case i: Metadatum.Int => Right(i.value.intValue)
@@ -142,16 +140,42 @@ object Metadata {
                     case _                => Left(WrongMetadataValue("depositFee", depositFeeRaw))
                 }
 
-                l2PayloadHash <- l2PayloadHashRaw match {
-                    case i: Metadatum.Text => Right(i)
-                    case _ => Left(WrongMetadataValue("l2PayloadHash", l2PayloadHashRaw))
-                }
+                coseKey <- unchunkedBytes(coseKeyRaw)
+                    .toRight(WrongMetadataValue("coseKey", coseKeyRaw))
+                coseSignature <- unchunkedBytes(coseSignatureRaw)
+                    .toRight(WrongMetadataValue("coseSignature", coseSignatureRaw))
             } yield Deposit(
               depositIx = depositIx,
               depositFee = Coin(depositFee),
-              l2PayloadHash = Hash32.fromHex(l2PayloadHash.value)
+              coseKey = coseKey,
+              coseSignature = coseSignature
             )
         }
+    }
+
+    /** Chunk `bytes` into a `Metadatum.List` of ≤64-byte `Metadatum.Bytes` — the L1 ledger caps
+      * each metadata byte/text string at 64 bytes, and a COSE_Sign1 exceeds that.
+      */
+    private def chunkedBytes(bytes: ByteString): Metadatum =
+        Metadatum.List(
+          bytes.bytes
+              .grouped(64)
+              .map(chunk => Metadatum.Bytes(ByteString.fromArray(chunk)))
+              .toIndexedSeq
+        )
+
+    /** Inverse of [[chunkedBytes]]: concatenate a `Metadatum.List` of `Metadatum.Bytes`. `None` on
+      * any other shape.
+      */
+    private def unchunkedBytes(m: Metadatum): Option[ByteString] = m match {
+        case Metadatum.List(items) =>
+            items
+                .foldLeft(Option(Array.emptyByteArray)) {
+                    case (Some(acc), Metadatum.Bytes(b)) => Some(acc ++ b.bytes)
+                    case _                               => None
+                }
+                .map(ByteString.fromArray)
+        case _ => None
     }
 
     case class Fallback() extends Metadata(EnrichedTx.Type.Fallback)

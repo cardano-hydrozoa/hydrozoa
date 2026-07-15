@@ -5,14 +5,21 @@ import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
 import com.suprnation.typelevel.actors.syntax.BroadcastSyntax.*
+import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
+import hydrozoa.config.head.multisig.fallback.FallbackContingency
+import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.lib.actor.SyncRequest
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.l1.tx.DepositPreScreening
+import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, WriteBatch}
 
 /** The first actor responsible for processing events from end-users, as received by the
@@ -25,6 +32,7 @@ import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persist
 trait RequestSequencer(
     config: Config,
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | RequestSequencer.Connections,
+    l2Ledger: L2Ledger[IO],
     tracer: ContraTracer[IO, EventSequencerEvent],
     persistence: Persistence[IO]
 ) extends Actor[IO, Request] {
@@ -74,44 +82,72 @@ trait RequestSequencer(
         case req: UserRequest.Sync =>
             req.request.handleSync(
               req,
-              (userRequest: UserRequest) =>
-                  for {
-                      conn <- getConnections
-                      newNum <- state.nextRequestNum()
-                      // The user-request surface is head-only, so the author is always a head peer.
-                      ownHeadPeerNum <- config.ownPeerId match {
-                          case PeerId.Head(n) => IO.pure(n)
-                          case PeerId.Coil(_) =>
-                              IO.raiseError(
-                                new IllegalStateException(
-                                  "RequestSequencer runs only on a head peer"
-                                )
+              (userRequest: UserRequest) => {
+                  // Screening (docs/l2-isomorphism.md): decide whether this request is worth a
+                  // RequestId. On a No, reject before assigning one — no id, no CR1 persist, no
+                  // consensus fan-out. A transaction goes straight to the ledger (it
+                  // self-authenticates through its own witnesses); a deposit first runs Hydrozoa's
+                  // pre-screening (COSE authentication + the accept-by gate), then the ledger's
+                  // value checks.
+                  val screened: IO[Either[String, Unit]] = userRequest.body match {
+                      case UserRequestBody.TransactionRequestBody(l2Payload) =>
+                          l2Ledger.sendScreenTx(l2Payload).value.map(_.left.map(_.message))
+                      case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
+                          realTimeQuantizedInstant(config.slotConfig).flatMap { now =>
+                              DepositPreScreening.preScreen(l1Payload, l2Payload, now)(
+                                config
+                              ) match {
+                                  case Left(e) => IO.pure(Left(e.toString))
+                                  case Right(screenDeposit) =>
+                                      l2Ledger
+                                          .sendScreenDeposit(screenDeposit)
+                                          .value
+                                          .map(_.left.map(_.message))
+                              }
+                          }
+                  }
+                  screened.flatMap {
+                      case Left(reason) => IO.pure(Left(UserRequest.Rejected(reason)))
+                      case Right(()) =>
+                          for {
+                              conn <- getConnections
+                              newNum <- state.nextRequestNum()
+                              // The user-request surface is head-only, so the author is always a head peer.
+                              ownHeadPeerNum <- config.ownPeerId match {
+                                  case PeerId.Head(n) => IO.pure(n)
+                                  case PeerId.Coil(_) =>
+                                      IO.raiseError(
+                                        new IllegalStateException(
+                                          "RequestSequencer runs only on a head peer"
+                                        )
+                                      )
+                              }
+                              newId = RequestId(ownHeadPeerNum, newNum)
+                              newRequestWithId = UserRequestWithId(
+                                userRequest = userRequest,
+                                requestId = newId
                               )
-                      }
-                      newId = RequestId(ownHeadPeerNum, newNum)
-                      newRequestWithId = UserRequestWithId(
-                        userRequest = userRequest,
-                        requestId = newId
-                      )
-                      _ <- tracer.traceWith(
-                        EventSequencerEvent.RequestIdAssigned(newId.peerNum, newId.requestNum)
-                      )
-                      // CR1: persist the assigned request to the Request lane BEFORE telling the
-                      // user the id (the id is durable before it is observable; §4 CR1/CR4).
-                      stamp <- persistence.arrivalStamp
-                      _ <- persistence.write(
-                        WriteBatch.start
-                            .put(JournalKey.Request(ownHeadPeerNum, newNum))(
-                              JournalValue(stamp, newRequestWithId)
-                            )
-                      )
-                      _ <- req.dResponse.complete(newId)
-                      _ <- conn.blockWeaver ! newRequestWithId
-                      // To the head-peer mesh, and (on a hub) to CoilRelay so its coil peers get the
-                      // request content they need to reproduce block bodies.
-                      _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
-                      _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
-                  } yield newId
+                              _ <- tracer.traceWith(
+                                EventSequencerEvent
+                                    .RequestIdAssigned(newId.peerNum, newId.requestNum)
+                              )
+                              // CR1: persist the assigned request to the Request lane BEFORE telling
+                              // the user the id (durable before observable; §4 CR1/CR4).
+                              stamp <- persistence.arrivalStamp
+                              _ <- persistence.write(
+                                WriteBatch.start
+                                    .put(JournalKey.Request(ownHeadPeerNum, newNum))(
+                                      JournalValue(stamp, newRequestWithId)
+                                    )
+                              )
+                              _ <- conn.blockWeaver ! newRequestWithId
+                              // To the head-peer mesh, and (on a hub) to CoilRelay so its coil peers
+                              // get the request content they need to reproduce block bodies.
+                              _ <- (conn.headPeerLiaisons ! newRequestWithId).parallel
+                              _ <- conn.coilRelay.traverse_(_ ! newRequestWithId)
+                          } yield Right(newId)
+                  }
+              }
             )
     }
 
@@ -153,14 +189,19 @@ object RequestSequencer {
     def apply(
         config: Config,
         pendingConnections: HeadMultisigRegimeManager.PendingConnections,
+        l2Ledger: L2Ledger[IO],
         tracer: ContraTracer[IO, EventSequencerEvent],
         persistence: Persistence[IO]
     ): IO[RequestSequencer] =
-        IO(new RequestSequencer(config, pendingConnections, tracer, persistence) {})
+        IO(new RequestSequencer(config, pendingConnections, l2Ledger, tracer, persistence) {})
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.
-    type Config = OwnPeerPublic.Section & CardanoNetwork.Section
+    // The sections beyond OwnPeerPublic/CardanoNetwork are what deposit pre-screening needs to
+    // parse and time-gate a deposit tx (DepositPreScreening.Config).
+    type Config = OwnPeerPublic.Section & CardanoNetwork.Section & HeadPeers.Section &
+        InitialBlock.Section & TxTiming.Section & InitializationParameters.Section &
+        FallbackContingency.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle,

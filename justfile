@@ -46,56 +46,95 @@ test:
 build-werror:
   #!/usr/bin/env bash
   trap 'just notify "build-werror"' EXIT
-  CI=true sbt Test/compile integration/Test/compile
+  CI=true sbt Test/compile integration/Test/compile examples/Test/compile
 
-keygen *ARGS:
-  #!/usr/bin/env bash
-  trap 'just notify "keygen"' EXIT
-  sbt "runMain hydrozoa.app.GenerateKeyPair {{ARGS}}"
-
-# Generate a whole head's keys + configs in one sbt run: a roster (peers.json) plus a
-# private config and L1 address per peer, under OUTDIR/{head,coil}-N/. Coil peers are
-# hubbed round-robin across the head peers. Fund OUTDIR/head-0/address.txt, then run
+# Generate a whole head's keys + configs in one sbt run, into the config layout:
+#   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
+#   OUTDIR/private/{head,coil}-N/private.json
+# Coil peers are hubbed round-robin across the head peers. Next: `just head-zero-address` and fund
+# it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-scripts-and-g2-setup`, then
 # `just build-head-config`.
 keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
   #!/usr/bin/env bash
   set -euo pipefail
   trap 'just notify "keygen-fleet"' EXIT
   outdir="{{OUTDIR}}"
-  if [ -e "$outdir/peers.json" ]; then
-    echo "error: $outdir/peers.json already exists; move it away or pick another OUTDIR" >&2
+  if [ -e "$outdir/bootstrap/roster.json" ]; then
+    echo "error: $outdir/bootstrap/roster.json already exists; move it away or pick another OUTDIR" >&2
     exit 1
   fi
+  template="config/template/peer-private.template.json.local"
+  if [ ! -f "$template" ]; then
+    echo "error: $template not found — copy config/template/peer-private.template.json to it and set blockfrostApiKey" >&2
+    exit 1
+  fi
+  key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template")
+  case "$key" in
+    preview*) network=preview;;
+    preprod*) network=preprod;;
+    mainnet*) network=mainnet;;
+    *) echo "error: cannot derive the network from blockfrostApiKey in $template (expected a preview…/preprod…/mainnet… key)" >&2; exit 1;;
+  esac
+  echo "network (from the Blockfrost key): $network"
   cmds=()
   for i in $(seq 0 $(( {{HEADS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/peers.json --role head --ws-address ws://head-$i:4001 --template peer-private.template.json --out $outdir/head-$i/private.json")
+    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role head --ws-address ws://head-$i:4001 --template $template --out $outdir/private/head-$i/private.json")
   done
   for i in $(seq 0 $(( {{COILS}} - 1 ))); do
-    cmds+=("runMain hydrozoa.app.GenerateKeyPair --roster $outdir/peers.json --role coil --hub $(( i % {{HEADS}} )) --template peer-private.template.json --out $outdir/coil-$i/private.json")
+    cmds+=("runMain hydrozoa.bootstrap.GenerateKeyPair --roster $outdir/bootstrap/roster.json --role coil --hub $(( i % {{HEADS}} )) --template $template --out $outdir/private/coil-$i/private.json")
   done
-  cmds[-1]+=" --coil-quorum {{QUORUM}}"
+  cmds+=("runMain hydrozoa.bootstrap.InitBootstrapFiles $outdir/bootstrap/roster.json --out-dir $outdir/bootstrap --coil-quorum {{QUORUM}} --cardano-network $network")
   sbt "${cmds[@]}"
 
-# Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder) on
-# Preview, funded by WALLET (a keygen private config, e.g. config/demo/head-0/private.json;
-# change returns to it). Writes the reference inputs to OUT for build-head-config. Pass
-# LADDER_REFS (an existing script-refs.json) to reuse the already-deployed ladder and
-# redeploy only the validators. Reads $BLOCKFROST_API_KEY.
-deploy-scripts-and-g2-setup WALLET OUT="config/demo/script-refs.json" LADDER_REFS="":
+# Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no
+# address files to go stale).
+head-zero-address BOOTSTRAP_DIR="config/demo/bootstrap":
   #!/usr/bin/env bash
-  trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
-  args=(--wallet {{WALLET}} --out {{OUT}})
-  [ -n "{{LADDER_REFS}}" ] && args+=(--ladder-refs {{LADDER_REFS}})
-  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[@]}"
+  trap 'just notify "head-zero-address"' EXIT
+  sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress --bootstrap-dir {{BOOTSTRAP_DIR}}"
 
-# Build the shared head-config.json from a keygen-fleet roster + deployed script refs.
-# Reads the Blockfrost key from $BLOCKFROST_API_KEY; head peer 0's address must be
-# funded on Preview first (the tool logs the exact lovelace required and fails with
-# the shortfall if not).
-build-head-config ROSTER REFS OUT EQUITY:
+# Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
+# WALLET (a keygen private config, e.g. config/demo/private/head-0/private.json; change returns
+# to it). The network is derived from the Blockfrost key (read from the .local template, else
+# $BLOCKFROST_API_KEY). Writes the reference inputs to OUT for build-head-config. Pass
+# LADDER_REFS (an existing script-refs.json) to reuse the already-deployed ladder and redeploy
+# only the validators.
+deploy-scripts-and-g2-setup WALLET OUT="config/demo/bootstrap/script-refs.json" LADDER_REFS="":
   #!/usr/bin/env bash
+  set -euo pipefail
+  trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
+  template="config/template/peer-private.template.json.local"
+  key="${BLOCKFROST_API_KEY:-}"
+  if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
+  if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
+  args=(--wallet {{WALLET}} --blockfrost-key "$key" --out {{OUT}})
+  if [ -n "{{LADDER_REFS}}" ]; then args+=(--ladder-refs {{LADDER_REFS}}); fi
+  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[*]}"
+
+# Build the shared head-config.json from the bootstrap directory's four files (roster, defaults,
+# l2-cardano-eutxo, script-refs). Reads the Blockfrost key from the .local template (else
+# $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network first (the
+# tool logs the exact lovelace required and fails with the shortfall if not).
+build-head-config BOOTSTRAP_DIR="config/demo/bootstrap" OUT="config/demo/head-config/head-config.json":
+  #!/usr/bin/env bash
+  set -euo pipefail
   trap 'just notify "build-head-config"' EXIT
-  sbt "runMain hydrozoa.app.BuildHeadConfig {{ROSTER}} --script-refs {{REFS}} --equity {{EQUITY}} --out {{OUT}}"
+  template="config/template/peer-private.template.json.local"
+  key="${BLOCKFROST_API_KEY:-}"
+  if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
+  if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
+  mkdir -p "$(dirname {{OUT}})"
+  sbt "runMain hydrozoa.bootstrap.BuildHeadConfig {{BOOTSTRAP_DIR}} --blockfrost-key $key --out {{OUT}}"
+
+# Interactively build, sign, and submit an L2 transaction to a running head: pick a peer key,
+# pick one of its L2 utxos, enter destination + value.
+submit-l2-tx CONFIG_DIR="config/demo" HEAD_URI="http://localhost:8080":
+  sbt "examples/runMain hydrozoa.examples.demo.SubmitL2Transaction --config-dir {{CONFIG_DIR}} --head-uri {{HEAD_URI}}"
+
+# Interactively deposit into a running head: pick a peer key, pick one of its L1 utxos, enter the
+# L2 outputs to spawn; registers with the head, then submits the deposit tx to L1 via Blockfrost.
+deposit CONFIG_DIR="config/demo" HEAD_URI="http://localhost:8080":
+  sbt "examples/runMain hydrozoa.examples.demo.SubmitDeposit --config-dir {{CONFIG_DIR}} --head-uri {{HEAD_URI}}"
 
 export:
   #!/usr/bin/env bash
@@ -110,7 +149,7 @@ export-test:
 migrate ADDRESS:
   #!/usr/bin/env bash
   trap 'just notify "migrate"' EXIT
-  sbt "runMain hydrozoa.app.Migrate {{ADDRESS}}"
+  sbt "runMain hydrozoa.bootstrap.Migrate {{ADDRESS}}"
 
 integration-fast:
   #!/usr/bin/env bash
