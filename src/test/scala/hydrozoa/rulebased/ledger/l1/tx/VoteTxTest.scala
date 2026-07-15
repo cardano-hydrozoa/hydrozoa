@@ -12,7 +12,7 @@ import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.AwaitingVote
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.*
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo}
 import org.scalacheck.{Gen, Properties}
 import scalus.cardano.ledger.*
 import scalus.cardano.onchain.plutus.v1.ArbitraryInstances.genByteStringOfN
@@ -85,6 +85,10 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
           ArbitraryInstances.given_Arbitrary_Value.arbitrary
         )
 
+        // The regime utxo (HRWT beacon + head-identity datum) referenced by the vote tx
+        regimeTxId <- genByteStringOfN(32).map(TransactionHash.fromByteString)
+        regimeUtxo = RuleBasedRegimeUtxo(TransactionInput(regimeTxId, 0))
+
         // Generate a ballot box with AwaitingVote status (input)
         voteDatum <- genPeerVoteDatumAwaitingVote
         voteUtxo <- genBallotBox(
@@ -120,6 +124,7 @@ def genVoteTxBuilder(using multiNodeConfig: MultiNodeConfig): Gen[VoteTx.Build] 
     } yield VoteTx.Build(
       uncastBallotBox = voteUtxo,
       treasuryUtxo = treasuryUtxo,
+      regimeUtxo = regimeUtxo,
       collateralUtxo = collateralUtxo,
       sec = blockHeader,
       signatures = signatures.toList,

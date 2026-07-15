@@ -5,6 +5,7 @@ import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
+import hydrozoa.config.ScriptReferenceUtxos.given
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -12,7 +13,7 @@ import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.l1.tx.RawTx
-import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DeploymentTx, SetupLadder}
 import io.circe.parser
 import io.circe.syntax.*
 import java.nio.file.{Files, Path}
@@ -21,18 +22,25 @@ import scalus.cardano.ledger.{ScriptRef, TransactionInput, Utxo}
 import scalus.crypto.ed25519.{SigningKey, VerificationKey}
 import scalus.uplc.builtin.ByteString
 
-/** Deploy the rule-based treasury and dispute validators as reference scripts on L1.
+/** Deploy the rule-based treasury and dispute validators as reference scripts, and (once) the G2
+  * setup ladder as inline-datum utxos, on L1.
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.DeployReferenceScripts \
-  *     --wallet config/demo/head-0/private.json [--out script-refs.json]"
+  *   sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup \
+  *     --wallet config/demo/head-0/private.json \
+  *     [--ladder-refs script-refs.json] [--out script-refs.json]"
   * }}}
   *
-  * Builds and submits two chained [[DeploymentTx]]s funded from the wallet carried by the given
-  * keygen private config (change returns to the wallet, so the head funding survives): each locks
-  * one script at the unspendable burn address. Waits until both reference UTxOs are visible on L1,
-  * then writes their inputs as `--out` in the shape [[BuildHeadConfig]] consumes via
+  * The G2 setup ladder never changes, so it is deployed exactly once; the validator scripts change
+  * per release. Pass `--ladder-refs <existing script-refs.json>` to reuse an already-deployed
+  * ladder and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
+  *
+  * Builds and submits chained [[DeploymentTx]]s funded from the wallet carried by the given keygen
+  * private config (change returns to the wallet, so the head funding survives): one per validator
+  * script, plus — unless the ladder is reused — one carrying all seven [[SetupLadder]] rungs at
+  * outputs 0-6, all locked at the unspendable burn address. Waits until every reference UTxO is
+  * visible on L1, then writes their inputs as `--out` in the shape [[BuildHeadConfig]] consumes via
   * `--script-refs`.
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
@@ -41,15 +49,15 @@ import scalus.uplc.builtin.ByteString
   * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
   * `mainnet…`).
   */
-object DeployReferenceScripts
+object DeployScriptsAndG2Setup
     extends CommandIOApp(
-      name = "deploy-reference-scripts",
-      header = "Deploy the treasury + dispute validators as reference scripts on L1"
+      name = "deploy-scripts-and-g2-setup",
+      header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"
     ):
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(
-          Slf4jMsgFormat.humanFormat("hydrozoa.app.DeployReferenceScripts")
+          Slf4jMsgFormat.humanFormat("hydrozoa.app.DeployScriptsAndG2Setup")
         )
 
     private val walletOpt: Opts[Path] =
@@ -68,17 +76,26 @@ object DeployReferenceScripts
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         )
 
+    private val ladderRefsOpt: Opts[Option[Path]] =
+        Opts.option[String](
+          "ladder-refs",
+          "Existing script-refs.json whose G2 setup ladder to reuse (skips redeploying it)",
+          short = "l"
+        ).map(Path.of(_))
+            .orNone
+
     private val outOpt: Opts[Path] =
         Opts.option[String]("out", "Output path (default script-refs.json)", short = "o")
             .map(Path.of(_))
             .withDefault(Path.of("script-refs.json"))
 
     override def main: Opts[IO[ExitCode]] =
-        (walletOpt, blockfrostKeyOpt, outOpt).mapN(deployReferenceScripts)
+        (walletOpt, blockfrostKeyOpt, ladderRefsOpt, outOpt).mapN(deployScriptsAndG2Setup)
 
-    private def deployReferenceScripts(
+    private def deployScriptsAndG2Setup(
         walletPath: Path,
         blockfrostKey: String,
+        ladderRefsPath: Option[Path],
         outPath: Path
     ): IO[ExitCode] = IO
         .fromEither[StandardCardanoNetwork](
@@ -86,13 +103,14 @@ object DeployReferenceScripts
         )
         .flatMap { (cardanoNetwork: StandardCardanoNetwork) =>
             given CardanoNetwork.Section = cardanoNetwork
-            deployOn(cardanoNetwork, walletPath, blockfrostKey, outPath)
+            deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
         }
 
     private def deployOn(
         cardanoNetwork: StandardCardanoNetwork,
         walletPath: Path,
         blockfrostKey: String,
+        ladderRefsPath: Option[Path],
         outPath: Path
     )(using CardanoNetwork.Section): IO[ExitCode] = {
         for {
@@ -101,6 +119,8 @@ object DeployReferenceScripts
             wallet <- readWallet(walletPath)
             address = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- log.info(s"Funding wallet address: ${address.toBech32.get}")
+
+            reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
             backend <- CardanoBackendBlockfrost(
               Left(cardanoNetwork),
@@ -117,11 +137,18 @@ object DeployReferenceScripts
               NonEmptyList.fromList(utxosMap.toList.map(Utxo(_, _)))
             )(RuntimeException(s"No UTxOs at ${address.toBech32.get}; fund the wallet first"))
 
-            // Treasury deployment spends the wallet UTxOs; the dispute deployment chains off
-            // its change output (index 1; index 0 is the reference script).
+            // Treasury deployment spends the wallet UTxOs; the dispute deployment chains off its
+            // change output, and the setup-ladder deployment (when not reused) off the dispute tx's
+            // change (a deployment tx's change is its last output, after the payload outputs).
             treasuryTx <- IO.fromEither(
               DeploymentTx
-                  .Build(fundingUtxos, ScriptRef(HydrozoaBlueprint.treasuryScript))
+                  .Build(
+                    fundingUtxos,
+                    NonEmptyList.one(
+                      DeploymentTx.DeployedPayload
+                          .script(ScriptRef(HydrozoaBlueprint.treasuryScript))
+                    )
+                  )
                   .result
                   .left
                   .map(e => RuntimeException(s"Failed to build treasury deployment tx: $e"))
@@ -135,26 +162,61 @@ object DeployReferenceScripts
               DeploymentTx
                   .Build(
                     NonEmptyList.one(treasuryChange),
-                    ScriptRef(HydrozoaBlueprint.disputeScript)
+                    NonEmptyList.one(
+                      DeploymentTx.DeployedPayload
+                          .script(ScriptRef(HydrozoaBlueprint.disputeScript))
+                    )
                   )
                   .result
                   .left
                   .map(e => RuntimeException(s"Failed to build dispute deployment tx: $e"))
             )
             disputeSigned = wallet.signTx(disputeTx.tx)
+            disputeChange = Utxo(
+              TransactionInput(disputeSigned.id, 1),
+              disputeSigned.body.value.outputs(1).value
+            )
+
+            // Deploy the ladder only when not reusing an existing one.
+            ladderTxOpt <- reusedLadderInputs match {
+                case Some(_) => IO.none
+                case None =>
+                    IO.fromEither(
+                      DeploymentTx
+                          .Build(
+                            NonEmptyList.one(disputeChange),
+                            SetupLadder.rungDatums.map(DeploymentTx.DeployedPayload.data(_))
+                          )
+                          .result
+                          .left
+                          .map(e =>
+                              RuntimeException(s"Failed to build setup-ladder deployment tx: $e")
+                          )
+                    ).map(Some(_))
+            }
+            ladderSignedOpt = ladderTxOpt.map(t => wallet.signTx(t.tx))
+            ladderInputs = reusedLadderInputs.getOrElse(ladderTxOpt.get.deployedUtxos.toList)
 
             _ <- log.info(s"Submitting treasury deployment tx: ${treasurySigned.id}")
             _ <- submit(backend, RawTx(treasurySigned))
             _ <- log.info(s"Submitting dispute deployment tx: ${disputeSigned.id}")
             _ <- submit(backend, RawTx(disputeSigned))
+            _ <- ladderSignedOpt match {
+                case Some(s) =>
+                    log.info(s"Submitting setup-ladder deployment tx: ${s.id}") *>
+                        submit(backend, RawTx(s))
+                case None => log.info("Reusing the already-deployed G2 setup ladder")
+            }
 
             _ <- log.info("Waiting for the reference UTxOs to appear on L1...")
-            _ <- awaitUtxo(backend, treasuryTx.refScriptUtxo)
-            _ <- awaitUtxo(backend, disputeTx.refScriptUtxo)
+            _ <- awaitUtxo(backend, treasuryTx.deployedUtxos.head)
+            _ <- awaitUtxo(backend, disputeTx.deployedUtxos.head)
+            _ <- ladderInputs.traverse_(awaitUtxo(backend, _))
 
             unresolved = ScriptReferenceUtxos.Unresolved(
-              rulebasedTreasuryScriptInput = treasuryTx.refScriptUtxo,
-              disputeResolutionScriptInput = disputeTx.refScriptUtxo
+              rulebasedTreasuryScriptInput = treasuryTx.deployedUtxos.head,
+              disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
+              setupLadderInputs = ladderInputs
             )
             _ <- IO.blocking {
                 Option(outPath.getParent).foreach(Files.createDirectories(_))
@@ -162,7 +224,7 @@ object DeployReferenceScripts
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
             _ <- log.info(
-              s"Explorer: https://$explorerHost/tx/${treasuryTx.refScriptUtxo.transactionId.toHex}"
+              s"Explorer: https://$explorerHost/tx/${treasuryTx.deployedUtxos.head.transactionId.toHex}"
             )
         } yield ExitCode.Success
     }
@@ -210,6 +272,14 @@ object DeployReferenceScripts
         )
     } yield wallet
 
+    /** Read the G2 setup ladder's reference inputs from an existing `script-refs.json`, to reuse
+      * the already-deployed ladder instead of redeploying it.
+      */
+    private def readLadderInputs(path: Path): IO[List[TransactionInput]] = for {
+        json <- IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))
+        unresolved <- IO.fromEither(json.as[ScriptReferenceUtxos.Unresolved])
+    } yield unresolved.setupLadderInputs
+
     private def submit(backend: CardanoBackend[IO], rawTx: RawTx): IO[Unit] =
         backend
             .submitTx(rawTx)
@@ -233,4 +303,4 @@ object DeployReferenceScripts
                 )
         }
 
-end DeployReferenceScripts
+end DeployScriptsAndG2Setup

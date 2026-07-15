@@ -50,7 +50,9 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
 
     private val nHeadPeers: Int = 2
     private val nCoilPeers: Int = 1
-    private val scenarioTimeout: FiniteDuration = 90.seconds
+    // Per-step budget. Must absorb the 60s takeoff offset plus the ~30s-per-major deadman
+    // cadence (`forcedMajorBlockWakeupTime` = bcet + inactivityMargin) up to major 2.
+    private val scenarioTimeout: FiniteDuration = 5.minutes
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     // ------------------------------------------------------------------
@@ -86,7 +88,7 @@ object VoteVersionMismatchTest extends Properties("Vote Version Mismatch"):
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 10.seconds,
+          takeoffOffset = 60.seconds,
           disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeersConfig,
         ) { (takeoffTime, mnc) =>

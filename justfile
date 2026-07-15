@@ -52,7 +52,7 @@ build-werror:
 #   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
 #   OUTDIR/private/{head,coil}-N/private.json
 # Coil peers are hubbed round-robin across the head peers. Next: `just head-zero-address` and fund
-# it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-reference-scripts`, then
+# it, edit bootstrap/l2-cardano-eutxo.json, run `just deploy-scripts-and-g2-setup`, then
 # `just build-head-config`.
 keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo":
   #!/usr/bin/env bash
@@ -93,20 +93,23 @@ head-zero-address BOOTSTRAP_DIR="config/demo/bootstrap":
   trap 'just notify "head-zero-address"' EXIT
   sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress --bootstrap-dir {{BOOTSTRAP_DIR}}"
 
-# Deploy the treasury + dispute validators as reference scripts, funded by WALLET (a keygen
-# private config, e.g. config/demo/private/head-0/private.json; change returns to it). The
-# network is derived from the Blockfrost key (read from the .local template, else
-# $BLOCKFROST_API_KEY). Writes the reference inputs to OUT for build-head-config. One deployment
-# serves every head until the compiled scripts change.
-deploy-reference-scripts WALLET OUT="config/demo/bootstrap/script-refs.json":
+# Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
+# WALLET (a keygen private config, e.g. config/demo/private/head-0/private.json; change returns
+# to it). The network is derived from the Blockfrost key (read from the .local template, else
+# $BLOCKFROST_API_KEY). Writes the reference inputs to OUT for build-head-config. Pass
+# LADDER_REFS (an existing script-refs.json) to reuse the already-deployed ladder and redeploy
+# only the validators.
+deploy-scripts-and-g2-setup WALLET OUT="config/demo/bootstrap/script-refs.json" LADDER_REFS="":
   #!/usr/bin/env bash
   set -euo pipefail
-  trap 'just notify "deploy-reference-scripts"' EXIT
+  trap 'just notify "deploy-scripts-and-g2-setup"' EXIT
   template="config/template/peer-private.template.json.local"
   key="${BLOCKFROST_API_KEY:-}"
   if [ -f "$template" ]; then key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template"); fi
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
-  sbt "runMain hydrozoa.app.DeployReferenceScripts --wallet {{WALLET}} --blockfrost-key $key --out {{OUT}}"
+  args=(--wallet {{WALLET}} --blockfrost-key "$key" --out {{OUT}})
+  if [ -n "{{LADDER_REFS}}" ]; then args+=(--ladder-refs {{LADDER_REFS}}); fi
+  sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup ${args[@]}"
 
 # Build the shared head-config.json from the bootstrap directory's four files (roster, defaults,
 # l2-cardano-eutxo, script-refs). Reads the Blockfrost key from the .local template (else

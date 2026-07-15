@@ -13,7 +13,7 @@ import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningNonValidit
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.{DisputeRedeemer, TallyRedeemer, maxVote}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.*
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, BallotBoxOutput, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.{Utxo as _, *}
 import scalus.cardano.txbuilder.SomeBuildError
@@ -105,6 +105,7 @@ object TallyTxOps {
         continuingBallotBox: BallotBox[VoteStatus],
         removedBallotBox: BallotBox[VoteStatus],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
 
@@ -142,6 +143,7 @@ object TallyTxOps {
                         // Send back the continuing vote utxo (the removed one is consumed)
                         tallied.send,
                         treasuryUtxo.referenceOutput,
+                        regimeUtxo.referenceOutput,
                         collateralUtxo.add,
                         ValidityStartSlot(votingDeadline.slot + 1)
                       )

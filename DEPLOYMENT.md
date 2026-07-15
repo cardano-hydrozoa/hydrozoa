@@ -144,10 +144,11 @@ files each node needs:
    ├─ private/head-N/private.json     │  per-peer private configs (not part of the bootstrap dir)
    └─ private/coil-N/private.json     │
                                       │
-   deploy-reference-scripts           │
+   deploy-scripts-and-g2-setup        │
    (head-0 wallet, Blockfrost)        │
-   └─ bootstrap/script-refs.json ─────┤  the two on-chain reference-script UTxOs (optional —
-                                      │  falls back to config/script-refs/<network>.json)
+   └─ bootstrap/script-refs.json ─────┤  the on-chain reference UTxOs: treasury + dispute
+                                      │  validators and the G2 setup ladder (falls back to
+                                      │  config/script-refs/<network>.json when committed)
                                       │
                                       │  + head-0 UTxOs + protocol params   (Blockfrost)
                                       ▼
@@ -165,7 +166,7 @@ files each node needs:
   so the real key never lands in a committed file.
 - **Cardano network** — the key's prefix (`preview…` / `preprod…` / `mainnet…`) selects the
   network for everything downstream: the `cardanoNetwork` seeded into `defaults.json` and the
-  target of `deploy-reference-scripts`.
+  target of `deploy-scripts-and-g2-setup`.
 
 The template is read at generation time — regenerating means fresh keys, so re-funding.
 
@@ -184,7 +185,7 @@ config/demo/
 │   ├── roster.json                #   peer topology
 │   ├── defaults.json              #   network + head params (coilQuorum, timing…) + per-peer equity
 │   ├── l2-cardano-eutxo.json      #   opening L2 outputs, one 5-ADA output per head peer — edit to taste
-│   └── script-refs.json           #   written by deploy-reference-scripts (step 4; optional —
+│   └── script-refs.json           #   written by deploy-scripts-and-g2-setup (step 4; optional —
 │                                  #   committed per-network defaults are the fallback)
 ├── head-config/
 │   └── head-config.json           # written later by build-head-config (step 5)
@@ -230,24 +231,25 @@ tx fee; step 5 logs the exact lovelace required and fails with the shortfall if 
 network comes from the Blockfrost key):
 
 ```bash
-just deploy-reference-scripts config/demo/private/head-0/private.json
+just deploy-scripts-and-g2-setup config/demo/private/head-0/private.json
 # -> config/demo/bootstrap/script-refs.json
 ```
 
 **This step is optional when a committed default exists for the network**: with no
 `bootstrap/script-refs.json`, `build-head-config` falls back to
-`config/script-refs/<network>.json` (Preview's and Preprod's are committed). Deploy yourself only
-for a network
-without a default, or after the compiled scripts change.
+`config/script-refs/<network>.json`. After a deployment, commit the fresh refs there so the next
+head on that network can skip this step (none are committed at the moment).
 
-The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators as
-**reference scripts** from two L1 UTxOs at startup. This target deploys the currently compiled
-scripts: two chained txs funded from head-0's wallet (change returns), each locking one script at
-the unspendable burn address, then writes the reference inputs to `script-refs.json` — the
-bootstrap directory's own refs take precedence over the committed defaults. Because the
-burn address can never be spent from, **one deployment serves every head and every restart** —
-redeploy only when the compiled scripts change (symptom: step 5 or node start fails complaining
-about invalid treasury/dispute script utxos).
+The rule-based regime (evacuation/dispute) txs resolve the treasury + dispute validators — and
+the G2 setup ladder — as **reference UTxOs** at startup. This target deploys the currently
+compiled scripts, funded from head-0's wallet (change returns): one chained tx per validator
+plus, unless an existing ladder is reused (the `LADDER_REFS` argument), one tx carrying the seven
+setup-ladder rungs — all locked at the unspendable burn address — then writes the reference
+inputs to `script-refs.json`; the bootstrap directory's own refs take precedence over the
+committed defaults. Because the burn address can never be spent from, **one deployment serves
+every head and every restart** — redeploy the validators only when the compiled scripts change
+(symptom: step 5 or node start fails complaining about invalid treasury/dispute script utxos);
+the ladder never changes.
 
 **Step 5 — Build the shared head config:**
 

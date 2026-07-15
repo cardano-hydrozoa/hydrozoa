@@ -77,12 +77,19 @@ object DisputeActorTestHelpers {
       * [[DisputeTestFixtures]] constructor.
       */
     def mkRuleBasedTreasuryPure(
+        headConfig: HeadConfig,
         versionMajor: BigInt,
         value: Value,
         txIn: TransactionInput,
         votingDeadline: PosixTime
     ): RuleBasedTreasuryUtxo =
-        DisputeTestFixtures.mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline)
+        DisputeTestFixtures.mkRuleBasedTreasuryPure(
+          headConfig,
+          versionMajor,
+          value,
+          txIn,
+          votingDeadline
+        )
 
     def mkRuleBasedTreasury(
         versionMajor: BigInt,
@@ -90,7 +97,9 @@ object DisputeActorTestHelpers {
         txIn: TransactionInput,
         votingDeadline: PosixTime
     ): MultiNodeConfigTestM[RuleBasedTreasuryUtxo] =
-        pure(mkRuleBasedTreasuryPure(versionMajor, value, txIn, votingDeadline))
+        asks(env =>
+            mkRuleBasedTreasuryPure(env.headConfig, versionMajor, value, txIn, votingDeadline)
+        )
 
     /** Default actor NodeConfig: first head peer. Coil tests override via `actorConfig`. */
     def defaultActorConfig: MultiNodeConfigTestM[NodeConfig] =
@@ -150,13 +159,21 @@ object DisputeActorTestHelpers {
               commitment = initialCommitment
             )
 
+            // The regime utxo (HRWT beacon + head-identity datum) that the dispute-flow txs
+            // reference; the mock L1 must hold it for the actor's getRegime lookup.
+            regimeTxId <- pick(Arbitrary.arbitrary[TransactionHash])
+            regimeUtxo = DisputeTestFixtures
+                .mkRegimeUtxoPure(TransactionInput(regimeTxId, 0))
+                .toUtxo(using env.headConfig)
+
             initialUtxos = additionalL1Utxos ++
                 List(
                   (
                     disputeCollateralUtxo.input,
                     disputeCollateralUtxo.collateralOutput
                         .toOutput(using env)
-                  )
+                  ),
+                  regimeUtxo.toTuple
                 )
                 ++ env.nodeConfigs.head._2.scriptReferenceUtxos.toList.map(_.toTuple)
 

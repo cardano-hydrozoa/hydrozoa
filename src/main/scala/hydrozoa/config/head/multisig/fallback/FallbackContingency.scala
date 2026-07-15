@@ -48,9 +48,11 @@ object FallbackContingency {
     final case class Collective(
         publicVoteDeposit: Coin,
         fallbackTxFee: Coin,
-        minAdaForTreasury: Coin
+        minAdaForTreasury: Coin,
+        minAdaForRegime: Coin
     ) {
-        lazy val total: Coin = publicVoteDeposit + fallbackTxFee + minAdaForTreasury
+        lazy val total: Coin = publicVoteDeposit + fallbackTxFee + minAdaForTreasury +
+            minAdaForRegime
     }
 
     /** This amount is collected from each peer in the initialization tx.
@@ -128,7 +130,8 @@ object FallbackContingency {
         def mkCollectiveContingencyWithDefaults: Collective = Collective(
           publicVoteDeposit = ballotBoxMinLovelace,
           minAdaForTreasury = noLiabilitesTreasuryMinLovelace,
-          fallbackTxFee = fallbackTxFee
+          fallbackTxFee = fallbackTxFee,
+          minAdaForRegime = regimeMinLovelace
         )
 
         def mkIndividualContingencyWithDefaults(
@@ -159,6 +162,9 @@ object FallbackContingency {
 
         private def ballotBoxMinLovelace: Coin =
             config.babbageUtxoMinLovelace(Assumptions.maxBallotBoxBytes)
+
+        private def regimeMinLovelace: Coin =
+            config.babbageUtxoMinLovelace(Assumptions.maxRegimeUtxoBytes)
     }
 
     object Assumptions {
@@ -171,5 +177,9 @@ object FallbackContingency {
         // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
         // (see TreasuryOutputSizeTest)
         val maxNoLiabilitiesTreasuryUtxoBytes: PositiveInt = PositiveInt.unsafeApply(6960)
+
+        // Max serialized size of the rule-based regime utxo (HRWT beacon + head-identity datum,
+        // ~one compressed vkey per head/coil peer); measured ~880 bytes at the largest supported head.
+        val maxRegimeUtxoBytes: PositiveInt = PositiveInt.unsafeApply(1024)
     }
 }

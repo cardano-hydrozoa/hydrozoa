@@ -168,8 +168,8 @@ See [Comments](docs/style-guide.md#comments) for the full rule. In short:
 
 - When you add a new named logger / tracer route, add a matching `<logger name="…">` line to
   **every** `logback.xml` in the same subproject — keep them in sync. Configs by subproject:
-  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback.xml`
-  - `integration`: `integration/src/test/resources/logback.xml`
+  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback-test.xml`
+  - `integration`: `integration/src/test/resources/logback-test.xml`
 
 ### Warnings
 

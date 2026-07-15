@@ -246,7 +246,7 @@ object Bootstrap:
 
     /** Pick the script-refs source: the bootstrap directory's own `script-refs.json` when present,
       * else the committed per-network default. Fails naming both candidates when neither exists —
-      * the network has no default yet, so run `just deploy-reference-scripts` first.
+      * the network has no default yet, so run `just deploy-scripts-and-g2-setup` first.
       */
     private def resolveScriptRefsPath(dir: Path, network: CardanoNetwork): IO[Path] = {
         val own = dir.resolve(BootstrapDir.scriptRefs)
@@ -258,7 +258,7 @@ object Bootstrap:
             else
                 throw RuntimeException(
                   s"no script refs: neither $own nor the committed default $default exists — " +
-                      "run `just deploy-reference-scripts` first"
+                      "run `just deploy-scripts-and-g2-setup` first"
                 )
         }
     }
@@ -981,15 +981,15 @@ end Migrate
   * Reads the bootstrap directory's four operator-facing files — `roster.json` (the peer topology
   * keygen writes), `defaults.json` (network, head params, equity, optional block-zero timing),
   * `l2-cardano-eutxo.json` (the opening L2 state), and `script-refs.json` (from
-  * [[DeployReferenceScripts]], with committed per-network defaults as the fallback) — assembles
+  * [[DeployScriptsAndG2Setup]], with committed per-network defaults as the fallback) — assembles
   * them into the [[Bootstrap.BootstrapConfig]], funds the head from head peer 0's L1 address (via
   * the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out` (default
   * `head-config.json`). Every node then loads this same artifact.
   *
-  * The script reference utxos are the L1 inputs of the treasury and dispute reference-script UTxOs
-  * that [[DeployReferenceScripts]] deployed. They are resolved and hash-checked against
-  * [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every node's
-  * startup.
+  * The script reference utxos are the L1 inputs of the reference-script UTxOs (treasury, dispute,
+  * setup ladder) that [[DeployScriptsAndG2Setup]] deployed. They are resolved and hash-checked
+  * against [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every
+  * node's startup.
   */
 object BuildHeadConfig
     extends CommandIOApp(
@@ -1060,7 +1060,7 @@ object BuildHeadConfig
                           r.left.map(e =>
                               RuntimeException(
                                 "Failed to resolve script reference UTxOs from the bootstrap " +
-                                    s"config: $e (redeploy with DeployReferenceScripts?)"
+                                    s"config: $e (redeploy with DeployScriptsAndG2Setup?)"
                               )
                           )
                         )
