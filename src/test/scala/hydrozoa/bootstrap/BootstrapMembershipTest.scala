@@ -109,7 +109,11 @@ class BootstrapMembershipTest extends AnyFunSuite {
           dir.resolve(Bootstrap.BootstrapDir.scriptRefs),
           """{
             |  "rulebasedTreasuryScriptInput": "d17362c69150ccf4cf0974ee4223f5f8c84b9171d74cd210aa042860a1a32ecd#0",
-            |  "disputeResolutionScriptInput": "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0"
+            |  "disputeResolutionScriptInput": "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0",
+            |  "setupLadderInputs": [
+            |    "4435067f019b0c9aff7d83fae994be66860b494fa37b0d4e35a8f50e59d5382c#0",
+            |    "4435067f019b0c9aff7d83fae994be66860b494fa37b0d4e35a8f50e59d5382c#1"
+            |  ]
             |}""".stripMargin
         )
 
