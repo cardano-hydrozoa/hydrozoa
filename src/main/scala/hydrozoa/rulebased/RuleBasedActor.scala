@@ -16,7 +16,7 @@ import hydrozoa.config.node.owninfo.OwnPeerPublic
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{pubKeyHash, shelleyAddress}
-import hydrozoa.lib.cardano.scalus.ledger.{CollateralOutput, CollateralUtxo}
+import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.PeerId
@@ -39,7 +39,7 @@ import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteStatus, secFromData}
 import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
-import scalus.cardano.address.{ShelleyAddress, ShelleyPaymentPart}
+import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
@@ -247,7 +247,12 @@ final case class RuleBasedActor(
       * recoverable — the HRWT still sits in the datum-less multisig regime utxo until the fallback
       * tx lands (or it was rolled back); other parse failures throw.
       */
-    private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
+    private def getRegime: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] = {
+        val regimeMissing: EitherT[IO, Error.RecoverableErrors, RuleBasedRegimeUtxo] =
+            traceRight(RuleBasedActorEvent.Regime.NotFound) >>
+                EitherT.leftT[IO, RuleBasedRegimeUtxo](
+                  Error.ParseError.Regime.RegimeMissing: Error.RecoverableErrors
+                )
         for {
             utxos <- Backend.utxosAtRegime
             regimeUtxo <- utxos.toList match {
@@ -255,22 +260,16 @@ final case class RuleBasedActor(
                     RuleBasedRegimeUtxo.parse(Utxo(i, o)) match {
                         case Right(u) => pure(u)
                         case Left(_: RuleBasedRegimeOutput.ParseError.RegimeDatumMissing) =>
-                            traceRight(RuleBasedActorEvent.Regime.NotFound) >>
-                                EitherT.leftT[IO, RuleBasedRegimeUtxo](
-                                  Error.ParseError.Regime.RegimeMissing: Error.RecoverableErrors
-                                )
+                            regimeMissing
                         case Left(e) =>
                             raiseError(Error.ParseError.Regime.WrappedRegimeParseError(e))
                     }
-                case Nil =>
-                    traceRight(RuleBasedActorEvent.Regime.NotFound) >>
-                        EitherT.leftT[IO, RuleBasedRegimeUtxo](
-                          Error.ParseError.Regime.RegimeMissing: Error.RecoverableErrors
-                        )
-                case _ => raiseError(Error.ParseError.Regime.MultipleRegimeUtxos(utxos))
+                case Nil => regimeMissing
+                case _   => raiseError(Error.ParseError.Regime.MultipleRegimeUtxos(utxos))
             }
             _ <- traceRight(RuleBasedActorEvent.Regime.Found)
         } yield regimeUtxo
+    }
 
     /** Determine this peer's dispute action, scoped to the on-chain treasury's `versionMajor`. The
       * dispute-resolution script pins `sec.versionMajor` to the treasury reference input's, so a
@@ -444,37 +443,41 @@ final case class RuleBasedActor(
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
                 disputeUtxos <- getDisputeUtxos
-                collateralUtxo <- getCollateral
                 _ <- disputeUtxos match {
+                    // Treasury was Unresolved but the dispute address holds no vote utxos. Per
+                    // the spec this state is unreachable, so escalate (no collateral needed).
+                    case DisputeUtxos.EmptyVotes =>
+                        raiseError(Error.TreasuryUnresolvedButNoVotes)
                     case DisputeUtxos.CastVote(ownBallotBox) =>
-                        hasDeadlineElapsed(treasuryUtxo).flatMap {
-                            case true =>
-                                // Own VoteTx/AbstainTx can no longer land — dispatch to residual
-                                // tally/resolve with the full parsed set (own AwaitingVote box
-                                // included; tally handles it via `gateOnVotingDeadline`).
-                                for {
-                                    _ <- traceRight(
-                                      RuleBasedActorEvent.Dispute.VotingDeadlineElapsed
-                                    )
-                                    parsed <- parseDisputeUtxos
-                                    _ <- dispatchResidual(
-                                      parsed,
+                        getCollateral.flatMap { collateralUtxo =>
+                            hasDeadlineElapsed(treasuryUtxo).flatMap {
+                                case true =>
+                                    // Own VoteTx/AbstainTx can no longer land — dispatch to
+                                    // residual tally/resolve with the full parsed set (own
+                                    // AwaitingVote box included; tally handles it via
+                                    // `gateOnVotingDeadline`).
+                                    traceRight(RuleBasedActorEvent.Dispute.VotingDeadlineElapsed) >>
+                                        parseDisputeUtxos.flatMap(
+                                          dispatchResidual(
+                                            _,
+                                            treasuryUtxo,
+                                            regimeUtxo,
+                                            collateralUtxo
+                                          )
+                                        )
+                                case false =>
+                                    castVote(
+                                      ownBallotBox,
                                       treasuryUtxo,
                                       regimeUtxo,
                                       collateralUtxo
                                     )
-                                } yield ()
-                            case false =>
-                                castVote(ownBallotBox, treasuryUtxo, regimeUtxo, collateralUtxo)
+                            }
                         }
                     case DisputeUtxos.Tally(otherUtxos) =>
-                        tally(otherUtxos, treasuryUtxo, regimeUtxo, collateralUtxo)
+                        getCollateral.flatMap(tally(otherUtxos, treasuryUtxo, regimeUtxo, _))
                     case DisputeUtxos.Resolve(finalVoteUtxo) =>
-                        resolve(finalVoteUtxo, treasuryUtxo, regimeUtxo, collateralUtxo)
-                    // Treasury was Unresolved but the dispute address holds no vote utxos. Per
-                    // the spec this state is unreachable, so escalate.
-                    case DisputeUtxos.EmptyVotes =>
-                        raiseError(Error.TreasuryUnresolvedButNoVotes)
+                        getCollateral.flatMap(resolve(finalVoteUtxo, treasuryUtxo, regimeUtxo, _))
                 }
             } yield ()
 
@@ -577,7 +580,7 @@ final case class RuleBasedActor(
                     case _: AwaitingVote => Nil
                 }
             }
-            openBoxes.filter(_._2 < targetVersionMinor).sortBy(_._2).headOption.map(_._1)
+            openBoxes.filter(_._2 < targetVersionMinor).minByOption(_._2).map(_._1)
         }
 
         /** Residual dispatch shared by head fallthrough (own box absent) and coil fallthrough (no
@@ -589,28 +592,17 @@ final case class RuleBasedActor(
             regimeUtxo: RuleBasedRegimeUtxo,
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
-            parsed match {
-                case Nil =>
-                    traceRight(RuleBasedActorEvent.Dispute.ParsingEmptyVotes) >>
-                        raiseError(Error.TreasuryUnresolvedButNoVotes)
-                case x :: Nil =>
-                    x.ballotBoxOutput.status match {
-                        case _: Voted =>
-                            traceRight(RuleBasedActorEvent.Dispute.ParsingResolve) >>
-                                resolve(
-                                  x.asInstanceOf[BallotBox[Voted]],
-                                  treasuryUtxo,
-                                  regimeUtxo,
-                                  collateralUtxo
-                                )
-                        case _ =>
-                            EitherT.leftT[IO, Unit](
-                              Error.NonVotedUtxoAtResolve(x): Error.RecoverableErrors
-                            )
-                    }
-                case x :: y :: rest =>
-                    traceRight(RuleBasedActorEvent.Dispute.ParsingTally) >>
-                        tally(NonEmptyList(x, y :: rest), treasuryUtxo, regimeUtxo, collateralUtxo)
+            classifyResidual(parsed).flatMap {
+                case DisputeUtxos.EmptyVotes =>
+                    raiseError(Error.TreasuryUnresolvedButNoVotes)
+                case DisputeUtxos.Resolve(finalVoteUtxo) =>
+                    resolve(finalVoteUtxo, treasuryUtxo, regimeUtxo, collateralUtxo)
+                case DisputeUtxos.Tally(utxos) =>
+                    tally(utxos, treasuryUtxo, regimeUtxo, collateralUtxo)
+                case DisputeUtxos.CastVote(_) =>
+                    raiseError(
+                      new IllegalStateException("classifyResidual never returns CastVote")
+                    )
             }
 
         /** Parse the treasury's `versionMajor` from an Unresolved datum. `Dispute.handle` is only
@@ -635,43 +627,7 @@ final case class RuleBasedActor(
         /** Find an ada-only collateral utxo at the own peer's address. */
         def getCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
             val peerAddr = config.ownWallet.exportVerificationKey.shelleyAddress()
-            for {
-                collateralCandidates <- Backend.utxosAtPeer(peerAddr)
-                collateralUtxoTuple <- collateralCandidates.filter((_, to) =>
-                    to.value.isOnlyAda
-                ) match {
-                    case x if x.nonEmpty =>
-                        pure(x.toList.maxBy(_._2.value.coin.value))
-                    case _ =>
-                        traceLeft[(TransactionInput, TransactionOutput)](
-                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
-                          NoSuitableCollateralUtxosFound(peerAddr)
-                        )
-                }
-                collateralOutput <- collateralUtxoTuple._2 match {
-                    case TransactionOutput.Babbage(
-                          ShelleyAddress(_, key: ShelleyPaymentPart.Key, delegation),
-                          value,
-                          datum,
-                          scriptRef
-                        ) =>
-                        pure(
-                          CollateralOutput(
-                            addrKeyHash = key.hash,
-                            delegationPart = delegation,
-                            coin = value.coin,
-                            datumOption = datum,
-                            scriptRef = scriptRef
-                          )
-                        )
-                    case _ =>
-                        traceLeft[CollateralOutput](
-                          RuleBasedActorEvent.Collateral.NotFound(peerAddr),
-                          NoSuitableCollateralUtxosFound(peerAddr)
-                        )
-                }
-                _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
-            } yield CollateralUtxo(collateralUtxoTuple._1, collateralOutput)
+            collateralAt(Backend.utxosAtPeer(peerAddr), peerAddr)
         }
 
         /** Branch: own ballot box still `AwaitingVote`. Load this peer's action (Vote/Abstain) and
@@ -687,16 +643,7 @@ final case class RuleBasedActor(
             collateralUtxo: CollateralUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
-                treasuryVersionMajor <- treasuryUtxo.treasuryOutput.datum match {
-                    case RuleBasedTreasuryDatum.Unresolved(_, _, v) => pure(v)
-                    case _: RuleBasedTreasuryDatum.Resolved =>
-                        raiseError(
-                          new IllegalStateException(
-                            "castVote reached with a Resolved treasury datum; " +
-                                "handleTick dispatches Resolved to Evacuation.handle"
-                          )
-                        )
-                }
+                treasuryVersionMajor <- extractTreasuryVersionMajor(treasuryUtxo)
                 action <- EitherT.liftF[
                   IO,
                   Error.RecoverableErrors,
@@ -805,23 +752,14 @@ final case class RuleBasedActor(
         private def gateOnVotingDeadline(
             treasuryUtxo: RuleBasedTreasuryUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
-            for {
-                deadline <- treasuryUtxo.parseVotingDeadline match {
-                    case Right(s) => pure(s)
-                    case Left(e) =>
-                        raiseError(Error.ParseError.Treasury.WrappedTreasuryParseError(e))
-                }
-                now <- EitherT.right[Error.RecoverableErrors](
-                  realTimeQuantizedInstant(config.slotConfig)
-                )
-                _ <-
-                    if now.toSlot.slot <= deadline.slot then
-                        traceRight(RuleBasedActorEvent.Dispute.WaitingForVotesBeforeDeadline) >>
-                            EitherT.leftT[IO, Unit](
-                              Error.TallyBlockedByAwaitingVote: Error.RecoverableErrors
-                            )
-                    else pure(())
-            } yield ()
+            hasDeadlineElapsed(treasuryUtxo).flatMap {
+                case true => pure(())
+                case false =>
+                    traceRight(RuleBasedActorEvent.Dispute.WaitingForVotesBeforeDeadline) >>
+                        EitherT.leftT[IO, Unit](
+                          Error.TallyBlockedByAwaitingVote: Error.RecoverableErrors
+                        )
+            }
 
         /** Branch: only a single Voted ballot box remains. Submit ResolutionTx to flip the treasury
           * datum to `Resolved`.
@@ -972,30 +910,42 @@ final case class RuleBasedActor(
                 case Some(eMap) => pure(eMap)
             }
 
-        /** Query the evacuation wallet's utxos and derive collateral from the first one. */
+        /** Find an ada-only collateral utxo at the evacuation wallet's address. */
         def getEvacuationCollateral: EitherT[IO, Error.RecoverableErrors, CollateralUtxo] = {
             val walletAddress = config.ruleBasedWallet.exportVerificationKey.shelleyAddress()
-            for {
-                feeUtxos <- Backend.utxosAtFee(walletAddress)
-                collateralUtxo <- feeUtxos.headOption match {
-                    case None =>
-                        traceLeft[CollateralUtxo](
-                          RuleBasedActorEvent.Collateral.NotFound(walletAddress),
-                          NoSuitableCollateralUtxosFound(walletAddress)
-                        )
-                    case Some((input, output)) =>
-                        CollateralUtxo.parse(Utxo(input, output)) match {
-                            case Right(c) => pure(c)
-                            case Left(_) =>
-                                traceLeft[CollateralUtxo](
-                                  RuleBasedActorEvent.Collateral.NotFound(walletAddress),
-                                  NoSuitableCollateralUtxosFound(walletAddress)
-                                )
-                        }
-                }
-            } yield collateralUtxo
+            collateralAt(Backend.utxosAtFee(walletAddress), walletAddress)
         }
     }
+
+    /** Query `addr` for candidate collateral utxos, pick the ada-only one with the most coin, and
+      * parse it as a [[CollateralUtxo]]. `query` carries the address-specific tracing and
+      * error-wrapping (peer vs fee); `addr` is only used for the `NotFound` trace.
+      */
+    private def collateralAt(
+        query: EitherT[IO, Error.RecoverableErrors, Utxos],
+        addr: ShelleyAddress
+    ): EitherT[IO, Error.RecoverableErrors, CollateralUtxo] =
+        for {
+            candidates <- query
+            best <- candidates.filter((_, o) => o.value.isOnlyAda) match {
+                case adaOnly if adaOnly.nonEmpty =>
+                    pure(adaOnly.toList.maxBy(_._2.value.coin.value))
+                case _ =>
+                    traceLeft[(TransactionInput, TransactionOutput)](
+                      RuleBasedActorEvent.Collateral.NotFound(addr),
+                      NoSuitableCollateralUtxosFound(addr)
+                    )
+            }
+            collateralUtxo <- CollateralUtxo.parse(Utxo(best._1, best._2)) match {
+                case Right(c) => pure(c)
+                case Left(_) =>
+                    traceLeft[CollateralUtxo](
+                      RuleBasedActorEvent.Collateral.NotFound(addr),
+                      NoSuitableCollateralUtxosFound(addr)
+                    )
+            }
+            _ <- traceRight(RuleBasedActorEvent.Collateral.Found)
+        } yield collateralUtxo
 
     /** Single tick: parse the treasury, dispatch on its datum subtype to the appropriate branch.
       * Returns the recoverable-Left vs Right for test introspection; the receive handler discards.
@@ -1059,32 +1009,39 @@ final case class RuleBasedActor(
                 case Some(own) =>
                     traceRight(RuleBasedActorEvent.Dispute.ParsingCastVote)
                         .as(DisputeUtxos.CastVote(own): DisputeUtxos)
-                case None =>
-                    parsed match {
-                        case Nil =>
-                            traceRight(RuleBasedActorEvent.Dispute.ParsingEmptyVotes)
-                                .as(DisputeUtxos.EmptyVotes: DisputeUtxos)
-                        case x :: Nil =>
-                            x.ballotBoxOutput.status match {
-                                case _: Voted =>
-                                    traceRight(RuleBasedActorEvent.Dispute.ParsingResolve)
-                                        .as(
-                                          DisputeUtxos.Resolve(
-                                            x.asInstanceOf[BallotBox[Voted]]
-                                          ): DisputeUtxos
-                                        )
-                                case _ =>
-                                    EitherT.leftT[IO, DisputeUtxos](
-                                      Error.NonVotedUtxoAtResolve(x): Error.RecoverableErrors
-                                    )
-                            }
-                        case x :: y :: rest =>
-                            traceRight(RuleBasedActorEvent.Dispute.ParsingTally)
-                                .as(DisputeUtxos.Tally(NonEmptyList(x, y :: rest)): DisputeUtxos)
-                    }
+                case None => classifyResidual(parsed)
             }
         } yield result
     }
+
+    /** Classify the residual vote utxos (no own `AwaitingVote` box in play) into the terminal
+      * dispute states, emitting the matching `Parsing*` trace. Shared by [[getDisputeUtxos]] (head
+      * pre-vote classification) and [[Dispute.dispatchResidual]] (head/coil fallthrough); never
+      * returns [[DisputeUtxos.CastVote]].
+      */
+    private def classifyResidual(
+        parsed: List[BallotBox[VoteStatus]]
+    ): EitherT[IO, Error.RecoverableErrors, DisputeUtxos] =
+        parsed match {
+            case Nil =>
+                traceRight(RuleBasedActorEvent.Dispute.ParsingEmptyVotes)
+                    .as(DisputeUtxos.EmptyVotes: DisputeUtxos)
+            case x :: Nil =>
+                x.ballotBoxOutput.status match {
+                    case _: Voted =>
+                        traceRight(RuleBasedActorEvent.Dispute.ParsingResolve)
+                            .as(
+                              DisputeUtxos.Resolve(x.asInstanceOf[BallotBox[Voted]]): DisputeUtxos
+                            )
+                    case _ =>
+                        EitherT.leftT[IO, DisputeUtxos](
+                          Error.NonVotedUtxoAtResolve(x): Error.RecoverableErrors
+                        )
+                }
+            case x :: y :: rest =>
+                traceRight(RuleBasedActorEvent.Dispute.ParsingTally)
+                    .as(DisputeUtxos.Tally(NonEmptyList(x, y :: rest)): DisputeUtxos)
+        }
 
 }
 
@@ -1292,7 +1249,6 @@ object RuleBasedActor {
                   * is over and the deinit transaction completed successfully.
                   */
                 case object TreasuryMissing extends Recoverable
-                case object TreasuryResolved extends Recoverable
             }
 
             object Regime {

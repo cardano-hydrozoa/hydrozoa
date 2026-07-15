@@ -82,6 +82,19 @@ case class MultiNodeConfig private (
             if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
         }
 
+    /** The dense header-signature list persisted for a hard-confirmed SEC: every head peer's
+      * signature followed by the first `coilQuorum` coil signatures. Matches the order
+      * `HardAckAggregator.collectSecSignatures` produces and `RuleBasedActor.loadAction` splits at
+      * `nHeadPeers` to recover head vs coil signatures.
+      */
+    def multisignHeaderDense(
+        blockHeader: StandaloneEvacuationCommitment.Onchain
+    ): List[BlockHeader.Minor.HeaderSignature] =
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
+        val headSigs = nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
+        val coilSigs = coilWallets.take(headConfig.coilQuorum).map(_.mkHeaderSignature(serialized))
+        headSigs ++ coilSigs
+
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
     ).ownWallet.exportVerificationKey.shelleyAddress()(using headConfig)

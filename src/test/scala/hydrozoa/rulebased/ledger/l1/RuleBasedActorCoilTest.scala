@@ -19,9 +19,10 @@ import test.Generators.Hydrozoa.genEvacuationMap
 
 /** Coil-peer RBA tests. Reuses [[DisputeActorTestHelpers.mkDisputeActor]] with
   * [[DisputeActorTestHelpers.coilActorConfig]] so the config carries an `OwnCoilPeerPrivate` and
-  * `Dispute.handle` routes into `handleCoil`. Uses `runWithCoil(quorum = 0)` so the ratchet VoteTx
-  * passes the Plutus coil multisig check with an empty coilSignatures list (the persistence-backed
-  * `loadAction` returns coilSignatures = Nil — coil-side recovery deferred).
+  * `Dispute.handle` routes into `handleCoil`. Runs with a randomized head count, 3 coil peers, and
+  * coilQuorum 2; the persistence fixture seeds a dense head-then-coil-quorum signature list, so
+  * `loadAction` recovers the 2 coil signatures the ratchet VoteTx needs to pass the Plutus coil
+  * multisig check.
   */
 object RuleBasedActorCoilTest extends Properties("Rule-Based Actor (Coil) Test") {
     import MultiNodeConfig.*
@@ -120,7 +121,7 @@ object RuleBasedActorCoilTest extends Properties("Rule-Based Actor (Coil) Test")
         )
     } yield true
 
-    val _ = property("coil ratchet path") = runWithCoil(nCoil = 5, quorum = 0)(
+    val _ = property("coil ratchet path") = runWithCoil(nCoil = 3, quorum = 2)(
       coilRatchetHappyPath
     )
 }
