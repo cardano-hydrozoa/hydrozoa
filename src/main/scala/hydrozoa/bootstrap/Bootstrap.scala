@@ -1030,7 +1030,7 @@ object BuildHeadConfig
             // culprit: a stale $BLOCKFROST_API_KEY export for another network).
             _ <- IO.raiseWhen(!keyMatchesNetwork(blockfrostKey, cardanoNetwork))(
               RuntimeException(
-                s"the Blockfrost key's network prefix does not match the bootstrap config's " +
+                "the Blockfrost key's network prefix does not match the bootstrap config's " +
                     s"cardanoNetwork ($cardanoNetwork) — stale BLOCKFROST_API_KEY export?"
               )
             )

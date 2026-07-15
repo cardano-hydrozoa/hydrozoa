@@ -15,7 +15,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.BlockWeaver.State.Leader.AwaitingConfirmation.StartedBlock.{NotStarted, Started}
 import hydrozoa.multisig.consensus.mempool.Mempool
 import hydrozoa.multisig.consensus.pollresults.PollResults
-import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber, BlockType}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
