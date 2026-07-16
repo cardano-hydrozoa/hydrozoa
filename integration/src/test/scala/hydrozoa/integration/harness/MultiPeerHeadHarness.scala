@@ -13,18 +13,20 @@ import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEnd
 import hydrozoa.config.head.multisig.timing.TxTiming.Durations.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
-import hydrozoa.config.head.rulebased.dispute.{DisputeResolutionConfig, generateDisputeResolutionConfig}
+import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
-import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.CardanoLiaison
+import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
+import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
+import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
 import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
@@ -124,6 +126,159 @@ object MultiPeerHeadHarness:
         )
     }
 
+    /** Static fast voting deadline (5s `votingDuration`) so the deadline-gated tally path unblocks
+      * within a wall-clock scenario budget — the default generator picks 1h..5d. Shared by the
+      * dispute-flow tests via [[mkResource]]'s default.
+      */
+    val fastDisputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+        ReaderT { (network: TestPeers) =>
+            Gen.const(
+              DisputeResolutionConfig(
+                votingDuration = QuantizedFiniteDuration(
+                  slotConfig = network.slotConfig,
+                  finiteDuration = 5.seconds,
+                )
+              )
+            )
+        }
+
+    /** Route every harness [[Event]] through the per-cell human formatters into slf4j, so scenario
+      * runs are visible in the console/log without touching each MRM's internal tracer. Coil events
+      * get a synthetic head-peer label past the head range.
+      */
+    def humanFormatTracer(nHeadPeers: Int): ContraTracer[IO, Event] =
+        ContraTracer[IO, Event] {
+            case Event.Head(peerNum, evt) =>
+                Slf4jTracer.sink.traceWith(
+                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)(evt)
+                )
+            case Event.Coil(coilNum, evt) =>
+                val syntheticLabel = HeadPeerNumber(nHeadPeers + coilNum.convert)
+                Slf4jTracer.sink.traceWith(
+                  CoilMultisigRegimeManagerEventFormat.humanFormat(syntheticLabel, coilNum)(evt)
+                )
+        }
+
+    /** A pure predicate over outbound txs deciding whether the [[FirewalledCardanoBackend]] drops
+      * them. Composable with `||` / `&&` / unary `!`; lift to the backend's gate with [[toGate]].
+      */
+    opaque type DropRule = EnrichedTx[?] => Boolean
+
+    object DropRule:
+        def apply(p: EnrichedTx[?] => Boolean): DropRule = p
+
+        /** Never drops — the unit for `||`. */
+        val never: DropRule = _ => false
+
+        /** Drop the [[SettlementTx]] that would advance the on-chain treasury to `major`. Pinning
+          * on-chain below the off-chain view is what triggers `Action.FallbackToRuleBased`.
+          */
+        def settlementProducingMajor(major: Int): DropRule = {
+            case s: SettlementTx => s.majorVersionProduced.convert == major
+            case _               => false
+        }
+
+        extension (self: DropRule)
+            def ||(other: DropRule): DropRule = etx => self(etx) || other(etx)
+            def &&(other: DropRule): DropRule = etx => self(etx) && other(etx)
+            def unary_! : DropRule            = etx => !self(etx)
+
+            /** Lift into the backend's effectful gate. Rules are pure, so this never suspends. */
+            def toGate: EnrichedTx[?] => IO[Boolean] = etx => IO.pure(self(etx))
+
+    /** Shared slf4j sink for a peer's [[FirewalledCardanoBackend]] — logs each drop (warn) and
+      * pass (info) tagged with the peer. Compose extra capture tracers onto it with `|+|`.
+      */
+    def firewallSlf4jSink(peerId: PeerId): ContraTracer[IO, FirewalledCardanoBackendEvent] =
+        val peerLabel = peerId match
+            case PeerId.Head(n) => s"head-$n"
+            case PeerId.Coil(n) => s"coil-$n"
+        Slf4jTracer.sink.contramap {
+            case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
+                LogEvent
+                    .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
+                    .warn(s"firewall DROPPED tx $hash")
+            case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
+                LogEvent
+                    .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
+                    .info(s"firewall passed tx $hash result=$result")
+        }
+
+    /** The standard head-peer handle for the dispute-flow tests: each head peer exposes its
+      * `RequestSequencer.Handle`; coil peers expose `None`.
+      */
+    val requestSequencerHandle
+        : (PeerId, HeadMultisigRegimeManager.Connections) => IO[Option[RequestSequencer.Handle]] = {
+        case (PeerId.Head(peerNum), conns) =>
+            IO.fromOption(conns.requestSequencer)(
+              new NoSuchElementException(
+                s"peer $peerNum has no RequestSequencer.Handle in its Connections"
+              )
+            ).map(Some(_))
+        case (_: PeerId.Coil, _) => IO.pure(None)
+    }
+
+    /** Submit one [[KickRequest]] to `peer`'s `RequestSequencer` to kick `BlockWeaver` past block
+      * 1's `Leader.AwaitingConfirmation` so the deadman switch on subsequent block headers can
+      * force-produce major blocks. The request screens cleanly but is marked `Invalid` at apply —
+      * the block still completes, which is all these scenarios need.
+      */
+    def submitKickRequest(
+        harness: Harness[Option[RequestSequencer.Handle]],
+        peer: HeadPeerNumber = HeadPeerNumber(0),
+    ): IO[Unit] =
+        val userRequest = KickRequest.mkKickTransactionRequest(harness.multiNodeConfig, peer)
+        for
+            sequencer <- IO.fromOption(harness.peers.get(peer).flatMap(_.handle))(
+              new NoSuchElementException(s"peer $peer missing in harness")
+            )
+            _ <- sequencer ?: userRequest
+        yield ()
+
+    /** Stand up the head + coil peers for a dispute-flow test: derive pre-init UTxOs and coil
+      * wallets from `testPeers`, coil node configs and the TestControl start epoch from
+      * `multiNodeConfig`, wire the standard `RequestSequencer.Handle` hook, and apply the caller's
+      * `tracer` / `wrapBackend`.
+      */
+    def disputeHarnessResource(
+        label: String,
+        transportMode: Transport.Mode,
+        multiNodeConfig: MultiNodeConfig,
+        testPeers: TestPeers,
+        takeoffTime: Option[Instant],
+        tracer: ContraTracer[IO, Event],
+        wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO],
+    ): Resource[IO, Harness[Option[RequestSequencer.Handle]]] =
+        val preinitPeerUtxosL1 =
+            yaciTestSauceGenesis(testPeers.cardanoNetwork.network)(testPeers).map {
+                case (name, utxos) => name.headPeerNumber -> utxos
+            }
+        // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
+        // exists (see PreSystem.testControlPresleep). Anchor to the head's configured initial block
+        // end-time so the model clock is coherent with the head config.
+        val startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
+            .convert.instant.toEpochMilli
+        val coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(testPeers.coilWallets)
+        resource[Option[RequestSequencer.Handle]](
+          Inputs(
+            config = Config(
+              label = label,
+              backendMode = StorageBackend.Mode.InMemory,
+              transportMode = transportMode,
+            ),
+            multiNodeConfig = multiNodeConfig,
+            coilNodeConfigs = coilNodeConfigs,
+            preinitPeerUtxosL1 = preinitPeerUtxosL1,
+            takeoffTime = takeoffTime,
+            startEpochMs = startEpochMs,
+          ),
+          Hooks[Option[RequestSequencer.Handle]](
+            tracer = tracer,
+            handle = requestSequencerHandle,
+            wrapBackend = wrapBackend,
+          ),
+        )
+
     /** Shared `PropertyM[IO, Resource[IO, Ctx]]` shell for dispute-flow integration tests: takeoff
       * time, yaci-genesis-pinned MNC, initial block anchored on `takeoffTime`, coil peers in the
       * bootstrap. Pins the 100ms evacuation polling + 500ms/250ms rate-limits both callers need;
@@ -136,7 +291,7 @@ object MultiPeerHeadHarness:
         takeoffOffset: FiniteDuration,
         fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
         disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
-            generateDisputeResolutionConfig,
+            fastDisputeResolutionConfig,
         coilPeers: CoilPeers = CoilPeers.empty,
         coilQuorum: Int = 0,
     )(
@@ -254,6 +409,8 @@ object MultiPeerHeadHarness:
       * per uncaught actor exception); callers read it post-run.
       */
     case class Harness[H](
+        transportMode: Transport.Mode,
+        multiNodeConfig: MultiNodeConfig,
         system: ActorSystem[IO],
         cardanoBackend: L1Backend[IO],
         l1Snapshot: IO[Utxos],
@@ -391,6 +548,8 @@ object MultiPeerHeadHarness:
                                }
                            )
         yield Harness(
+          transportMode = transportMode,
+          multiNodeConfig = multiNodeConfig,
           system = system,
           cardanoBackend = cardanoBackend,
           l1Snapshot = l1Snapshot,

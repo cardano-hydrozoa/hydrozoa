@@ -271,9 +271,9 @@ object DisputeActorTestHelpers {
       * find the SEC there, returning
       * `Vote(sec = blockHeader, signatures = ..., coilSignatures = ...)`.
       *
-      * NOTE: `coilSignatures` come back as `Nil` from `loadAction` (coil-side recovery is deferred
-      * in the current implementation). Tests that assert on `coilSignatures` will fail; the
-      * surviving tests here only exercise the head-multisigned path.
+      * `headerMultiSigned` is the dense head-then-coil-quorum signature list (see
+      * [[MultiNodeConfig.multisignHeaderDense]]); `loadAction` splits it at `nHeadPeers`, so both
+      * the head `signatures` and the coil-quorum `coilSignatures` are recovered.
       */
     def mkPersistenceWithDisputeVote(
         env: MultiNodeConfig,
@@ -294,7 +294,7 @@ object DisputeActorTestHelpers {
         val multiSigned: StandaloneEvacuationCommitment.MultiSigned =
             StandaloneEvacuationCommitment.MultiSigned(
               commitment = offchainSec,
-              headerMultiSigned = env.multisignHeader(blockHeader).toList,
+              headerMultiSigned = env.multisignHeaderDense(blockHeader),
             )
         val partition: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned] =
             PartitionEffects.Minor(sec = multiSigned, refunds = List.empty)
@@ -631,12 +631,11 @@ object DisputeActorTest extends Properties("Dispute Actor Test") {
 
     } yield true
 
-    // `runWithCoil(quorum = 0)` seeds the treasury's `coilPeerVKeys` from generated coil
-    // wallets while keeping `coilQuorum = 0` — the persistence-backed `loadAction` returns
-    // `coilSignatures = Nil` (coil-side recovery is deferred), so any non-zero quorum would
-    // trip the Plutus `coilMultisig must contain at least coilQuorum valid signatures` check.
-    // Quorum-0 exercises the head path under a treasury shape that carries coil metadata.
-    val _ = property("dispute actor (no actor system)") = runWithCoil(nCoil = 5, quorum = 0)(
+    // Randomized head count, 3 coil peers, coilQuorum 2. The persistence fixture seeds a dense
+    // head-then-coil-quorum signature list, so `loadAction` recovers 2 coil signatures and the
+    // VoteTx satisfies the Plutus `coilMultisig must contain at least coilQuorum valid
+    // signatures` check.
+    val _ = property("dispute actor (no actor system)") = runWithCoil(nCoil = 3, quorum = 2)(
       for {
           _ <- missingVoteDatumThrows
           _ <- missingRuleBasedTreasuryUtxoDoesNotThrow
