@@ -31,6 +31,12 @@ enum RBRPlaceId:
     case ResolvedTreasuryPlaceId
     case UnvotedPlaceId
     case VotedPlaceId
+    case AbstainPlaceId
+    // Synthetic buffers used only during the two-step same-status Tally (see
+    // transitions/Tally.scala). Marking is 0 at both initial and terminal states.
+    case TallyBufferUnvotedPlaceId
+    case TallyBufferAbstainPlaceId
+    case TallyBufferVotedPlaceId
     case PayoutObligationsPlaceId // synthetic
     case EvacuationOutputPlaceId
     case CollateralPlaceId
@@ -55,14 +61,33 @@ case class TreasuryRefPlace(
 
 }
 
+object DisputeRefPlace {
+    case object OnlyOneTokenAllowed extends MarkingError {
+        override def getMessage: String = "DisputeRef place must have exactly one token"
+    }
+}
+
+/** The dispute-resolution ref-script utxo, read (never spent) by every dispute-side tx. */
+case class DisputeRefPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(1),
+    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(1)),
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): DisputeRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): DisputeRefPlace =
+        copy(finalMarking = m)
+
+    override def markingError: Option[MarkingError] =
+        if marking.toInt != 1 then Some(DisputeRefPlace.OnlyOneTokenAllowed) else None
+}
+
 object RegimeRefPlace {
     case object OnlyOneTokenAllowed extends MarkingError {
         override def getMessage: String = "RegimeRef place must have exactly one token"
     }
 }
 
-/** The rule-based regime utxo (HRWT beacon + head-identity datum): created by fallback, read by
-  * the dispute-side txs, consumed only at deinit.
+/** The rule-based regime utxo (HRWT beacon + head-identity datum): created by fallback, read by the
+  * dispute-side txs, consumed only at deinit.
   */
 case class RegimeRefPlace(
     override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(1),
@@ -86,12 +111,73 @@ case class SetupLadderRefPlace(
         copy(finalMarking = m)
 }
 
+/** Treasury utxo in the pre-resolution phase: created by FallbackTx, consumed by ResolutionTx. */
+case class UnresolvedTreasuryPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val finalMarking: Option[NonNegativeInt] = None,
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): UnresolvedTreasuryPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): UnresolvedTreasuryPlace =
+        copy(finalMarking = m)
+}
+
+/** Treasury utxo in the post-resolution phase: produced by ResolutionTx, read (chained) by every
+  * EvacuationTx. Consumed by DeinitTx (not modeled in PR1a).
+  */
 case class ResolvedPlace(
     override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
     override val finalMarking: Option[NonNegativeInt] = None,
 ) extends RBRPlace {
     override def mark(n: NonNegativeInt): ResolvedPlace = copy(marking = n)
     override def withFinalMarking(m: Option[NonNegativeInt]): ResolvedPlace =
+        copy(finalMarking = m)
+}
+
+/** Ballot box in `AwaitingVote` (reserved) state: created per head-peer by FallbackTx, consumed by
+  * either VoteTx (→ Voted), AbstainTx (→ Abstain), or TallyTx.
+  */
+case class UnvotedPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val finalMarking: Option[NonNegativeInt] = None,
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): UnvotedPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): UnvotedPlace =
+        copy(finalMarking = m)
+}
+
+/** Ballot box in `Voted` (open) state: seeded by FallbackTx with the public/default vote, produced
+  * by VoteTx and RatchetVoteTx, consumed by TallyTx (or ResolutionTx for the final one).
+  */
+case class VotedPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val finalMarking: Option[NonNegativeInt] = None,
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): VotedPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): VotedPlace =
+        copy(finalMarking = m)
+}
+
+/** Ballot box in `Abstain` (open) state: produced by AbstainTx, consumed by RatchetVoteTx (→ Voted)
+  * or TallyTx.
+  */
+case class AbstainPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val finalMarking: Option[NonNegativeInt] = None,
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): AbstainPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): AbstainPlace =
+        copy(finalMarking = m)
+}
+
+/** Synthetic buffer sitting between a same-status Tally's consume and restore steps. See
+  * `transitions/Tally.scala` for the two-step split.
+  */
+case class TallyBufferPlace(
+    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
+    override val finalMarking: Option[NonNegativeInt] = None,
+) extends RBRPlace {
+    override def mark(n: NonNegativeInt): TallyBufferPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[NonNegativeInt]): TallyBufferPlace =
         copy(finalMarking = m)
 }
 
