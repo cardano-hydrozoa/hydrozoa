@@ -7,7 +7,6 @@ import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
-import hydrozoa.lib.cardano.wallet.Cip30SignedData
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.SomeBuildErrorOnly
 import hydrozoa.multisig.ledger.l1.tx.{DepositTx, EnrichedTx, RefundTx}
@@ -119,10 +118,6 @@ private object DepositRefundTxSeqOps {
       */
     final case class Build(
         l2Payload: ByteString,
-        /** The depositor's CIP-30 COSE endorsement of `blake2b_256(l2Payload)`
-          * (docs/l2-isomorphism.md), threaded into the deposit tx metadata.
-          */
-        l2PayloadCose: Cip30SignedData,
         l2Value: Value,
         depositFee: Coin,
         utxosFunding: NonEmptyList[Utxo],
@@ -147,7 +142,6 @@ private object DepositRefundTxSeqOps {
                     .Build(
                       utxosFunding,
                       l2Payload,
-                      l2PayloadCose,
                       l2Value,
                       depositFee,
                       changeAddress,

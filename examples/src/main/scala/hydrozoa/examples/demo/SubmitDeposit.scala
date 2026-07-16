@@ -24,18 +24,16 @@ import org.http4s.ember.client.EmberClientBuilder
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.{Coin, TransactionInput, Utxo, Value}
 import scalus.cardano.onchain.plutus.prelude.Option as SOption
-import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 
 /** Interactive demo target: deposit funds from L1 into a running head.
   *
   * Select a peer (its key funds and signs), pick one of the peer's L1 utxos (fetched via the peer's
   * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
-  * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload,
-  * COSE-signs its hash with the peer wallet (the depositor's endorsement carried in the deposit tx
-  * metadata, docs/l2-isomorphism.md), registers the deposit with the head (`POST
-  * /api/deposit/register`), then signs the deposit tx and submits it to L1 via Blockfrost, polling
-  * until the deposit utxo lands. The head absorbs it after maturity.
+  * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload (its hash
+  * pins the payload in the deposit tx metadata, docs/l2-isomorphism.md), registers the deposit with
+  * the head (`POST /api/deposit/register`), then signs the deposit tx and submits it to L1 via
+  * Blockfrost, polling until the deposit utxo lands. The head absorbs it after maturity.
   *
   * Usage:
   * {{{
@@ -105,10 +103,6 @@ object SubmitDeposit
                 l2Payload = GenesisObligation.serialize(obligations)
                 l2Value = Value.combine(obligations.map(_.l2OutputValue).toList)
 
-                // The depositor's endorsement of the L2 payload (docs/l2-isomorphism.md), carried
-                // in the deposit tx metadata and verified by the head's deposit pre-screening.
-                l2PayloadCose = config.ownWallet.signCoseCip30(blake2b_256(l2Payload).bytes)
-
                 now <- IO.realTimeInstant
                 requestValidityEndTime = RequestValidityEndTime(
                   QuantizedInstant.ofEpochSeconds(
@@ -121,7 +115,6 @@ object SubmitDeposit
                   DepositRefundTxSeq
                       .Build(
                         l2Payload = l2Payload,
-                        l2PayloadCose = l2PayloadCose,
                         l2Value = l2Value,
                         depositFee = Coin.zero,
                         utxosFunding = NonEmptyList.one(Utxo(selected._1, selected._2)),

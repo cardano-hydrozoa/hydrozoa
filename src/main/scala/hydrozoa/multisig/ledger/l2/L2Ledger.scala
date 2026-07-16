@@ -103,9 +103,10 @@ trait L2Ledger[F[_]] {
     def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
 
     /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
-      * Hydrozoa's deposit pre-screening (COSE authentication + the accept-by check) has passed. The
-      * ledger checks that the `l2Payload` is well-formed for it and consistent with the deposit's
-      * reference data — for the EUTXO ledger, that `depositL2Value` covers the `l2Payload` outputs.
+      * Hydrozoa's deposit pre-screening (the l2Payload pin check + the accept-by check) has passed.
+      * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
+      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
+      * `l2Payload` outputs.
       */
     def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
 

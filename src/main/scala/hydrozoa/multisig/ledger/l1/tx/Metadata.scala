@@ -23,25 +23,20 @@ import scalus.uplc.builtin.ByteString
   *   - The CIP67 Head Tag (WARNING: this currently isn't compliant with the specification:
   *     https://github.com/cardano-hydrozoa/hydrozoa/issues/260)
   *   - The name of the transaction type
-  *   - A cbor-encoded payload, represented as a Metadatum.List of Metadatum.Bytes, where each
-  *     element is at most 64 bytes long.
+  *   - The head id
+  *   - A map of the transaction type's fields; each byte-string value must fit Cardano's 64-byte
+  *     metadatum cap.
   *
   * It should look something like:
   *
-  * { $CIP67HeadTag: { $TransactionTypeName: [ $cborChunk1, $cborChunk2, $cborChunk3, ...] } }
+  * { $CIP67HeadTag: { $TransactionTypeName: { $headId: { $field1: $value1, ... } } } }
   */
 sealed trait Metadata(val txType: EnrichedTx.Type) {
     def asMap: Map[Metadatum, Metadatum] = Map.empty
 
-    /** Create the auxiliary data for a specific transaction by cbor-encoding the desired metadata
-      * and chunking it into a list of bytes, where each element is no more than 64 bytes long.
-      *
-      * @param md
-      * @return
-      *
-      * The common structure is a metadata map, labeled by the CIP67 "HYDR" tag, pointing a map with
-      * the transaction type name, pointing at a map with the head ID, pointing at the actual
-      * Hydrozoa tx metadata.
+    /** Create the auxiliary data for a specific transaction: a metadata map, labeled by the CIP67
+      * "HYDR" tag, pointing at a map with the transaction type name, pointing at a map with the
+      * head ID, pointing at the actual Hydrozoa tx metadata ([[asMap]]).
       */
     final def asAuxData(headId: HeadId): AuxiliaryData = {
         val txTypeName = txType.toString
@@ -86,26 +81,21 @@ object Metadata {
       *   The output index of the deposit utxo in this transaction
       * @param depositFee
       *   The deposit fee, which the head will absorb from the deposit into equity.
-      * @param coseKey
-      *   The CBOR bytes of the depositor's COSE_Key (CIP-30 `signData()`), carrying the key that
-      *   endorsed the deposit's L2 payload.
-      * @param coseSignature
-      *   The CBOR bytes of the depositor's COSE_Sign1 over `blake2b_256(l2Payload)` — the L2
-      *   payload itself is passed out-of-band, and the parse verifies this signature binds it to
-      *   the deposit (docs/l2-isomorphism.md).
+      * @param l2PayloadHash
+      *   `blake2b_256` of the deposit's L2 payload — the payload itself is passed out-of-band, and
+      *   the parse verifies this hash pins it to the deposit. Once the deposit tx is signed, its
+      *   witnesses commit to the pin via the auxiliary-data hash (docs/l2-isomorphism.md).
       */
     case class Deposit(
         depositIx: Int,
         depositFee: Coin,
-        coseKey: ByteString,
-        coseSignature: ByteString,
+        l2PayloadHash: ByteString,
     ) extends Metadata(EnrichedTx.Type.Deposit) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("depositIx") -> Metadatum.Int(depositIx),
             Metadatum.Text("depositFee") -> Metadatum.Int(depositFee.value),
-            Metadatum.Text("coseKey") -> chunkedBytes(coseKey),
-            Metadatum.Text("coseSignature") -> chunkedBytes(coseSignature)
+            Metadatum.Text("l2PayloadHash") -> Metadatum.Bytes(l2PayloadHash)
           )
         )
     }
@@ -127,8 +117,7 @@ object Metadata {
             for {
                 depositIxRaw <- required("depositIx")
                 depositFeeRaw <- required("depositFee")
-                coseKeyRaw <- required("coseKey")
-                coseSignatureRaw <- required("coseSignature")
+                l2PayloadHashRaw <- required("l2PayloadHash")
 
                 depositIx <- depositIxRaw match {
                     case i: Metadatum.Int => Right(i.value.intValue)
@@ -140,42 +129,16 @@ object Metadata {
                     case _                => Left(WrongMetadataValue("depositFee", depositFeeRaw))
                 }
 
-                coseKey <- unchunkedBytes(coseKeyRaw)
-                    .toRight(WrongMetadataValue("coseKey", coseKeyRaw))
-                coseSignature <- unchunkedBytes(coseSignatureRaw)
-                    .toRight(WrongMetadataValue("coseSignature", coseSignatureRaw))
+                l2PayloadHash <- l2PayloadHashRaw match {
+                    case Metadatum.Bytes(b) => Right(b)
+                    case _ => Left(WrongMetadataValue("l2PayloadHash", l2PayloadHashRaw))
+                }
             } yield Deposit(
               depositIx = depositIx,
               depositFee = Coin(depositFee),
-              coseKey = coseKey,
-              coseSignature = coseSignature
+              l2PayloadHash = l2PayloadHash
             )
         }
-    }
-
-    /** Chunk `bytes` into a `Metadatum.List` of ≤64-byte `Metadatum.Bytes` — the L1 ledger caps
-      * each metadata byte/text string at 64 bytes, and a COSE_Sign1 exceeds that.
-      */
-    private def chunkedBytes(bytes: ByteString): Metadatum =
-        Metadatum.List(
-          bytes.bytes
-              .grouped(64)
-              .map(chunk => Metadatum.Bytes(ByteString.fromArray(chunk)))
-              .toIndexedSeq
-        )
-
-    /** Inverse of [[chunkedBytes]]: concatenate a `Metadatum.List` of `Metadatum.Bytes`. `None` on
-      * any other shape.
-      */
-    private def unchunkedBytes(m: Metadatum): Option[ByteString] = m match {
-        case Metadatum.List(items) =>
-            items
-                .foldLeft(Option(Array.emptyByteArray)) {
-                    case (Some(acc), Metadatum.Bytes(b)) => Some(acc ++ b.bytes)
-                    case _                               => None
-                }
-                .map(ByteString.fromArray)
-        case _ => None
     }
 
     case class Fallback() extends Metadata(EnrichedTx.Type.Fallback)

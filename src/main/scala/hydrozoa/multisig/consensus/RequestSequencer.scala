@@ -87,8 +87,8 @@ trait RequestSequencer(
                   // RequestId. On a No, reject before assigning one — no id, no CR1 persist, no
                   // consensus fan-out. A transaction goes straight to the ledger (it
                   // self-authenticates through its own witnesses); a deposit first runs Hydrozoa's
-                  // pre-screening (COSE authentication + the accept-by gate), then the ledger's
-                  // value checks.
+                  // pre-screening (the l2Payload pin check + the accept-by gate), then the
+                  // ledger's value checks.
                   val screened: IO[Either[String, Unit]] = userRequest.body match {
                       case UserRequestBody.TransactionRequestBody(l2Payload) =>
                           l2Ledger.sendScreenTx(l2Payload).value.map(_.left.map(_.message))

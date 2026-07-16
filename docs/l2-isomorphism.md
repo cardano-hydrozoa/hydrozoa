@@ -5,8 +5,8 @@ any Cardano library, sign it with ordinary vkey witnesses, and submit it — no 
 extra signature. The only head-specific content is two metadata entries
 ([What an L2 transaction must carry](#what-an-l2-transaction-must-carry)). This doc explains what
 "isomorphic" covers and does not cover, the metadata an L2 tx must carry, the two-phase checks
-every request passes through, how deposits authenticate (they are not isomorphic), and how a head
-selects its L2 backend.
+every request passes through, how a deposit is pinned to its L2 payload (deposits are not
+isomorphic), and how a head selects its L2 backend.
 
 ## Terminology
 
@@ -19,16 +19,17 @@ selects its L2 backend.
   `RequestId` — the gate before the head spends any resources on it.
 - **Submission (applying)**: the stateful ledger check at block production — validity interval,
   input resolution, value conservation.
-- **Deposit pre-screening**: the Hydrozoa-side stage that authenticates a deposit before the
-  ledger screens it (deposits only; transactions have no pre-screening stage).
+- **Deposit pre-screening**: the Hydrozoa-side stage that checks a deposit's l2Payload pin and
+  accept-by deadline before the ledger screens it (deposits only; transactions have no
+  pre-screening stage).
 
 ## Scope: transactions, not boundary crossings
 
 Isomorphism is a property of L2 *transactions* — moving value within L2. Deposits (funds entering
 L2) and withdrawals (funds leaving) have no L1 counterpart — the boundary crossings are precisely
 what stops an L2 from being just another L1 — so they cannot be isomorphic. Each keeps its own
-machinery: a deposit carries an explicit signature
-([Deposits](#deposits-explicitly-authenticated)); a withdrawal is an L2 output marked L1-bound in
+machinery: a deposit pins its L2 payload in tx metadata
+([Deposits](#deposits-pinned-to-their-l2-payload)); a withdrawal is an L2 output marked L1-bound in
 the designation list, and a subsequent settlement tx pays it out on L1.
 
 Both crossings are avoidable to a degree: a head can open with an initial utxo set instead of
@@ -115,27 +116,27 @@ clean but fails here (say, its inputs were spent by an earlier tx in the block) 
 head does not retry it, and it never appears in `GET /api/l2/transactions` — so the client
 resubmits a corrected tx.
 
-## Deposits: explicitly authenticated
+## Deposits: pinned to their L2 payload
 
 A deposit request is two payloads: `l1Payload`, the CBOR of the **unsigned** deposit tx, and
 `l2Payload`, the serialized `GenesisObligation`s — the L2 outputs the deposit spawns on
-absorption. Neither self-authenticates: the deposit tx has no witnesses yet at request time, and
-the `l2Payload` is not a transaction at all. An unauthenticated pairing would let anyone attach an
-arbitrary `l2Payload` to someone else's deposit. So the depositor — one of the deposit tx's
-eventual signers — **COSE-signs `blake2b_256(l2Payload)`** (CIP-30 `signData`), and the COSE key +
-signature ride in the deposit tx's metadata (`Metadata.Deposit`, chunked into ≤64-byte byte
-strings to fit Cardano's metadatum cap). Once the deposit tx is signed and on-chain, its own L1
-witnesses also commit to that metadata via the signed body.
+absorption. The `l2Payload` is not a transaction, so nothing intrinsic pairs it with the deposit
+tx; an unpinned pairing would let anyone attach an arbitrary `l2Payload` to someone else's
+deposit. So the deposit tx's metadata (`Metadata.Deposit`) carries **`blake2b_256(l2Payload)`**,
+pinning the payload to the tx. At request time the tx is unsigned and the pin is a plain
+consistency check; once the depositor signs and submits the tx, its L1 witnesses commit to the
+pin via the signed body's auxiliary-data hash — swapping the `l2Payload` would change the tx body
+and void the signatures.
 
 The deposit path, in order (client steps marked):
 
-1. **Client:** build the deposit tx and the `l2Payload`, COSE-sign `blake2b_256(l2Payload)`, and
-   register both with `POST /api/deposit/register`.
+1. **Client:** build the deposit tx (`DepositTx.Build` puts `blake2b_256(l2Payload)` in its
+   metadata) and register both payloads with `POST /api/deposit/register`.
 2. **Deposit pre-screening** — Hydrozoa's stage, before the ledger sees the deposit
    (`multisig/ledger/l1/tx/DepositPreScreening.scala`, called by `RequestSequencer`).
    `preScreen(l1Payload, l2Payload, now)`:
-   - parses the deposit tx (`DepositTx.Parse`), which verifies the COSE signature and that its
-     signed payload equals `blake2b_256(l2Payload)`;
+   - parses the deposit tx (`DepositTx.Parse`), which checks the metadata's `l2PayloadHash`
+     equals `blake2b_256(l2Payload)`;
    - gates on the accept-by deadline: `now < validityEnd` (below);
    - on success builds the `ScreenDeposit` command — `depositId`, `depositFee`, `depositL2Value`,
      `refundDestination`, `l2Payload` — for the ledger.
@@ -224,10 +225,6 @@ divergence, not a spec change.
   `sendScreenDeposit` accept everything; the screening endpoint on `remoteLedgerUri` is not
   implemented, so nothing screens a remote payload. `any-remote` is not a safe backend until it
   lands.
-- **The COSE key is not tied to the deposit signers.** Pre-screening verifies the COSE signature
-  is internally valid, but the request-time deposit tx is unsigned, so the
-  `coseKey ∈ deposit-tx witnesses` tie could only be checked once the deposit is observed on L1 —
-  and no stage currently checks it.
 - **`l2Ledger` and `identityIsomorphism` are pinned by the bootstrap tooling** to `cardano-eutxo`
   and `false` (`bootstrap/Bootstrap.scala`, `mkSharedHeadConfig`); surfacing them as bootstrap
   config fields is pending.

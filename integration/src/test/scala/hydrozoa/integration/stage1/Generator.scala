@@ -43,7 +43,6 @@ import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, SlotConfig, TransactionInput, TransactionOutput, Utxo, Utxos, Value, Word64}
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
 import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
-import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 
 // ===================================
@@ -504,19 +503,11 @@ object CommandGenerators:
                                           )
                                         )
 
-                                        // The depositor's COSE endorsement of the L2 payload
-                                        // (docs/l2-isomorphism.md); head peer 0 plays the
-                                        // depositor.
                                         l2PayloadSerialized = GenesisObligation.serialize(l2Outputs)
-                                        l2PayloadCose = multiNodeConfig
-                                            .nodeConfigs(HeadPeerNumber.zero)
-                                            .ownWallet
-                                            .signCoseCip30(blake2b_256(l2PayloadSerialized).bytes)
 
                                         depositRefundSeq = DepositRefundTxSeq
                                             .Build(
                                               l2Payload = l2PayloadSerialized,
-                                              l2PayloadCose = l2PayloadCose,
                                               depositFee = Coin.zero,
                                               utxosFunding = NonEmptyList
                                                   .fromListUnsafe(fundingUtxos.asUtxoList),
