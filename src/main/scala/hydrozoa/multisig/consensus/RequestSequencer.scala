@@ -18,7 +18,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.RequestSequencer.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.l1.tx.DepositPreScreening
+import hydrozoa.multisig.ledger.l1.tx.DepositL1Screening
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, WriteBatch}
 
@@ -87,14 +87,14 @@ trait RequestSequencer(
                   // RequestId. On a No, reject before assigning one — no id, no CR1 persist, no
                   // consensus fan-out. A transaction goes straight to the ledger (it
                   // self-authenticates through its own witnesses); a deposit first runs Hydrozoa's
-                  // pre-screening (the l2Payload pin check + the accept-by gate), then the
-                  // ledger's value checks.
+                  // L1 screening (the l2Payload pin check + the accept-by gate), then the ledger's
+                  // value checks.
                   val screened: IO[Either[String, Unit]] = userRequest.body match {
                       case UserRequestBody.TransactionRequestBody(l2Payload) =>
                           l2Ledger.sendScreenTx(l2Payload).value.map(_.left.map(_.message))
                       case UserRequestBody.DepositRequestBody(l1Payload, l2Payload) =>
                           realTimeQuantizedInstant(config.slotConfig).flatMap { now =>
-                              DepositPreScreening.preScreen(l1Payload, l2Payload, now)(
+                              DepositL1Screening.screen(l1Payload, l2Payload, now)(
                                 config
                               ) match {
                                   case Left(e) => IO.pure(Left(e.toString))
@@ -197,8 +197,8 @@ object RequestSequencer {
 
     // `& CardanoNetwork.Section`: the Request-lane codec (UserRequestWithId) is Section-dependent;
     // the full configs passed in satisfy it.
-    // The sections beyond OwnPeerPublic/CardanoNetwork are what deposit pre-screening needs to
-    // parse and time-gate a deposit tx (DepositPreScreening.Config).
+    // The sections beyond OwnPeerPublic/CardanoNetwork are what deposit L1 screening needs to
+    // parse and time-gate a deposit tx (DepositL1Screening.Config).
     type Config = OwnPeerPublic.Section & CardanoNetwork.Section & HeadPeers.Section &
         InitialBlock.Section & TxTiming.Section & InitializationParameters.Section &
         FallbackContingency.Section

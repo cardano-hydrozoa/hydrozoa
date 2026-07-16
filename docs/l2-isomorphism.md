@@ -19,9 +19,9 @@ isomorphic), and how a head selects its L2 backend.
   `RequestId` — the gate before the head spends any resources on it.
 - **Submission (applying)**: the stateful ledger check at block production — validity interval,
   input resolution, value conservation.
-- **Deposit pre-screening**: the Hydrozoa-side stage that checks a deposit's l2Payload pin and
-  accept-by deadline before the ledger screens it (deposits only; transactions have no
-  pre-screening stage).
+- **Deposit L1 screening**: the Hydrozoa-side stage that checks a deposit's l2Payload pin and
+  accept-by deadline before the ledger screens it (deposits only; transactions have no L1
+  screening stage).
 
 ## Scope: transactions, not boundary crossings
 
@@ -132,9 +132,9 @@ The deposit path, in order (client steps marked):
 
 1. **Client:** build the deposit tx (`DepositTx.Build` puts `blake2b_256(l2Payload)` in its
    metadata) and register both payloads with `POST /api/deposit/register`.
-2. **Deposit pre-screening** — Hydrozoa's stage, before the ledger sees the deposit
-   (`multisig/ledger/l1/tx/DepositPreScreening.scala`, called by `RequestSequencer`).
-   `preScreen(l1Payload, l2Payload, now)`:
+2. **Deposit L1 screening** — Hydrozoa's stage, before the ledger sees the deposit
+   (`multisig/ledger/l1/tx/DepositL1Screening.scala`, called by `RequestSequencer`).
+   `screen(l1Payload, l2Payload, now)`:
    - parses the deposit tx (`DepositTx.Parse`), which checks the metadata's `l2PayloadHash`
      equals `blake2b_256(l2Payload)`;
    - gates on the accept-by deadline: `now < validityEnd` (below);
