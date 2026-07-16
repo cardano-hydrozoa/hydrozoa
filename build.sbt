@@ -124,6 +124,20 @@ lazy val core: Project = (project in file("."))
       ),
       // Fork JVM to properly pass system properties
       run / fork := true,
+      // Fork each test run into a fresh JVM: isolates native state (RocksDB JNI), the
+      // cats-effect IORuntime, and daemon threads, and makes re-running a `testOnly` in a
+      // warm sbt session actually re-run instead of reporting 0 tests.
+      Test / fork := true,
+      // Forking otherwise serializes the suites; keep sbt's parallel suite execution in the
+      // single forked JVM so the full run isn't dramatically slower than in-process.
+      Test / testForkedParallel := true,
+      // Forked test JVMs don't inherit the sbt launcher's JDK-25 flags, so grant the same
+      // native access (blst-java JNI `System::load`, Scala `LazyVals` via `sun.misc.Unsafe`)
+      // to keep test output free of restricted-method warnings.
+      Test / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow"
+      ),
     )
 
 // Interactive demo targets that drive a running head (DEPLOYMENT.md §7).
@@ -193,6 +207,14 @@ addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;examples/scalafixAll
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
+
+// Tests are wall-clock/sleep-bound (real System timestamps in the cats-actors), so run more
+// suites concurrently than CPU cores to overlap the waits. sbt's default caps concurrency at the
+// core count (2 on GitHub runners), which leaves those waits un-overlapped; pin it to 6.
+Global / concurrentRestrictions := Seq(
+  Tags.limitAll(6),
+  Tags.limit(Tags.ForkedTestGroup, 1)
+)
 
 inThisBuild(
   List(
