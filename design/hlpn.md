@@ -276,22 +276,28 @@ mode-search simulator is §3.4 / increment 6.
 
 ### 3.4 Mode search (the enabling engine)
 
-Enabling is now a *search*, and this is the genuinely new algorithmic content:
+Enabling is now a *search*, and this is the genuinely new algorithmic content. Implemented in
+`hlpn/ModeSearch.scala` against a minimal `hlpn/TransitionH.scala` (variables + guard + arcs) and a
+marking `PlaceId => MultiSet[C]`:
 
-```
-enabledModes(t):
-  for each input place p ∈ •t with arc term W(p,t):
-      unify W(p,t) against the concrete multiset M(p)  →  candidate partial bindings
-  join partial bindings across all input arcs (consistent on shared variables)
-  keep β where Φ(t)⟦β⟧ = true and ∀p. W(p,t)⟦β⟧ ≤ M(p)
-  → Iterator[Mode]
+```scala
+def enabledModes(t, marking): LazyList[Binding]   // guard holds ∧ every arc enabled
+def isEnabled(t, marking): Boolean                // = enabledModes.nonEmpty
+def fire(t, mode, marking): Either[EvalError, Map[PlaceId, MultiSet[C]]]   // M − pre + post per arc
 ```
 
-For the **symmetric-net fragment** this is finite and cheap: variables range over finite color
-classes, arc terms are linear in projections/successors, so unification is pattern matching a
-variable against the tokens present in `M(p)`. For full HLPN with infinite sorts it is
-undecidable in general — which is why §3.2 recommends making the finite fragment first-class and
-gating the rest.
+The MVP enumerates the **cartesian product of the variables' finite carriers** and filters by
+`Φ⟦β⟧ ∧ ∀arc. arc.enabled(β, M(p))` — correct and terminating for the symmetric-net fragment,
+exponential in the variable count. The unification-based prune (match each inscription against the
+tokens actually in `M(p)` to build partial bindings, then join) is the future optimization, not
+needed for correctness. A binding whose terms are undefined for it (e.g. `Succ` off a linear-class
+end) is simply not a mode; structural ill-sortedness is the sort-checker's job (§5). Because arcs
+are direction-neutral, enabling is "*all* arcs enabled" — output arcs never block — so `TransitionH`
+needs no input/output split.
+
+Two MVP simplifications, both deferred to net integration (increment 7): a **single net color type
+`C`** (fine while place colors are base classes; product-colored places like `Bag(Peer×Vote)` need
+heterogeneous `C`), and the marking passed in as a function rather than held by a net.
 
 ---
 
