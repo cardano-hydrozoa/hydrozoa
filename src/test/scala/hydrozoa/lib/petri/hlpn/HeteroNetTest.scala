@@ -64,21 +64,15 @@ class HeteroNetTest extends AnyFunSuite:
         assert(SortCheck.errors(net).isEmpty)
     }
 
-    test("casting enumerates present-peer × any-vote as modes") {
+    test("a present peer can cast any vote; an absent peer cannot") {
         val net = b.build(program(peerBag("p0" -> 1, "p1" -> 1))).toOption.get
-        val assignments =
-            ModeSearch
-                .enabledModes(net, "castVote")
-                .map(m => (Binding.lookup(m, p), Binding.lookup(m, v)))
-                .toSet
-        assert(
-          assignments == Set(
-            (Some("p0"), Some("No")),
-            (Some("p0"), Some("Yes")),
-            (Some("p1"), Some("No")),
-            (Some("p1"), Some("Yes"))
-          )
-        )
+        def mode(peer: String, vote: String) =
+            Binding.bind(Binding.bind(Binding.empty, p, peer), v, vote)
+        // present peer, either vote value (v is a free choice — unconstrained by any input arc)
+        val _ = assert(net.isModeEnabled("castVote", mode("p0", "No")))
+        val _ = assert(net.isModeEnabled("castVote", mode("p1", "Yes")))
+        // p2 is not in `pending`
+        assert(!net.isModeEnabled("castVote", mode("p2", "Yes")))
     }
 
     test("firing records the product-colored ballot and consumes the peer") {

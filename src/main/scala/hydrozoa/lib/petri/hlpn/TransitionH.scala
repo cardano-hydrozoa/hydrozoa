@@ -5,8 +5,9 @@ import cats.implicits.*
 /** A resolved HLPN transition: the variables it binds (ISO `V`), its guard `Φ`, and its arcs (each
   * an [[ArcSemanticsH]] connected to a place). Carries the *semantic* operations given a mode and a
   * marking — whether the mode enables it, and the marking it produces — but **not** any search for
-  * enabled modes; finding modes is a simulator concern (see [[ModeSearch]]). Direction-neutral: an
-  * arc constrains enabling only through its own `pre` (`pre ≤ M(p)`), so output arcs never block.
+  * enabled modes; finding modes is a separate strategy (unification, or a scenario-specific
+  * driver). Direction-neutral: an arc constrains enabling only through its own `pre` (`pre ≤
+  * M(p)`), so output arcs never block.
   */
 final case class TransitionH[PlaceId, C](
     variables: List[Var[C]],

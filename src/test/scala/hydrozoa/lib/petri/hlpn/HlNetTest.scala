@@ -42,12 +42,12 @@ class HlNetTest extends AnyFunSuite:
           )
         )
 
-    test("enabled modes reflect the input marking") {
+    test("a mode is enabled iff its peer is present in the input place") {
         val n = net(ms("p0" -> 1, "p2" -> 1))
-        assert(
-          ModeSearch.enabledModes(n, "advance").flatMap(b => Binding.lookup(b, p)).toSet ==
-              Set("p0", "p2")
-        )
+        def mode(peer: String) = Binding.bind(Binding.empty, p, peer)
+        val _ = assert(n.isModeEnabled("advance", mode("p0")))
+        val _ = assert(!n.isModeEnabled("advance", mode("p1")))
+        assert(n.isModeEnabled("advance", mode("p2")))
     }
 
     test("firing moves the chosen token and yields a new net") {

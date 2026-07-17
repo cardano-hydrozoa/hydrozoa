@@ -5,8 +5,10 @@ import hydrozoa.lib.petri.net.components.Place
 
 /** A high-level Petri net over a color type `C`: colored places (each carrying its marking and
   * declared domain), transition declarations (variables + guard), and arcs (a mode-relative
-  * [[ArcSemanticsH]] connecting a place and a transition). Enabling and firing delegate to
-  * [[ModeSearch]]; firing checks each updated place's E1 validity (in-domain colors, non-negative
+  * [[ArcSemanticsH]] connecting a place and a transition). It exposes the *semantic* surface —
+  * [[isModeEnabled]] (does a given mode enable a transition?) and [[fire]] (fire under a given
+  * mode) — but does **not** search for enabled modes; that is a separate strategy over
+  * [[transitionH]]. Firing checks each updated place's E1 validity (in-domain colors, non-negative
   * multiplicities) via [[ColoredPlace.markingError]].
   *
   * All places share the single type parameter `C`. A homogeneous net uses a concrete `C`; a
@@ -27,7 +29,8 @@ final case class HlNet[PlaceId, TransitionId, ArcId, C](
     def marking(pid: PlaceId): MultiSet[C] = places(pid).marking
 
     /** The resolved transition `tid` — its variables, guard, and connected arcs — if present. A
-      * search strategy (e.g. [[ModeSearch]]) operates on this; the net does not search itself.
+      * search strategy (unification, or a scenario-specific driver) operates on this; the net does
+      * not search itself.
       */
     def transitionH(tid: TransitionId): Option[TransitionH[PlaceId, C]] =
         transitions.get(tid).map { decl =>
