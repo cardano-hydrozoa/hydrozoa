@@ -24,22 +24,22 @@ final case class HlNet[PlaceId, TransitionId, ArcId, C](
     import HlNet.FiringError
 
     /** The current marking of a place. Assumes it exists — a validated net has no dangling arcs. */
-    private def markingOf(pid: PlaceId): MultiSet[C] = places(pid).marking
+    def marking(pid: PlaceId): MultiSet[C] = places(pid).marking
 
-    /** The transition's arcs bundled with its declaration for mode search. */
-    private def transitionH(tid: TransitionId): TransitionH[PlaceId, C] =
-        val decl = transitions(tid)
-        val connected = arcs.values.toList.collect {
-            case a if a.transition == tid => a.place -> a.semantics
+    /** The resolved transition `tid` — its variables, guard, and connected arcs — if present. A
+      * search strategy (e.g. [[ModeSearch]]) operates on this; the net does not search itself.
+      */
+    def transitionH(tid: TransitionId): Option[TransitionH[PlaceId, C]] =
+        transitions.get(tid).map { decl =>
+            val connected = arcs.values.toList.collect {
+                case a if a.transition == tid => a.place -> a.semantics
+            }
+            TransitionH(decl.variables, decl.guard, connected)
         }
-        TransitionH(decl.variables, decl.guard, connected)
 
-    /** Enabled modes of `tid` at the current marking. */
-    def enabledModes(tid: TransitionId): LazyList[Binding] =
-        ModeSearch.enabledModes(transitionH(tid), markingOf)
-
-    /** Whether `tid` has any enabled mode. */
-    def isEnabled(tid: TransitionId): Boolean = enabledModes(tid).nonEmpty
+    /** Whether `mode` enables `tid` at the current marking (the semantic predicate; no search). */
+    def isModeEnabled(tid: TransitionId, mode: Binding): Boolean =
+        transitionH(tid).exists(_.enabledUnder(mode, marking))
 
     /** Fire `tid` under `mode`, returning the net with updated place markings. Fails if the
       * transition is unknown, the mode is not enabled, evaluation fails, or a resulting marking
@@ -49,24 +49,23 @@ final case class HlNet[PlaceId, TransitionId, ArcId, C](
         tid: TransitionId,
         mode: Binding
     ): Either[FiringError[TransitionId, PlaceId], HlNet[PlaceId, TransitionId, ArcId, C]] =
-        if !transitions.contains(tid) then Left(FiringError.TransitionNotFound(tid))
-        else
-            val t = transitionH(tid)
-            if !ModeSearch.isModeEnabled(t, mode, markingOf) then Left(FiringError.NotEnabled(tid))
-            else
-                ModeSearch
-                    .fire(t, mode, markingOf)
-                    .leftMap(FiringError.EvalFailed(tid, _))
-                    .flatMap { updated =>
-                        updated.toList
-                            .traverse { case (pid, m) =>
-                                val fired = places(pid).mark(m)
-                                fired.markingError match
-                                    case Some(e) => Left(FiringError.PlaceInvalid(pid, e))
-                                    case None    => Right(pid -> fired)
-                            }
-                            .map(updates => copy(places = places ++ updates))
-                    }
+        transitionH(tid) match
+            case None => Left(FiringError.TransitionNotFound(tid))
+            case Some(t) =>
+                if !t.enabledUnder(mode, marking) then Left(FiringError.NotEnabled(tid))
+                else
+                    t.firedMarkings(mode, marking)
+                        .leftMap(FiringError.EvalFailed(tid, _))
+                        .flatMap { updated =>
+                            updated.toList
+                                .traverse { case (pid, m) =>
+                                    val fired = places(pid).mark(m)
+                                    fired.markingError match
+                                        case Some(e) => Left(FiringError.PlaceInvalid(pid, e))
+                                        case None    => Right(pid -> fired)
+                                }
+                                .map(updates => copy(places = places ++ updates))
+                        }
 
 object HlNet:
 

@@ -67,7 +67,8 @@ class HeteroNetTest extends AnyFunSuite:
     test("casting enumerates present-peer × any-vote as modes") {
         val net = b.build(program(peerBag("p0" -> 1, "p1" -> 1))).toOption.get
         val assignments =
-            net.enabledModes("castVote")
+            ModeSearch
+                .enabledModes(net, "castVote")
                 .map(m => (Binding.lookup(m, p), Binding.lookup(m, v)))
                 .toSet
         assert(

@@ -71,7 +71,7 @@ class ModeSearchTest extends AnyFunSuite:
     test("firing under a mode moves the chosen token") {
         val mk = marking(Map("pending" -> ms("p0" -> 1, "p2" -> 1)))
         val mode = Binding.bind(Binding.empty, p, "p0")
-        val fired = ModeSearch.fire(advance(Guard.True), mode, mk).toOption.get
+        val fired = advance(Guard.True).firedMarkings(mode, mk).toOption.get
         val _ = assert(fired("pending") == ms("p2" -> 1))
         assert(fired("done") == ms("p0" -> 1))
     }

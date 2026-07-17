@@ -45,7 +45,8 @@ class HlNetTest extends AnyFunSuite:
     test("enabled modes reflect the input marking") {
         val n = net(ms("p0" -> 1, "p2" -> 1))
         assert(
-          n.enabledModes("advance").flatMap(b => Binding.lookup(b, p)).toSet == Set("p0", "p2")
+          ModeSearch.enabledModes(n, "advance").flatMap(b => Binding.lookup(b, p)).toSet ==
+              Set("p0", "p2")
         )
     }
 

@@ -1,26 +1,24 @@
 package hydrozoa.lib.petri.hlpn
 
-import cats.implicits.*
-
-/** The enabling engine (ISO 15909-1 Concept 23): given a [[TransitionH]] and a marking, enumerate
-  * the *modes* — bindings under which the transition is enabled — and fire it under a chosen mode.
+/** An *enumerating* strategy for finding the enabled modes of a transition: enumerate the cartesian
+  * product of the variables' carriers and keep the bindings that enable it
+  * ([[TransitionH.enabledUnder]]).
+  *
+  * This is one simulation strategy, deliberately **not** part of the net — a net exposes only the
+  * enabling predicate and firing ([[HlNet.isModeEnabled]] / [[HlNet.fire]]); how you search for
+  * modes (enumeration here, unification, or a scenario-specific method) is a separate concern.
+  * Enumeration is exponential in the variable count and materializes each variable's class, so it
+  * suits small finite nets; a unification-based strategy that matches inscriptions against the
+  * tokens present in `M(p)` is the scalable alternative.
   */
 object ModeSearch:
 
-    /** Every enabled mode of `t` at `marking`: bindings β where `Φ⟦β⟧` holds and every arc is
-      * enabled (`W(p,t)⟦β⟧ ≤ M(p)`).
-      *
-      * Enumerates the cartesian product of the variables' finite carriers, so it is exponential in
-      * the variable count — correct for the symmetric-net fragment; a unification-based prune is
-      * the future optimization. A binding whose terms are undefined for it (e.g. `Succ` off a
-      * linear-class end) is simply not a mode; structural ill-sortedness is the sort-checker's
-      * concern (§5), not this.
-      */
+    /** Every enabled mode of `t` at `marking`. */
     def enabledModes[PlaceId, C](
         t: TransitionH[PlaceId, C],
         marking: PlaceId => MultiSet[C]
     ): LazyList[Binding] =
-        candidates(t.variables).filter(isModeEnabled(t, _, marking))
+        candidates(t.variables).filter(t.enabledUnder(_, marking))
 
     /** Whether `t` has any enabled mode at `marking`. */
     def isEnabled[PlaceId, C](
@@ -28,35 +26,28 @@ object ModeSearch:
         marking: PlaceId => MultiSet[C]
     ): Boolean = enabledModes(t, marking).nonEmpty
 
-    /** Fire `t` under `mode`, returning the new marking of every place it touches (`M − pre + post`
-      * per arc). Assumes `mode` is enabled; a resulting negative multiplicity would surface at the
-      * place's E1 validity check downstream.
-      */
-    def fire[PlaceId, C](
-        t: TransitionH[PlaceId, C],
-        mode: Binding,
-        marking: PlaceId => MultiSet[C]
-    ): Either[EvalError, Map[PlaceId, MultiSet[C]]] =
-        t.arcs
-            .traverse { case (pid, arc) => arc.fire(mode, marking(pid)).map(pid -> _) }
-            .map(_.toMap)
+    /** Every enabled mode of transition `tid` in `net` (empty if `tid` is unknown). */
+    def enabledModes[PlaceId, TransitionId, ArcId, C](
+        net: HlNet[PlaceId, TransitionId, ArcId, C],
+        tid: TransitionId
+    ): LazyList[Binding] =
+        net.transitionH(tid).fold(LazyList.empty)(enabledModes(_, net.marking))
 
     /** All candidate bindings: the cartesian product of each variable's carrier. */
     private def candidates[C](variables: List[Var[C]]): LazyList[Binding] =
         variables.foldLeft(LazyList(Binding.empty)) { (bindings, v) =>
             for
                 b <- bindings
-                value <- LazyList.from(v.sort.elements)
+                value <- LazyList.from(enumerate(v.sort))
             yield Binding.bind(b, v, value)
         }
 
-    /** Whether the specific binding `b` enables `t` at `marking`: the guard holds and every arc is
-      * enabled. Used to verify a mode before firing it.
+    /** Enumerate every color of a finite sort. Enumeration is specific to this strategy, so it
+      * lives here rather than on `Sort` (which offers only membership).
       */
-    def isModeEnabled[PlaceId, C](
-        t: TransitionH[PlaceId, C],
-        b: Binding,
-        marking: PlaceId => MultiSet[C]
-    ): Boolean =
-        Binding.evalGuard(t.guard, b) == Right(true) &&
-            t.arcs.forall { case (pid, arc) => arc.enabled(b, marking(pid)) == Right(true) }
+    private def enumerate[C](sort: Sort[C]): List[C] =
+        sort match
+            case Sort.Dot                     => List(())
+            case Sort.Class(_, carrier, _, _) => carrier.toSortedSet.toList
+            case Sort.Prod(left, right) =>
+                for x <- enumerate(left); y <- enumerate(right) yield (x, y)

@@ -22,10 +22,9 @@ abstract class ColoredPlace[C]
     def colorDomain: Sort[C]
 
     override def markingError: Option[Place.Semantics.MarkingError] =
-        val domain = colorDomain.elements.toSet
         marking.multiplicityMap.collectFirst {
-            case (c, _) if !domain.contains(c) => ColoredPlace.OutOfDomain(c.toString)
-            case (c, n) if n < SafeLong.zero   => ColoredPlace.NegativeMultiplicity(c.toString, n)
+            case (c, _) if !colorDomain.contains(c) => ColoredPlace.OutOfDomain(c.toString)
+            case (c, n) if n < SafeLong.zero => ColoredPlace.NegativeMultiplicity(c.toString, n)
         }
 
 object ColoredPlace:

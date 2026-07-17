@@ -1,6 +1,7 @@
 package hydrozoa.lib.petri.hlpn
 
 import cats.data.NonEmptySet
+import scala.annotation.unused
 import spire.algebra.Order
 
 /** A sort names a color domain — the type of color a token carries — together with the finite
@@ -17,10 +18,11 @@ sealed trait Sort[C]:
       */
     def order: Order[C]
 
-    /** Every color of this finite sort — enumerated for the broadcast `all` and to validate that a
-      * marking stays within its place's declared domain.
+    /** Whether `c` is a color of this sort — a membership test, not an enumeration (used to
+      * validate that a marking stays within its place's declared domain). Enumerating a sort is a
+      * simulator concern, not a `Sort` one.
       */
-    def elements: List[C]
+    def contains(c: C): Boolean
 
 object Sort:
 
@@ -29,7 +31,7 @@ object Sort:
       */
     case object Dot extends Sort[Unit]:
         def order: Order[Unit] = Order.from((_, _) => 0)
-        def elements: List[Unit] = List(())
+        def contains(@unused c: Unit): Boolean = true
 
     /** A finite color class (Concept 13): a non-empty carrier set, a discipline governing the
       * successor function, and a static partition into named subclasses (Concept 15). The class's
@@ -44,7 +46,7 @@ object Sort:
     )(using ord: Order[C])
         extends Sort[C]:
         def order: Order[C] = ord
-        def elements: List[C] = carrier.toSortedSet.toList
+        def contains(c: C): Boolean = carrier.contains(c)
 
     /** A color domain that is the cartesian product of two sorts (Concept 14). N-ary domains nest
       * to the right.
@@ -54,8 +56,7 @@ object Sort:
             val c = left.order.compare(x._1, y._1)
             if c != 0 then c else right.order.compare(x._2, y._2)
         }
-        def elements: List[(A, B)] =
-            for x <- left.elements; y <- right.elements yield (x, y)
+        def contains(c: (A, B)): Boolean = left.contains(c._1) && right.contains(c._2)
 
     /** Whether a class carrier admits the successor function (Concept 16 `X++`): `Circular` wraps,
       * `Linear` has no successor for the last element, `Unordered` has no successor at all.
