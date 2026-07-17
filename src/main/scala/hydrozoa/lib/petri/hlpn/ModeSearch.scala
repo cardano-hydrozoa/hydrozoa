@@ -8,7 +8,7 @@ import cats.implicits.*
 object ModeSearch:
 
     /** Every enabled mode of `t` at `marking`: bindings β where `Φ⟦β⟧` holds and every arc is
-      * enabled (`W(p,t)⟦β⟧ ≤ M(p) ∧ sideCondition`).
+      * enabled (`W(p,t)⟦β⟧ ≤ M(p)`).
       *
       * Enumerates the cartesian product of the variables' finite carriers, so it is exponential in
       * the variable count — correct for the symmetric-net fragment; a unification-based prune is

@@ -50,12 +50,6 @@ class ArcSemanticsHTest extends AnyFunSuite:
         assert(arc.fire(bx, m).toOption.get == m)
     }
 
-    test("inhibitor is enabled only when the place is empty") {
-        val arc = ArcSemanticsH.Inhibitor[String]()
-        val _ = assert(arc.enabled(bx, ms()) == Right(true))
-        assert(arc.enabled(bx, ms("p0" -> 1)) == Right(false))
-    }
-
     test("reset drains all tokens") {
         val arc = ArcSemanticsH.Reset[String]()
         val m = ms("p0" -> 2, "p1" -> 1)

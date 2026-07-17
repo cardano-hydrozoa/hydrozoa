@@ -114,16 +114,17 @@ eyes open.**
 
 - ISO's `F ⊆ (P×T) ∪ (T×P)` *is* directed, and `W` is defined separately on `(p,t)` and `(t,p)`.
   So a purist HLPN encoding would put direction in topology.
-- But our generalization pays for itself: `Read`, `Inhibitor`, and `Reset` arcs are *not*
-  cleanly "input" or "output" — they are test/side-condition arcs. Keeping topology
-  direction-neutral and letting each arc's *term contribution* declare its role (consume from
-  input marking / produce to output / test-only) models all five uniformly, and matches how the
-  standard treats guards-vs-flow as separate concerns.
-- Concrete rule for HLPN: an arc semantics contributes a **pre-multiset** `W⁻(p,t)⟦β⟧` (subtracted,
-  and bounded by enabling) and a **post-multiset** `W⁺(t,p)⟦β⟧` (added). `PT` sets only `W⁻`;
-  `TP` sets only `W⁺`; `Read` sets `W⁻ = W⁺` (test, no net change); `Inhibitor` sets a `= ∅`
-  side-condition; `Reset` sets `W⁻ = M(p)`. Direction is then *derived* from which of `W⁻`/`W⁺`
-  is non-empty. This is the undirected-topology idea, made precise for colored tokens.
+- But our generalization pays for itself: `Read` and `Reset` arcs are *not* cleanly "input" or
+  "output". Keeping topology direction-neutral and letting each arc's *term contribution* declare
+  its role (consume from input marking / produce to output / test-only) models all of them
+  uniformly.
+- Concrete rule for HLPN: an arc semantics contributes a **pre-multiset** `W(p,t)⟦β⟧` (subtracted,
+  and bounded by enabling `pre ≤ M(p)`) and a **post-multiset** `W(t,p)⟦β⟧` (added). `PT` sets only
+  `pre`; `TP` sets only `post`; `Read` sets `pre = post` (test, no net change); `Reset` sets
+  `pre = M(p)`. Direction is then *derived* from which of `pre`/`post` is non-empty. This is the
+  undirected-topology idea, made precise for colored tokens. (Non-ISO arcs needing a condition
+  beyond `pre ≤ M(p)` — e.g. an inhibitor's `M(p) = ∅` — are deliberately out of scope: Part 1's
+  enabling rule has no per-arc side-condition.)
 
 The one caveat the current code already documents — **firing endomorphisms don't commute**, hence
 `SingleArc` — becomes *more* important under HLPN, because multiset add/subtract still don't
@@ -255,24 +256,27 @@ A **binding** is a typed environment; a **mode** is a binding that enables a tra
 Implemented in `hlpn/ArcSemanticsH.scala`. Direction-neutral (§2.3): the arc carries no place/
 transition order; consume-vs-produce is *which of `pre`/`post` is non-empty*. `pre`/`post` take the
 current marking as well as the binding, because `Reset.pre` is the whole marking and the empty bag
-is derived as `marking.filter(_ => false)` (reusing the marking's own `Order`, so `Inhibitor`/
-`Reset`/output arcs need no `Order[C]` given).
+is derived as `marking.filter(_ => false)` (reusing the marking's own `Order`, so `Reset`/output
+arcs need no `Order[C]` given).
 
 ```scala
 trait ArcSemanticsH[C]:
-    def pre(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]   // W⁻(β)
-    def post(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]  // W⁺(β)
-    def sideCondition(binding: Binding, marking: MultiSet[C]): Boolean               // e.g. inhibitor
+    def pre(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]   // W(p,t)⟦β⟧
+    def post(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]  // W(t,p)⟦β⟧
     // derived, final:
-    def enabled(binding, marking): Either[EvalError, Boolean]   // pre ≤ M(p) ∧ sideCondition
-    def fire(binding, marking): Either[EvalError, MultiSet[C]]  // M − pre + post
+    def enabled(binding, marking): Either[EvalError, Boolean]   // pre ≤ M(p) (Concept 23 per-arc conjunct)
+    def fire(binding, marking): Either[EvalError, MultiSet[C]]  // M − pre + post (Concept 24)
 ```
 
-The five Petri arcs are the cases, each over an `Inscription`: `Consume` (pre only), `Produce`
-(post only), `Read` (`pre = post` — required present, net-zero), `Inhibitor` (`sideCondition:
-M(p) = ∅`), `Reset` (`pre = M(p)`). Crucially `pre`/`post` are *functions of the binding*, which
-is what the current unary `Arc.Semantics[P]` cannot represent. Wiring these into a net alongside a
-mode-search simulator is §3.4 / increment 6.
+`pre`/`post` are exactly `W(p,t)⟦β⟧` / `W(t,p)⟦β⟧` from Concepts 21/23/24 — the arc annotations
+evaluated at the mode. The four Petri arcs are the cases, each over an `Inscription`: `Consume`
+(pre only), `Produce` (post only), `Read` (`pre = post` — required present, net-zero), `Reset`
+(`pre = M(p)`; ISO Concept 7's `A-post` placeholder). Enabling here is only the per-arc conjunct
+`M(p) ≥ W(p,t)`; the guard `Φ` — the other conjunct of Concept 23 — is checked once per transition
+in `ModeSearch`, not per-arc. There is deliberately **no** per-arc side-condition: Part 1's enabling
+rule has none, so inhibitor-style arcs (`M(p) = ∅`), which cannot be expressed through `pre ≤ M(p)`,
+are out of scope. Crucially `pre`/`post` are *functions of the binding*, which is what the unary
+`Arc.Semantics[P]` cannot represent.
 
 ### 3.4 Mode search (the enabling engine)
 
@@ -431,8 +435,8 @@ Ordered so each step compiles and the RBR model keeps working throughout:
    against hand-written terms. This is the DSL from §3.2.
 3. **`ColoredPlace[C]`** as a `Place.Syntax`/`Place.Semantics` instance (§3.1). Proves the
    metamodel absorbs multiset markings with zero changes to `Place`/`Net`.
-4. **`ArcSemanticsH` (pre/post/side-condition)** + re-express PT/TP/Read/Inhibitor/Reset over it
-   (§3.3). The unary `Arc.Semantics` stays for the P/T path; HLPN is the parallel path.
+4. **`ArcSemanticsH` (pre/post)** + re-express PT/TP/Read/Reset over it (§3.3). The unary
+   `Arc.Semantics` stays for the P/T path; HLPN is the parallel path.
 5. **Sort-checker** → new `ValidationError.SortInvalid` in `ValidatedSimulator` (Stage 2, §5).
 6. **Mode-search engine** for the symmetric-net fragment: `enabledModes(t)` + `fire(t, mode)`
    (§3.4). New `HlSimulator` alongside `SequentialSimulator`.
