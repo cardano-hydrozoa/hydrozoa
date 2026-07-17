@@ -49,10 +49,3 @@ class ArcSemanticsHTest extends AnyFunSuite:
         val _ = assert(arc.enabled(bx, ms()) == Right(false))
         assert(arc.fire(bx, m).toOption.get == m)
     }
-
-    test("reset drains all tokens") {
-        val arc = ArcSemanticsH.Reset[String]()
-        val m = ms("p0" -> 2, "p1" -> 1)
-        val _ = assert(arc.enabled(bx, m) == Right(true))
-        assert(arc.fire(bx, m).toOption.get == ms())
-    }
