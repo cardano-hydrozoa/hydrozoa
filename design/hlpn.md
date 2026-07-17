@@ -295,9 +295,31 @@ end) is simply not a mode; structural ill-sortedness is the sort-checker's job (
 are direction-neutral, enabling is "*all* arcs enabled" — output arcs never block — so `TransitionH`
 needs no input/output split.
 
-Two MVP simplifications, both deferred to net integration (increment 7): a **single net color type
-`C`** (fine while place colors are base classes; product-colored places like `Bag(Peer×Vote)` need
-heterogeneous `C`), and the marking passed in as a function rather than held by a net.
+Two MVP simplifications, both handled at net integration (§3.5): a **single net color type `C`**,
+and the marking passed in as a function rather than held by a net.
+
+### 3.5 Assembling a net: per-place types, no universal color
+
+`HlNet[PlaceId, TransitionId, ArcId, C]` (`hlpn/HlNet.scala`) holds colored places, transition
+declarations, and arcs, and delegates enabling/firing to `ModeSearch`; firing checks each updated
+place's E1 validity. The open question was how to hold places of *different* color domains (a
+`Bag(Peer)` place next to a `Bag(Peer×Vote)` place) in one net.
+
+Answer: **there is no universal net color.** Each place keeps its own color type, and the net is
+their *erasure*, assembled by a typed builder (`hlpn/NetBuilder.scala`):
+
+- `place[C](id, ColoredPlace[C])` hands back a typed `PlaceRef[PlaceId, C]`; `arc[C](id, ref:
+  PlaceRef[…, C], t, ArcSemanticsH[C])` unifies the two `C`s, so a `Peer`-arc on a `Vote`-place is a
+  **compile error**. That is the per-place-type safety, exactly at the one place a single color is
+  meaningful (a place and the arc touching it) — transition variables stay `List[Var[?]]`, since a
+  transition binds mixed colors.
+- Building is a plain `State` monad (never fails, just records + issues refs); `build` runs a
+  separate `ValidatedNel` pass that **accumulates** every id clash / dangling reference, then erases
+  colors to `Any`. The erasure is sound because wiring was checked, and every downstream op is
+  parametric in `C` (multiset ops need only the marking's stored `Order`), so the net runs at `Any`.
+- `SortCheck` (§5) is the *runtime* counterpart of the builder's compile-time check, for nets
+  decoded from PNML that arrive without static types. Belt for hand-authored, suspenders for
+  imported.
 
 ---
 
