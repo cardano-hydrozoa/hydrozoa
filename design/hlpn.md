@@ -170,19 +170,25 @@ The petri layer then fixes the multiplicity carrier via a one-line facade:
 type MultiSet[C] = Multiset[C, SafeLong]
 ```
 
-A colored place is then a straightforward instance of the *existing* `Place.Syntax`:
+A colored place is then a straightforward instance of the *existing* `Place.Syntax` — it only
+fixes `PlaceMarking` to a multiset. `Self` is fixed to `ColoredPlace[C]` (not F-bounded on the
+leaf), mirroring the `RBRPlace` pattern: the base's `mark` returns the base and leaves override
+covariantly, which is what a uniform `MapNet` `P` needs.
 
 ```scala
-trait ColoredPlace[C, Self <: ColoredPlace[C, Self]]
-    extends Place.Syntax[Self], Place.Semantics[Self]:
-    self: Self =>
+abstract class ColoredPlace[C]
+    extends Place.Topology, Place.Syntax[ColoredPlace[C]], Place.Semantics[ColoredPlace[C]]:
     final type PlaceMarking = MultiSet[C]
-    def colorDomain: Sort[C]   // C(p): the place's declared color domain (for sort-checking §5)
+    def colorDomain: Sort[C]                 // C(p): the declared color domain
+    override def markingError: Option[MarkingError] = /* out-of-domain color OR negative count */
 ```
 
-`Bounded`, `HasFinalMarking`, and the whole `Place.Semantics` validity machinery apply unchanged
-— a bound becomes a bound on `|M(p)|` or a per-color bound, a `markingError` still returns
-`Option[MarkingError]`.
+`markingError` is where the two E1 invariants land: every color present must belong to
+`colorDomain` (`OutOfDomain`), and every multiplicity must be ≥ 0 (`NegativeMultiplicity`) — the
+latter being how "a marking is a non-negative multiset" is enforced given the signed carrier.
+`Bounded`, `HasFinalMarking`, and the rest of `Place.Semantics` apply unchanged. This confirms the
+increment's goal: the Place metamodel absorbs multiset markings with *zero* changes to
+`Place`/`Net`.
 
 ### 3.2 The expression DSL: sorts, signature, terms, variables
 

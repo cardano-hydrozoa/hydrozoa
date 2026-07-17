@@ -52,7 +52,7 @@ object Binding:
             case Inscription.Weighted(coeff, color) =>
                 evalColor(color, b).map(c => bag(List(c -> SafeLong(coeff.toInt))))
             case Inscription.All(over) =>
-                Right(bag(colors(over).map(_ -> SafeLong.one)))
+                Right(bag(over.elements.map(_ -> SafeLong.one)))
             case Inscription.SubclassAll(over, sub) =>
                 over match
                     case Sort.Class(name, _, _, subclasses) =>
@@ -102,15 +102,6 @@ object Binding:
                         else Left(EvalError.SuccessorUndefined(name))
                     case Sort.Discipline.Unordered => Left(EvalError.SuccessorUndefined(name))
             case _ => Left(EvalError.SuccessorUndefined(sort.toString))
-
-    /** Enumerate every color of a finite sort — the carrier of a class, the singleton of `Dot`, or
-      * the cartesian product of the two.
-      */
-    private def colors[C](sort: Sort[C]): List[C] =
-        sort match
-            case Sort.Dot               => List(())
-            case Sort.Class(_, c, _, _) => c.toList
-            case Sort.Prod(left, right) => for x <- colors(left); y <- colors(right) yield (x, y)
 
 /** Why evaluation of a term under a binding failed. */
 enum EvalError:

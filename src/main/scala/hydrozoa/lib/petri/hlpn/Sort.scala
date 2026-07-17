@@ -17,6 +17,11 @@ sealed trait Sort[C]:
       */
     def order: Order[C]
 
+    /** Every color of this finite sort — enumerated for the broadcast `all` and to validate that a
+      * marking stays within its place's declared domain.
+      */
+    def elements: List[C]
+
 object Sort:
 
     /** The singleton color `•`. `Bag(Dot) ≅ ℕ`, so a Dot-typed place is an ordinary P/T place and a
@@ -24,6 +29,7 @@ object Sort:
       */
     case object Dot extends Sort[Unit]:
         def order: Order[Unit] = Order.from((_, _) => 0)
+        def elements: List[Unit] = List(())
 
     /** A finite color class (Concept 13): an ordered carrier, a discipline governing the successor
       * function, and a static partition into named subclasses (Concept 15).
@@ -37,6 +43,7 @@ object Sort:
         private lazy val rank: Map[C, Int] = carrier.toList.zipWithIndex.toMap
         def order: Order[C] =
             Order.from((a, b) => Integer.compare(rank.getOrElse(a, -1), rank.getOrElse(b, -1)))
+        def elements: List[C] = carrier.toList
 
     /** A color domain that is the cartesian product of two sorts (Concept 14). N-ary domains nest
       * to the right.
@@ -46,6 +53,8 @@ object Sort:
             val c = left.order.compare(x._1, y._1)
             if c != 0 then c else right.order.compare(x._2, y._2)
         }
+        def elements: List[(A, B)] =
+            for x <- left.elements; y <- right.elements yield (x, y)
 
     /** Whether a class carrier admits the successor function (Concept 16 `X++`): `Circular` wraps,
       * `Linear` has no successor for the last element, `Unordered` has no successor at all.
