@@ -1,6 +1,5 @@
 package hydrozoa.lib.petri.hlpn
 
-import cats.data.NonEmptyList
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
@@ -14,14 +13,14 @@ import spire.math.SafeLong
   */
 class ModeSearchTest extends AnyFunSuite:
 
+    private given Order[String] = Order.from((a, b) => a.compareTo(b))
+
     private val peer = Sort.Class(
       "Peer",
-      NonEmptyList.of("p0", "p1", "p2"),
+      Set("p0", "p1", "p2"),
       Sort.Discipline.Unordered,
       Map("evens" -> Set("p0", "p2"))
     )
-
-    private given Order[String] = peer.order
 
     private def ms(entries: (String, Int)*): MultiSet[String] =
         Multiset(entries.map((k, v) => k -> SafeLong(v)).to(SortedMap))

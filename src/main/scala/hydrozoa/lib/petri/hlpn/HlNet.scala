@@ -3,14 +3,18 @@ package hydrozoa.lib.petri.hlpn
 import cats.implicits.*
 import hydrozoa.lib.petri.net.components.Place
 
-/** A high-level Petri net at a single color type `C`: colored places (each carrying its marking and
+/** A high-level Petri net over a color type `C`: colored places (each carrying its marking and
   * declared domain), transition declarations (variables + guard), and arcs (a mode-relative
   * [[ArcSemanticsH]] connecting a place and a transition). Enabling and firing delegate to
   * [[ModeSearch]]; firing checks each updated place's E1 validity (in-domain colors, non-negative
   * multiplicities) via [[ColoredPlace.markingError]].
   *
-  * Single-color-type simplification: place colors are base classes here. A net mixing base and
-  * product colors needs `C` to be a universal sum type; that is deferred.
+  * All places share the single type parameter `C`. A homogeneous net uses a concrete `C`; a
+  * heterogeneous net — mixing base and product colors, e.g. `Bag(Peer)` alongside
+  * `Bag(Peer × Vote)` — is assembled by the typed [[NetBuilder]], which checks arc↔place color
+  * agreement at compile time and instantiates `C = Any`. Each place's real color domain is
+  * recovered from its `colorDomain` and enforced by `markingError`; the multiset operations are
+  * parametric in `C`, so the net runs unchanged at `Any`.
   */
 final case class HlNet[PlaceId, TransitionId, ArcId, C](
     places: Map[PlaceId, ColoredPlace[C]],

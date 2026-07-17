@@ -92,8 +92,9 @@ object Binding:
       */
     private def successor[C](sort: Sort[C], value: C): Either[EvalError, C] =
         sort match
-            case Sort.Class(name, carrier, discipline, _) =>
-                val elems = carrier.toList
+            case cls @ Sort.Class(name, carrier, discipline, _) =>
+                given Order[C] = cls.order
+                val elems = carrier.toList.sorted
                 val i = elems.indexOf(value)
                 discipline match
                     case Sort.Discipline.Circular => Right(elems((i + 1) % elems.size))
