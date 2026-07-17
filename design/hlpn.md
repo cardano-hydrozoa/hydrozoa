@@ -198,37 +198,44 @@ Two ISO distinctions drive the design and answer the task's "map builder with va
 - A **closed** term under a binding `β` (all free variables assigned) **evaluates** to a concrete
   multiset/boolean. Whether `β` is complete is exactly "are the variable assignments complete."
 
+Implemented in `hydrozoa.lib.petri.hlpn` (`Sort`, `Term`, `Binding`). The term language is split
+into ISO's three syntactic categories rather than one `Term[C]`, because that is exactly how
+evaluation dispatches — to a color, a multiset, or a boolean — and it keeps each category's GADT
+tight:
+
 ```scala
-/** A sort names a color domain: a Scala type C plus enough structure to enumerate/serialize it. */
-sealed trait Sort[C]
+/** A color domain: the type of color a token carries, plus the finite structure the SN operators
+  * need (a canonical Order doubling as MultiSet key order + ordered-class `<`; a subclass partition). */
+sealed trait Sort[C]:  def order: Order[C]
 object Sort:
-    case object Dot extends Sort[Dot.type]              // the P/T singleton • ; Bag(Dot) ≅ ℕ
-    case object Bool extends Sort[Boolean]
-    case object Int extends Sort[BigInt]                // HLPN infinite carrier
-    final case class Finite[C](values: Set[C]) extends Sort[C]     // symmetric-net color class
-    final case class Product[A, B](a: Sort[A], b: Sort[B]) extends Sort[(A, B)]
-    final case class Multiset[C](elem: Sort[C]) extends Sort[MultiSet[C]]
+    case object Dot extends Sort[Unit]                             // the P/T singleton • ; Bag(Dot) ≅ ℕ
+    final case class Class[C](name: String, carrier: NonEmptyList[C],
+        discipline: Discipline, subclasses: Map[String, Set[C]]) extends Sort[C]   // Concept 13/15
+    final case class Prod[A, B](left: Sort[A], right: Sort[B]) extends Sort[(A, B)] // Concept 14
+    enum Discipline: case Unordered, Linear, Circular             // governs Succ (Concept 16)
 
-/** A typed variable: a name bound to a sort. `V` is the set of these per transition. */
-final case class Var[C](name: String, sort: Sort[C])
+final case class Var[C](name: String, sort: Sort[C])              // ISO V
 
-/** TERM(O ∪ V). Typed by construction on the Scala side; sort-checked against Σ on validation. */
-enum Term[C]:
-    case Lit(value: C, sort: Sort[C])                   // constant
-    case Ref(v: Var[C])                                 // variable occurrence
-    case App[A, C](op: Op[A, C], arg: Term[A]) extends Term[C]   // operator application
-    // multiset-former terms (arc inscriptions): n·x, x ⊕ y, all, projections, successors …
-    case Weighted[C](coeff: NonNegativeInt, of: Term[C]) extends Term[MultiSet[C]]
-    case Union[C](l: Term[MultiSet[C]], r: Term[MultiSet[C]]) extends Term[MultiSet[C]]
+/** ColorTerm — basic color function (Concept 16): evaluates to one color. Variables ARE the
+  * projections; `Succ` steps an ordered class; `Tuple` builds a product color. */
+sealed trait ColorTerm[C]:  def sort: Sort[C]
+object ColorTerm: /* Ref(Var) · Const(value, sort) · Succ(inner) · Tuple(left, right) */
 
-/** O: the operator set. Kept small; symmetric-net operators first (projection/successor/all),
-  * general operators (arithmetic, comparison, tuple) behind the HLPN level. */
-enum Op[A, C]:
-    case Proj[A, B](which: Int) extends Op[(A, B), ?]   // X_C^j : select a color component
-    case Succ[C] extends Op[C, C]                       // successor in an ordered class
-    case Eq[C] extends Op[(C, C), Boolean]
-    // … arithmetic / boolean connectives for guards …
+/** Inscription — class color function W(p,t)/W(t,p) (Concept 17): evaluates to a multiset.
+  * A positive linear combination — kept positive so an inscription never selects negative tokens. */
+sealed trait Inscription[C]:  def sort: Sort[C]
+object Inscription: /* Weighted(n, color) · All(sort) · SubclassAll(sort, name) · Union(l, r) */
+
+/** Guard — Φ (Concept 15): evaluates to a boolean. */
+sealed trait Guard
+object Guard: /* True · Eq · Lt · InSubclass(color, name) · Not · And · Or */
 ```
+
+`Binding` (opaque `Map[Var[?], Any]`) carries a candidate mode; `evalColor` / `evalInscription` /
+`evalGuard` are the three closed-term evaluators, each `Either[EvalError, _]` — `Left` on an
+unbound variable (incomplete binding), a `Succ` off an unordered/last color, or an unknown
+subclass. Deferred beyond the SN fragment: infinite carriers, arithmetic/string operators, and
+inscription difference.
 
 Design stance: **model the symmetric-net operator set (Concept 16/17) as first-class, and put the
 open-ended HLPN operators behind it.** That keeps mode-search decidable for the fragment we
