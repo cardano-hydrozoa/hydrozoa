@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.data.NonEmptySet
 import spire.algebra.Order
 
 /** A sort names a color domain — the type of color a token carries — together with the finite
@@ -30,19 +31,20 @@ object Sort:
         def order: Order[Unit] = Order.from((_, _) => 0)
         def elements: List[Unit] = List(())
 
-    /** A finite color class (Concept 13): a carrier set, a discipline governing the successor
-      * function, and a static partition into named subclasses (Concept 15). The class's total order
-      * is the ambient `Order[C]` of the color type, not synthesized here.
+    /** A finite color class (Concept 13): a non-empty carrier set, a discipline governing the
+      * successor function, and a static partition into named subclasses (Concept 15). The class's
+      * total order is the ambient `Order[C]` of the color type, not synthesized here. (Finiteness
+      * is a precondition we cannot express in the type; non-emptiness we can, via `NonEmptySet`.)
       */
     final case class Class[C](
         name: String,
-        carrier: Set[C],
+        carrier: NonEmptySet[C],
         discipline: Discipline,
         subclasses: Map[String, Set[C]]
     )(using ord: Order[C])
         extends Sort[C]:
         def order: Order[C] = ord
-        def elements: List[C] = carrier.toList
+        def elements: List[C] = carrier.toSortedSet.toList
 
     /** A color domain that is the cartesian product of two sorts (Concept 14). N-ary domains nest
       * to the right.

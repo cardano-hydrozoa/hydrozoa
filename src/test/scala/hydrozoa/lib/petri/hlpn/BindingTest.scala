@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.data.NonEmptySet
 import hydrozoa.lib.number.PositiveInt
 import org.scalatest.funsuite.AnyFunSuite
 import spire.algebra.Order
@@ -12,13 +13,13 @@ class BindingTest extends AnyFunSuite:
     // A circular peer class {p0, p1, p2} with a static subclass of the even-indexed peers.
     private val peer = Sort.Class(
       "Peer",
-      Set("p0", "p1", "p2"),
+      NonEmptySet.of("p0", "p1", "p2"),
       Sort.Discipline.Circular,
       Map("evens" -> Set("p0", "p2"))
     )
     // A linear vote class {No, Yes} — no successor past the last element.
     private val vote =
-        Sort.Class("Vote", Set("No", "Yes"), Sort.Discipline.Linear, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear, Map.empty)
 
     private val x = Var("x", peer)
     private val y = Var("y", vote)

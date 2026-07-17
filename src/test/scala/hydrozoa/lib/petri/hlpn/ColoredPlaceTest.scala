@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import org.scalatest.funsuite.AnyFunSuite
@@ -12,7 +13,7 @@ class ColoredPlaceTest extends AnyFunSuite:
     private given Order[String] = Order.from((a, b) => a.compareTo(b))
 
     private val peer =
-        Sort.Class("Peer", Set("p0", "p1", "p2"), Sort.Discipline.Unordered, Map.empty)
+        Sort.Class("Peer", NonEmptySet.of("p0", "p1", "p2"), Sort.Discipline.Unordered, Map.empty)
 
     private def ms(entries: (String, Int)*): MultiSet[String] =
         Multiset(entries.map((k, v) => k -> SafeLong(v)).to(SortedMap))

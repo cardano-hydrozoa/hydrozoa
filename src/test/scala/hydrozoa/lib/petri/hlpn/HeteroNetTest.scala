@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
@@ -19,9 +20,9 @@ class HeteroNetTest extends AnyFunSuite:
     private given Order[String] = Order.from((a, b) => a.compareTo(b))
 
     private val peer =
-        Sort.Class("Peer", Set("p0", "p1", "p2"), Sort.Discipline.Unordered, Map.empty)
+        Sort.Class("Peer", NonEmptySet.of("p0", "p1", "p2"), Sort.Discipline.Unordered, Map.empty)
     private val vote =
-        Sort.Class("Vote", Set("No", "Yes"), Sort.Discipline.Unordered, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Unordered, Map.empty)
     private val peerVote: Sort[(String, String)] = Sort.Prod(peer, vote)
 
     private given Order[(String, String)] = peerVote.order

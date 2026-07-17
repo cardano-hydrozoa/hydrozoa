@@ -1,5 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
@@ -14,12 +15,12 @@ class SortCheckTest extends AnyFunSuite:
 
     private val peer = Sort.Class(
       "Peer",
-      Set("p0", "p1", "p2"),
+      NonEmptySet.of("p0", "p1", "p2"),
       Sort.Discipline.Unordered,
       Map("evens" -> Set("p0", "p2"))
     )
     private val vote =
-        Sort.Class("Vote", Set("No", "Yes"), Sort.Discipline.Linear, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear, Map.empty)
 
     private def ms(entries: (String, Int)*): MultiSet[String] =
         Multiset(entries.map((k, v) => k -> SafeLong(v)).to(SortedMap))
