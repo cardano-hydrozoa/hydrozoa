@@ -329,33 +329,28 @@ actually be simulated," and where `ValidatedSimulator` fits. Four stages, each a
 into a more-refined type:
 
 ```
- (1) BuilderM program ──build──▶ MapNet        structurally present: IDs, arcs, terms as raw Term
-        │  can fail: ID conflicts / dangling refs (existing BuilderError / topologyErrors)
+ (1) build ──▶ HlNet          structurally present: places (+domains), transitions (vars+guard), arcs
         ▼
- (2) MapNet ──sortCheck──▶ WellSortedNet        every arc term & guard type-checks against Σ;
-        │  can fail: SortError (arg-sort mismatch, undeclared var, W(p,t) result-sort ≠ Bag(C(p)))
-        ▼   ← this is the new work inside ValidatedSimulator.validate
- (3) WellSortedNet ──validate──▶ ValidatedSimulator[S]    + existing topology/syntax/semantics totality
-        │
-        ▼
- (4) ValidatedSimulator ──enabledModes/fire──▶ simulation
-            per firing: a Binding may be partial (search) or complete (evaluable).
+ (2) HlNet ──SortCheck.errors──▶ well-sorted?   every guard & arc inscription checks against Σ;
+        │  SortError: undeclared var, Succ/Lt on unordered class, unknown subclass,
+        ▼              arc inscription sort ≠ place domain (W(p,t) ∉ Bag(C(p)))
+ (3) well-sorted HlNet ──enabledModes/fire──▶ simulation
+            per firing: ModeSearch enumerates modes; fire checks E1 (ColoredPlace.markingError).
 ```
 
-- **Stage 2 is the "compilation step"** the task anticipated: sort-checking turns a bag of terms
-  with variables into a net whose every annotation is guaranteed evaluable *once a complete
-  binding is supplied*. It slots into `ValidatedSimulator.validate` as a fourth error source
-  (`SortError`) alongside the three that already exist — no new top-level type needed, just a new
-  `ValidationError` case and a `sortErrors: List[SortError]` accumulator on the net's `Syntax`.
-- **Stage 4's partial-vs-complete distinction** is surfaced by `Binding`: `enabledModes` produces
-  *complete* bindings (a partial binding that can't be completed is not a mode). The engine's
-  internal search carries *partial* bindings; only complete ones cross the API boundary into
-  `fire(t, mode)`. So "indicate whether variable assignments are complete" is a type-level fact:
-  the public `Mode` type is a `Binding` refined to *closed over `t`'s variables*.
+Implemented as `hlpn/HlNet.scala` + `hlpn/SortCheck.scala` (the standalone HLPN net, not
+`MapNet`/`ValidatedSimulator` — those stay unary-P/T; `ArcSemanticsH` is not `Arc.Semantics[P]`).
 
-Net: `ValidatedSimulator` graduates from "the net is structurally sound" to "the net is a
-well-sorted HLPN whose every reachable firing is evaluable" — the same opaque-type discipline,
-one more check.
+- **Stage 2 is the "compilation step"** the task anticipated: `SortCheck.errors(net)` turns a bag
+  of terms with variables into a net whose every annotation is guaranteed evaluable *once a
+  complete binding is supplied*. Evaluation deliberately does not police these — `evalGuard` will
+  compare an unordered class by carrier index — so the check must run before simulation. A
+  `validate → Either[NonEmptyList[SortError], well-sorted]` opaque wrapper (mirroring
+  `ValidatedSimulator`) is the natural next refinement.
+- **Stage 3's partial-vs-complete distinction** is surfaced by `Binding`: `enabledModes` yields
+  *complete* bindings (a partial one that can't be completed is not a mode); `fire(t, mode)` takes
+  a complete mode. The engine's internal search carries partial bindings; only complete ones cross
+  the API boundary.
 
 ---
 

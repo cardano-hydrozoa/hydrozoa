@@ -20,7 +20,7 @@ object ModeSearch:
         t: TransitionH[PlaceId, C],
         marking: PlaceId => MultiSet[C]
     ): LazyList[Binding] =
-        candidates(t.variables).filter(modeEnabled(t, _, marking))
+        candidates(t.variables).filter(isModeEnabled(t, _, marking))
 
     /** Whether `t` has any enabled mode at `marking`. */
     def isEnabled[PlaceId, C](
@@ -50,7 +50,10 @@ object ModeSearch:
             yield Binding.bind(b, v, value)
         }
 
-    private def modeEnabled[PlaceId, C](
+    /** Whether the specific binding `b` enables `t` at `marking`: the guard holds and every arc is
+      * enabled. Used to verify a mode before firing it.
+      */
+    def isModeEnabled[PlaceId, C](
         t: TransitionH[PlaceId, C],
         b: Binding,
         marking: PlaceId => MultiSet[C]
