@@ -51,16 +51,6 @@ object Binding:
         term match
             case Inscription.Weighted(coeff, color) =>
                 evalColor(color, b).map(c => bag(List(c -> SafeLong(coeff.toInt))))
-            case Inscription.All(over) =>
-                Right(bag(over.elements.map(_ -> SafeLong.one)))
-            case Inscription.SubclassAll(over, sub) =>
-                over match
-                    case Sort.Class(name, _, _, subclasses) =>
-                        subclasses
-                            .get(sub)
-                            .toRight(EvalError.UnknownSubclass(name, sub))
-                            .map(elems => bag(elems.toList.map(_ -> SafeLong.one)))
-                    case other => Left(EvalError.UnknownSubclass(other.toString, sub))
             case Inscription.Union(l, r) =>
                 for lb <- evalInscription(l, b); rb <- evalInscription(r, b)
                 yield lb.combineWith(rb)((x, y) => x + y)

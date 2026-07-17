@@ -69,28 +69,6 @@ class BindingTest extends AnyFunSuite:
         assert(bag.multiplicityMap.size == 1)
     }
 
-    test("evalInscription: all is one of every color in the class") {
-        val bag = Binding.evalInscription(Inscription.All(peer), Binding.empty).toOption.get
-        val _ = assert(bag.multiplicityMap.size == 3)
-        assert(List("p0", "p1", "p2").forall(p => bag.get(p) == SafeLong.one))
-    }
-
-    test("evalInscription: subclass all is restricted to the partition") {
-        val bag =
-            Binding
-                .evalInscription(Inscription.SubclassAll(peer, "evens"), Binding.empty)
-                .toOption
-                .get
-        assert(bag.multiplicityMap.keySet == Set("p0", "p2"))
-    }
-
-    test("evalInscription: unknown subclass fails") {
-        assert(
-          Binding.evalInscription(Inscription.SubclassAll(peer, "odds"), Binding.empty) ==
-              Left(EvalError.UnknownSubclass("Peer", "odds"))
-        )
-    }
-
     test("evalInscription: union sums multiplicities") {
         val b = Binding.bind(Binding.empty, x, "p0")
         val term = Inscription.Union(

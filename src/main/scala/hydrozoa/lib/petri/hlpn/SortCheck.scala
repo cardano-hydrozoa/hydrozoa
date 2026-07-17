@@ -61,9 +61,7 @@ object SortCheck:
         declared: List[Var[?]]
     ): List[SortError] =
         inscription match
-            case Inscription.Weighted(_, color)     => walkColor(color, declared)
-            case Inscription.All(_)                 => Nil
-            case Inscription.SubclassAll(sort, sub) => subclassError(sort, sub).toList
+            case Inscription.Weighted(_, color) => walkColor(color, declared)
             case Inscription.Union(l, r) =>
                 walkInscription(l, declared) ++ walkInscription(r, declared)
 

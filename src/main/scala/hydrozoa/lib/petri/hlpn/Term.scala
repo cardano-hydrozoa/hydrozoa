@@ -36,8 +36,9 @@ object ColorTerm:
 
 /** An arc inscription (ISO Concept 17, "class color function"): evaluates under a [[Binding]] to a
   * multiset over C. This is `W(p,t)` / `W(t,p)`. Built as a positive linear combination of weighted
-  * colors plus the broadcast `all`; kept positive so an inscription never selects a negative number
-  * of tokens.
+  * colors; kept positive so an inscription never selects a negative number of tokens. (The `all`
+  * broadcast of Concept 16 is deliberately omitted — it is symmetric-net sugar that would force a
+  * full enumeration of a class.)
   */
 sealed trait Inscription[C]:
     def sort: Sort[C]
@@ -47,14 +48,6 @@ object Inscription:
     /** `n·⟨color⟩` — `n` copies of one color. `⟨x⟩` is `Weighted(1, x)`. */
     final case class Weighted[C](coeff: PositiveInt, color: ColorTerm[C]) extends Inscription[C]:
         def sort: Sort[C] = color.sort
-
-    /** The broadcast constant bag `all` — one of every color in the class (Concept 16). */
-    final case class All[C](over: Sort[C]) extends Inscription[C]:
-        def sort: Sort[C] = over
-
-    /** `all` restricted to a static subclass `Ci,q.all` (Concept 16). */
-    final case class SubclassAll[C](over: Sort[C], subclass: String) extends Inscription[C]:
-        def sort: Sort[C] = over
 
     /** `⊕` — multiset union, i.e. the sum of a linear combination. */
     final case class Union[C](left: Inscription[C], right: Inscription[C]) extends Inscription[C]:
