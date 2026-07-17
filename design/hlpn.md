@@ -252,25 +252,27 @@ case. It also lines up 1:1 with PNML conformance (§6).
 
 A **binding** is a typed environment; a **mode** is a binding that enables a transition.
 
-```scala
-/** β : an assignment of a transition's variables to values of the right sort. */
-opaque type Binding = Map[Var[?], Any]                  // smart-constructed; sort-checked
-object Binding:
-    def eval[C](t: Term[C], b: Binding): Either[EvalError, C] = ???   // closed-term evaluation
+Implemented in `hlpn/ArcSemanticsH.scala`. Direction-neutral (§2.3): the arc carries no place/
+transition order; consume-vs-produce is *which of `pre`/`post` is non-empty*. `pre`/`post` take the
+current marking as well as the binding, because `Reset.pre` is the whole marking and the empty bag
+is derived as `marking.filter(_ => false)` (reusing the marking's own `Order`, so `Inhibitor`/
+`Reset`/output arcs need no `Order[C]` given).
 
-/** HLPN arc semantics: mode-relative. Replaces the unary Arc.Semantics[P]. */
-trait ArcSemanticsH[C, P <: ColoredPlace[C, P]]:
-    /** The pre-multiset W⁻(p,t)⟦β⟧ this arc removes from its place (∅ for pure output arcs). */
-    def pre(b: Binding): Either[EvalError, MultiSet[C]]
-    /** The post-multiset W⁺(t,p)⟦β⟧ this arc adds to its place (∅ for pure input arcs). */
-    def post(b: Binding): Either[EvalError, MultiSet[C]]
-    /** Side-condition beyond `pre ≤ M(p)` (e.g. inhibitor: M(p) = ∅). */
-    def sideCondition(b: Binding, p: P): Boolean = true
+```scala
+trait ArcSemanticsH[C]:
+    def pre(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]   // W⁻(β)
+    def post(binding: Binding, marking: MultiSet[C]): Either[EvalError, MultiSet[C]]  // W⁺(β)
+    def sideCondition(binding: Binding, marking: MultiSet[C]): Boolean               // e.g. inhibitor
+    // derived, final:
+    def enabled(binding, marking): Either[EvalError, Boolean]   // pre ≤ M(p) ∧ sideCondition
+    def fire(binding, marking): Either[EvalError, MultiSet[C]]  // M − pre + post
 ```
 
-The Petri `PT`/`TP`/`Read`/`Inhibitor`/`Reset` mixins re-express as which of `pre`/`post`/
-`sideCondition` they fill — see §2.3. Crucially, both `pre` and `post` are *functions of the
-binding*, which is what the current unary signature cannot represent.
+The five Petri arcs are the cases, each over an `Inscription`: `Consume` (pre only), `Produce`
+(post only), `Read` (`pre = post` — required present, net-zero), `Inhibitor` (`sideCondition:
+M(p) = ∅`), `Reset` (`pre = M(p)`). Crucially `pre`/`post` are *functions of the binding*, which
+is what the current unary `Arc.Semantics[P]` cannot represent. Wiring these into a net alongside a
+mode-search simulator is §3.4 / increment 6.
 
 ### 3.4 Mode search (the enabling engine)
 
