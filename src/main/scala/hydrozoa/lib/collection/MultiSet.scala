@@ -31,24 +31,16 @@ case class Multiset[K, V] private (
       */
     def get(k: K): V = multiplicityMap.getOrElse(k, vMonoid.zero)
 
-    /** Apply a function to every value in the multiset's canonical map. */
-    def mapValues[VNew](
+    /** Apply a zero-preserving function to every value in the multiset's canonical map.
+      *
+      * Precondition: `f(V.zero) == VNew.zero`. The function is only applied to the finitely many
+      * non-zero entries; missing keys remain at `VNew.zero` in the result. If `f` does not preserve
+      * zero, the result does not agree with the semantic multiplicity function `k => f(get(k))`.
+      */
+    private[collection] def mapValues[VNew](
         f: V => VNew
     )(using AdditiveMonoid[VNew]): Multiset[K, VNew] =
         Multiset.apply(multiplicityMap.view.mapValues(f).to(SortedMap))
-
-    /** Apply a function to every value in the canonical sorted map, exposing the value's key to the
-      * function as an additional argument.
-      */
-    def mapValuesIndexed[VNew](
-        f: (K, V) => VNew
-    )(using AdditiveMonoid[VNew]): Multiset[K, VNew] =
-        def g(kv: (K, V)): (K, VNew) = (kv._1, f(kv._1, kv._2))
-        Multiset.apply(multiplicityMap.view.map(g).to(SortedMap))
-
-    /** Filter the entries of the multiplicity map. */
-    def filter(f: ((K, V)) => Boolean): Multiset[K, V] =
-        new Multiset(multiplicityMap.filter(f))
 
     def combineWith[VOther, VResult](
         other: Multiset[K, VOther]
@@ -56,12 +48,6 @@ case class Multiset[K, V] private (
         AdditiveMonoid[VOther],
         AdditiveMonoid[VResult]
     ): Multiset[K, VResult] = MultisetOps.combineWith(this, other)(combiner)
-
-    // Copied from immutable.TreeMap
-    override def equals(obj: Any): Boolean = obj match {
-        case that: Multiset[?, ?] => multiplicityMap == that.multiplicityMap
-        case _                    => false
-    }
 }
 
 object Multiset {
@@ -72,16 +58,13 @@ object Multiset {
       *   a sorted map with additively monoidal values (only the additive identity is used here).
       * @return
       *   a multiset with a [[V]]-valued multiplicity function corresponding to the canonicalized
-      *   sorted map. Canonicalizing a sorted map means removing all zero-valued entries and setting
-      *   its default value for missing keys set to zero.
+      *   sorted map. Canonicalizing a sorted map means removing all zero-valued entries; missing
+      *   keys default to zero via [[Multiset.get]].
       */
     def apply[K, V](
         sortedMap: SortedMap[K, V]
-    )(using vMonoid: AdditiveMonoid[V], kOrder: Order[K]): Multiset[K, V] = {
-        val canonicalMap =
-            sortedMap.filterNot(_._2 == vMonoid.zero).withDefaultValue(vMonoid.zero)
-        new Multiset[K, V](canonicalMap)
-    }
+    )(using vMonoid: AdditiveMonoid[V], kOrder: Order[K]): Multiset[K, V] =
+        new Multiset[K, V](sortedMap.filterNot(_._2 == vMonoid.zero))
 
     def empty[K, V](using
         AdditiveMonoid[V],
@@ -132,10 +115,6 @@ private object MultisetAlgebra {
             class OrderedElements(comparer: (V, V) => Int)(using
                 algebra.AdditiveMonoid[Int]
             ) extends PartialOrder[Int](comparer, _.toDouble)
-
-            class PartiallyOrderedElements(comparer: (V, V) => Double)(using
-                algebra.AdditiveMonoid[Double]
-            ) extends PartialOrder[Double](comparer, identity)
         }
 
         trait AdditiveMonoid extends algebra.AdditiveMonoid[Multiset[K, V]] {
