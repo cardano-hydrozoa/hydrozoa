@@ -36,8 +36,9 @@ object HydrozoaServer {
       *   Node lifecycle status behind `GET /ready`, maintained by `MultisigRegimeManagerBase` and
       *   `CardanoLiaison`
       * @param l2QueryReader
-      *   The EUTXO L2-ledger read model behind `GET /api/l2/utxos` and `/api/l2/transactions`, or
-      *   `None` on a node that runs a remote ledger (those endpoints are then not mounted)
+      *   The EUTXO L2-ledger read model behind `GET /l2/cardano-eutxo/utxos` and
+      *   `/l2/cardano-eutxo/transactions`, or `None` on a node that runs a remote ledger (those
+      *   endpoints are then not mounted)
       * @param headConfig
       *   Head configuration
       * @param config

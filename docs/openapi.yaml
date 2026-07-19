@@ -3,11 +3,11 @@ info:
   title: Hydrozoa node API
   version: 0.1.0
 paths:
-  /api/l2/submit:
+  /head/tx:
     post:
       description: Submit an L2 transaction (a JSON UserRequest whose L2 payload is
         a native, self-authenticating Cardano transaction).
-      operationId: postApiL2Submit
+      operationId: postHeadTx
       requestBody:
         content:
           application/json:
@@ -27,11 +27,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/deposit/register:
+  /head/deposit:
     post:
-      description: Register an L1 deposit (a JSON UserRequest whose L2 payload is
-        a native, self-authenticating Cardano transaction).
-      operationId: postApiDepositRegister
+      description: Register an L1 deposit (a JSON UserRequest carrying the unsigned
+        deposit tx CBOR and the serialized L2 outputs the deposit spawns on absorption).
+      operationId: postHeadDeposit
       requestBody:
         content:
           application/json:
@@ -51,10 +51,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/head-info:
+  /head/info:
     get:
       description: Head parameters plus the current node time.
-      operationId: getApiHead-info
+      operationId: getHeadInfo
       responses:
         '200':
           description: ''
@@ -94,7 +94,7 @@ paths:
   /api/admin/finalize:
     post:
       description: Trigger head finalization (admin only).
-      operationId: postApiAdminFinalize
+      operationId: postAdminFinalize
       responses:
         '200':
           description: ''

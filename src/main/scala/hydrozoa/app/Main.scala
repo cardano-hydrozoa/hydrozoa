@@ -179,10 +179,10 @@ object Main
     }
 
     /** Instantiate the head-agreed L2 ledger and, when it is the built-in EUTXO ledger, the
-      * read-only view the user-facing server exposes over the `GET /api/l2/...` endpoints. A node
-      * wired to a remote ledger has no such reader, so the server is handed `None` and mounts no
-      * L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence, separate from the
-      * consensus store.
+      * read-only view the user-facing server exposes over the `GET /l2/cardano-eutxo/...`
+      * endpoints. A node wired to a remote ledger has no such reader, so the server is handed
+      * `None` and mounts no L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence,
+      * separate from the consensus store.
       */
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
@@ -414,7 +414,7 @@ object Main
                           ),
                           connections.blockWeaver,
                           mrm.nodeStatus.get,
-                          // Some(reader) for a cardano-eutxo node (mounts GET /api/l2/...); None for
+                          // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
                           // a remote-ledger node, which serves no L2-query endpoints.
                           l2QueryReader,
                           nodeConfig.headConfig,

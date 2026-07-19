@@ -1,16 +1,13 @@
 package hydrozoa.multisig.server
 
-import hydrozoa.config.head.initialization.InitializationParameters
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
-import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import io.bullet.borer.Cbor
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
@@ -21,7 +18,6 @@ import scalus.uplc.builtin.ByteString
 object JsonCodecs {
 
     import cip116.JsonCodecs.CIP0116.Conway.given
-    import hydrozoa.config.head.initialization.InitializationParameters.HeadId.{given Decoder[HeadId], given Encoder[HeadId]}
 
     //// Make TransactionInput codecs available as given instances
     // given Encoder[TransactionInput] = transactionInputEncoder
@@ -129,45 +125,7 @@ object JsonCodecs {
         c.downField("requestId").as[RequestId].map(RequestAccepted.apply)
     }
 
-    given errorEncoder: Encoder[Error] = deriveEncoder[Error]
-
-    given errorDecoder: Decoder[Error] = deriveDecoder[Error]
-
-    // CardanoNativeToken codec - serialized as "{policyIdHex}.{assetNameHex}"
-    given cardanoNativeTokenEncoder: Encoder[ApiResponse.CardanoNativeToken] =
-        (token: ApiResponse.CardanoNativeToken) => {
-            val policyIdHex = token.policyId.toHex
-            val assetNameHex = token.tokenName.bytes.toHex
-            Json.fromString(s"$policyIdHex.$assetNameHex")
-        }
-
-    given cardanoNativeTokenDecoder: Decoder[ApiResponse.CardanoNativeToken] =
-        Decoder.decodeString.emap { str =>
-            str.split('.') match {
-                case Array(policyIdHex, assetNameHex) =>
-                    scala.util
-                        .Try {
-                            val policyIdBytes = ByteString.fromHex(policyIdHex)
-                            val assetNameBytes = ByteString.fromHex(assetNameHex)
-                            val policyId = ScriptHash.fromByteString(policyIdBytes)
-                            val assetName = AssetName(assetNameBytes)
-                            ApiResponse.CardanoNativeToken(policyId, assetName)
-                        }
-                        .toEither
-                        .left
-                        .map(e => s"Failed to decode CardanoNativeToken: ${e.getMessage}")
-                case _ =>
-                    Left(
-                      s"Invalid CardanoNativeToken format, expected '{policyIdHex}.{assetNameHex}', got: $str"
-                    )
-            }
-        }
-
-    given headInfoEncoder: Encoder[HeadInfo] = deriveEncoder[HeadInfo]
-
-    given headInfoDecoder: Decoder[HeadInfo] = deriveDecoder[HeadInfo]
-
-    // ---- L2 query endpoints (GET /api/l2/utxos, /api/l2/transactions) ----
+    // ---- L2 query endpoints (GET /l2/cardano-eutxo/utxos, /l2/cardano-eutxo/transactions) ----
     // CIP-0116-structured utxo encoding. `transactionInputEncoder` and `valueEncoder` come from the
     // CIP-0116 givens imported above; only the output object is assembled here, since CIP-0116
     // defines no `TransactionOutput` encoder.

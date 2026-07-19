@@ -69,7 +69,7 @@ the application already bakes a headId-like domain separator into its own txs. L
 `examples/src/main/scala/hydrozoa/examples/demo/SubmitL2Transaction.scala` builds exactly this
 shape end-to-end and is the reference client.
 
-What a client needs from the head: `GET /api/head-info` serves the `headId` (for the pin) and the
+What a client needs from the head: `GET /head/info` serves the `headId` (for the pin) and the
 deposit timing offsets (`submissionDurationSeconds`, `absorptionStartOffsetSeconds`,
 `refundStartOffsetSeconds`); slot↔time interpretation uses the network's standard slot config.
 
@@ -82,7 +82,7 @@ no clock, so at apply it receives the block-creation time. What Hydrozoa keeps i
 *sequencing*: a request is screened first, admitted second.
 
 ```
-user ──POST /api/l2/submit──► RequestSequencer
+user ──POST /head/tx──► RequestSequencer
                                    │  sendScreenTx(l2Payload)            (stateless)
                                    ▼
                               L2Ledger screening ── fail ──► rejected, no RequestId
@@ -105,7 +105,7 @@ tx id). Screening cannot resolve inputs, check balance, or test the validity win
 state. It returns pass/fail with an error reason; Hydrozoa itself never inspects or compares head
 identities — the pin check lives entirely inside the ledger. Passing is what assigns the
 `RequestId`, so an unparseable or unauthenticated payload is dropped before it consumes a durable
-id or any peer traffic. On the wire, `POST /api/l2/submit` returns the assigned `RequestId` on
+id or any peer traffic. On the wire, `POST /head/tx` returns the assigned `RequestId` on
 acceptance and the rejection reason otherwise (`docs/openapi.yaml`).
 
 **Submission** is the stateful apply path at block production: the validity interval against the
@@ -113,7 +113,7 @@ block-creation time, input resolution against the active utxo set, value conserv
 fee, and that the witnesses cover the resolved inputs' payment credentials. A request that screens
 clean but fails here (say, its inputs were spent by an earlier tx in the block) is marked
 `Invalid` by `JointLedger`; the block completes regardless. An `Invalid` request is terminal — the
-head does not retry it, and it never appears in `GET /api/l2/transactions` — so the client
+head does not retry it, and it never appears in `GET /l2/cardano-eutxo/transactions` — so the client
 resubmits a corrected tx.
 
 ## Deposits: pinned to their L2 payload
@@ -131,7 +131,7 @@ and void the signatures.
 The deposit path, in order (client steps marked):
 
 1. **Client:** build the deposit tx (`DepositTx.Build` puts `blake2b_256(l2Payload)` in its
-   metadata) and register both payloads with `POST /api/deposit/register`.
+   metadata) and register both payloads with `POST /head/deposit`.
 2. **Deposit L1 screening** — Hydrozoa's stage, before the ledger sees the deposit
    (`multisig/ledger/l1/tx/DepositL1Screening.scala`, called by `RequestSequencer`).
    `screen(l1Payload, l2Payload, now)`:
@@ -187,8 +187,8 @@ peer's replica the same ordered commands, so a non-deterministic backend diverge
 consensus. The EUTXO ledger gets determinism from native tx validation; a remote ledger must
 provide it by design.
 
-The read side follows the backend: the L2 query endpoints (`GET /api/l2/utxos/{address}`,
-`GET /api/l2/transactions`) are mounted only when the node runs the EUTXO ledger — see
+The read side follows the backend: the L2 query endpoints (`GET /l2/cardano-eutxo/utxos/{address}`,
+`GET /l2/cardano-eutxo/transactions`) are mounted only when the node runs the EUTXO ledger — see
 [l2-query-endpoints.md](l2-query-endpoints.md).
 
 ### Opening state
