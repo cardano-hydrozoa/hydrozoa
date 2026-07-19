@@ -100,7 +100,7 @@ object BlockWeaverTestHelpers {
         )
 
     /** Empty block brief for block 1, so Carol starts working on block 2. */
-    def mkDummyBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Next] =
+    def mkDummyBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)
         } yield {
@@ -131,6 +131,8 @@ object BlockWeaverTestHelpers {
 
         val events: AtomicReference[Vector[UserRequestWithId]] = AtomicReference(Vector.empty)
         val startBlockNums: AtomicReference[Vector[BlockNumber]] = AtomicReference(Vector.empty)
+        val finalCompletions: AtomicReference[Vector[CompleteBlockFinal]] =
+            AtomicReference(Vector.empty)
 
         override def receive: Receive[IO, JointLedger.Requests.Request] = {
             case e: UserRequestWithId =>
@@ -139,8 +141,8 @@ object BlockWeaverTestHelpers {
                 IO { startBlockNums.updateAndGet(_ :+ s.blockNum) }
             case _: CompleteBlockRegular =>
                 IO.pure(())
-            case _: CompleteBlockFinal =>
-                IO.pure(())
+            case f: CompleteBlockFinal =>
+                IO { finalCompletions.updateAndGet(_ :+ f) }
         }
 }
 
@@ -230,6 +232,125 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
               case CompleteBlockRegular(None, _, _, _) => ()
           })
+      } yield true
+    )
+
+    // ===================================
+    // Bob (1) completes empty block 1 as final on the finalization trigger
+    // ===================================
+    val _ = property("Bob (1) completes empty block 1 as final on the finalization trigger") = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          startBlockNums <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            startBlockNums == Vector(BlockNumber(1)),
+            s"The trigger must start (empty) block 1, but StartBlocks were $startBlockNums"
+          )
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
+              case CompleteBlockFinal(None, _) => ()
+          })
+      } yield true
+    )
+
+    // ===================================
+    // Bob (1), retired by the finalization trigger, ignores a late request
+    // ===================================
+    val _ = property(
+      "Bob (1), retired by the finalization trigger, ignores a late request"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          anyLedgerEvent <- pick(genUserRequest.label("request arriving after the trigger"))
+          errors <- lift(Ref[IO].of(List.empty[String]))
+          drainer <- lift(
+            env.system.eventStream.take
+                .flatMap {
+                    case e: ActorError if e.cause != ActorError.NoCause =>
+                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                    case _ => IO.unit
+                }
+                .foreverM
+                .start
+          )
+          weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
+              case CompleteBlockFinal(None, _) => ()
+          })
+          // The weaver retired on the final block; a request arriving after must
+          // dead-letter — never panic, never reach the joint ledger.
+          _ <- lift((weaver ! anyLedgerEvent) >> env.system.waitForIdle())
+          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
+          collected <- lift(errors.get)
+          _ <- lift(drainer.cancel)
+          _ <- assertWith(
+            collected.isEmpty,
+            s"a late request must dead-letter on the retired weaver, not panic it: $collected"
+          )
+          fedEvents <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            fedEvents.isEmpty,
+            s"the late request must not reach the joint ledger, but it fed $fedEvents"
+          )
+      } yield true
+    )
+
+    // ===================================
+    // Carol (2), armed as leader of block 2, records the trigger and finalizes only at completion
+    // ===================================
+    val _ = property(
+      "Carol (2), armed as leader of block 2, records the trigger and finalizes only at completion"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          anyLedgerEvent <- pick(genUserRequest.label("request completing block 2"))
+          weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          brief <- mkDummyBlockBrief1(config.headConfig)
+          // Reproduce block 1 as a follower and arm as the leader of block 2.
+          _ <- lift((weaver ! brief) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          // The trigger on a later-block armed leader is recorded only — it must not
+          // start or complete block 2 by itself.
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          startBlockNums <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            startBlockNums == Vector(BlockNumber(1)),
+            s"The trigger alone must not start block 2, but StartBlocks were $startBlockNums"
+          )
+          earlyCompletions <- lift(IO(env.jointLedgerMock.finalCompletions.get))
+          _ <- assertWith(
+            earlyCompletions.isEmpty,
+            s"The trigger alone must not complete block 2, but got $earlyCompletions"
+          )
+          // Once block 1 is confirmed and a request (or the forced wakeup) drives
+          // completion, the recorded flag makes block 2 final.
+          _ <- lift(
+            weaver ! Block.SoftConfirmed.Minor(
+              brief,
+              headerMultiSigned = List.empty,
+              finalizationRequested = false
+            )
+          )
+          _ <- lift((weaver ! anyLedgerEvent) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.finalCompletions.get.nonEmpty)
+          finalCompletions <- lift(IO(env.jointLedgerMock.finalCompletions.get))
+          _ <- assertWith(
+            finalCompletions.nonEmpty,
+            "The recorded trigger must complete block 2 as final at completion time"
+          )
       } yield true
     )
 

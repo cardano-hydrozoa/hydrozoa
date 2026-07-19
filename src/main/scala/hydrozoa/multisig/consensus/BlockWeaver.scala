@@ -700,21 +700,24 @@ object BlockWeaver {
                 override def react(config: Config)(req: Request): IO[Option[NextReactiveState]] = {
                     req match {
                         case ur: UserRequestWithId =>
-                            // First block is implicitly confirmed, so we exit immediately back to
-                            // the DecidingRole state.
-                            def completeFirstBlock = for {
-                                _ <- tracer.traceWith(
-                                  BlockWeaverEvent.RequestSentToJointLedger(ur.requestId)
-                                ) >> sendCompleteRegularBlockAsLeader(config)
-                                newState <- DecidingRole(
-                                  connections,
-                                  tracer,
-                                  pollResults,
-                                  finalizationLocallyTriggered,
-                                  mempool = Mempool.empty,
-                                  nextBlockNumber = leadingBlockNumber.increment
-                                ).act(config)
-                            } yield newState
+                            // First block is implicitly confirmed, so we complete it immediately —
+                            // as the final block when finalization was requested (mirroring
+                            // completeNextBlock below), regular otherwise.
+                            def completeFirstBlock =
+                                if finalizationLocallyTriggered.asBoolean
+                                then sendCompleteFinalBlockAsLeader(config) >> stop()
+                                else
+                                    for {
+                                        _ <- sendCompleteRegularBlockAsLeader(config)
+                                        newState <- DecidingRole(
+                                          connections,
+                                          tracer,
+                                          pollResults,
+                                          finalizationLocallyTriggered,
+                                          mempool = Mempool.empty,
+                                          nextBlockNumber = leadingBlockNumber.increment
+                                        ).act(config)
+                                    } yield newState
 
                             for {
                                 _ <- IO.whenA(isBlockStarted == NotStarted)(
@@ -808,8 +811,24 @@ object BlockWeaver {
                                 pure(copy(pollResults = pr))
 
                         case ft: LocalFinalizationTrigger.Triggered.type =>
-                            tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
-                                pure(copy(finalizationLocallyTriggered = ft))
+                            // The first block completes on its first request — there is no
+                            // previous-block confirmation and no wakeup to drive it otherwise — so
+                            // on the first block the trigger itself completes the (possibly empty)
+                            // block as final. On later blocks the flag is recorded here and honored
+                            // at completion.
+                            if leadingBlockNumber == BlockNumber.zero.increment
+                            then
+                                for {
+                                    _ <- tracer.traceWith(BlockWeaverEvent.FinalizationTriggered)
+                                    _ <- IO.whenA(isBlockStarted == NotStarted)(
+                                      sendStartBlock(config)(leadingBlockNumber)
+                                    )
+                                    _ <- sendCompleteFinalBlockAsLeader(config)
+                                    newState <- stop()
+                                } yield newState
+                            else
+                                tracer.traceWith(BlockWeaverEvent.FinalizationTriggered) >>
+                                    pure(copy(finalizationLocallyTriggered = ft))
 
                         case w: Wakeup =>
                             tracer.traceWith(BlockWeaverEvent.WakeupDropped(w.blockNumber)) >>
