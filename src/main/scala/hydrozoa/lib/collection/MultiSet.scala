@@ -152,14 +152,14 @@ private object MultisetOps {
             val cmp = kOrder.compare(kx, ky)
             if cmp < 0 then
                 append(kx, combiner(vx, vOtherMonoid.zero))
-                selfIter.next()
+                selfIter.next(): Unit
             else if cmp > 0 then
                 append(ky, combiner(vSelfMonoid.zero, vy))
-                otherIter.next()
+                otherIter.next(): Unit
             else
                 append(kx, combiner(vx, vy))
-                selfIter.next()
-                otherIter.next()
+                selfIter.next(): Unit
+                otherIter.next(): Unit
 
         while selfIter.hasNext do
             val (k, v) = selfIter.next()
