@@ -11,6 +11,7 @@ import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber as LedgerL2CommandNumber
 import hydrozoa.multisig.ledger.stack.{Stack, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec, DepositMapCodec, RequestHighWaterCodec, SoftConfirmationCodec, StackEffectsCodec, TreasuryCodec, UnsignedStackCodec}
+import scalus.cardano.ledger.TransactionHash
 
 /** The typed key surface for the high-level persistence API.
   *
@@ -20,7 +21,7 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
   * append-only replay sequence, §3) is the **subset** of column families reached through
   * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
-  * The 13 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * The 14 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
   * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -33,7 +34,8 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
   *     request id (its packed i64). [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by
-  *     `blockNum`.
+  *     `blockNum`. [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's
+  *     `l1TxId`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
@@ -131,6 +133,16 @@ object StoreKey:
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.BlockStackIndex
         def encode: Array[Byte] = JournalKey.intBytes(num)
+
+    /** Key for [[Cf.EffectStackIndex]] — the effect → stack reverse index, keyed by the effect's
+      * `l1TxId` (its 32 raw bytes), holding the [[StackNumber]] whose `HardConfirmation` carries
+      * it. Written by SCA in the same atomic batch as that `HardConfirmation`.
+      */
+    final case class EffectStackIndex(l1TxId: TransactionHash) extends StoreKey:
+        type Value = StackNumber
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.EffectStackIndex
+        def encode: Array[Byte] = l1TxId.bytes.toArray
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:

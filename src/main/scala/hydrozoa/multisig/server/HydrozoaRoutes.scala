@@ -22,6 +22,8 @@ import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
 import scalus.cardano.address.Address
+import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
 import sttp.model.headers.WWWAuthenticateChallenge
@@ -56,6 +58,9 @@ class HydrozoaRoutes(
       * `headConfig` satisfies the section.
       */
     private given CardanoNetwork.Section = headConfig
+
+    /** Decomposes hard-confirmed stacks' effects onto blocks for the effect queries. */
+    private val effectsResolver: EffectsResolver = EffectsResolver(consensusReader)
 
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
@@ -149,6 +154,17 @@ class HydrozoaRoutes(
                 )
         )(_.asI64)
 
+    /** `{l1TxId}` path segments decode to a validated 32-byte [[TransactionHash]] from lower-case
+      * hex; a malformed or wrong-length token is a 400 at decode.
+      */
+    private given Codec[String, TransactionHash, CodecFormat.TextPlain] =
+        Codec.string.mapDecode(s =>
+            Try(TransactionHash.fromByteString(ByteString.fromHex(s))).toEither match
+                case Right(h) if h.bytes.size == 32 => DecodeResult.Value(h)
+                case _ =>
+                    DecodeResult.Error(s, new IllegalArgumentException("malformed 32-byte l1TxId"))
+        )(_.toHex)
+
     private val blocksEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "blocks")
@@ -202,6 +218,77 @@ class HydrozoaRoutes(
                 blockHeader(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
+
+    private val blockEffectsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects")
+            .name("getHeadBlockEffects")
+            .out(jsonBody[BlockEffectsView])
+            .errorOut(errorOut)
+            .description(
+              "A block's L1 effects as l1TxIds, grouped by kind (initialization, settlement, " +
+                  "fallback, sec, rollouts, refunds, finalization) per block type. Empty until " +
+                  "the block is hard-confirmed."
+            )
+            .serverLogic(num =>
+                blockEffectsListing(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per fixed kind — the effect in full, or a
+      * 404 when this block carries no effect of that kind.
+      */
+    private def blockEffectKindEndpoint(
+        segment: String,
+        kind: EffectKind
+    ): ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / segment)
+            .name(s"getHeadBlockEffect_$segment")
+            .out(jsonBody[EffectView])
+            .errorOut(errorOut)
+            .description(s"The block's $segment effect in full, or 404 if it has none.")
+            .serverLogic(num =>
+                blockEffectOfKind(num, kind)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockRolloutEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in(
+              "head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "rollouts" /
+                  path[Int]("number")
+            )
+            .name("getHeadBlockRollout")
+            .out(jsonBody[EffectView])
+            .errorOut(errorOut)
+            .description("One rollout of the block's rollout chain by index, or 404 if absent.")
+            .serverLogic((num, i) =>
+                blockRollout(num, i)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val effectByIdEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "effects" / path[TransactionHash]("l1TxId"))
+            .name("getHeadEffect")
+            .out(jsonBody[EffectView])
+            .errorOut(errorOut)
+            .description("Any effect by its l1TxId (real tx id, or an SEC's synthetic hash).")
+            .serverLogic(id =>
+                effectById(id)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** The per-kind effect sub-resources, one endpoint each. */
+    private val blockEffectKindEndpoints: List[ServerEndpoint[Any, IO]] =
+        List(
+          "initialization" -> EffectKind.Initialization,
+          "settlement" -> EffectKind.Settlement,
+          "fallback" -> EffectKind.Fallback,
+          "sec" -> EffectKind.Sec,
+          "finalization" -> EffectKind.Finalization
+        ).map(blockEffectKindEndpoint)
 
     private val requestsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -384,10 +471,13 @@ class HydrozoaRoutes(
           blocksEndpoint,
           blockDetailsEndpoint,
           blockHeaderEndpoint,
+          blockEffectsEndpoint,
+          effectByIdEndpoint,
+          blockRolloutEndpoint,
           healthEndpoint,
           readyEndpoint,
           finalizeEndpoint
-        )
+        ) ++ blockEffectKindEndpoints
 
     /** Don't auto-document a body/param decode-failure response: our JSON bodies are raw strings
       * whose codec never fails, so tapir's default would advertise an unreachable `text/plain` 400
@@ -513,6 +603,79 @@ class HydrozoaRoutes(
                         case b: BlockBrief.Final => b.header.asJson
                     })
             }
+
+    /** The block's type — `initial` for block 0 (config), else read from its brief. `None` if a
+      * non-zero block does not exist.
+      */
+    private def blockTypeOf(num: BlockNumber): IO[Option[String]] =
+        if num == BlockNumber.zero then IO.pure(Some("initial"))
+        else
+            consensusReader
+                .blockBrief(num)
+                .map(_.map {
+                    case _: BlockBrief.Minor => "minor"
+                    case _: BlockBrief.Major => "major"
+                    case _: BlockBrief.Final => "final"
+                })
+
+    /** The block-effects listing (l1TxIds grouped by kind), or a 404 when the block does not exist.
+      */
+    private def blockEffectsListing(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockEffectsView]] =
+        effectsResolver.blockEffects(num).flatMap {
+            case None => IO.pure(Left(blockNotFound(num)))
+            case Some(effects) =>
+                blockTypeOf(num).map {
+                    case None            => Left(blockNotFound(num))
+                    case Some(blockType) => Right(ApiDto.mkBlockEffectsView(blockType, effects))
+                }
+        }
+
+    /** One kind of the block's effects in full, or a 404 (block missing, or no effect of that kind
+      * on this block).
+      */
+    private def blockEffectOfKind(
+        num: BlockNumber,
+        kind: EffectKind
+    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.find(_.kind == kind) match
+                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                    case None =>
+                        Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
+        }
+
+    /** One rollout of the block's rollout chain by index, or a 404. */
+    private def blockRollout(
+        num: BlockNumber,
+        index: Int
+    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst {
+                    case e: ResolvedEffect.Tx
+                        if e.kind == EffectKind.Rollout && e.rolloutIndex.contains(index) =>
+                        e
+                } match
+                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                    case None =>
+                        Left(
+                          fail(StatusCode.NotFound, s"Block ${num.convert} has no rollout $index")
+                        )
+        }
+
+    /** Any effect by its l1TxId, or a 404. */
+    private def effectById(
+        l1TxId: TransactionHash
+    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+        effectsResolver.effectById(l1TxId).map {
+            case None    => Left(fail(StatusCode.NotFound, s"No effect ${l1TxId.toHex}"))
+            case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+        }
 
     /** Resolve a block's confirmation status from this node's records: the soft-confirmation
       * moment, and — through the block → stack index — the hard-confirmation moment.

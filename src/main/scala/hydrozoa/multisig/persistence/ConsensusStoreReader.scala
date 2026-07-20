@@ -6,10 +6,11 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.recovery.CursorScan
 import java.nio.ByteBuffer
 import java.time.Instant
+import scalus.cardano.ledger.TransactionHash
 
 /** Read-only view over the consensus store for the user-facing HTTP API (the
   * [[hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader]] pattern): block briefs from the block spine,
@@ -38,6 +39,14 @@ trait ConsensusStoreReader[F[_]]:
       * confirmation stamp.
       */
     def hardConfirmation(num: StackNumber): F[Option[Timestamped[StackEffects.HardConfirmed]]]
+
+    /** One stack's brief (its `[firstBlockNum, lastBlockNum]` range), if persisted. */
+    def stackBrief(num: StackNumber): F[Option[StackBrief]]
+
+    /** The stack whose hard-confirmation carries the effect with this l1TxId, if any (the effect →
+      * stack reverse index).
+      */
+    def effectStack(l1TxId: TransactionHash): F[Option[StackNumber]]
 
     /** One head peer's assigned requests, in request-number order (that author's Request journal),
       * each paired with the arrival stamp it was recorded at (its receive time).
@@ -88,6 +97,12 @@ object ConsensusStoreReader:
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] =
                 persistence.get(StoreKey.HardConfirmation(num))
 
+            def stackBrief(num: StackNumber): IO[Option[StackBrief]] =
+                persistence.get(JournalKey.Stack(num)).map(_.map(_.payload))
+
+            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] =
+                persistence.get(StoreKey.EffectStackIndex(l1TxId))
+
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 CursorScan.cursorWalk(
                   persistence.backend,
@@ -125,6 +140,8 @@ object ConsensusStoreReader:
             def hardConfirmation(
                 num: StackNumber
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] = IO.pure(None)
+            def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
+            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(Nil)
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)

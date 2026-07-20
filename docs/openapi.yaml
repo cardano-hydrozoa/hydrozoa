@@ -202,6 +202,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects:
+    get:
+      description: A block's L1 effects as l1TxIds, grouped by kind (initialization,
+        settlement, fallback, sec, rollouts, refunds, finalization) per block type.
+        Empty until the block is hard-confirmed.
+      operationId: getHeadBlockEffects
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockEffectsView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/effects/{l1TxId}:
+    get:
+      description: Any effect by its l1TxId (real tx id, or an SEC's synthetic hash).
+      operationId: getHeadEffect
+      parameters:
+      - name: l1TxId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/rollouts/{number}:
+    get:
+      description: One rollout of the block's rollout chain by index, or 404 if absent.
+      operationId: getHeadBlockRollout
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      - name: number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /health:
     get:
       description: Liveness — always 200 while the process is serving HTTP.
@@ -250,6 +329,126 @@ paths:
       security:
       - {}
       - httpAuth: []
+  /head/blocks/{block-number}/effects/initialization:
+    get:
+      description: The block's initialization effect in full, or 404 if it has none.
+      operationId: getHeadBlockEffect_initialization
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/settlement:
+    get:
+      description: The block's settlement effect in full, or 404 if it has none.
+      operationId: getHeadBlockEffect_settlement
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/fallback:
+    get:
+      description: The block's fallback effect in full, or 404 if it has none.
+      operationId: getHeadBlockEffect_fallback
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/sec:
+    get:
+      description: The block's sec effect in full, or 404 if it has none.
+      operationId: getHeadBlockEffect_sec
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/finalization:
+    get:
+      description: The block's finalization effect in full, or 404 if it has none.
+      operationId: getHeadBlockEffect_finalization
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
     BlockConfirmationView:
@@ -282,6 +481,32 @@ components:
           type: string
         confirmation:
           $ref: '#/components/schemas/BlockConfirmationView'
+    BlockEffectsView:
+      title: BlockEffectsView
+      type: object
+      required:
+      - blockType
+      properties:
+        blockType:
+          type: string
+        initialization:
+          type: string
+        settlement:
+          type: string
+        finalization:
+          type: string
+        fallback:
+          type: string
+        sec:
+          type: string
+        rollouts:
+          type: array
+          items:
+            type: string
+        refunds:
+          type: array
+          items:
+            type: string
     BlockSummaryView:
       title: BlockSummaryView
       type: object
@@ -297,6 +522,33 @@ components:
           format: int32
         blockType:
           type: string
+    EffectView:
+      title: EffectView
+      type: object
+      required:
+      - l1TxId
+      - kind
+      - blockNumber
+      properties:
+        l1TxId:
+          type: string
+        kind:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        secOnchainSerialized:
+          type: string
+        headSignatures:
+          type: array
+          items:
+            type: string
+        coilSignatures:
+          type: array
+          items:
+            type: string
     ErrorResponse:
       title: ErrorResponse
       type: object
