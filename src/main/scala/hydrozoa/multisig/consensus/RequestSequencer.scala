@@ -123,9 +123,13 @@ trait RequestSequencer(
                                       )
                               }
                               newId = RequestId(ownHeadPeerNum, newNum)
+                              // The receive time rides the request onto the wire, so every peer
+                              // records the author's stamp.
+                              receivedAt <- IO.realTimeInstant
                               newRequestWithId = UserRequestWithId(
                                 userRequest = userRequest,
-                                requestId = newId
+                                requestId = newId,
+                                receivedAt = receivedAt
                               )
                               _ <- tracer.traceWith(
                                 EventSequencerEvent

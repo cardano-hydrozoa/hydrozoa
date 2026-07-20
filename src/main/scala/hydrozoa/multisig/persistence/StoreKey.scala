@@ -20,7 +20,7 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
   * append-only replay sequence, §3) is the **subset** of column families reached through
   * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
-  * The 11 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * The 13 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
   * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -31,6 +31,9 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
+  *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by
+  *     `(author, requestNum)`. [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by
+  *     `blockNum`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
@@ -81,10 +84,11 @@ object StoreKey:
         def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.SoftConfirmation]] — FCA aggregate (header + multisig), keyed by `blockNum`.
-      * `softConfirmed` derives as the last key in this CF (§5.2).
+      * `softConfirmed` derives as the last key in this CF (§5.2). The value is [[Timestamped]] with
+      * this node's local soft-confirmation moment (when its signature set saturated).
       */
     final case class SoftConfirmation(num: BlockNumber) extends StoreKey:
-        type Value = Block.SoftConfirmed.Next
+        type Value = Timestamped[Block.SoftConfirmed.Next]
         import SoftConfirmationCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.SoftConfirmation
@@ -92,17 +96,40 @@ object StoreKey:
 
     /** Key for [[Cf.HardConfirmation]] — SCA multisigned effects / SECs / fallbacks, keyed by
       * `stackNum`. `hardConfirmed` derives as the last key in this CF (§5.2). The R10 evacuation
-      * floor — never deleted.
+      * floor — never deleted. The value is [[Timestamped]] with this node's local hard-confirmation
+      * moment (when the stack's multisig completed).
       *
-      * Value type = `hydrozoa.multisig.ledger.stack.StackEffects.HardConfirmed`. Codec routes
+      * Payload type = `hydrozoa.multisig.ledger.stack.StackEffects.HardConfirmed`. Codec routes
       * through `persistence.codec.StackEffectsCodec` (lifted to `StoreCodec` via the universal
       * `StoreCodec.fromCirce`).
       */
     final case class HardConfirmation(num: StackNumber) extends StoreKey:
-        type Value = StackEffects.HardConfirmed
+        type Value = Timestamped[StackEffects.HardConfirmed]
         import StackEffectsCodec.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.HardConfirmation
+        def encode: Array[Byte] = JournalKey.intBytes(num)
+
+    /** Key for [[Cf.RequestBlockIndex]] — the request → (block, validity) reverse index, keyed by
+      * `(author, requestNum)` as `[peer:4][requestNum:8]` big-endian, so one author's rows form a
+      * contiguous key-prefix range. Written by JL in the same atomic bundle as the block that
+      * locally processed the request.
+      */
+    final case class RequestBlockIndex(peer: HeadPeerNumber, num: RequestNumber) extends StoreKey:
+        type Value = RequestBlockEntry
+        import RequestBlockEntry.given
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.RequestBlockIndex
+        def encode: Array[Byte] = JournalKey.intBytes(peer) ++ JournalKey.longBytes(num)
+
+    /** Key for [[Cf.BlockStackIndex]] — the block → stack reverse index, keyed by `blockNum`,
+      * holding the [[StackNumber]] of the stack that hard-confirmed the block. Written by SCA in
+      * the same atomic batch as the stack's `HardConfirmation`.
+      */
+    final case class BlockStackIndex(num: BlockNumber) extends StoreKey:
+        type Value = StackNumber
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.BlockStackIndex
         def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */

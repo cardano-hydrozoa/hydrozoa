@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 import io.circe.*
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
+import java.time.Instant
 import scodec.bits.ByteVector
 
 /** JSON codecs for the wire-eligible subset of [[PeerLiaisonHeadToHead.Request]].
@@ -444,32 +445,35 @@ object Codecs {
 
     given Codec[UserRequestWithId] = {
         val enc: Encoder[UserRequestWithId] = Encoder.instance {
-            case UserRequestWithId.DepositRequest(rid, r) =>
+            case UserRequestWithId.DepositRequest(rid, r, receivedAt) =>
                 Json.obj(
                   "kind" -> "Deposit".asJson,
                   "requestId" -> rid.asJson,
-                  "request" -> r.asJson
+                  "request" -> r.asJson,
+                  "receivedAt" -> receivedAt.asJson
                 )
-            case UserRequestWithId.TransactionRequest(rid, r) =>
+            case UserRequestWithId.TransactionRequest(rid, r, receivedAt) =>
                 Json.obj(
                   "kind" -> "Transaction".asJson,
                   "requestId" -> rid.asJson,
-                  "request" -> r.asJson
+                  "request" -> r.asJson,
+                  "receivedAt" -> receivedAt.asJson
                 )
         }
         val dec: Decoder[UserRequestWithId] = Decoder.instance(c =>
             for {
                 kind <- c.downField("kind").as[String]
                 rid <- c.downField("requestId").as[RequestId]
+                receivedAt <- c.downField("receivedAt").as[Instant]
                 out <- kind match {
                     case "Deposit" =>
                         c.downField("request")
                             .as[UserRequest.DepositRequest]
-                            .map(r => UserRequestWithId.DepositRequest(rid, r))
+                            .map(r => UserRequestWithId.DepositRequest(rid, r, receivedAt))
                     case "Transaction" =>
                         c.downField("request")
                             .as[UserRequest.TransactionRequest]
-                            .map(r => UserRequestWithId.TransactionRequest(rid, r))
+                            .map(r => UserRequestWithId.TransactionRequest(rid, r, receivedAt))
                     case other =>
                         Left(
                           DecodingFailure(s"Unknown UserRequestWithId kind: $other", c.history)

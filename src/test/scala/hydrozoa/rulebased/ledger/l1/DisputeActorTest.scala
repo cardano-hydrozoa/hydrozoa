@@ -17,7 +17,7 @@ import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey}
+import hydrozoa.multisig.persistence.{InMemoryBackendStore, Persistence, PersistenceEventFormat, StoreKey, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{KzgCommitment, VoteDatum, VoteStatus}
@@ -307,7 +307,9 @@ object DisputeActorTestHelpers {
             persistence <- Persistence.fromBackend(backend, persistenceTracer)(using
               env.headConfig
             )
-            _ <- persistence.put(StoreKey.HardConfirmation(StackNumber.first))(hardConfirmed)
+            _ <- persistence.put(StoreKey.HardConfirmation(StackNumber.first))(
+              Timestamped(java.time.Instant.EPOCH, hardConfirmed)
+            )
         yield persistence
 }
 

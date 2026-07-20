@@ -16,7 +16,7 @@ import java.nio.ByteBuffer
   * append-only replay sequence (scanned by [[recovery.JournalScan]], total-ordered across journals
   * by [[recovery.ArrivalOrderedMerge]]). It is a **subset** of the column families: `JournalKey
   * extends StoreKey`, so "journal" ≠ "column family" — every CF is a [[StoreKey]], but only the
-  * replayable ones are a `JournalKey`. The 11 non-journal CFs (snapshots, key-ordered / `max(key)`
+  * replayable ones are a `JournalKey`. The 13 non-journal CFs (snapshots, key-ordered / `max(key)`
   * reconstruction reads) stay plain [[StoreKey]]: unstamped, never merged.
   *
   * Encoded byte form (per §7.1, big-endian fixed-width so lexicographic byte order matches numeric
@@ -128,7 +128,8 @@ object JournalKey:
             HubHardAck(hub, HubHardAckNumber(readIntBE(bytes, 0)))
         case Cf.BlockResult | Cf.SoftConfirmation | Cf.HardConfirmation | Cf.DepositMap |
             Cf.Treasury | Cf.EvacuationMap | Cf.RequestHighWater | Cf.CoilStampMark |
-            Cf.L2CommandNumber | Cf.UnsignedStack | Cf.Meta =>
+            Cf.L2CommandNumber | Cf.UnsignedStack | Cf.RequestBlockIndex | Cf.BlockStackIndex |
+            Cf.Meta =>
             throw new IllegalArgumentException(
               s"$cf is not a journal CF; JournalKey.decode is undefined for it"
             )
