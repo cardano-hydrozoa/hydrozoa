@@ -12,8 +12,8 @@ import spire.math.SafeLong
 /** The full RBR voting fold as a genuinely *heterogeneous* net: `pending : Bag(Peer)` and
   * `ballots : Bag(Peer × Vote)` — two different color types — assembled into one net, erased to
   * `Any`, and fired. `castVote` binds a peer and a vote; the vote value is unconstrained by any
-  * input, so casting enumerates (present-peer × any-vote) as modes. Proves per-place types +
-  * `Tuple` inscriptions + product colors work end-to-end, not just at the type level.
+  * input, so any vote is castable by a present peer. Proves per-place types + `Tuple` inscriptions
+  * + product colors work end-to-end over the framework net, not just at the type level.
   */
 class HeteroNetTest extends AnyFunSuite:
 
@@ -45,7 +45,7 @@ class HeteroNetTest extends AnyFunSuite:
       ColorTerm.Tuple(ColorTerm.Ref(p), ColorTerm.Ref(v))
     )
 
-    private val b = NetBuilder[String, String, String]()
+    private val b = NetBuilder[String, String]()
 
     private def program(pending: MultiSet[String]) =
         for
@@ -55,8 +55,8 @@ class HeteroNetTest extends AnyFunSuite:
               Tokens(voteBag(), peerVote)
             ) // PlaceRef[String, (String, String)]
             castVote <- b.transition("castVote", List(p, v), Guard.True)
-            _ <- b.arc("consume", pendingRef, castVote, ArcSemanticsH.Consume(consumePeer))
-            _ <- b.arc("produce", ballotsRef, castVote, ArcSemanticsH.Produce(produceBallot))
+            _ <- b.input(pendingRef, castVote, consumePeer)
+            _ <- b.output(castVote, ballotsRef, produceBallot)
         yield ()
 
     test("a heterogeneous net assembles and is well-sorted") {
@@ -79,6 +79,6 @@ class HeteroNetTest extends AnyFunSuite:
         val net = b.build(program(peerBag("p0" -> 1, "p1" -> 1))).toOption.get
         val mode = Binding.bind(Binding.bind(Binding.empty, p, "p0"), v, "Yes")
         val fired = net.fire("castVote", mode).toOption.get
-        val _ = assert(fired.places("pending").marking == peerBag("p1" -> 1))
-        assert(fired.places("ballots").marking == voteBag(("p0", "Yes") -> 1))
+        val _ = assert(fired.placesMap("pending").marking == peerBag("p1" -> 1))
+        assert(fired.placesMap("ballots").marking == voteBag(("p0", "Yes") -> 1))
     }

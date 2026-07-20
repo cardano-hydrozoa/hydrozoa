@@ -4,6 +4,7 @@ import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
 import spire.algebra.Order
@@ -26,7 +27,7 @@ class NetBuilderTest extends AnyFunSuite:
     private val p = Var("p", peer)
     private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
 
-    private val b = NetBuilder[String, String, String]()
+    private val b = NetBuilder[String, String]()
 
     test("a well-formed program assembles and fires") {
         val program =
@@ -34,24 +35,24 @@ class NetBuilderTest extends AnyFunSuite:
                 in <- b.place("pending", Tokens(ms("p0" -> 1, "p2" -> 1), peer))
                 out <- b.place("done", Tokens(ms(), peer))
                 t <- b.transition("advance", List(p), Guard.True)
-                _ <- b.arc("a1", in, t, ArcSemanticsH.Consume(wp))
-                _ <- b.arc("a2", out, t, ArcSemanticsH.Produce(wp))
+                _ <- b.input(in, t, wp)
+                _ <- b.output(t, out, wp)
             yield ()
 
         val net = b.build(program).toOption.get
         val n2 = net.fire("advance", Binding.bind(Binding.empty, p, "p0")).toOption.get
-        val _ = assert(n2.places("pending").marking == ms("p2" -> 1))
-        assert(n2.places("done").marking == ms("p0" -> 1))
+        val _ = assert(n2.placesMap("pending").marking == ms("p2" -> 1))
+        assert(n2.placesMap("done").marking == ms("p0" -> 1))
     }
 
-    test("duplicate ids are reported and accumulated") {
+    test("duplicate ids and duplicate flow elements are reported and accumulated") {
         val program =
             for
                 in <- b.place("pending", Tokens(ms(), peer))
                 _ <- b.place("pending", Tokens(ms(), peer)) // duplicate place id
                 t <- b.transition("advance", List(p), Guard.True)
-                _ <- b.arc("a", in, t, ArcSemanticsH.Consume(wp))
-                _ <- b.arc("a", in, t, ArcSemanticsH.Produce(wp)) // duplicate arc id
+                _ <- b.input(in, t, wp)
+                _ <- b.input(in, t, wp) // duplicate flow element — W must be a function on F
             yield ()
 
         val errors = b.build(program).fold(_.toList, _ => Nil)
@@ -60,7 +61,7 @@ class NetBuilderTest extends AnyFunSuite:
             case _                                          => false
         })
         assert(errors.exists {
-            case NetBuilder.Error.DuplicateArc("a") => true
-            case _                                  => false
+            case NetBuilder.Error.DuplicateArc(Flow.Pt("pending", "advance")) => true
+            case _                                                            => false
         })
     }

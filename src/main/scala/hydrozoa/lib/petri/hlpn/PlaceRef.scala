@@ -1,9 +1,10 @@
 package hydrozoa.lib.petri.hlpn
 
 /** A typed handle to a place under construction: the place's id carried with a phantom color type,
-  * so wiring an arc can check the arc's color against the place's *at compile time*. Erased to the
-  * id at runtime — the type only exists to constrain [[NetBuilder.arc]]. Minted only by the builder
-  * (the constructor is package-private), so a ref cannot be forged with the wrong color.
+  * so wiring an arc can check its inscription's color against the place's *at compile time*. Erased
+  * to the id at runtime — the type only exists to constrain [[NetBuilder.input]] /
+  * [[NetBuilder.output]]. Minted only by the builder (the constructor is package-private), so a ref
+  * cannot be forged with the wrong color.
   */
 opaque type PlaceRef[PlaceId, C] = PlaceId
 

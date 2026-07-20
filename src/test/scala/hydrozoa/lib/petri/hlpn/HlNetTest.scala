@@ -4,13 +4,14 @@ import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
 import spire.algebra.Order
 import spire.math.SafeLong
 
-/** The folded voting sub-net as a real [[HlNet]]: one `advance` transition moves a peer token from
-  * `pending` to `done`, the peer chosen by the firing mode.
+/** The folded voting sub-net as an [[HlNet]] over the framework: one `advance` transition moves a
+  * peer token from `pending` to `done`, the peer chosen by the firing mode.
   */
 class HlNetTest extends AnyFunSuite:
 
@@ -29,16 +30,16 @@ class HlNetTest extends AnyFunSuite:
     private val p = Var("p", peer)
     private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
 
-    private def net(pending: MultiSet[String]): HlNet[String, String, String, String] =
+    private def net(pending: MultiSet[String]): HlNet[String, String, String] =
         HlNet(
-          places = Map[String, ColoredPlace[String]](
+          placesMap = Map[String, ColoredPlace[String]](
             "pending" -> Tokens(pending, peer),
             "done" -> Tokens(ms(), peer)
           ),
-          transitions = Map("advance" -> HlNet.Transition(List(p), Guard.True)),
-          arcs = Map[String, HlNet.Arc[String, String, String]](
-            "a1" -> HlNet.Arc("pending", "advance", ArcSemanticsH.Consume(wp)),
-            "a2" -> HlNet.Arc("done", "advance", ArcSemanticsH.Produce(wp))
+          transitionsMap = Map("advance" -> HlTransition(List(p), Guard.True)),
+          arcsMap = Map(
+            Flow.Pt("pending", "advance") -> InscribedArc(wp),
+            Flow.Tp("advance", "done") -> InscribedArc(wp)
           )
         )
 
@@ -54,18 +55,35 @@ class HlNetTest extends AnyFunSuite:
         val n = net(ms("p0" -> 1, "p2" -> 1))
         val mode = Binding.bind(Binding.empty, p, "p0")
         val n2 = n.fire("advance", mode).toOption.get
-        val _ = assert(n2.places("pending").marking == ms("p2" -> 1))
-        assert(n2.places("done").marking == ms("p0" -> 1))
+        val _ = assert(n2.placesMap("pending").marking == ms("p2" -> 1))
+        assert(n2.placesMap("done").marking == ms("p0" -> 1))
     }
 
-    test("firing an un-enabled mode is rejected") {
+    test("firing an un-enabled mode is rejected with the failing arc") {
         val n = net(ms("p1" -> 1))
         val mode = Binding.bind(Binding.empty, p, "p0")
-        assert(n.fire("advance", mode) == Left(HlNet.FiringError.NotEnabled("advance")))
+        n.fire("advance", mode) match
+            case Left(HlNet.FiringError.ArcNotEnabled(flow, _, _)) =>
+                assert(flow == Flow.Pt("pending", "advance"))
+            case other => fail(s"expected ArcNotEnabled, got $other")
     }
 
     test("firing an unknown transition is rejected") {
         val n = net(ms("p0" -> 1))
         val mode = Binding.bind(Binding.empty, p, "p0")
         assert(n.fire("nope", mode) == Left(HlNet.FiringError.TransitionNotFound("nope")))
+    }
+
+    test("a read self-loop (Pt + Tp on the same place) requires presence but leaves it unchanged") {
+        val n = HlNet(
+          placesMap = Map[String, ColoredPlace[String]]("ref" -> Tokens(ms("p0" -> 1), peer)),
+          transitionsMap = Map("observe" -> HlTransition(List(p), Guard.True)),
+          arcsMap = Map(
+            Flow.Pt("ref", "observe") -> InscribedArc(wp),
+            Flow.Tp("observe", "ref") -> InscribedArc(wp)
+          )
+        )
+        val _ = assert(!n.isModeEnabled("observe", Binding.bind(Binding.empty, p, "p1")))
+        val fired = n.fire("observe", Binding.bind(Binding.empty, p, "p0")).toOption.get
+        assert(fired.placesMap("ref").marking == ms("p0" -> 1))
     }

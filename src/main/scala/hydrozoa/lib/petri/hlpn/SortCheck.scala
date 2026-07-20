@@ -13,19 +13,16 @@ package hydrozoa.lib.petri.hlpn
 object SortCheck:
 
     /** Every sort error in `net`, empty if it is well-sorted. */
-    def errors[PlaceId, TransitionId, ArcId, C](
-        net: HlNet[PlaceId, TransitionId, ArcId, C]
+    def errors[PlaceId, TransitionId, C](
+        net: HlNet[PlaceId, TransitionId, C]
     ): List[SortError] =
-        val guardErrors = net.transitions.toList.flatMap { (_, decl) =>
+        val guardErrors = net.transitionsMap.toList.flatMap { (_, decl) =>
             walkGuard(decl.guard, decl.variables)
         }
-        val arcErrors = net.arcs.toList.flatMap { (arcId, arc) =>
-            val declared = net.transitions.get(arc.transition).map(_.variables).getOrElse(Nil)
-            inscriptionOf(arc.semantics) match
-                case None => Nil
-                case Some(inscription) =>
-                    walkInscription(inscription, declared) ++
-                        domainErrors(arcId.toString, arc.place, inscription, net.places)
+        val arcErrors = net.arcsMap.toList.flatMap { (flow, arc) =>
+            val declared = net.transitionsMap.get(flow.transition).map(_.variables).getOrElse(Nil)
+            walkInscription(arc.inscription, declared) ++
+                domainErrors(flow.toString, flow.place, arc.inscription, net.placesMap)
         }
         guardErrors ++ arcErrors
 
@@ -93,13 +90,6 @@ object SortCheck:
             case Sort.Dot               => "Dot"
             case Sort.Class(n, _, _, _) => n
             case Sort.Prod(left, right) => s"(${name(left)}, ${name(right)})"
-
-    private def inscriptionOf[C](semantics: ArcSemanticsH[C]): Option[Inscription[C]] =
-        semantics match
-            case ArcSemanticsH.Consume(i) => Some(i)
-            case ArcSemanticsH.Produce(i) => Some(i)
-            case ArcSemanticsH.Read(i)    => Some(i)
-            case _                        => None
 
 /** A static well-sortedness violation in a net's terms. */
 enum SortError:

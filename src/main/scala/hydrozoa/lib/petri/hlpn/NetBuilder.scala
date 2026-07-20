@@ -2,36 +2,37 @@ package hydrozoa.lib.petri.hlpn
 
 import cats.data.{NonEmptyList, State, ValidatedNel}
 import cats.syntax.all.*
+import hydrozoa.lib.petri.net.components.Arc
 
 /** The build program: a `State` over the accumulating declarations. Building never fails — `place`
-  * / `transition` / `arc` only record and hand back typed refs — so this is a plain state monad,
-  * threaded with a `for`-comprehension. Errors are deferred entirely to [[NetBuilder.build]], which
-  * validates with accumulation.
+  * / `transition` / `input` / `output` only record and hand back typed refs — so this is a plain
+  * state monad, threaded with a `for`-comprehension. Errors are deferred entirely to
+  * [[NetBuilder.build]], which validates with accumulation.
   */
-type Build[PlaceId, TransitionId, ArcId, A] =
-    State[NetBuilder.Accum[PlaceId, TransitionId, ArcId], A]
+type Build[PlaceId, TransitionId, A] = State[NetBuilder.Accum[PlaceId, TransitionId], A]
 
 /** A typed assembly for an [[HlNet]]: each place is declared with its own color type and yields a
-  * typed [[PlaceRef]]; an arc wires a place ref to a transition ref, and its color must equal the
-  * ref's — a `Peer`-arc on a `Vote`-place does not compile. [[build]] runs the program, then
-  * validates with `ValidatedNel` so every id clash and dangling reference is reported at once, and
-  * erases the per-place colors to `Any` (sound because agreement was checked at wiring).
+  * typed [[PlaceRef]]; an arc is wired with [[input]] (`(p,t) ∈ F`) or [[output]] (`(t,p) ∈ F`),
+  * and its inscription's color must equal the place ref's — a `Peer`-inscription on a `Vote`-place
+  * does not compile. [[build]] runs the program, then validates with `ValidatedNel` so every id
+  * clash, duplicate flow element, and dangling reference is reported at once, and erases the
+  * per-place colors to `Any` (sound because agreement was checked at wiring).
   *
-  * Fix the three id types once per net, then assemble in a `for`-comprehension:
+  * Fix the two id types once per net, then assemble in a `for`-comprehension:
   * {{{
-  * val b = NetBuilder[String, String, String]()
+  * val b = NetBuilder[String, String]()
   * val program = for
-  *     in  <- b.place("in", somePlace)          // PlaceRef[String, Peer]
+  *     in  <- b.place("in", somePlace)              // PlaceRef[String, Peer]
   *     t   <- b.transition("t", List(x), guard)
-  *     _   <- b.arc("a", in, t, Consume(wPeer)) // wPeer: ArcSemanticsH[Peer] — checked against `in`
+  *     _   <- b.input(in, t, wPeer)                 // wPeer: Inscription[Peer] — checked against `in`
   * yield ()
-  * val net = b.build(program)                   // ValidatedNel[Error, HlNet[..., Any]]
+  * val net = b.build(program)                       // ValidatedNel[Error, HlNet[String, String, Any]]
   * }}}
   */
-final class NetBuilder[PlaceId, TransitionId, ArcId]:
+final class NetBuilder[PlaceId, TransitionId]:
     import NetBuilder.{Accum, Error}
 
-    private type B[A] = Build[PlaceId, TransitionId, ArcId, A]
+    private type B[A] = Build[PlaceId, TransitionId, A]
 
     /** Declare a colored place; returns a typed handle for wiring its arcs. */
     def place[C](id: PlaceId, place: ColoredPlace[C]): B[PlaceRef[PlaceId, C]] =
@@ -47,28 +48,44 @@ final class NetBuilder[PlaceId, TransitionId, ArcId]:
         guard: Guard
     ): B[TransitionRef[TransitionId]] =
         State { accum =>
-            val decl = HlNet.Transition(variables.asInstanceOf[List[Var[Any]]], guard)
+            val decl = HlTransition[Any](variables.asInstanceOf[List[Var[Any]]], guard)
             (accum.copy(transitions = accum.transitions :+ (id -> decl)), TransitionRef.wrap(id))
         }
 
-    /** Wire an arc. The arc semantics' color `C` unifies with the place ref's `C`, so a color
-      * mismatch does not compile.
+    /** Wire an input arc `(p,t) ∈ F` with annotation `W(p,t) = inscription`. The inscription's
+      * color `C` unifies with the place ref's, so a color mismatch does not compile.
       */
-    def arc[C](
-        id: ArcId,
+    def input[C](
         place: PlaceRef[PlaceId, C],
         transition: TransitionRef[TransitionId],
-        semantics: ArcSemanticsH[C]
+        inscription: Inscription[C]
     ): B[Unit] =
         State { accum =>
-            val arc = HlNet.Arc(place.id, transition.id, semantics.asInstanceOf[ArcSemanticsH[Any]])
-            (accum.copy(arcs = accum.arcs :+ (id -> arc)), ())
+            val entry =
+                Arc.Flow.Pt(place.id, transition.id) ->
+                    InscribedArc(inscription).asInstanceOf[InscribedArc[Any]]
+            (accum.copy(arcs = accum.arcs :+ entry), ())
         }
 
-    /** Run the program and validate it, accumulating every id clash and dangling reference. */
+    /** Wire an output arc `(t,p) ∈ F` with annotation `W(t,p) = inscription`. */
+    def output[C](
+        transition: TransitionRef[TransitionId],
+        place: PlaceRef[PlaceId, C],
+        inscription: Inscription[C]
+    ): B[Unit] =
+        State { accum =>
+            val entry =
+                Arc.Flow.Tp(transition.id, place.id) ->
+                    InscribedArc(inscription).asInstanceOf[InscribedArc[Any]]
+            (accum.copy(arcs = accum.arcs :+ entry), ())
+        }
+
+    /** Run the program and validate it, accumulating every id clash, duplicate flow element, and
+      * dangling reference.
+      */
     def build[A](
         program: B[A]
-    ): ValidatedNel[Error[PlaceId, TransitionId, ArcId], HlNet[PlaceId, TransitionId, ArcId, Any]] =
+    ): ValidatedNel[Error, HlNet[PlaceId, TransitionId, Any]] =
         val accum = program.runS(Accum.empty).value
         val placeIds = accum.places.map(_._1).toSet
         val transitionIds = accum.transitions.map(_._1).toSet
@@ -76,15 +93,11 @@ final class NetBuilder[PlaceId, TransitionId, ArcId]:
         val placesV = uniqueMap(accum.places)(Error.DuplicatePlace(_))
         val transitionsV = uniqueMap(accum.transitions)(Error.DuplicateTransition(_))
         val arcsV = uniqueMap(accum.arcs)(Error.DuplicateArc(_)).andThen { arcs =>
-            val dangling = accum.arcs.flatMap { case (arcId, arc) =>
-                Option
-                    .unless(placeIds.contains(arc.place))(
-                      Error.ArcMissingPlace(arcId, arc.place)
-                    )
-                    .toList ++
+            val dangling = accum.arcs.flatMap { (flow, _) =>
+                Option.unless(placeIds.contains(flow.place))(Error.ArcMissingPlace(flow)).toList ++
                     Option
-                        .unless(transitionIds.contains(arc.transition))(
-                          Error.ArcMissingTransition(arcId, arc.transition)
+                        .unless(transitionIds.contains(flow.transition))(
+                          Error.ArcMissingTransition(flow)
                         )
                         .toList
             }
@@ -93,28 +106,47 @@ final class NetBuilder[PlaceId, TransitionId, ArcId]:
 
         (placesV, transitionsV, arcsV).mapN(HlNet(_, _, _))
 
-    /** Collect the entries into a map, reporting one error per duplicated id. */
-    private def uniqueMap[K, V, E](entries: List[(K, V)])(dup: K => E): ValidatedNel[E, Map[K, V]] =
+    /** Collect the entries into a map, reporting one error per duplicated key. */
+    private def uniqueMap[K, V](entries: List[(K, V)])(
+        dup: K => Error
+    ): ValidatedNel[Error, Map[K, V]] =
         val dups = entries.groupBy(_._1).collect { case (k, vs) if vs.sizeIs > 1 => dup(k) }.toList
         NonEmptyList.fromList(dups).fold(entries.toMap.validNel)(_.invalid)
 
 object NetBuilder:
 
     /** The accumulated declarations, colors erased to `Any` as they are recorded. */
-    final case class Accum[PlaceId, TransitionId, ArcId](
+    final case class Accum[PlaceId, TransitionId](
         places: List[(PlaceId, ColoredPlace[Any])],
-        transitions: List[(TransitionId, HlNet.Transition[Any])],
-        arcs: List[(ArcId, HlNet.Arc[PlaceId, TransitionId, Any])]
+        transitions: List[(TransitionId, HlTransition[Any])],
+        arcs: List[(Arc.Flow[PlaceId, TransitionId], InscribedArc[Any])]
     )
 
     object Accum:
-        def empty[PlaceId, TransitionId, ArcId]: Accum[PlaceId, TransitionId, ArcId] =
+        def empty[PlaceId, TransitionId]: Accum[PlaceId, TransitionId] =
             Accum(Nil, Nil, Nil)
 
     /** Why assembly failed. */
-    enum Error[+PlaceId, +TransitionId, +ArcId]:
-        case DuplicatePlace(id: PlaceId)
-        case DuplicateTransition(id: TransitionId)
-        case DuplicateArc(id: ArcId)
-        case ArcMissingPlace(arc: ArcId, place: PlaceId)
-        case ArcMissingTransition(arc: ArcId, transition: TransitionId)
+    sealed trait Error
+
+    object Error:
+        /** A place id declared twice. */
+        final case class DuplicatePlace[PlaceId](id: PlaceId) extends Error
+
+        /** A transition id declared twice. */
+        final case class DuplicateTransition[TransitionId](id: TransitionId) extends Error
+
+        /** A flow element wired twice — `W` must be a function on `F`. */
+        final case class DuplicateArc[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ) extends Error
+
+        /** An arc references a place that was never declared. */
+        final case class ArcMissingPlace[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ) extends Error
+
+        /** An arc references a transition that was never declared. */
+        final case class ArcMissingTransition[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ) extends Error
