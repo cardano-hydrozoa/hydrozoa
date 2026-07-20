@@ -139,108 +139,36 @@ private object MultisetOps {
         vOtherMonoid: AdditiveMonoid[VOther],
         vResultMonoid: AdditiveMonoid[VResult]
     ): Multiset[K, VResult] = {
-        import scala.annotation.tailrec
-        import scala.collection.mutable
-        import scala.math.Ordered.orderingToOrdered
+        val selfIter = self.multiplicityMap.iterator.buffered
+        val otherIter = other.multiplicityMap.iterator.buffered
+        val builder = SortedMap.newBuilder[K, VResult]
 
-        val selfIterator: Iterator[(K, VSelf)] = self.multiplicityMap.iterator
-        val otherIterator: Iterator[(K, VOther)] = other.multiplicityMap.iterator
-        val resultBuilder: mutable.Builder[(K, VResult), SortedMap[K, VResult]] =
-            SortedMap.newBuilder
+        inline def append(k: K, v: VResult): Unit =
+            if v != vResultMonoid.zero then builder += (k -> v)
 
-        inline def processBoth(x: (K, VSelf), y: (K, VOther)): (K, VResult) =
-            (x._1, combiner(x._2, y._2))
+        while selfIter.hasNext && otherIter.hasNext do
+            val (kx, vx) = selfIter.head
+            val (ky, vy) = otherIter.head
+            val cmp = kOrder.compare(kx, ky)
+            if cmp < 0 then
+                append(kx, combiner(vx, vOtherMonoid.zero))
+                selfIter.next()
+            else if cmp > 0 then
+                append(ky, combiner(vSelfMonoid.zero, vy))
+                otherIter.next()
+            else
+                append(kx, combiner(vx, vy))
+                selfIter.next()
+                otherIter.next()
 
-        inline def processSelf(x: (K, VSelf)): (K, VResult) =
-            (x._1, combiner(x._2, vOtherMonoid.zero))
+        while selfIter.hasNext do
+            val (k, v) = selfIter.next()
+            append(k, combiner(v, vOtherMonoid.zero))
 
-        inline def processOther(y: (K, VOther)): (K, VResult) =
-            (y._1, combiner(vSelfMonoid.zero, y._2))
+        while otherIter.hasNext do
+            val (k, v) = otherIter.next()
+            append(k, combiner(vSelfMonoid.zero, v))
 
-        inline def appendNonZero(
-            builder: mutable.Builder[(K, VResult), SortedMap[K, VResult]],
-            z: (K, VResult)
-        ): Unit = if z._2 == vResultMonoid.zero then () else builder += z
-
-        inline def concatNonZero(
-            builder: mutable.Builder[(K, VResult), SortedMap[K, VResult]],
-            m: Iterator[(K, VResult)]
-        ): Unit = builder ++= m.iterator.filterNot(_._2 == vResultMonoid.zero)
-
-        // Warning: this function mutates its arguments!
-        @tailrec
-        def loop(
-            x: (K, VSelf),
-            xs: Iterator[(K, VSelf)],
-            y: (K, VOther),
-            ys: Iterator[(K, VOther)],
-            builder: mutable.Builder[(K, VResult), SortedMap[K, VResult]]
-        ): SortedMap[K, VResult] = {
-            if x._1 < y._1 then {
-                // Process `x` now and `y` later
-                appendNonZero(builder, processSelf(x))
-                if xs.hasNext then {
-                    // Continue looping with the next `x` and same `y`
-                    val xNext = xs.next()
-                    loop(xNext, xs, y, ys, builder)
-                } else {
-                    // Process `y` and the remaining `ys` and return
-                    appendNonZero(builder, processOther(y))
-                    concatNonZero(builder, ys.map(processOther))
-                    builder.result()
-                }
-            } else if x._1 == y._1 then {
-                // Process both `x` and `y` now
-                appendNonZero(builder, processBoth(x, y))
-                if xs.hasNext then
-                    if ys.hasNext then {
-                        // Continue looping with the next `x` and next `y`
-                        val xNext = xs.next()
-                        val yNext = ys.next()
-                        loop(xNext, xs, yNext, ys, builder)
-                    } else {
-                        // Process the remaining `xs` and return
-                        concatNonZero(builder, xs.map(processSelf))
-                        builder.result()
-                    }
-                else {
-                    // Process the remaining `ys` and return
-                    concatNonZero(builder, ys.map(processOther))
-                    builder.result()
-                }
-            } else {
-                // Process `y` now and `x` later
-                appendNonZero(builder, processOther(y))
-                if ys.hasNext then {
-                    // Continue looping with the same `x` and next `y`
-                    val yNext = ys.next()
-                    loop(x, xs, yNext, ys, builder)
-                } else {
-                    // Process `x` and the remaining `xs` and return
-                    appendNonZero(builder, processSelf(x))
-                    concatNonZero(builder, xs.map(processSelf))
-                    builder.result()
-                }
-            }
-        }
-
-        val newCanonicalMap = if selfIterator.hasNext then {
-            if otherIterator.hasNext then {
-                // Start looping with the first entries in `self` and `other`
-                val selfFirst = selfIterator.next()
-                val otherFirst = otherIterator.next()
-                loop(selfFirst, selfIterator, otherFirst, otherIterator, resultBuilder)
-            } else {
-                // Process the entries in `self` and return
-                concatNonZero(resultBuilder, selfIterator.map(processSelf))
-                resultBuilder.result()
-            }
-        } else {
-            // Process the entries in `other` and return
-            concatNonZero(resultBuilder, otherIterator.map(processOther))
-            resultBuilder.result()
-        }
-
-        Multiset(newCanonicalMap)
+        Multiset(builder.result())
     }
 }
