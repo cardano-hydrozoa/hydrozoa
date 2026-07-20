@@ -2,7 +2,10 @@ package hydrozoa.multisig.persistence
 
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.recovery.CursorScan
 import java.nio.ByteBuffer
@@ -33,6 +36,18 @@ trait ConsensusStoreReader[F[_]]:
       * confirmation moment.
       */
     def hardConfirmation(num: StackNumber): F[Option[Timestamped[StackEffects.HardConfirmed]]]
+
+    /** One head peer's assigned requests, in request-number order (that author's Request journal).
+      */
+    def requestsOf(peer: HeadPeerNumber): F[List[UserRequestWithId]]
+
+    /** One assigned request, if persisted. */
+    def request(peer: HeadPeerNumber, num: RequestNumber): F[Option[UserRequestWithId]]
+
+    /** The block that locally processed a request, plus its validity verdict — absent while the
+      * request is still unprocessed.
+      */
+    def requestBlock(peer: HeadPeerNumber, num: RequestNumber): F[Option[RequestBlockEntry]]
 
 object ConsensusStoreReader:
 
@@ -65,6 +80,24 @@ object ConsensusStoreReader:
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] =
                 persistence.get(StoreKey.HardConfirmation(num))
 
+            def requestsOf(peer: HeadPeerNumber): IO[List[UserRequestWithId]] =
+                CursorScan.cursorWalk(
+                  persistence.backend,
+                  Cf.Request(peer),
+                  JournalKey.Request(peer, RequestNumber.zero).encode,
+                  keyBytes =>
+                      JournalKey.Request(peer, RequestNumber(ByteBuffer.wrap(keyBytes).getLong))
+                )((key, valueBytes) => key.decodeValue(valueBytes).payload)
+
+            def request(peer: HeadPeerNumber, num: RequestNumber): IO[Option[UserRequestWithId]] =
+                persistence.get(JournalKey.Request(peer, num)).map(_.map(_.payload))
+
+            def requestBlock(
+                peer: HeadPeerNumber,
+                num: RequestNumber
+            ): IO[Option[RequestBlockEntry]] =
+                persistence.get(StoreKey.RequestBlockIndex(peer, num))
+
     /** A reader over no data — every lookup is empty. For wiring the routes on a node whose store
       * is absent or irrelevant (test and harness setups).
       */
@@ -79,3 +112,12 @@ object ConsensusStoreReader:
             def hardConfirmation(
                 num: StackNumber
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] = IO.pure(None)
+            def requestsOf(peer: HeadPeerNumber): IO[List[UserRequestWithId]] = IO.pure(Nil)
+            def request(
+                peer: HeadPeerNumber,
+                num: RequestNumber
+            ): IO[Option[UserRequestWithId]] = IO.pure(None)
+            def requestBlock(
+                peer: HeadPeerNumber,
+                num: RequestNumber
+            ): IO[Option[RequestBlockEntry]] = IO.pure(None)

@@ -2,8 +2,10 @@ package hydrozoa.multisig.server
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import io.bullet.borer.Cbor
 import io.circe.Codec
@@ -148,6 +150,91 @@ object ApiDto {
         case _: BlockBrief.Minor => "minor"
         case _: BlockBrief.Major => "major"
         case _: BlockBrief.Final => "final"
+
+    /** One row of the head-wide request listing: the full request id and the request type. */
+    final case class RequestSummaryView(requestId: RequestIdView, requestType: String)
+    given Codec[RequestSummaryView] = deriveCodec
+
+    /** One row of a single peer's request listing: the request number (the peer is the path) and
+      * the request type.
+      */
+    final case class PeerRequestSummaryView(requestNumber: Long, requestType: String)
+    given Codec[PeerRequestSummaryView] = deriveCodec
+
+    /** A request's lifecycle status from this node's viewpoint: `UNPROCESSED`, `LOCALLY_PROCESSED`,
+      * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. `relatedEffects` is
+      * always absent for now (per-request effect tracking is a separate change).
+      */
+    final case class RequestStatusView(
+        status: String,
+        blockNumber: Option[Int],
+        validity: Option[String],
+        softConfirmedAt: Option[String],
+        hardConfirmedAt: Option[String],
+        relatedEffects: Option[List[Int]]
+    )
+    given Codec[RequestStatusView] = deriveCodec
+
+    /** The request-details body: id, type, receive time, and the lifecycle status. */
+    final case class RequestDetailsView(
+        requestId: RequestIdView,
+        requestType: String,
+        receivedAt: String,
+        status: RequestStatusView
+    )
+    given Codec[RequestDetailsView] = deriveCodec
+
+    /** The request type discriminator, matching the submit-body field names. */
+    def requestTypeName(request: UserRequestWithId): String = request match
+        case _: UserRequestWithId.DepositRequest     => "deposit"
+        case _: UserRequestWithId.TransactionRequest => "transaction"
+
+    /** Map a request to its head-wide listing row. */
+    def mkRequestSummaryView(request: UserRequestWithId): RequestSummaryView =
+        RequestSummaryView(mkRequestIdView(request.requestId), requestTypeName(request))
+
+    /** Map a request to its per-peer listing row. */
+    def mkPeerRequestSummaryView(request: UserRequestWithId): PeerRequestSummaryView =
+        PeerRequestSummaryView(request.requestId.requestNum.convert, requestTypeName(request))
+
+    private def validityName(validity: ValidityFlag): String = validity match
+        case ValidityFlag.Valid   => "valid"
+        case ValidityFlag.Invalid => "invalid"
+
+    /** Assemble the request-status view from its resolved lifecycle stages: the processing block
+      * and verdict (absent while unprocessed) and the node-local confirmation moments.
+      */
+    def mkRequestStatusView(
+        block: Option[(Int, ValidityFlag)],
+        softConfirmedAt: Option[Instant],
+        hardConfirmedAt: Option[Instant]
+    ): RequestStatusView =
+        val status = block match
+            case None => "UNPROCESSED"
+            case Some(_) =>
+                if hardConfirmedAt.isDefined then "HARD_CONFIRMED"
+                else if softConfirmedAt.isDefined then "SOFT_CONFIRMED"
+                else "LOCALLY_PROCESSED"
+        RequestStatusView(
+          status = status,
+          blockNumber = block.map(_._1),
+          validity = block.map((_, v) => validityName(v)),
+          softConfirmedAt = softConfirmedAt.map(_.toString),
+          hardConfirmedAt = hardConfirmedAt.map(_.toString),
+          relatedEffects = None
+        )
+
+    /** Map a request plus its resolved status to the details body. */
+    def mkRequestDetailsView(
+        request: UserRequestWithId,
+        status: RequestStatusView
+    ): RequestDetailsView =
+        RequestDetailsView(
+          requestId = mkRequestIdView(request.requestId),
+          requestType = requestTypeName(request),
+          receivedAt = request.receivedAt.toString,
+          status = status
+        )
 
     /** A utxo reference, `{ transaction_id, index }` (CIP-0116). */
     final case class TxInputView(transaction_id: String, index: Int)
