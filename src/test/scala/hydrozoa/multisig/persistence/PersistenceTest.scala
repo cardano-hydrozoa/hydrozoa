@@ -173,7 +173,7 @@ class PersistenceTest extends AnyFunSuite:
         val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
         try
             val program = for
-                // First open (generation N): take a stamp and its conversion.
+                // First open bumps to a fresh generation and anchors it; take a stamp + conversion.
                 firstOpen <- RocksDbBackendStore
                     .open(tempDir, testCfs, tracer)
                     .use(backend =>
@@ -182,8 +182,10 @@ class PersistenceTest extends AnyFunSuite:
                             .flatMap(p => p.arrivalStamp.flatMap(s => p.wallClockOf(s).map(s -> _)))
                     )
                 (oldStamp, firstWall) = firstOpen
-                // Second open (generation N+1): the older generation's anchor is still present, so
-                // the stamp taken before the re-open still converts.
+                // Re-opening bumps to the next generation with its own anchor (each open is a new
+                // generation — a recovery is always a fresh instance). The previous generation's
+                // anchor persists, so its stamp still converts to the same wall clock through the
+                // new instance's per-generation lookup.
                 secondWall <- RocksDbBackendStore
                     .open(tempDir, testCfs, tracer)
                     .use(backend =>
