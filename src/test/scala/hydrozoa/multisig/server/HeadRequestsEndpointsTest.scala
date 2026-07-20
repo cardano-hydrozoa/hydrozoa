@@ -97,22 +97,16 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   requests.getOrElse(peer, Nil).map(r => Timestamped(stampFor(receivedAt), r))
                 )
-            def request(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[Timestamped[UserRequestWithId]]] =
+            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =
                 IO.pure(
                   requests
-                      .getOrElse(peer, Nil)
-                      .find(_.requestId.requestNum == num)
+                      .getOrElse(id.peerNum, Nil)
+                      .find(_.requestId == id)
                       .map(r => Timestamped(stampFor(receivedAt), r))
                 )
-            def requestBlock(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[RequestBlockEntry]] =
+            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] =
                 IO.pure(
-                  processed.filter(_ => peer == peer0 && num == RequestNumber(0))
+                  processed.filter(_ => id == RequestId(peer0, RequestNumber(0)))
                 )
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))

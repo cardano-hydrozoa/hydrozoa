@@ -4,7 +4,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.ack.HardAckNumber
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult as LedgerBlockResult}
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap as JointEvacuationMap
 import hydrozoa.multisig.ledger.l1.deposits.map.DepositsMap
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -31,8 +31,8 @@ import hydrozoa.multisig.persistence.codec.{BlockResultCodec, CoilStampMarkCodec
   *     [[StoreKey.RequestHighWater]] — `Cf.RequestHighWater`, keyed by `blockNum`.
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
-  *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by
-  *     `(author, requestNum)`. [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by
+  *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
+  *     request id (its packed i64). [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by
   *     `blockNum`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
@@ -111,16 +111,16 @@ object StoreKey:
         def encode: Array[Byte] = JournalKey.intBytes(num)
 
     /** Key for [[Cf.RequestBlockIndex]] — the request → (block, validity) reverse index, keyed by
-      * `(author, requestNum)` as `[peer:4][requestNum:8]` big-endian, so one author's rows form a
-      * contiguous key-prefix range. Written by JL in the same atomic bundle as the block that
-      * locally processed the request.
+      * the opaque [[RequestId]] via its packed i64 (`asI64`), big-endian. The author sits in the
+      * high bits, so one author's rows still form a contiguous key-prefix range. Written by JL in
+      * the same atomic bundle as the block that locally processed the request.
       */
-    final case class RequestBlockIndex(peer: HeadPeerNumber, num: RequestNumber) extends StoreKey:
+    final case class RequestBlockIndex(id: RequestId) extends StoreKey:
         type Value = RequestBlockEntry
         import RequestBlockEntry.given
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.RequestBlockIndex
-        def encode: Array[Byte] = JournalKey.intBytes(peer) ++ JournalKey.longBytes(num)
+        def encode: Array[Byte] = JournalKey.longBytes(id.asI64)
 
     /** Key for [[Cf.BlockStackIndex]] — the block → stack reverse index, keyed by `blockNum`,
       * holding the [[StackNumber]] of the stack that hard-confirmed the block. Written by SCA in

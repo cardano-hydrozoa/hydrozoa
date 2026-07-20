@@ -5,7 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.recovery.CursorScan
 import java.nio.ByteBuffer
@@ -45,12 +45,12 @@ trait ConsensusStoreReader[F[_]]:
     def requestsOf(peer: HeadPeerNumber): F[List[Timestamped[UserRequestWithId]]]
 
     /** One assigned request paired with its receive stamp, if persisted. */
-    def request(peer: HeadPeerNumber, num: RequestNumber): F[Option[Timestamped[UserRequestWithId]]]
+    def request(id: RequestId): F[Option[Timestamped[UserRequestWithId]]]
 
     /** The block that locally processed a request, plus its validity verdict — absent while the
       * request is still unprocessed.
       */
-    def requestBlock(peer: HeadPeerNumber, num: RequestNumber): F[Option[RequestBlockEntry]]
+    def requestBlock(id: RequestId): F[Option[RequestBlockEntry]]
 
     /** The wall-clock instant an arrival stamp was recorded at, via the store's per-generation
       * zero-time anchor. `None` for a stamp whose generation predates the anchor.
@@ -100,19 +100,13 @@ object ConsensusStoreReader:
                     Timestamped(jv.stamp, jv.payload)
                 )
 
-            def request(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[Timestamped[UserRequestWithId]]] =
+            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =
                 persistence
-                    .get(JournalKey.Request(peer, num))
+                    .get(JournalKey.Request(id.peerNum, id.requestNum))
                     .map(_.map(jv => Timestamped(jv.stamp, jv.payload)))
 
-            def requestBlock(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[RequestBlockEntry]] =
-                persistence.get(StoreKey.RequestBlockIndex(peer, num))
+            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] =
+                persistence.get(StoreKey.RequestBlockIndex(id))
 
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 persistence.wallClockOf(stamp)
@@ -133,12 +127,6 @@ object ConsensusStoreReader:
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] = IO.pure(None)
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(Nil)
-            def request(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
-            def requestBlock(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[RequestBlockEntry]] = IO.pure(None)
+            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
+            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)

@@ -1,5 +1,4 @@
 package hydrozoa.multisig.persistence
-// recompile-marker
 
 import cats.effect.IO
 import cats.syntax.traverse.*
@@ -111,9 +110,9 @@ object StoreDump:
         s"  ${renderKey(cf, key)} -> ${value.length} bytes"
 
     /** Pretty-print a key. Journal CFs go through [[JournalKey.decode]]; spine-indexed metadata CFs
-      * decode as 4-byte big-endian `Int`; `RequestBlockIndex` decodes as `[peer:4][requestNum:8]`;
-      * `Meta` decodes as UTF-8; singleton snapshot CFs show "(singleton)"; anything malformed falls
-      * back to a hex dump.
+      * decode as 4-byte big-endian `Int`; `RequestBlockIndex` decodes as the packed i64; `Meta`
+      * decodes as UTF-8; singleton snapshot CFs show "(singleton)"; anything malformed falls back
+      * to a hex dump.
       */
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
@@ -129,9 +128,7 @@ object StoreDump:
                 if key.length == 4 then s"HardConfirmation(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.RequestBlockIndex =>
-                if key.length == 12 then
-                    val buf = ByteBuffer.wrap(key)
-                    s"RequestBlockIndex(${buf.getInt}, ${buf.getLong})"
+                if key.length == 8 then s"RequestBlockIndex(i64=${ByteBuffer.wrap(key).getLong})"
                 else hex(key)
             case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
                 if key.isEmpty then "(singleton)" else hex(key)

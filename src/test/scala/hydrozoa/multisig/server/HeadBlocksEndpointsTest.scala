@@ -12,7 +12,7 @@ import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
@@ -143,16 +143,11 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 )
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(Nil)
-            def request(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
+            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =
+                IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))
-            def requestBlock(
-                peer: HeadPeerNumber,
-                num: RequestNumber
-            ): IO[Option[RequestBlockEntry]] = IO.pure(None)
+            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
         ActorSystem[IO]("HeadBlocksEndpointsTest")

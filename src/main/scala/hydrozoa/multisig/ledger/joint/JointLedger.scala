@@ -698,7 +698,7 @@ final case class JointLedger(
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
             // to the block that processed it and the validity verdict it received.
             brief.events.foldLeft(bundle) { case (batch, (requestId, validity)) =>
-                batch.put(StoreKey.RequestBlockIndex(requestId.peerNum, requestId.requestNum))(
+                batch.put(StoreKey.RequestBlockIndex(requestId))(
                   RequestBlockEntry(brief.blockNum, validity)
                 )
             }

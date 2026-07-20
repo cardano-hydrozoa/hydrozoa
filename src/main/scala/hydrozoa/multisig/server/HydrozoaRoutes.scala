@@ -9,7 +9,7 @@ import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.ApiDto.*
@@ -236,7 +236,7 @@ class HydrozoaRoutes(
                   "same request. This is by design."
             )
             .serverLogic(id =>
-                requestDetails(id.peerNum, id.requestNum)
+                requestDetails(id)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -559,15 +559,14 @@ class HydrozoaRoutes(
             }
 
     private def requestDetails(
-        peer: HeadPeerNumber,
-        num: RequestNumber
+        id: RequestId
     ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
-        consensusReader.request(peer, num).flatMap {
-            case None => IO.pure(Left(requestNotFound(peer, num)))
+        consensusReader.request(id).flatMap {
+            case None => IO.pure(Left(requestNotFound(id)))
             case Some(stamped) =>
                 for {
                     receivedAt <- consensusReader.wallClockOf(stamped.stamp)
-                    processed <- consensusReader.requestBlock(peer, num)
+                    processed <- consensusReader.requestBlock(id)
                     confirmation <- processed match {
                         case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
                         case Some(entry) => confirmationTimes(entry.blockNum)
@@ -581,14 +580,8 @@ class HydrozoaRoutes(
                 } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
         }
 
-    private def requestNotFound(
-        peer: HeadPeerNumber,
-        num: RequestNumber
-    ): (StatusCode, ErrorResponse) =
-        fail(
-          StatusCode.NotFound,
-          s"Request ${RequestId(peer, num).asI64} not found"
-        )
+    private def requestNotFound(id: RequestId): (StatusCode, ErrorResponse) =
+        fail(StatusCode.NotFound, s"Request ${id.asI64} not found")
 
     private def blockNotFound(num: BlockNumber): (StatusCode, ErrorResponse) =
         fail(StatusCode.NotFound, s"Block ${num.convert} not found")

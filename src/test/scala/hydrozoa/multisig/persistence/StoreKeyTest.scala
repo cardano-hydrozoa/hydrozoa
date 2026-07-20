@@ -3,7 +3,7 @@ package hydrozoa.multisig.persistence
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -27,7 +27,7 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
           StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
-          StoreKey.RequestBlockIndex(HeadPeerNumber(0), RequestNumber(0)) ->
+          StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
               Cf.RequestBlockIndex,
           StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta
@@ -52,18 +52,15 @@ class StoreKeyTest extends AnyFunSuite:
         }
     }
 
-    test("RequestBlockIndex keys encode as [peer:4][requestNum:8], author-prefix-ordered") {
-        val k = StoreKey.RequestBlockIndex(HeadPeerNumber(1), RequestNumber(7))
-        val _ = assert(k.encode.length == 12, s"encoded to ${k.encode.length} bytes, expected 12")
-        // Same author: lex order == request-number order.
-        val a = StoreKey.RequestBlockIndex(HeadPeerNumber(1), RequestNumber(1)).encode
-        val b = StoreKey.RequestBlockIndex(HeadPeerNumber(1), RequestNumber(2)).encode
-        val _ = assert(java.util.Arrays.compareUnsigned(a, b) < 0)
-        // Different authors: the author prefix dominates, keeping each author's rows contiguous.
-        // (1L << 40) - 1 is RequestNumber's maximum — the 40-bit half of the packed i64 form.
-        val c = StoreKey.RequestBlockIndex(HeadPeerNumber(0), RequestNumber((1L << 40) - 1)).encode
-        val d = StoreKey.RequestBlockIndex(HeadPeerNumber(1), RequestNumber(0)).encode
-        assert(java.util.Arrays.compareUnsigned(c, d) < 0)
+    test("RequestBlockIndex keys encode as the packed-i64 RequestId, author-prefix-ordered") {
+        def key(peer: Int, num: Long) =
+            StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(peer), RequestNumber(num))).encode
+        val _ = assert(key(1, 7).length == 8, s"encoded to ${key(1, 7).length} bytes, expected 8")
+        // Same author: lex order == request-number order (the low bits of the i64).
+        val _ = assert(java.util.Arrays.compareUnsigned(key(1, 1), key(1, 2)) < 0)
+        // Different authors: the author sits in the high bits, so each author's rows stay
+        // contiguous. (1L << 40) - 1 is RequestNumber's maximum — the 40-bit low half.
+        assert(java.util.Arrays.compareUnsigned(key(0, (1L << 40) - 1), key(1, 0)) < 0)
     }
 
     test("singleton snapshot keys all encode to the same empty key") {
