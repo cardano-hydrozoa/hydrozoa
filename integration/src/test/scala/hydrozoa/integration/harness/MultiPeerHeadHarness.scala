@@ -28,7 +28,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{BackendStore, Cf, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
 import java.nio.file.{Files, Path}
@@ -1120,6 +1120,8 @@ object MultiPeerHeadHarness:
               conns.blockWeaver,
               // The harness runs no head lifecycle, so readiness is a constant Active.
               IO.pure(NodeStatus.Active),
+              // No consensus-store reader in the harness — the block queries are unit-tested.
+              ConsensusStoreReader.empty,
               // No EUTXO L2-query reader in the harness — the SubmissionClient uses the write path.
               None,
               nodeConfig.headConfig,
