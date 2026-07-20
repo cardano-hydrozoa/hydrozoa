@@ -69,8 +69,7 @@ object BlockWeaverTestHelpers {
             )
         } yield UserRequestWithId(
           userRequest = userRequest,
-          requestId = requestId,
-          receivedAt = Instant.EPOCH
+          requestId = requestId
         )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =

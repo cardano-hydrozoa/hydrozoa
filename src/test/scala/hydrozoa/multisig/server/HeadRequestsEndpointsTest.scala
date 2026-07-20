@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
 import io.circe.Json
 import java.time.Instant
 import org.http4s.circe.*
@@ -41,22 +41,34 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
     private val softAt = Instant.parse("2026-01-01T00:01:00Z")
     private val hardAt = Instant.parse("2026-01-01T00:05:00Z")
 
+    private val nanosPerSecond = 1_000_000_000L
+
+    /** Encode an instant into an arrival stamp's monotonic field, and back, so the stub's
+      * `wallClockOf` round-trips the moments the tests assert on.
+      */
+    private def stampFor(t: Instant): ArrivalStamp =
+        ArrivalStamp(0, t.getEpochSecond * nanosPerSecond + t.getNano)
+    private def instantOf(stamp: ArrivalStamp): Instant =
+        Instant.ofEpochSecond(
+          stamp.monotonicNanos / nanosPerSecond,
+          stamp.monotonicNanos % nanosPerSecond
+        )
+
     private def txRequest(peer: HeadPeerNumber, num: Long): UserRequestWithId =
         UserRequestWithId(
           TransactionRequest(TransactionRequestBody(ByteString.empty)),
-          RequestId(peer, RequestNumber(num)),
-          receivedAt
+          RequestId(peer, RequestNumber(num))
         )
 
     private def depositRequest(peer: HeadPeerNumber, num: Long): UserRequestWithId =
         UserRequestWithId(
           DepositRequest(DepositRequestBody(ByteString.empty, ByteString.empty)),
-          RequestId(peer, RequestNumber(num)),
-          receivedAt
+          RequestId(peer, RequestNumber(num))
         )
 
-    /** A reader over a fixed per-peer request map, plus an optional lifecycle for request
-      * `(peer0, 0)`: its processing block/verdict and that block's confirmation moments.
+    /** A reader over a fixed per-peer request map (each request stamped at `receivedAt`), plus an
+      * optional lifecycle for request `(peer0, 0)`: its processing block/verdict and that block's
+      * confirmation moments.
       */
     private def stubReader(
         requests: Map[HeadPeerNumber, List[UserRequestWithId]],
@@ -70,18 +82,30 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             def softConfirmation(
                 num: BlockNumber
             ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] =
-                IO.pure(softBlock.collect { case (b, at) if b == num => Timestamped(at, null) })
+                IO.pure(softBlock.collect {
+                    case (b, at) if b == num => Timestamped(stampFor(at), null)
+                })
             def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
                 IO.pure(hardStack.collect { case (b, s, _) if b == num => s })
             def hardConfirmation(
                 num: StackNumber
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] =
-                IO.pure(hardStack.collect { case (_, s, at) if s == num => Timestamped(at, null) })
-            def requestsOf(peer: HeadPeerNumber): IO[List[UserRequestWithId]] =
-                IO.pure(requests.getOrElse(peer, Nil))
-            def request(peer: HeadPeerNumber, num: RequestNumber): IO[Option[UserRequestWithId]] =
+                IO.pure(hardStack.collect {
+                    case (_, s, at) if s == num => Timestamped(stampFor(at), null)
+                })
+            def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(
-                  requests.getOrElse(peer, Nil).find(_.requestId.requestNum == num)
+                  requests.getOrElse(peer, Nil).map(r => Timestamped(stampFor(receivedAt), r))
+                )
+            def request(
+                peer: HeadPeerNumber,
+                num: RequestNumber
+            ): IO[Option[Timestamped[UserRequestWithId]]] =
+                IO.pure(
+                  requests
+                      .getOrElse(peer, Nil)
+                      .find(_.requestId.requestNum == num)
+                      .map(r => Timestamped(stampFor(receivedAt), r))
                 )
             def requestBlock(
                 peer: HeadPeerNumber,
@@ -90,6 +114,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   processed.filter(_ => peer == peer0 && num == RequestNumber(0))
                 )
+            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
+                IO.pure(Some(instantOf(stamp)))
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
         ActorSystem[IO]("HeadRequestsEndpointsTest")

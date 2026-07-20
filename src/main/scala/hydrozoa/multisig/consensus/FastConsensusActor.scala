@@ -300,11 +300,12 @@ class FastConsensusActor(
         // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
         // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
         // the subsumed soft-acks (no compaction on confirmation). The value carries this node's
-        // local confirmation moment (the instant its signature set saturated).
-        now <- IO.realTimeInstant
+        // local confirmation moment as an arrival stamp — a wall-clock instant is derived on read
+        // via the per-generation zero-time anchor, so none is stored.
+        stamp <- persistence.arrivalStamp
         _ <- persistence.write(
           WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(
-            Timestamped(now, confirmed)
+            Timestamped(stamp, confirmed)
           )
         )
 

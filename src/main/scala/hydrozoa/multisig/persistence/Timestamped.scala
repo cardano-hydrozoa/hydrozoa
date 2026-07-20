@@ -2,21 +2,35 @@ package hydrozoa.multisig.persistence
 
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
-import java.time.Instant
 
-/** A persisted value paired with the local wall-clock instant this node recorded it. Used by the
-  * confirmation CFs: a soft/hard confirmation moment is a per-node observation (each peer's
-  * signature set saturates at its own time), so the stamp is node-local diagnostic data — never
-  * consensus state.
+/** A persisted value paired with the [[ArrivalStamp]] this node recorded it at. Used by the
+  * confirmation CFs (which, unlike journal CFs, carry no arrival-stamp framing of their own): a
+  * soft/hard confirmation moment is a per-node observation, stored as the monotonic `(generation,
+  * monotonicNanos)` stamp rather than a wall-clock instant — the wall-clock time is derived on read
+  * from the per-generation zero-time anchor ([[Persistence.zeroTimes]]), so no wall clock is ever
+  * persisted.
   */
-final case class Timestamped[P](at: Instant, payload: P)
+final case class Timestamped[P](stamp: ArrivalStamp, payload: P)
 
 object Timestamped:
+    given arrivalStampEncoder: Encoder[ArrivalStamp] =
+        (s: ArrivalStamp) =>
+            Json.obj(
+              "generation" -> s.generation.asJson,
+              "monotonicNanos" -> s.monotonicNanos.asJson
+            )
+
+    given arrivalStampDecoder: Decoder[ArrivalStamp] = c =>
+        for {
+            generation <- c.downField("generation").as[Int]
+            monotonicNanos <- c.downField("monotonicNanos").as[Long]
+        } yield ArrivalStamp(generation, monotonicNanos)
+
     given [P: Encoder]: Encoder[Timestamped[P]] =
-        (t: Timestamped[P]) => Json.obj("at" -> t.at.asJson, "payload" -> t.payload.asJson)
+        (t: Timestamped[P]) => Json.obj("stamp" -> t.stamp.asJson, "payload" -> t.payload.asJson)
 
     given [P: Decoder]: Decoder[Timestamped[P]] = c =>
         for {
-            at <- c.downField("at").as[Instant]
+            stamp <- c.downField("stamp").as[ArrivalStamp]
             payload <- c.downField("payload").as[P]
-        } yield Timestamped(at, payload)
+        } yield Timestamped(stamp, payload)

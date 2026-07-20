@@ -380,7 +380,6 @@ components:
       - requestId
       - peerNumber
       - requestType
-      - receivedAt
       - status
       properties:
         requestId:

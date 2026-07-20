@@ -431,8 +431,7 @@ object JointLedgerTestHelpers {
                 req =
                     UserRequestWithId(
                       userRequest = request,
-                      requestId = requestId,
-                      receivedAt = java.time.Instant.EPOCH
+                      requestId = requestId
                     )
 
                 _ <- registerDeposit(req)

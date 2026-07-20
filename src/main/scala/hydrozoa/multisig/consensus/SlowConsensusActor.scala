@@ -386,10 +386,10 @@ final case class SlowConsensusActor(
         brief: StackBrief,
         signed: StackEffects.HardConfirmed
     ): IO[Unit] = for {
-        now <- IO.realTimeInstant
+        stamp <- persistence.arrivalStamp
         blockRange = ((brief.firstBlockNum: Int) to (brief.lastBlockNum: Int)).toList
         batch = blockRange.foldLeft(
-          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(Timestamped(now, signed))
+          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(Timestamped(stamp, signed))
         )((b, n) => b.put(StoreKey.BlockStackIndex(BlockNumber(n)))(stackNum))
         _ <- persistence.write(batch)
     } yield ()

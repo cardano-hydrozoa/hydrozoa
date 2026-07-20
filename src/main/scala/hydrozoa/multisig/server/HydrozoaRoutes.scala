@@ -514,8 +514,9 @@ class HydrozoaRoutes(
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
         confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
 
-    /** This node's `(soft, hard)` confirmation moments for a block: the soft-confirmation record's
-      * stamp, and — through the block → stack index — the hard-confirmation record's stamp.
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
+      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
+      * stack index — the hard-confirmation record.
       */
     private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
@@ -525,7 +526,9 @@ class HydrozoaRoutes(
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-        } yield (soft.map(_.at), hard.map(_.at))
+            softAt <- soft.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
+            hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
+        } yield (softAt, hardAt)
 
     /** The request-details body for `(peer, num)`, or a 404 when the head has assigned no such id.
       * The lifecycle status resolves through the request → block index and the block's confirmation
@@ -545,7 +548,7 @@ class HydrozoaRoutes(
         peers
             .traverse(consensusReader.requestsOf)
             .map { perPeer =>
-                val rows = perPeer.flatten.map(ApiDto.mkRequestSummaryView)
+                val rows = perPeer.flatten.map(t => ApiDto.mkRequestSummaryView(t.payload))
                 Right(typeFilter.fold(rows)(t => rows.filter(_.requestType == t)))
             }
 
@@ -555,8 +558,9 @@ class HydrozoaRoutes(
     ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
         consensusReader.request(peer, num).flatMap {
             case None => IO.pure(Left(requestNotFound(peer, num)))
-            case Some(request) =>
+            case Some(stamped) =>
                 for {
+                    receivedAt <- consensusReader.wallClockOf(stamped.stamp)
                     processed <- consensusReader.requestBlock(peer, num)
                     confirmation <- processed match {
                         case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
@@ -568,7 +572,7 @@ class HydrozoaRoutes(
                       softConfirmedAt = softAt,
                       hardConfirmedAt = hardAt
                     )
-                } yield Right(ApiDto.mkRequestDetailsView(request, status))
+                } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
         }
 
     private def requestNotFound(

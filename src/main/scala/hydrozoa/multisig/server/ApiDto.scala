@@ -171,14 +171,15 @@ object ApiDto {
     )
     given Codec[RequestStatusView] = deriveCodec
 
-    /** The request-details body: opaque id (echoed from the path), author peer, type, receive time,
-      * and the lifecycle status.
+    /** The request-details body: opaque id (echoed from the path), author peer, type, receive time
+      * (the node-local wall clock derived from the request's arrival stamp), and the lifecycle
+      * status.
       */
     final case class RequestDetailsView(
         requestId: Long,
         peerNumber: Int,
         requestType: String,
-        receivedAt: String,
+        receivedAt: Option[String],
         status: RequestStatusView
     )
     given Codec[RequestDetailsView] = deriveCodec
@@ -223,16 +224,17 @@ object ApiDto {
           relatedEffects = None
         )
 
-    /** Map a request plus its resolved status to the details body. */
+    /** Map a request, its derived receive time, and its resolved status to the details body. */
     def mkRequestDetailsView(
         request: UserRequestWithId,
+        receivedAt: Option[Instant],
         status: RequestStatusView
     ): RequestDetailsView =
         RequestDetailsView(
           requestId = request.requestId.asI64,
           peerNumber = request.requestId.peerNum.convert,
           requestType = requestTypeName(request),
-          receivedAt = request.receivedAt.toString,
+          receivedAt = receivedAt.map(_.toString),
           status = status
         )
 

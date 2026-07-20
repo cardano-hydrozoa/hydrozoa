@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import io.circe.Json
 import java.time.Instant
@@ -40,6 +40,19 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
 
     private val softAt = Instant.parse("2026-01-01T00:00:00Z")
     private val hardAt = Instant.parse("2026-01-01T00:05:00Z")
+
+    private val nanosPerSecond = 1_000_000_000L
+
+    /** Encode an instant into an arrival stamp's monotonic field, and back, so the stub's
+      * `wallClockOf` round-trips the confirmation moments the tests assert on.
+      */
+    private def stampFor(t: Instant): ArrivalStamp =
+        ArrivalStamp(0, t.getEpochSecond * nanosPerSecond + t.getNano)
+    private def instantOf(stamp: ArrivalStamp): Instant =
+        Instant.ofEpochSecond(
+          stamp.monotonicNanos / nanosPerSecond,
+          stamp.monotonicNanos % nanosPerSecond
+        )
 
     /** A minimal minor brief for block 1, timed off the head's slot config. */
     private def mkMinorBrief1: IO[BlockBrief.Minor] =
@@ -108,7 +121,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   Option.when(soft && num == BlockNumber(1))(
                     Timestamped(
-                      softAt,
+                      stampFor(softAt),
                       Block.SoftConfirmed
                           .Minor(
                             brief,
@@ -123,12 +136,19 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             def hardConfirmation(
                 num: StackNumber
             ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] =
-                IO.pure(Option.when(hard && num == StackNumber(1))(Timestamped(hardAt, hardRecord)))
-            def requestsOf(peer: HeadPeerNumber): IO[List[UserRequestWithId]] = IO.pure(Nil)
+                IO.pure(
+                  Option.when(hard && num == StackNumber(1))(
+                    Timestamped(stampFor(hardAt), hardRecord)
+                  )
+                )
+            def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
+                IO.pure(Nil)
             def request(
                 peer: HeadPeerNumber,
                 num: RequestNumber
-            ): IO[Option[UserRequestWithId]] = IO.pure(None)
+            ): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
+                IO.pure(Some(instantOf(stamp)))
             def requestBlock(
                 peer: HeadPeerNumber,
                 num: RequestNumber

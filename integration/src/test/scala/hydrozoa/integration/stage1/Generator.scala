@@ -35,7 +35,6 @@ import java.util.concurrent.TimeUnit
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
-import java.time.Instant
 import scala.concurrent.duration.{DurationInt, FiniteDuration}
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.cardano.address.ShelleyAddress
@@ -404,8 +403,7 @@ object CommandGenerators:
             requestId = state.nextRequestId,
             request = UserRequest.TransactionRequest(
               body = body.asInstanceOf[TransactionRequestBody]
-            ),
-            receivedAt = Instant.EPOCH
+            )
           ),
           txStrategy = txStrategy,
           txMutator = txMutator
@@ -547,8 +545,7 @@ object CommandGenerators:
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
                                             body = body.asInstanceOf[DepositRequestBody]
-                                          ),
-                                          receivedAt = Instant.EPOCH
+                                          )
                                         ),
                                         depositRefundTxSeq = depositRefundSeq,
                                         depositTxBytesSigned = depositTxSigned

@@ -4,7 +4,6 @@ import cats.effect.IO
 import hydrozoa.lib.actor.SyncRequest
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.ledger.event.RequestId
-import java.time.Instant
 import scalus.cardano.ledger.{Hash, Hash32}
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
@@ -89,33 +88,24 @@ enum UserRequestWithId {
     def requestId: RequestId
     def request: UserRequest
 
-    /** Wall-clock time the author peer received the request, stamped at id assignment (CR1) and
-      * consensus-replicated with the request.
-      */
-    def receivedAt: Instant
-
     case DepositRequest(
         override val requestId: RequestId,
         override val request: UserRequest.DepositRequest,
-        override val receivedAt: Instant,
     )
 
     case TransactionRequest(
         override val requestId: RequestId,
         override val request: UserRequest.TransactionRequest,
-        override val receivedAt: Instant,
     )
 }
 
 object UserRequestWithId {
     def apply(
         userRequest: UserRequest,
-        requestId: RequestId,
-        receivedAt: Instant
+        requestId: RequestId
     ): UserRequestWithId = userRequest match {
-        case req: UserRequest.DepositRequest =>
-            UserRequestWithId.DepositRequest(requestId, req, receivedAt)
+        case req: UserRequest.DepositRequest => UserRequestWithId.DepositRequest(requestId, req)
         case req: UserRequest.TransactionRequest =>
-            UserRequestWithId.TransactionRequest(requestId, req, receivedAt)
+            UserRequestWithId.TransactionRequest(requestId, req)
     }
 }
