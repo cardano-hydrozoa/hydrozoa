@@ -178,9 +178,10 @@ class HydrozoaRoutes(
             .errorOut(errorOut)
             .description(
               "One block's type, leader, and confirmation status: PROPOSED, SOFT (+ " +
-                  "soft-confirmation time), or HARD (+ hard-confirmation time). The " +
-                  "confirmation times are this node's own observations — node-local, so different " +
-                  "peers report different times for the same block. This is by design."
+                  "soft-confirmation time), or HARD (+ hard-confirmation time). Each confirmation " +
+                  "time records a local event at this peer — when it produced the soft/hard " +
+                  "confirmation — so different peers report different times for the same block. " +
+                  "This is by design."
             )
             .serverLogic(num =>
                 blockDetails(num)
@@ -229,10 +230,10 @@ class HydrozoaRoutes(
             .description(
               "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
                   "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
-                  "time), or HARD_CONFIRMED (+ hard-confirmation time). All times are this " +
-                  "node's own observations — receive time and soft/hard-confirmation times are " +
-                  "node-local, so different peers report different times for the same request. " +
-                  "This is by design."
+                  "time), or HARD_CONFIRMED (+ hard-confirmation time). Every time records a " +
+                  "local event at this peer — when it received the request, and when it produced " +
+                  "the soft/hard confirmation — so different peers report different times for the " +
+                  "same request. This is by design."
             )
             .serverLogic(id =>
                 requestDetails(id.peerNum, id.requestNum)

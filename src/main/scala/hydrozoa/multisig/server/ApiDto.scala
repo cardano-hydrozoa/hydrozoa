@@ -100,8 +100,8 @@ object ApiDto {
     given Codec[BlockSummaryView] = deriveCodec
 
     /** A block's confirmation from this node's viewpoint: `PROPOSED`, `SOFT`, or `HARD`, with the
-      * confirmation moments (ISO-8601) where reached. The times are **node-local** — each peer
-      * records when its own signature set saturated, so different peers report different times for
+      * confirmation moments (ISO-8601) where reached. Each time records a **local event at this
+      * peer** — when it produced the confirmation — so different peers report different times for
       * the same block. This is by design.
       */
     final case class BlockConfirmationView(
@@ -160,10 +160,10 @@ object ApiDto {
     given Codec[RequestSummaryView] = deriveCodec
 
     /** A request's lifecycle status from this node's viewpoint: `UNPROCESSED`, `LOCALLY_PROCESSED`,
-      * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. The confirmation
-      * times are **node-local** — different peers report different times for the same request, by
-      * design. `relatedEffects` is always absent for now (per-request effect tracking is a separate
-      * change).
+      * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. Each confirmation
+      * time records a **local event at this peer**, so different peers report different times for
+      * the same request. This is by design. `relatedEffects` is always absent for now (per-request
+      * effect tracking is a separate change).
       */
     final case class RequestStatusView(
         status: String,
@@ -176,8 +176,8 @@ object ApiDto {
     given Codec[RequestStatusView] = deriveCodec
 
     /** The request-details body: opaque id (echoed from the path), author peer, type, receive time
-      * (the node-local wall clock derived from the request's arrival stamp — different peers report
-      * different times for the same request, by design), and the lifecycle status.
+      * (when this peer received the request — a local event, so different peers report different
+      * times for the same request, by design), and the lifecycle status.
       */
     final case class RequestDetailsView(
         requestId: Long,
