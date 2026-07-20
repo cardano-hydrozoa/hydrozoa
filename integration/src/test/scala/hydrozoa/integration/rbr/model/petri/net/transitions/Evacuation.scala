@@ -4,56 +4,17 @@ import hydrozoa.integration.rbr.model.petri.net.*
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.integration.rbr.model.petri.net.Transitions.RBRTransitionId
 import hydrozoa.integration.rbr.model.petri.net.Transitions.RBRTransitionId.EvacuationId
-import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.lib.petri.MapNet
+import hydrozoa.lib.petri.net.components.Arc.Flow
 import hydrozoa.lib.petri.net.components.{Arc, Transition}
+import spire.math.Natural
 
 // =============================================================================
-// Arc ID
+// Arc value (annotation only — direction lives in the Flow key)
 // =============================================================================
 
-enum RBRArcId:
-    case ReadTreasury
-    case ReadResolved
-    case ReadSetupLadder
-    case SpendAmbient
-    case FulfillPayoutObligation
-    case SendEvacuationOutput
-    case UseCollateral
-
-object RBRArcId {
-    given Ordering[RBRArcId] = Ordering.by(_.ordinal)
-}
-
-// =============================================================================
-// Arc sealed hierarchy (no presentation)
-// =============================================================================
-
-sealed trait EvacuationArc
-    extends Arc.Topology[RBRPlaceId, RBRTransitionId],
-      Arc.Syntax,
-      Arc.Semantics[RBRPlace]
-
-case class EvacuationPTArc(
-    override val arcPlaceId: RBRPlaceId,
-    override val arcTransitionId: RBRTransitionId,
-    override val weight: PositiveInt,
-) extends EvacuationArc,
-      Arc.Semantics.PT[RBRPlace]
-
-case class EvacuationTPArc(
-    override val arcPlaceId: RBRPlaceId,
-    override val arcTransitionId: RBRTransitionId,
-    override val weight: PositiveInt,
-) extends EvacuationArc,
-      Arc.Semantics.TP[RBRPlace]
-
-case class EvacuationReadArc(
-    override val arcPlaceId: RBRPlaceId,
-    override val arcTransitionId: RBRTransitionId,
-    override val weight: PositiveInt,
-) extends EvacuationArc,
-      Arc.Semantics.Read[RBRPlace]
+case class EvacuationArc(override val weight: PositiveInt) extends Arc.Syntax.Weighted
 
 // =============================================================================
 // Transition (no presentation)
@@ -61,21 +22,33 @@ case class EvacuationReadArc(
 
 type RBRTransition = Transition.Topology & Transition.Syntax & Transition.Semantics
 
-private object EvacuatingTransition extends Transition.Topology, Transition.Syntax, Transition.Semantics
+private object EvacuatingTransition
+    extends Transition.Topology,
+      Transition.Syntax,
+      Transition.Semantics
 
 // =============================================================================
 // Net type alias and builder
 // =============================================================================
 
 type EvacuationNet =
-    MapNet[RBRArcId, RBRPlaceId, RBRTransitionId, EvacuationArc, RBRPlace, RBRTransition]
+    MapNet[
+      RBRPlaceId,
+      RBRTransitionId,
+      PositiveInt,
+      Natural,
+      EvacuationArc,
+      RBRPlace,
+      RBRTransition
+    ]
 
 object EvacuationNet {
 
     private val ops: MapNet.BuilderMOps[
-      RBRArcId,
       RBRPlaceId,
       RBRTransitionId,
+      PositiveInt,
+      Natural,
       EvacuationArc,
       RBRPlace,
       RBRTransition,
@@ -83,15 +56,18 @@ object EvacuationNet {
 
     import ops.*
 
+    private def weighted(weight: Int): EvacuationArc =
+        EvacuationArc(PositiveInt.unsafeApply(weight))
+
     /** Build a typed evacuation net parameterised on the ambient UTxO count, payout obligations,
       * head-peer count (for collateral and final markings), and payout batch size.
       *
-      * The topology mirrors the [[hydrozoa.lib.petri.Demo]] net exactly; the difference is that all
-      * IDs are typed enums and the place type carries domain-specific marking validation.
+      * Reference reads (treasury, resolved treasury, setup ladder, collateral) are self-loops: a
+      * `Pt` + `Tp` flow pair on the same place with equal weight.
       */
     def apply(
-        numAmbientUtxos: NonNegativeInt,
-        numPayoutObligations: NonNegativeInt,
+        numAmbientUtxos: Natural,
+        numPayoutObligations: Natural,
         nHeadPeers: Int,
         payoutBatchSize: Int = 63,
     ): EvacuationNet = {
@@ -100,15 +76,15 @@ object EvacuationNet {
             _ <- addPlace(
               TreasuryRefPlaceId,
               TreasuryRefPlace(
-                marking = NonNegativeInt.unsafeApply(1),
-                finalMarking = Some(NonNegativeInt.unsafeApply(1)),
+                marking = Natural.one,
+                finalMarking = Some(Natural.one),
               ),
             )
             _ <- addPlace(
               ResolvedTreasuryPlaceId,
               ResolvedPlace(
-                marking = NonNegativeInt.unsafeApply(1),
-                finalMarking = Some(NonNegativeInt.unsafeApply(1)),
+                marking = Natural.one,
+                finalMarking = Some(Natural.one),
               ),
             )
             _ <- addPlace(SetupLadderRefPlaceId, SetupLadderRefPlace())
@@ -120,59 +96,34 @@ object EvacuationNet {
             _ <- addPlace(
               EvacuationOutputPlaceId,
               EvacuationOutputPlace(
-                marking = NonNegativeInt.unsafeApply(0),
-                finalMarking = Some(NonNegativeInt.unsafeApply(nHeadPeers * payoutBatchSize)),
+                marking = Natural.zero,
+                finalMarking = Some(Natural((nHeadPeers * payoutBatchSize).toLong)),
               ),
             )
             _ <- addPlace(
               CollateralPlaceId,
               CollateralPlace(
-                marking = NonNegativeInt.unsafeApply(nHeadPeers),
+                marking = Natural(nHeadPeers.toLong),
                 expectedCount = nHeadPeers,
-                finalMarking = Some(NonNegativeInt.unsafeApply(nHeadPeers)),
+                finalMarking = Some(Natural(nHeadPeers.toLong)),
               ),
             )
             // ---- Transitions ----
             _ <- addTransition(EvacuationId, EvacuatingTransition)
             // ---- Arcs ----
-            _ <- addArc(
-              RBRArcId.ReadTreasury,
-              EvacuationReadArc(TreasuryRefPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
-            )
-            _ <- addArc(
-              RBRArcId.ReadResolved,
-              EvacuationReadArc(ResolvedTreasuryPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
-            )
+            _ <- addArc(Flow.Pt(TreasuryRefPlaceId, EvacuationId), weighted(1))
+            _ <- addArc(Flow.Tp(EvacuationId, TreasuryRefPlaceId), weighted(1))
+            _ <- addArc(Flow.Pt(ResolvedTreasuryPlaceId, EvacuationId), weighted(1))
+            _ <- addArc(Flow.Tp(EvacuationId, ResolvedTreasuryPlaceId), weighted(1))
             // Each evacuation reads exactly one setup-ladder rung
-            _ <- addArc(
-              RBRArcId.ReadSetupLadder,
-              EvacuationReadArc(SetupLadderRefPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
-            )
+            _ <- addArc(Flow.Pt(SetupLadderRefPlaceId, EvacuationId), weighted(1))
+            _ <- addArc(Flow.Tp(EvacuationId, SetupLadderRefPlaceId), weighted(1))
             // PT(3)+TP(1) on Ambient collapses to net -2
-            _ <- addArc(
-              RBRArcId.SpendAmbient,
-              EvacuationPTArc(AmbientPlaceId, EvacuationId, PositiveInt.unsafeApply(2)),
-            )
-            _ <- addArc(
-              RBRArcId.FulfillPayoutObligation,
-              EvacuationPTArc(
-                PayoutObligationsPlaceId,
-                EvacuationId,
-                PositiveInt.unsafeApply(payoutBatchSize),
-              ),
-            )
-            _ <- addArc(
-              RBRArcId.SendEvacuationOutput,
-              EvacuationTPArc(
-                EvacuationOutputPlaceId,
-                EvacuationId,
-                PositiveInt.unsafeApply(payoutBatchSize),
-              ),
-            )
-            _ <- addArc(
-              RBRArcId.UseCollateral,
-              EvacuationReadArc(CollateralPlaceId, EvacuationId, PositiveInt.unsafeApply(1)),
-            )
+            _ <- addArc(Flow.Pt(AmbientPlaceId, EvacuationId), weighted(2))
+            _ <- addArc(Flow.Pt(PayoutObligationsPlaceId, EvacuationId), weighted(payoutBatchSize))
+            _ <- addArc(Flow.Tp(EvacuationId, EvacuationOutputPlaceId), weighted(payoutBatchSize))
+            _ <- addArc(Flow.Pt(CollateralPlaceId, EvacuationId), weighted(1))
+            _ <- addArc(Flow.Tp(EvacuationId, CollateralPlaceId), weighted(1))
         } yield ()
 
         val Right((net, _)) = builder.runEmpty: @unchecked

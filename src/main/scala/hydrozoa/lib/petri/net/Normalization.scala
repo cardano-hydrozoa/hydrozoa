@@ -12,10 +12,7 @@ trait Normalization[Self <: Normalization[Self]] { self: Self =>
 
     /** Remove all topologically invalid elements according to implementation-specific logic. For
       * MapNet the default will be:
-      *   - Remove all arcs whose `arcPlaceId` or `arcTransitionId` is absent from the net's ID
-      *     sets.
-      *   - For each (place, transition) pair with duplicate arcs, retain only the first in ArcId
-      *     ordering; remove the rest.
+      *   - Remove all flow elements whose place or transition is absent from the net's ID sets.
       *
       * Post-condition:
       *

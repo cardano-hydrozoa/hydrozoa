@@ -2,28 +2,19 @@ package hydrozoa.lib.petri.net
 
 import cats.Monad
 import cats.data.StateT
-import cats.implicits.*
 import hydrozoa.lib.petri.net.components.*
-import scala.annotation.unused
 
 /** Abstract simulation interface for a net. Extends [[Net]] with the ability to fire transitions
   * and query enabledness.
   *
-  * [[Net.Semantics]] describes _what conditions must hold_ for a transition to fire
-  * (configuration). [[Simulator]] describes _how_ firing is performed (evaluation). The two are
-  * separate so that the same net structure can be paired with different simulators — pure vs.
-  * effectful, sequential vs. parallel.
+  * [[Net.Semantics]] describes the net's *configuration* (place/transition semantics, the
+  * filtering-function seam). [[Simulator]] implements the ISO 15909-1 *rules*: the enabling rule
+  * (Concept 6/10) and the firing rule (Concept 7/12). The two are separate so that the same net
+  * structure can be paired with different simulators — pure vs. effectful, sequential vs. parallel.
   *
-  * ## Firing semantics
-  *
-  * [[fire]] enforces all enabling conditions:
-  *   - Net-level: [[Net.Semantics.netEnablingPredicate]]
-  *   - E2 (arc-side): [[Arc.Semantics.enabled]] for every arc connected to the transition
-  *   - E1 (place-side): [[Place.Semantics.validMarking]] for every place after firing endos are
-  *     applied
-  *
-  * [[isEnabled]] is derived as `fire(t).isRight` (test-fire approach), so it captures all three
-  * levels of enabling in a single pass.
+  * [[isEnabled]] is derived as `fire(t).isRight` (test-fire approach), so it captures every
+  * enabling condition — including place validity, which thereby acts as an enabling filter (the
+  * capacity-enrichment behavior of ISO 15909-3, 5.2.5) — in a single pass.
   *
   * ## Monadic simulation
   *
@@ -33,24 +24,23 @@ import scala.annotation.unused
   * [[Simulator.Sim.enabledTransitions]] to build programs; [[Simulator.Sim.run]] to execute them.
   */
 trait Simulator[
-    ArcId,
     PlaceId,
     TransitionId,
-    A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+    A <: Arc.Syntax,
     P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
     T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-    Self <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, Self]
-] extends Net[ArcId, PlaceId, TransitionId, A, P, T, Self] {
+    Self <: Simulator[PlaceId, TransitionId, A, P, T, Self]
+] extends Net[PlaceId, TransitionId, A, P, T, Self] {
 
-    /** Fire transition `t`. Checks, in order:
+    /** Fire transition `t` (ISO Concept 7/12). Checks, in order:
       *   1. Transition exists in the net
-      *   2. [[Net.Semantics.netEnablingPredicate]] holds (net-level conditions)
-      *   3. [[Arc.Semantics.enabled]] holds for every arc connected to `t` (E2)
-      *   4. [[Arc.Semantics.fire]] succeeds for every arc connected to `t`
-      *   5. [[Place.Semantics.validMarking]] holds for every updated place (E1)
+      *   2. [[Net.Semantics.netEnablingPredicate]] holds (the filtering-function seam, Fε)
+      *   3. The enabling rule holds for every input arc (`M(p) ≥ W(p,t)`, Concept 10)
+      *   4. Every updated place satisfies its own marking invariants
+      *      ([[Place.Semantics.validMarking]])
       *
-      * All arc/place pairs are snapshotted before any firing endo is applied, so every endo is
-      * computed against the pre-fire state.
+      * On success the marking update is `M′(p) = M(p) − W(p,t) + W(t,p)` per connected place
+      * (Concept 12).
       */
     def fire(t: TransitionId): Either[Simulator.FiringError, Self]
 
@@ -58,9 +48,8 @@ trait Simulator[
     @throws[Simulator.FiringError]("if firing fails")
     final def fireUnsafe(t: TransitionId): Self = fire(t).fold(throw _, identity)
 
-    // Enabling is defined as: fire would succeed (test-fire approach).
-    // Arc-side enabling (E2) and place validity (E1) are both checked inside fire,
-    // so this captures all enabling conditions in a single pass.
+    // Enabling is defined as: fire would succeed (test-fire approach), capturing all enabling
+    // conditions in a single pass.
     final def isEnabled(t: TransitionId): Boolean = fire(t).isRight
 
     final def enabledTransitions: Set[TransitionId] = transitionIds.filter(isEnabled)
@@ -70,6 +59,10 @@ object Simulator {
     trait Error extends Net.Error
 
     /** Errors that can arise when firing a transition. Not sealed; extend for custom error cases.
+      *
+      * In ISO 15909-1 firing an *enabled* transition cannot fail (Concept 7 has no failure path),
+      * so every case here is an enabling-side failure or a validation bug — there are no
+      * post-enabling arithmetic errors.
       */
     trait FiringError extends Error
 
@@ -81,24 +74,19 @@ object Simulator {
             override def getMessage: String = s"Transition not found: $transitionId"
         }
 
-        /** Arc `arcId` connected to place `placeId` failed its enabling check (E2). */
-        case class ArcNotEnabled[ArcId, PlaceId](
-            arcId: ArcId,
-            placeId: PlaceId,
-            error: Arc.Semantics.EnablingError,
+        /** Input arc `flow` failed the enabling rule: the place's marking does not cover the arc's
+          * annotation (`M(p) ≥ W(p,t)` is false, Concept 10).
+          */
+        case class ArcNotEnabled[PlaceId, TransitionId, W, M](
+            flow: Arc.Flow[PlaceId, TransitionId],
+            marking: M,
+            annotation: W,
         ) extends FiringError {
             override def getMessage: String =
-                s"Arc $arcId on place $placeId is not enabled: ${error.getMessage}"
+                s"Input arc $flow is not enabled: marking $marking does not cover annotation $annotation"
         }
 
-        /** Arc `arcId`'s firing endo returned a [[Arc.Semantics.FiringError]]. */
-        case class ArcFiringFailed[ArcId](arcId: ArcId, cause: Arc.Semantics.FiringError)
-            extends FiringError {
-            override def getMessage: String =
-                s"Arc $arcId firing failed: ${cause.getMessage}"
-        }
-
-        /** Place `placeId` has an invalid marking constraint after firing (E1). */
+        /** Place `placeId` violates its own marking invariants after firing. */
         case class PlaceValidityViolated[PlaceId](
             placeId: PlaceId,
             cause: Place.Semantics.MarkingError,
@@ -139,14 +127,13 @@ object Simulator {
           * automatically; short-circuits with a [[Simulator.FiringError]] on failure.
           */
         def fire[
-            ArcId,
             PlaceId,
             TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+            A <: Arc.Syntax,
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ](t: TransitionId)(using @unused ordArcId: Ordering[ArcId]): Sim[S, Unit] =
+            S <: Simulator[PlaceId, TransitionId, A, P, T, S]
+        ](t: TransitionId): Sim[S, Unit] =
             StateT.modifyF(_.fire(t))
 
         /** Read-only access to the current net state. The only way to observe `S` from within a
@@ -155,25 +142,23 @@ object Simulator {
         def inspect[S, A](f: S => A): Sim[S, A] = StateT.inspect(f)
 
         def isEnabled[
-            ArcId,
             PlaceId,
             TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+            A <: Arc.Syntax,
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ](t: TransitionId)(using @unused ordArcId: Ordering[ArcId]): Sim[S, Boolean] =
+            S <: Simulator[PlaceId, TransitionId, A, P, T, S]
+        ](t: TransitionId): Sim[S, Boolean] =
             StateT.inspect(_.isEnabled(t))
 
         def enabledTransitions[
-            ArcId,
             PlaceId,
             TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+            A <: Arc.Syntax,
             P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-            S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-        ](using @unused ordArcId: Ordering[ArcId]): Sim[S, Set[TransitionId]] =
+            S <: Simulator[PlaceId, TransitionId, A, P, T, S]
+        ]: Sim[S, Set[TransitionId]] =
             StateT.inspect(_.enabledTransitions)
 
         // ----- Eliminators ---------------------------------------------------

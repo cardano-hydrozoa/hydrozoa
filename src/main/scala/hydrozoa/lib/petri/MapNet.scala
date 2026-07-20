@@ -4,14 +4,15 @@ import cats.Monad
 import cats.data.IndexedStateT
 import cats.implicits.*
 import hydrozoa.lib.petri.net.*
-import hydrozoa.lib.petri.net.Net.Semantics.Error
 import hydrozoa.lib.petri.net.components.*
 import scala.collection.immutable.TreeMap
 
 /** A full, canonical map-backed representation. Suitable for building and simulating typed nets.
-  * TreeMap is used internally for deterministic iteration order (ArcId / PlaceId / TransitionId
-  * ordering), which stabilises serialisation and makes firing order deterministic when multi-arcs
-  * are present.
+  * TreeMap is used internally for deterministic iteration order, which stabilises serialisation and
+  * makes firing order deterministic.
+  *
+  * The arc map is keyed by [[Arc.Flow]] elements: its key set is the flow relation `F` and the map
+  * itself is the annotation function `W : F → AN` (Concept 8) — a function by construction.
   *
   * MapNet is primarily suitable for _building_ nets rather than large-scale simulation. In
   * particular, determining whether a transition is enabled (via a test-fire) and actually firing
@@ -22,53 +23,55 @@ import scala.collection.immutable.TreeMap
   * bundled in a trait because it makes inference easier. Downstream code should prefer wrapper
   * types or type aliases.
   *
-  * @tparam ArcId
-  *   arc identity type (must have an [[Ordering]] for TreeMap)
   * @tparam PlaceId
   *   place identity type (must have an [[Ordering]] for TreeMap)
   * @tparam TransitionId
   *   transition identity type (must have an [[Ordering]] for TreeMap)
-  * @tparam P
-  *   concrete place type — must carry both syntax and semantics
+  * @tparam W
+  *   arc-annotation type (ISO's `W`)
+  * @tparam M
+  *   place-marking type
   * @tparam A
-  *   concrete arc type — must carry topology and semantics over [[P]]
+  *   concrete arc value type — carries the annotation
+  * @tparam P
+  *   concrete place type — carries syntax (marking type [[M]]) and semantics
   * @tparam T
   *   concrete transition type (currently a stub; no Transition.Semantics yet)
   */
 case class MapNet[
-    ArcId: Ordering,
     PlaceId: Ordering,
     TransitionId: Ordering,
-    A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-    P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+    W,
+    M,
+    A <: Arc.Syntax.Annotated[W],
+    P <: Place.Topology & Place.Syntax.Marked[P, M] & Place.Semantics[P],
     T <: Transition.Topology & Transition.Syntax & Transition.Semantics
 ](
     placesMap: TreeMap[PlaceId, P],
     transitionsMap: TreeMap[TransitionId, T],
-    arcsMap: TreeMap[ArcId, A]
-) extends SequentialSimulator[ArcId, PlaceId, TransitionId, A, P, T, MapNet[
-      ArcId,
+    arcsMap: TreeMap[Arc.Flow[PlaceId, TransitionId], A]
+)(using markingAlgebra: MarkingAlgebra[W, M])
+    extends SequentialSimulator[PlaceId, TransitionId, W, M, A, P, T, MapNet[
       PlaceId,
       TransitionId,
+      W,
+      M,
       A,
       P,
       T
     ]] {
 
     // ---------------------------------------------------------------------------
-    // net.Id
+    // net.Ids
     // ---------------------------------------------------------------------------
 
-    override val arcIds: Set[ArcId] = arcsMap.keySet
     override val placeIds: Set[PlaceId] = placesMap.keySet
     override val transitionIds: Set[TransitionId] = transitionsMap.keySet
+    override val flowRelation: Set[Arc.Flow[PlaceId, TransitionId]] = arcsMap.keySet
 
     // ---------------------------------------------------------------------------
-    // Net.Topology.Topology (via NoDanglingArcs / SingleArc mixin chain)
+    // Net.Topology.Topology (via NoDanglingArcs mixin chain)
     // ---------------------------------------------------------------------------
-
-    def getArcTopology(arcId: ArcId): Either[Net.Topology.MissingArcTopology[ArcId], A] =
-        arcsMap.get(arcId).toRight(Net.Topology.MissingArcTopology(arcId))
 
     def getPlaceTopology(placeId: PlaceId): Either[Net.Topology.MissingPlaceTopology[PlaceId], P] =
         placesMap.get(placeId).toRight(Net.Topology.MissingPlaceTopology(placeId))
@@ -80,7 +83,7 @@ case class MapNet[
             .get(transitionId)
             .toRight(Net.Topology.MissingTransitionTopology(transitionId))
 
-    // Net.Topology (outer) — bridge: delegate to the NoDanglingArcs/SingleArc mixin chain above.
+    // Net.Topology (outer) — bridge: delegate to the NoDanglingArcs mixin chain above.
     // Required because the inner Net.Topology.Topology and outer Net.Topology are separate trait
     // hierarchies; Scala does not auto-satisfy the outer abstract via the inner abstract-override chain.
     override def topologyErrors: List[Net.Topology.Error] = super.topologyErrors
@@ -89,8 +92,10 @@ case class MapNet[
     // Net.Syntax.Syntax
     // ---------------------------------------------------------------------------
 
-    def getArcSyntax(id: ArcId): Either[Net.Syntax.MissingArcSyntax[ArcId], A] =
-        arcsMap.get(id).toRight(Net.Syntax.MissingArcSyntax(id))
+    def getArcSyntax(
+        flow: Arc.Flow[PlaceId, TransitionId]
+    ): Either[Net.Syntax.MissingArcSyntax[PlaceId, TransitionId], A] =
+        arcsMap.get(flow).toRight(Net.Syntax.MissingArcSyntax(flow))
 
     def getPlaceSyntax(id: PlaceId): Either[Net.Syntax.MissingPlaceSyntax[PlaceId], P] =
         placesMap.get(id).toRight(Net.Syntax.MissingPlaceSyntax(id))
@@ -100,33 +105,34 @@ case class MapNet[
     ): Either[Net.Syntax.MissingTransitionSyntax[TransitionId], T] =
         transitionsMap.get(id).toRight(Net.Syntax.MissingTransitionSyntax(id))
 
-    // Net.Syntax (outer) — syntaxErrors default (List.empty) from Net.Syntax.Syntax satisfies the abstract.
-
     // ---------------------------------------------------------------------------
-    // Net.Semantics (outer)
+    // Net.Semantics (outer) — places and transitions only; arcs carry no semantics
     // ---------------------------------------------------------------------------
 
-    override def getArcSemantics(id: ArcId): Either[Error.MissingArcSemantics[ArcId], A] =
-        arcsMap.get(id).toRight(Net.Semantics.Error.MissingArcSemantics(id))
-
-    override def getPlaceSemantics(id: PlaceId): Either[Error.MissingPlaceSemantics[PlaceId], P] =
+    override def getPlaceSemantics(
+        id: PlaceId
+    ): Either[Net.Semantics.Error.MissingPlaceSemantics[PlaceId], P] =
         placesMap.get(id).toRight(Net.Semantics.Error.MissingPlaceSemantics(id))
 
     override def getTransitionSemantics(
         id: TransitionId
-    ): Either[Error.MissingTransitionSemantics[TransitionId], T] =
+    ): Either[Net.Semantics.Error.MissingTransitionSemantics[TransitionId], T] =
         transitionsMap.get(id).toRight(Net.Semantics.Error.MissingTransitionSemantics(id))
 
     // ---------------------------------------------------------------------------
     // SequentialSimulator
     // ---------------------------------------------------------------------------
 
-    override protected def arcsForTransition(t: TransitionId): List[(ArcId, A)] =
-        arcsMap.toList.collect { case (id, arc) if arc.arcTransitionId == t => (id, arc) }
+    override protected val algebra: MarkingAlgebra[W, M] = markingAlgebra
+
+    override protected def arcsForTransition(
+        t: TransitionId
+    ): List[(Arc.Flow[PlaceId, TransitionId], A)] =
+        arcsMap.toList.filter((flow, _) => flow.transition == t)
 
     override protected def withUpdatedPlaces(
         updates: Iterable[(PlaceId, P)]
-    ): MapNet[ArcId, PlaceId, TransitionId, A, P, T] =
+    ): MapNet[PlaceId, TransitionId, W, M, A, P, T] =
         this.copy(placesMap = placesMap ++ updates)
 }
 
@@ -137,13 +143,13 @@ object MapNet {
     // =========================================================================
 
     /** Errors that can arise when building a [[MapNet]] with [[BuilderMOps]]. */
-    enum BuilderError[ArcId, PlaceId, TransitionId]:
+    enum BuilderError[PlaceId, TransitionId]:
         case PlaceIdConflict(placeId: PlaceId)
         case PlaceIdMissing(placeId: PlaceId)
         case TransitionIdConflict(transitionId: TransitionId)
         case TransitionIdMissing(transitionId: TransitionId)
-        case ArcIdConflict(arcId: ArcId)
-        case ArcIdMissing(arcId: ArcId)
+        case ArcConflict(flow: Arc.Flow[PlaceId, TransitionId])
+        case ArcMissing(flow: Arc.Flow[PlaceId, TransitionId])
 
     // =========================================================================
     // empty
@@ -153,13 +159,14 @@ object MapNet {
       * [[BuilderM.runEmpty]].
       */
     def empty[
-        ArcId: Ordering,
         PlaceId: Ordering,
         TransitionId: Ordering,
-        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-        P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+        W,
+        M,
+        A <: Arc.Syntax.Annotated[W],
+        P <: Place.Topology & Place.Syntax.Marked[P, M] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-    ]: MapNet[ArcId, PlaceId, TransitionId, A, P, T] =
+    ](using MarkingAlgebra[W, M]): MapNet[PlaceId, TransitionId, W, M, A, P, T] =
         MapNet(TreeMap.empty, TreeMap.empty, TreeMap.empty)
 
     // =========================================================================
@@ -170,93 +177,94 @@ object MapNet {
       * Result]`.
       *
       * `map` and `flatMap` are defined directly on the class, so for-comprehensions work without
-      * any import. Programs are built via [[BuilderMOps]], which fixes the 6 net type parameters
-      * once so that operations infer cleanly at every call site. Execute with [[run]] or
-      * [[runEmpty]].
+      * any import. Programs are built via [[BuilderMOps]], which fixes the net type parameters once
+      * so that operations infer cleanly at every call site. Execute with [[run]] or [[runEmpty]].
       *
       * The monad short-circuits on the first [[BuilderError]].
       */
     final class BuilderM[
-        ArcId,
         PlaceId,
         TransitionId,
-        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-        P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+        W,
+        M,
+        A <: Arc.Syntax.Annotated[W],
+        P <: Place.Topology & Place.Syntax.Marked[P, M] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
         Result
     ] private[MapNet] (
         private[MapNet] val inner: IndexedStateT[
-          [X] =>> Either[BuilderError[ArcId, PlaceId, TransitionId], X],
-          MapNet[ArcId, PlaceId, TransitionId, A, P, T],
-          MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+          [X] =>> Either[BuilderError[PlaceId, TransitionId], X],
+          MapNet[PlaceId, TransitionId, W, M, A, P, T],
+          MapNet[PlaceId, TransitionId, W, M, A, P, T],
           Result
         ]
     ) {
         def map[B](
             f: Result => B
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B] =
+        ): BuilderM[PlaceId, TransitionId, W, M, A, P, T, B] =
             new BuilderM(inner.map(f))
 
         def flatMap[B](
-            f: Result => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B]
-        ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, B] =
+            f: Result => BuilderM[PlaceId, TransitionId, W, M, A, P, T, B]
+        ): BuilderM[PlaceId, TransitionId, W, M, A, P, T, B] =
             new BuilderM(inner.flatMap(r => f(r).inner))
 
         def run(
-            initial: MapNet[ArcId, PlaceId, TransitionId, A, P, T]
+            initial: MapNet[PlaceId, TransitionId, W, M, A, P, T]
         ): Either[
-          BuilderError[ArcId, PlaceId, TransitionId],
+          BuilderError[PlaceId, TransitionId],
           (
-              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+              MapNet[PlaceId, TransitionId, W, M, A, P, T],
               Result
           )
         ] = inner.run(initial)
 
         def runEmpty(using
-            Ordering[ArcId],
             Ordering[PlaceId],
-            Ordering[TransitionId]
+            Ordering[TransitionId],
+            MarkingAlgebra[W, M]
         ): Either[
-          BuilderError[ArcId, PlaceId, TransitionId],
+          BuilderError[PlaceId, TransitionId],
           (
-              MapNet[ArcId, PlaceId, TransitionId, A, P, T],
+              MapNet[PlaceId, TransitionId, W, M, A, P, T],
               Result
           )
-        ] = run(MapNet.empty[ArcId, PlaceId, TransitionId, A, P, T])
+        ] = run(MapNet.empty[PlaceId, TransitionId, W, M, A, P, T])
     }
 
     object BuilderM {
 
-        /** `Monad` instance for `BuilderM[ArcId, PlaceId, TransitionId, A, P, T, _]`. Provides
+        /** `Monad` instance for `BuilderM[PlaceId, TransitionId, W, M, A, P, T, _]`. Provides
           * `traverse`, `sequence`, and other derived Cats combinators when in scope.
           */
         given [
-            ArcId,
             PlaceId,
             TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-            P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+            W,
+            M,
+            A <: Arc.Syntax.Annotated[W],
+            P <: Place.Topology & Place.Syntax.Marked[P, M] & Place.Semantics[P],
             T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-        ]: Monad[[R] =>> BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]] with {
+        ]: Monad[[R] =>> BuilderM[PlaceId, TransitionId, W, M, A, P, T, R]] with {
 
-            private type BE = BuilderError[ArcId, PlaceId, TransitionId]
-            private type MN = MapNet[ArcId, PlaceId, TransitionId, A, P, T]
+            private type BE = BuilderError[PlaceId, TransitionId]
+            private type MN = MapNet[PlaceId, TransitionId, W, M, A, P, T]
 
-            override def pure[R](r: R): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R] =
+            override def pure[R](r: R): BuilderM[PlaceId, TransitionId, W, M, A, P, T, R] =
                 new BuilderM(IndexedStateT.pure(r))
 
             override def flatMap[R, S](
-                fa: BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]
+                fa: BuilderM[PlaceId, TransitionId, W, M, A, P, T, R]
             )(
-                f: R => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S]
-            ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S] =
+                f: R => BuilderM[PlaceId, TransitionId, W, M, A, P, T, S]
+            ): BuilderM[PlaceId, TransitionId, W, M, A, P, T, S] =
                 fa.flatMap(f)
 
             // Delegates to IndexedStateT's tailRecM by explicit type application to avoid
             // the circular implicit search that would arise from summon[Monad[BuilderM[...]]].
             override def tailRecM[R, S](r: R)(
-                f: R => BuilderM[ArcId, PlaceId, TransitionId, A, P, T, Either[R, S]]
-            ): BuilderM[ArcId, PlaceId, TransitionId, A, P, T, S] =
+                f: R => BuilderM[PlaceId, TransitionId, W, M, A, P, T, Either[R, S]]
+            ): BuilderM[PlaceId, TransitionId, W, M, A, P, T, S] =
                 new BuilderM(
                   Monad[[Y] =>> IndexedStateT[[X] =>> Either[BE, X], MN, MN, Y]]
                       .tailRecM(r)(r0 => f(r0).inner)
@@ -273,13 +281,13 @@ object MapNet {
       * applications.
       *
       * {{{
-      * val ops = MapNet.BuilderMOps[String, String, String, MyArc, MyPlace, MyTransition]()
+      * val ops = MapNet.BuilderMOps[String, String, PositiveInt, Natural, MyArc, MyPlace, MyTransition]()
       * import ops.*
       *
       * val program = for
       *     _ <- addPlace("p1", myPlace)
       *     _ <- addTransition("t1", myTransition)
-      *     _ <- addArc("a1", myArc)
+      *     _ <- addArc(Arc.Flow.Pt("p1", "t1"), myArc)
       * yield ()
       *
       * val net = program.runEmpty
@@ -292,16 +300,17 @@ object MapNet {
       * trailing `_` are _force_ variants: they silently overwrite or no-op instead of failing.
       */
     class BuilderMOps[
-        ArcId: Ordering,
         PlaceId: Ordering,
         TransitionId: Ordering,
-        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
-        P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
+        W,
+        M,
+        A <: Arc.Syntax.Annotated[W],
+        P <: Place.Topology & Place.Syntax.Marked[P, M] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics
-    ] {
-        private type BM[R] = BuilderM[ArcId, PlaceId, TransitionId, A, P, T, R]
-        private type MN = MapNet[ArcId, PlaceId, TransitionId, A, P, T]
-        private type BE = BuilderError[ArcId, PlaceId, TransitionId]
+    ](using MarkingAlgebra[W, M]) {
+        private type BM[R] = BuilderM[PlaceId, TransitionId, W, M, A, P, T, R]
+        private type MN = MapNet[PlaceId, TransitionId, W, M, A, P, T]
+        private type BE = BuilderError[PlaceId, TransitionId]
 
         private def lift[R](f: MN => Either[BE, (MN, R)]): BM[R] =
             new BuilderM(IndexedStateT(f))
@@ -396,38 +405,41 @@ object MapNet {
 
         // ----- Arc operations ------------------------------------------------
 
-        /** Add an arc. Fails with [[BuilderError.ArcIdConflict]] if `id` is already present. */
-        def addArc(id: ArcId, arc: A): BM[Unit] = lift(mn =>
-            if mn.arcsMap.contains(id) then Left(BuilderError.ArcIdConflict(id))
-            else Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ()))
+        /** Annotate flow element `flow` with `arc`. Fails with [[BuilderError.ArcConflict]] if the
+          * element is already annotated (`W` is a function on `F`).
+          */
+        def addArc(flow: Arc.Flow[PlaceId, TransitionId], arc: A): BM[Unit] = lift(mn =>
+            if mn.arcsMap.contains(flow) then Left(BuilderError.ArcConflict(flow))
+            else Right((mn.copy(arcsMap = mn.arcsMap.updated(flow, arc)), ()))
         )
 
-        /** Add or overwrite an arc, regardless of whether `id` already exists. */
-        def addArc_(id: ArcId, arc: A): BM[Unit] =
-            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, arc)), ())))
+        /** Annotate or re-annotate flow element `flow`, regardless of whether it is present. */
+        def addArc_(flow: Arc.Flow[PlaceId, TransitionId], arc: A): BM[Unit] =
+            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.updated(flow, arc)), ())))
 
-        /** Update an existing arc. Fails with [[BuilderError.ArcIdMissing]] if `id` is absent. */
-        def updateArc(id: ArcId)(f: A => A): BM[Unit] = lift(mn =>
-            mn.arcsMap.get(id) match
-                case None    => Left(BuilderError.ArcIdMissing(id))
-                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
+        /** Update an existing arc. Fails with [[BuilderError.ArcMissing]] if `flow` is absent. */
+        def updateArc(flow: Arc.Flow[PlaceId, TransitionId])(f: A => A): BM[Unit] = lift(mn =>
+            mn.arcsMap.get(flow) match
+                case None    => Left(BuilderError.ArcMissing(flow))
+                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(flow, f(a))), ()))
         )
 
-        /** Update an existing arc, or no-op if `id` is absent. */
-        def updateArc_(id: ArcId)(f: A => A): BM[Unit] = lift(mn =>
-            mn.arcsMap.get(id) match
+        /** Update an existing arc, or no-op if `flow` is absent. */
+        def updateArc_(flow: Arc.Flow[PlaceId, TransitionId])(f: A => A): BM[Unit] = lift(mn =>
+            mn.arcsMap.get(flow) match
                 case None    => Right((mn, ()))
-                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(id, f(a))), ()))
+                case Some(a) => Right((mn.copy(arcsMap = mn.arcsMap.updated(flow, f(a))), ()))
         )
 
-        /** Remove an arc. Fails with [[BuilderError.ArcIdMissing]] if `id` is absent. */
-        def removeArc(id: ArcId): BM[Unit] = lift(mn =>
-            if mn.arcsMap.contains(id) then Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ()))
-            else Left(BuilderError.ArcIdMissing(id))
+        /** Remove an arc. Fails with [[BuilderError.ArcMissing]] if `flow` is absent. */
+        def removeArc(flow: Arc.Flow[PlaceId, TransitionId]): BM[Unit] = lift(mn =>
+            if mn.arcsMap.contains(flow) then
+                Right((mn.copy(arcsMap = mn.arcsMap.removed(flow)), ()))
+            else Left(BuilderError.ArcMissing(flow))
         )
 
-        /** Remove an arc, or no-op if `id` is absent. */
-        def removeArc_(id: ArcId): BM[Unit] =
-            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.removed(id)), ())))
+        /** Remove an arc, or no-op if `flow` is absent. */
+        def removeArc_(flow: Arc.Flow[PlaceId, TransitionId]): BM[Unit] =
+            lift(mn => Right((mn.copy(arcsMap = mn.arcsMap.removed(flow)), ())))
     }
 }

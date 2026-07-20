@@ -1,8 +1,8 @@
 package hydrozoa.integration.rbr.model.petri.net
 
-import hydrozoa.lib.number.NonNegativeInt
 import hydrozoa.lib.petri.net.components.Place
 import hydrozoa.lib.petri.net.components.Place.Semantics.MarkingError
+import spire.math.Natural
 
 /** Common base for all RBR places. Using a concrete `Self = RBRPlace` (rather than an F-bounded
   * trait) lets the type be used directly as the `P` parameter in `MapNet`.
@@ -15,7 +15,7 @@ sealed abstract class RBRPlace
     extends Place.Topology,
       Place.Syntax.HasFinalMarking[RBRPlace],
       Place.Semantics[RBRPlace] {
-    final override type PlaceMarking = NonNegativeInt
+    final override type PlaceMarking = Natural
 }
 
 object RBRPlaceId {
@@ -43,15 +43,15 @@ object TreasuryRefPlace {
 }
 
 case class TreasuryRefPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(1),
-    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(1)),
+    override val marking: Natural = Natural.one,
+    override val finalMarking: Option[Natural] = Some(Natural.one),
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): TreasuryRefPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): TreasuryRefPlace =
+    override def mark(n: Natural): TreasuryRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): TreasuryRefPlace =
         copy(finalMarking = m)
 
     override def markingError: Option[MarkingError] =
-        if marking.toInt != 1 then Some(TreasuryRefPlace.OnlyOneTokenAllowed) else None
+        if marking != Natural.one then Some(TreasuryRefPlace.OnlyOneTokenAllowed) else None
 
 }
 
@@ -65,65 +65,65 @@ object RegimeRefPlace {
   * the dispute-side txs, consumed only at deinit.
   */
 case class RegimeRefPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(1),
-    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(1)),
+    override val marking: Natural = Natural.one,
+    override val finalMarking: Option[Natural] = Some(Natural.one),
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): RegimeRefPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): RegimeRefPlace =
+    override def mark(n: Natural): RegimeRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): RegimeRefPlace =
         copy(finalMarking = m)
 
     override def markingError: Option[MarkingError] =
-        if marking.toInt != 1 then Some(RegimeRefPlace.OnlyOneTokenAllowed) else None
+        if marking != Natural.one then Some(RegimeRefPlace.OnlyOneTokenAllowed) else None
 }
 
 /** The seven deployed-once G2 setup-ladder rungs, read (one per tx) by evacuations. */
 case class SetupLadderRefPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(7),
-    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(7)),
+    override val marking: Natural = Natural(7L),
+    override val finalMarking: Option[Natural] = Some(Natural(7L)),
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): SetupLadderRefPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): SetupLadderRefPlace =
+    override def mark(n: Natural): SetupLadderRefPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): SetupLadderRefPlace =
         copy(finalMarking = m)
 }
 
 case class ResolvedPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
-    override val finalMarking: Option[NonNegativeInt] = None,
+    override val marking: Natural = Natural.zero,
+    override val finalMarking: Option[Natural] = None,
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): ResolvedPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): ResolvedPlace =
+    override def mark(n: Natural): ResolvedPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): ResolvedPlace =
         copy(finalMarking = m)
 }
 
 case class AmbientPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
-    override val finalMarking: Option[NonNegativeInt] = None,
+    override val marking: Natural = Natural.zero,
+    override val finalMarking: Option[Natural] = None,
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): AmbientPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): AmbientPlace =
+    override def mark(n: Natural): AmbientPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): AmbientPlace =
         copy(finalMarking = m)
 }
 
 case class PayoutObligationsPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
-    override val finalMarking: Option[NonNegativeInt] = Some(NonNegativeInt.unsafeApply(0)),
+    override val marking: Natural = Natural.zero,
+    override val finalMarking: Option[Natural] = Some(Natural.zero),
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): PayoutObligationsPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): PayoutObligationsPlace =
+    override def mark(n: Natural): PayoutObligationsPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): PayoutObligationsPlace =
         copy(finalMarking = m)
 }
 
 case class EvacuationOutputPlace(
-    override val marking: NonNegativeInt = NonNegativeInt.unsafeApply(0),
-    override val finalMarking: Option[NonNegativeInt] = None,
+    override val marking: Natural = Natural.zero,
+    override val finalMarking: Option[Natural] = None,
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): EvacuationOutputPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): EvacuationOutputPlace =
+    override def mark(n: Natural): EvacuationOutputPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): EvacuationOutputPlace =
         copy(finalMarking = m)
 }
 
 object CollateralPlace {
-    case class WrongCount(expected: Int, got: Int) extends MarkingError {
+    case class WrongCount(expected: Int, got: Natural) extends MarkingError {
         override def getMessage: String =
             s"Wrong number of collateral utxos. Expected: $expected; got $got"
     }
@@ -131,16 +131,16 @@ object CollateralPlace {
 
 // expectedCount is the required number of collateral utxos (typically nHeadPeers).
 case class CollateralPlace(
-    override val marking: NonNegativeInt,
+    override val marking: Natural,
     val expectedCount: Int,
-    override val finalMarking: Option[NonNegativeInt] = None,
+    override val finalMarking: Option[Natural] = None,
 ) extends RBRPlace {
-    override def mark(n: NonNegativeInt): CollateralPlace = copy(marking = n)
-    override def withFinalMarking(m: Option[NonNegativeInt]): CollateralPlace =
+    override def mark(n: Natural): CollateralPlace = copy(marking = n)
+    override def withFinalMarking(m: Option[Natural]): CollateralPlace =
         copy(finalMarking = m)
 
     override def markingError: Option[MarkingError] =
-        if marking.toInt != expectedCount
-        then Some(CollateralPlace.WrongCount(expectedCount, marking.toInt))
+        if marking != Natural(expectedCount.toLong)
+        then Some(CollateralPlace.WrongCount(expectedCount, marking))
         else None
 }

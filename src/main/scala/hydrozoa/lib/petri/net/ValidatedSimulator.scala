@@ -2,7 +2,6 @@ package hydrozoa.lib.petri.net
 
 import cats.data.NonEmptyList
 import hydrozoa.lib.petri.net.components.*
-import scala.annotation.unused
 
 /** An opaque refinement of a [[Simulator]] instance that has passed all validity checks.
   *
@@ -14,9 +13,9 @@ import scala.annotation.unused
   *   2. **Preservation under firing**: [[ValidatedSimulator.fire]] can only return a new
   *      `ValidatedSimulator[S]` or fail with a [[Simulator.FiringError]]. The new wrapped value is
   *      guaranteed valid because firing only updates place markings (via `withUpdatedPlaces`) — it
-  *      never changes ID sets, arc structure, or transition structure. Therefore:
-  *      - Topology validity is preserved: no dangling arcs or duplicate arcs are introduced.
-  *      - Syntax validity is preserved: ID sets are unchanged.
+  *      never changes ID sets, the flow relation, or transition structure. Therefore:
+  *      - Topology validity is preserved: no dangling arcs are introduced.
+  *      - Syntax validity is preserved: ID sets and the flow relation are unchanged.
   *      - Semantics validity is preserved: all IDs still have entries; updated places remain in the
   *        semantics map.
   *
@@ -47,7 +46,7 @@ object ValidatedSimulator {
 
     object ValidationError {
 
-        /** One or more topology constraints were violated (e.g. dangling arcs, duplicate arcs). See
+        /** One or more topology constraints were violated (e.g. dangling arcs). See
           * [[Net.Topology.topologyErrors]] for full error definitions.
           */
         case class TopologyInvalid(errors: NonEmptyList[Net.Topology.Error])
@@ -78,16 +77,13 @@ object ValidatedSimulator {
       * constraint if any check fails; [[scala.util.Right]] with the wrapped simulator otherwise.
       */
     def validate[
-        ArcId,
         PlaceId,
         TransitionId,
-        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+        A <: Arc.Syntax,
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-        S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-    ](s: S)(using
-        @unused ordArcId: Ordering[ArcId]
-    ): Either[NonEmptyList[ValidationError], ValidatedSimulator[S]] = {
+        S <: Simulator[PlaceId, TransitionId, A, P, T, S]
+    ](s: S): Either[NonEmptyList[ValidationError], ValidatedSimulator[S]] = {
         val errors: List[ValidationError] =
             NonEmptyList
                 .fromList(s.topologyErrors)
@@ -109,14 +105,13 @@ object ValidatedSimulator {
     // =========================================================================
 
     extension [
-        ArcId,
         PlaceId,
         TransitionId,
-        A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+        A <: Arc.Syntax,
         P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
         T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-        S <: Simulator[ArcId, PlaceId, TransitionId, A, P, T, S]
-    ](vs: ValidatedSimulator[S])(using @unused ordArcId: Ordering[ArcId])
+        S <: Simulator[PlaceId, TransitionId, A, P, T, S]
+    ](vs: ValidatedSimulator[S])
 
         /** Fire transition `t`. On success, the returned [[ValidatedSimulator]] is guaranteed valid
           * by the firing-preservation invariant (see type-level Scaladoc): firing only updates

@@ -1,7 +1,8 @@
 package hydrozoa.lib.petri.net.components
 
-import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
+import hydrozoa.lib.number.PositiveInt
 import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTokens
+import spire.math.Natural
 
 /** A "Place" defines the following properties in the following ontological order:
   *   - [[Place.Topology]]: any restrictions on what or how many arcs can connect to this place.
@@ -49,11 +50,13 @@ object Place {
 
     object Syntax {
 
-        /** Type alias for the common case of token-counting places, where [[PlaceMarking]] is fixed
-          * to [[NonNegativeInt]]. Used as the type bound for arcs and semantics that require token
-          * arithmetic.
+        /** Refinement alias pinning the marking type — used as the place bound of simulators. */
+        type Marked[Self <: Syntax[Self], M] = Syntax[Self] { type PlaceMarking = M }
+
+        /** The common case of token-counting places: [[PlaceMarking]] fixed to the unbounded
+          * [[Natural]] (ISO markings are ℕ-valued, Concept 8).
           */
-        type WithTokens[Self <: Syntax[Self]] = Syntax[Self] { type PlaceMarking = NonNegativeInt }
+        type WithTokens[Self <: Syntax[Self]] = Marked[Self, Natural]
 
         /** Mixin for places that carry a target terminal marking. Parametric over [[PlaceMarking]]
           * so it applies equally to token-counting places, colored nets, or any other marking type.
@@ -87,16 +90,15 @@ object Place {
             val bound: PositiveInt
 
             override def markingError: Option[Place.Semantics.MarkingError] =
-                Option.when(marking.toInt > bound.toInt)(TooManyTokens(marking, bound))
+                Option.when(marking > Natural(bound.toInt.toLong))(TooManyTokens(marking, bound))
         }
 
         object Bounded {
             object Error {
-                case class TooManyTokens(tokens: NonNegativeInt, bound: PositiveInt)
-                    extends MarkingError {
+                case class TooManyTokens(tokens: Natural, bound: PositiveInt) extends MarkingError {
                     override def getMessage: String =
                         "Failed constructing place: too many tokens. " +
-                            s"Max: $bound. Received: ${tokens.convert}"
+                            s"Max: $bound. Received: $tokens"
                 }
             }
         }
