@@ -9,7 +9,7 @@ import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
-import hydrozoa.multisig.ledger.event.RequestNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.ApiDto.*
@@ -132,31 +132,19 @@ class HydrozoaRoutes(
                 )
         )(_.convert)
 
-    /** `{head-peer-number}` path segments decode to a validated [[HeadPeerNumber]] (0..255); an
-      * out-of-range number is a 400 at decode, not a throw in the type's `apply`.
+    /** `{request-id}` path segments decode to a validated [[RequestId]] from its opaque i64 form
+      * (`asI64`, bits 40-47 = author peer, bits 0-39 = request number). Out of `[0, 2^48)` — where
+      * `fromI64` would throw an out-of-range peer/number — is a 400 at decode, not a 500.
       */
-    private given Codec[String, HeadPeerNumber, CodecFormat.TextPlain] =
-        Codec.int.mapDecode(i =>
-            if i >= 0 && i < (1 << 8) then DecodeResult.Value(HeadPeerNumber(i))
-            else
-                DecodeResult.Error(
-                  i.toString,
-                  new IllegalArgumentException("head peer number out of range [0, 256)")
-                )
-        )(_.convert)
-
-    /** `{request-number}` path segments decode to a validated [[RequestNumber]] (a 40-bit
-      * non-negative), a 400 at decode rather than a throw.
-      */
-    private given Codec[String, RequestNumber, CodecFormat.TextPlain] =
+    private given Codec[String, RequestId, CodecFormat.TextPlain] =
         Codec.long.mapDecode(n =>
-            if n >= 0 && n < (1L << 40) then DecodeResult.Value(RequestNumber(n))
+            if n >= 0 && n < (1L << 48) then DecodeResult.Value(RequestId.fromI64(n))
             else
                 DecodeResult.Error(
                   n.toString,
-                  new IllegalArgumentException("request number out of range [0, 2^40)")
+                  new IllegalArgumentException("request id out of range [0, 2^48)")
                 )
-        )(_.convert)
+        )(_.asI64)
 
     private val blocksEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -212,53 +200,34 @@ class HydrozoaRoutes(
     private val requestsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "requests")
+            .in(query[Option[String]]("type"))
+            .in(query[Option[Int]]("peer_number"))
             .name("getHeadRequests")
             .out(jsonBody[List[RequestSummaryView]])
             .errorOut(errorOut)
             .description(
-              "Every request the head has assigned an id, across all head peers — request id " +
-                  "(author peer number + request number) and type (transaction or deposit)."
+              "Requests the head has assigned an id — opaque request id, author peer number, and " +
+                  "type (transaction or deposit). Filter with ?type=transaction|deposit and " +
+                  "?peer_number=<n>."
             )
-            .serverLogic(_ =>
-                headConfig.headPeerNums.toList
-                    .traverse(consensusReader.requestsOf)
-                    .map(perPeer => Right(perPeer.flatten.map(ApiDto.mkRequestSummaryView)))
-                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
-            )
-
-    private val peerRequestsEndpoint: ServerEndpoint[Any, IO] =
-        endpoint.get
-            .in("head" / "requests" / path[HeadPeerNumber]("head-peer-number"))
-            .name("getHeadPeerRequests")
-            .out(jsonBody[List[PeerRequestSummaryView]])
-            .errorOut(errorOut)
-            .description(
-              "Every request authored by one head peer, in request-number order — request " +
-                  "number and type."
-            )
-            .serverLogic(peer =>
-                consensusReader
-                    .requestsOf(peer)
-                    .map(requests => Right(requests.map(ApiDto.mkPeerRequestSummaryView)))
+            .serverLogic((typeFilter, peerFilter) =>
+                listRequests(typeFilter, peerFilter)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
     private val requestDetailsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
-            .in(
-              "head" / "requests" / path[HeadPeerNumber]("head-peer-number") /
-                  path[RequestNumber]("request-number")
-            )
+            .in("head" / "requests" / path[RequestId]("request-id"))
             .name("getHeadRequest")
             .out(jsonBody[RequestDetailsView])
             .errorOut(errorOut)
             .description(
-              "One request's type, receive time, and lifecycle status: UNPROCESSED, " +
+              "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
                   "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ this node's " +
                   "soft-confirmation time), or HARD_CONFIRMED (+ its hard-confirmation time)."
             )
-            .serverLogic((peer, num) =>
-                requestDetails(peer, num)
+            .serverLogic(id =>
+                requestDetails(id.peerNum, id.requestNum)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -397,7 +366,6 @@ class HydrozoaRoutes(
           registerDepositEndpoint,
           headInfoEndpoint,
           requestsEndpoint,
-          peerRequestsEndpoint,
           requestDetailsEndpoint,
           blocksEndpoint,
           blockDetailsEndpoint,
@@ -555,6 +523,24 @@ class HydrozoaRoutes(
       * The lifecycle status resolves through the request → block index and the block's confirmation
       * records.
       */
+    /** The request listing, optionally narrowed to one author peer (`peer_number`) and one type
+      * (`transaction`/`deposit`). An unknown `type` value matches nothing (empty list); an
+      * out-of-range `peer_number` likewise yields an empty list, since no such author exists.
+      */
+    private def listRequests(
+        typeFilter: Option[String],
+        peerFilter: Option[Int]
+    ): IO[Either[(StatusCode, ErrorResponse), List[RequestSummaryView]]] =
+        val peers = peerFilter match
+            case None    => headConfig.headPeerNums.toList
+            case Some(p) => headConfig.headPeerNums.toList.filter(_.convert == p)
+        peers
+            .traverse(consensusReader.requestsOf)
+            .map { perPeer =>
+                val rows = perPeer.flatten.map(ApiDto.mkRequestSummaryView)
+                Right(typeFilter.fold(rows)(t => rows.filter(_.requestType == t)))
+            }
+
     private def requestDetails(
         peer: HeadPeerNumber,
         num: RequestNumber
@@ -583,7 +569,7 @@ class HydrozoaRoutes(
     ): (StatusCode, ErrorResponse) =
         fail(
           StatusCode.NotFound,
-          s"Request ${peer.convert}/${num.convert} not found"
+          s"Request ${RequestId(peer, num).asI64} not found"
         )
 
     private def blockNotFound(num: BlockNumber): (StatusCode, ErrorResponse) =
