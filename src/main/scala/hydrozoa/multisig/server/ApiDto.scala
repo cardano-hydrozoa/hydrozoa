@@ -151,15 +151,11 @@ object ApiDto {
         case _: BlockBrief.Major => "major"
         case _: BlockBrief.Final => "final"
 
-    /** One row of the head-wide request listing: the full request id and the request type. */
-    final case class RequestSummaryView(requestId: RequestIdView, requestType: String)
-    given Codec[RequestSummaryView] = deriveCodec
-
-    /** One row of a single peer's request listing: the request number (the peer is the path) and
-      * the request type.
+    /** One row of the request listing: the opaque request id (the packed i64, the same value the
+      * submit response returns), the author peer number, and the request type.
       */
-    final case class PeerRequestSummaryView(requestNumber: Long, requestType: String)
-    given Codec[PeerRequestSummaryView] = deriveCodec
+    final case class RequestSummaryView(requestId: Long, peerNumber: Int, requestType: String)
+    given Codec[RequestSummaryView] = deriveCodec
 
     /** A request's lifecycle status from this node's viewpoint: `UNPROCESSED`, `LOCALLY_PROCESSED`,
       * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. `relatedEffects` is
@@ -175,9 +171,12 @@ object ApiDto {
     )
     given Codec[RequestStatusView] = deriveCodec
 
-    /** The request-details body: id, type, receive time, and the lifecycle status. */
+    /** The request-details body: opaque id (echoed from the path), author peer, type, receive time,
+      * and the lifecycle status.
+      */
     final case class RequestDetailsView(
-        requestId: RequestIdView,
+        requestId: Long,
+        peerNumber: Int,
         requestType: String,
         receivedAt: String,
         status: RequestStatusView
@@ -189,13 +188,13 @@ object ApiDto {
         case _: UserRequestWithId.DepositRequest     => "deposit"
         case _: UserRequestWithId.TransactionRequest => "transaction"
 
-    /** Map a request to its head-wide listing row. */
+    /** Map a request to its listing row. */
     def mkRequestSummaryView(request: UserRequestWithId): RequestSummaryView =
-        RequestSummaryView(mkRequestIdView(request.requestId), requestTypeName(request))
-
-    /** Map a request to its per-peer listing row. */
-    def mkPeerRequestSummaryView(request: UserRequestWithId): PeerRequestSummaryView =
-        PeerRequestSummaryView(request.requestId.requestNum.convert, requestTypeName(request))
+        RequestSummaryView(
+          requestId = request.requestId.asI64,
+          peerNumber = request.requestId.peerNum.convert,
+          requestType = requestTypeName(request)
+        )
 
     private def validityName(validity: ValidityFlag): String = validity match
         case ValidityFlag.Valid   => "valid"
@@ -230,7 +229,8 @@ object ApiDto {
         status: RequestStatusView
     ): RequestDetailsView =
         RequestDetailsView(
-          requestId = mkRequestIdView(request.requestId),
+          requestId = request.requestId.asI64,
+          peerNumber = request.requestId.peerNum.convert,
           requestType = requestTypeName(request),
           receivedAt = request.receivedAt.toString,
           status = status

@@ -127,7 +127,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             body <- resp.as[Json]
         } yield (resp.status, body)
 
-    test("GET /head/requests lists every peer's requests with full ids and types") {
+    test("GET /head/requests lists rows with the opaque i64 id, peer number, and type") {
         val reader = stubReader(
           Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1)))
         )
@@ -137,34 +137,48 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 val rows = body.asArray.get
                 val _ = assert(rows.size == 2)
                 val r0 = rows(0).hcursor
-                val _ = assert(r0.downField("requestId").get[Int]("headPeerNumber") == Right(0))
-                val _ = assert(r0.downField("requestId").get[Long]("requestNumber") == Right(0L))
+                // peer 0, request 0 packs to i64 0.
+                val _ = assert(r0.get[Long]("requestId") == Right(0L))
+                val _ = assert(r0.get[Int]("peerNumber") == Right(0))
                 val _ = assert(r0.get[String]("requestType") == Right("transaction"))
-                val _ = assert(rows(1).hcursor.get[String]("requestType") == Right("deposit"))
+                val r1 = rows(1).hcursor
+                val _ = assert(r1.get[Long]("requestId") == Right(1L))
+                val _ = assert(r1.get[String]("requestType") == Right("deposit"))
                 ()
             }
         }
     }
 
-    test("GET /head/requests/0 lists that peer's requests by number and type") {
-        val reader = stubReader(Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1))))
+    test("GET /head/requests?type= and ?peer_number= narrow the listing") {
+        val reader = stubReader(
+          Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1)))
+        )
         withRoutes(reader) { app =>
-            get(app, "/head/requests/0").map { (status, body) =>
-                val _ = assert(status == Status.Ok)
-                val rows = body.asArray.get
-                val _ = assert(rows.size == 2)
-                val _ = assert(rows(0).hcursor.get[Long]("requestNumber") == Right(0L))
-                val _ = assert(rows(1).hcursor.get[String]("requestType") == Right("deposit"))
+            for {
+                deposits <- get(app, "/head/requests?type=deposit")
+                thisPeer <- get(app, "/head/requests?peer_number=0")
+                otherPeer <- get(app, "/head/requests?peer_number=99")
+                unknownType <- get(app, "/head/requests?type=nonsense")
+            } yield {
+                val _ = assert(deposits._1 == Status.Ok)
+                val depRows = deposits._2.asArray.get
+                val _ = assert(depRows.size == 1)
+                val _ = assert(depRows(0).hcursor.get[String]("requestType") == Right("deposit"))
+                val _ = assert(thisPeer._2.asArray.get.size == 2)
+                // No such author peer -> empty, not an error.
+                val _ = assert(otherPeer._1 == Status.Ok && otherPeer._2.asArray.get.isEmpty)
+                val _ = assert(unknownType._2.asArray.get.isEmpty)
                 ()
             }
         }
     }
 
-    test("GET /head/requests/0/0 walks the lifecycle: UNPROCESSED to HARD_CONFIRMED") {
+    test("GET /head/requests/{id} walks the lifecycle: UNPROCESSED to HARD_CONFIRMED") {
         def statusOf(reader: ConsensusStoreReader[IO]): (String, Option[Int], Option[String]) =
             var out: (String, Option[Int], Option[String]) = ("", None, None)
             withRoutes(reader) { app =>
-                get(app, "/head/requests/0/0").map { (status, body) =>
+                // peer 0, request 0 -> opaque id 0.
+                get(app, "/head/requests/0").map { (status, body) =>
                     val _ = assert(status == Status.Ok)
                     val s = body.hcursor.downField("status")
                     out = (
@@ -201,14 +215,16 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
         )
     }
 
-    test("GET /head/requests/0/0 carries the receive time and the invalid verdict") {
+    test("GET /head/requests/{id} carries the opaque id, peer, receive time, and verdict") {
         val reader = stubReader(
           Map(peer0 -> List(txRequest(peer0, 0))),
           processed = Some(RequestBlockEntry(BlockNumber(2), ValidityFlag.Invalid))
         )
         withRoutes(reader) { app =>
-            get(app, "/head/requests/0/0").map { (status, body) =>
+            get(app, "/head/requests/0").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
+                val _ = assert(body.hcursor.get[Long]("requestId") == Right(0L))
+                val _ = assert(body.hcursor.get[Int]("peerNumber") == Right(0))
                 val _ = assert(body.hcursor.get[String]("receivedAt") == Right(receivedAt.toString))
                 val _ = assert(
                   body.hcursor.downField("status").get[String]("validity") == Right("invalid")
@@ -218,21 +234,22 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /head/requests/{unknown} is a 404; a malformed segment is a 4xx, not a 500") {
+    test("GET /head/requests/{unknown} is a 404; a malformed id is a 4xx, not a 500") {
         val reader = stubReader(Map(peer0 -> List(txRequest(peer0, 0))))
         withRoutes(reader) { app =>
             for {
-                missing <- get(app, "/head/requests/0/99")
-                badPeer <- app.run(
+                missing <- get(app, "/head/requests/99")
+                malformed <- app.run(
                   Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/oops"))
                 )
-                badNum <- app.run(
-                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/0/oops"))
+                // 2^48 is out of the packable range -> a clean decode error, never a 500.
+                outOfRange <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/281474976710656"))
                 )
             } yield {
                 val _ = assert(missing._1 == Status.NotFound)
-                val _ = assert(badPeer.status.code >= 400 && badPeer.status.code < 500)
-                val _ = assert(badNum.status.code >= 400 && badNum.status.code < 500)
+                val _ = assert(malformed.status.code >= 400 && malformed.status.code < 500)
+                val _ = assert(outOfRange.status.code >= 400 && outOfRange.status.code < 500)
                 ()
             }
         }
