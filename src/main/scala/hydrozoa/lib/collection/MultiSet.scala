@@ -3,6 +3,7 @@ package hydrozoa.lib.collection
 import cats.implicits.catsKernelOrderingForOrder
 import scala.collection.immutable.SortedMap
 import spire.algebra.*
+import spire.std.int.IntAlgebra
 
 /** A multiset (AKA a "bag") allows for multiple instances to exist for each of its elements,
   * generalizing the concept of a set (which only allows one instance per element).
@@ -50,7 +51,7 @@ case class Multiset[K, V] private (
     ): Multiset[K, VResult] = MultisetOps.combineWith(this, other)(combiner)
 }
 
-object Multiset {
+object Multiset extends MultisetInstances1 {
 
     /** Create a multiset.
       *
@@ -72,83 +73,59 @@ object Multiset {
     ): Multiset[K, V] =
         new Multiset[K, V](SortedMap.empty)
 
-    export MultisetAlgebra.*
-    export MultisetOps.*
+    /** Sub-multiset partial order: `a ≤ b` iff `a(k) ≤ b(k)` for every key. */
+    given partialOrder[K, V](using
+        kOrder: Order[K],
+        vMonoid: AdditiveMonoid[V],
+        vOrder: Order[V]
+    ): PartialOrder[Multiset[K, V]] with {
+        override def eqv(x: Multiset[K, V], y: Multiset[K, V]): Boolean =
+            x.multiplicityMap == y.multiplicityMap
+
+        override def partialCompare(x: Multiset[K, V], y: Multiset[K, V]): Double =
+            // Compare pairwise across every key present in either map. Missing keys default to
+            // zero (via combineWith's monoidal fill), so equal comparisons at any key drop out of
+            // the canonical result. The remaining non-zero comparisons must all agree in sign for
+            // the multisets to be comparable.
+            val comparisons =
+                MultisetOps.combineWith(x, y)(vOrder.compare).multiplicityMap.values
+            comparisons.headOption.fold(0d) { first =>
+                if comparisons.forall(_ == first) then first.toDouble else Double.NaN
+            }
+    }
+
+    given additiveAbGroup[K, V](using
+        kOrder: Order[K],
+        vGroup: AdditiveAbGroup[V]
+    ): AdditiveAbGroup[Multiset[K, V]] with {
+        override def zero: Multiset[K, V] = Multiset.empty
+        override def plus(x: Multiset[K, V], y: Multiset[K, V]): Multiset[K, V] =
+            MultisetOps.combineWith(x, y)(vGroup.plus)
+        override def negate(x: Multiset[K, V]): Multiset[K, V] =
+            x.mapValues(vGroup.negate)
+        override def minus(x: Multiset[K, V], y: Multiset[K, V]): Multiset[K, V] =
+            MultisetOps.combineWith(x, y)(vGroup.minus)
+    }
 }
 
-private object MultisetAlgebra {
-
-    import MultisetOps.*
-    import spire.algebra
-
-    class Algebra[K, V](using
-        vMonoid: algebra.AdditiveMonoid[V],
-        kOrder: algebra.Order[K]
-    ) {
-        trait PartialOrder[I](
-            comparer: (V, V) => I,
-            toDouble: I => Double
-        )(using algebra.AdditiveMonoid[I])
-            extends algebra.PartialOrder[Multiset[K, V]] {
-            override def eqv(self: Multiset[K, V], other: Multiset[K, V]): Boolean =
-                self.equals(other)
-
-            override def partialCompare(
-                self: Multiset[K, V],
-                other: Multiset[K, V]
-            ): Double =
-                val comparisons: Iterable[I] =
-                    // If both keys exist, compare the values.
-                    // If only the left key exists, compare the left value against zero.
-                    // If only the right key exists, compare the right value against zero.
-                    MultisetOps.combineWith(self, other)(comparer).multiplicityMap.values
-                // If both maps are empty, then they are equal.
-                // If all element-wise comparisons are the same, then the maps are comparable.
-                // Otherwise, the maps are incomparable.
-                comparisons.headOption.fold(0d)(first =>
-                    val monotonic = comparisons.forall(_ == first)
-                    if monotonic then toDouble(first) else Double.NaN
-                )
-        }
-
-        object PartialOrder {
-            class OrderedElements(comparer: (V, V) => Int)(using
-                algebra.AdditiveMonoid[Int]
-            ) extends PartialOrder[Int](comparer, _.toDouble)
-        }
-
-        trait AdditiveMonoid extends algebra.AdditiveMonoid[Multiset[K, V]] {
-            override def zero: Multiset[K, V] = Multiset.empty
-
-            override def plus(
-                self: Multiset[K, V],
-                other: Multiset[K, V]
-            ): Multiset[K, V] = combineWith(self, other)(vMonoid.plus)
-        }
-
-        trait AdditiveCommutativeGroup(using vAbGroup: algebra.AdditiveAbGroup[V])
-            extends AdditiveMonoid,
-              algebra.AdditiveAbGroup[Multiset[K, V]] {
-            override def negate(self: Multiset[K, V]): Multiset[K, V] =
-                self.mapValues(vAbGroup.negate)
-
-            override def minus(
-                self: Multiset[K, V],
-                other: Multiset[K, V]
-            ): Multiset[K, V] = combineWith(self, other)(vAbGroup.minus)
-
-        }
-
-        trait CModule[S](using
-            sCRing: CRing[S],
-            vCModule: algebra.CModule[V, S]
-        ) extends AdditiveCommutativeGroup,
-              algebra.CModule[Multiset[K, V], S] {
-            override def scalar: CRing[S] = sCRing
-
-            override def timesl(s: S, self: Multiset[K, V]): Multiset[K, V] =
-                self.mapValues(vCModule.timesl(s, _))
-        }
+/** Lower-priority instances for [[Multiset]]. Placed on a parent trait so a direct summon for
+  * `AdditiveAbGroup[Multiset[K, V]]` prefers the explicit companion given (which has no free scalar
+  * type to pin down) over `cModule`'s inherited-via-CModule alternative.
+  */
+private[collection] sealed trait MultisetInstances1 {
+    given cModule[K, V, S](using
+        kOrder: Order[K],
+        sRing: CRing[S],
+        vModule: CModule[V, S]
+    ): CModule[Multiset[K, V], S] with {
+        override def scalar: CRing[S] = sRing
+        override def zero: Multiset[K, V] = Multiset.empty
+        override def plus(x: Multiset[K, V], y: Multiset[K, V]): Multiset[K, V] =
+            MultisetOps.combineWith(x, y)(vModule.plus)
+        override def negate(x: Multiset[K, V]): Multiset[K, V] =
+            x.mapValues(vModule.negate)
+        override def timesl(s: S, x: Multiset[K, V]): Multiset[K, V] =
+            x.mapValues(vModule.timesl(s, _))
     }
 }
 

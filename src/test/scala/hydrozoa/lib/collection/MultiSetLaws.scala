@@ -21,7 +21,8 @@ class MultiSetLaws extends AnyFunSuite, FunSuiteDiscipline, Checkers {
     private type MS = Multiset[Int, SafeLong]
 
     // SafeLong is a commutative ring but spire provides no ring-as-self-module instance, so the
-    // scalar action `n · multiset` needs one supplied explicitly.
+    // scalar action `n · multiset` needs one supplied explicitly. The Multiset given for CModule
+    // then derives CModule[MS, SafeLong] (and AdditiveAbGroup[MS], via inheritance) from this.
     private given CModule[SafeLong, SafeLong] with {
         def scalar: CRing[SafeLong] = CRing[SafeLong]
         def zero: SafeLong = SafeLong.zero
@@ -29,13 +30,6 @@ class MultiSetLaws extends AnyFunSuite, FunSuiteDiscipline, Checkers {
         def negate(x: SafeLong): SafeLong = -x
         def timesl(r: SafeLong, v: SafeLong): SafeLong = r * v
     }
-
-    private val algebra = new Multiset.Algebra[Int, SafeLong]
-
-    private given PartialOrder[MS] =
-        new algebra.PartialOrder.OrderedElements(Order[SafeLong].compare)
-    // Provides AdditiveAbGroup[MS] too, since CModule extends it.
-    private given CModule[MS, SafeLong] = new algebra.CModule[SafeLong] {}
 
     private given Arbitrary[MS] = Arbitrary(
       for
