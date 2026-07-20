@@ -9,7 +9,6 @@ import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidit
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedInstant, quantizeLosslessUnsafe}
-import hydrozoa.lib.cardano.wallet.{Cip30SignedData, Cip30Verify}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Builder.explainConst
 import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
@@ -44,10 +43,6 @@ private object DepositTxOps {
     final case class Build(
         utxosFunding: NonEmptyList[Utxo],
         l2Payload: ByteString,
-        /** The depositor's CIP-30 COSE endorsement of `blake2b_256(l2Payload)` — carried in the
-          * deposit metadata so the head can authenticate the L2 payload (docs/l2-isomorphism.md).
-          */
-        l2PayloadCose: Cip30SignedData,
         l2Value: Value,
         depositFee: Coin,
         changeAddress: ShelleyAddress,
@@ -89,8 +84,8 @@ private object DepositTxOps {
               MD.Deposit(
                 depositIx = 0, // This builder produces the deposit utxo at index 0
                 depositFee = depositFee,
-                coseKey = ByteString.fromHex(l2PayloadCose.coseKeyCborHex),
-                coseSignature = ByteString.fromHex(l2PayloadCose.coseSignatureCborHex)
+                // Pin the out-of-band L2 payload to this tx (docs/l2-isomorphism.md).
+                l2PayloadHash = blake2b_256(l2Payload)
               ).asAuxData(config.headId)
             )
             val addRefundMetadata =
@@ -154,9 +149,8 @@ private object DepositTxOps {
         enum Error extends Throwable {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
-            case CoseVerificationFailed(e: Cip30Verify.Error)
-            case CoseSignedPayloadMismatch(
-                signedPayload: ByteString,
+            case L2PayloadHashMismatch(
+                metadataHash: ByteString,
                 expectedL2PayloadHash: ByteString
             )
             case MissingDepositOutputAtIndex(e: Int)
@@ -173,10 +167,8 @@ private object DepositTxOps {
                     s"MetadataParseError: $e"
                 case AlienDeposit(headAddress) =>
                     s"AlienDeposit: deposit sent to wrong head address: $headAddress"
-                case CoseVerificationFailed(e) =>
-                    s"CoseVerificationFailed: ${e.message}"
-                case CoseSignedPayloadMismatch(signedPayload, expectedL2PayloadHash) =>
-                    s"CoseSignedPayloadMismatch: the COSE signature covers ${signedPayload.toHex}, " +
+                case L2PayloadHashMismatch(metadataHash, expectedL2PayloadHash) =>
+                    s"L2PayloadHashMismatch: the metadata carries ${metadataHash.toHex}, " +
                         s"expected blake2b_256(l2Payload) = ${expectedL2PayloadHash.toHex}"
                 case MissingDepositOutputAtIndex(e) =>
                     s"MissingDepositOutputAtIndex: no deposit output found at index $e"
@@ -219,21 +211,17 @@ private object DepositTxOps {
                         // Pull metadata
                         mdParseResult <- MD.Deposit.parse(tx).left.map(MetadataParseError(_))
                         (_, md) = mdParseResult
-                        Metadata.Deposit(depositUtxoIx, depositFee, coseKey, coseSignature) = md
+                        MD.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
 
-                        // Verify the depositor's COSE endorsement: the signature must be valid,
-                        // and it must cover blake2b_256(l2Payload) — binding the out-of-band L2
-                        // payload to this on-chain deposit (docs/l2-isomorphism.md).
-                        coseVerified <- Cip30Verify
-                            .verify(coseKey.toHex, coseSignature.toHex)
-                            .left
-                            .map(CoseVerificationFailed(_))
-                        (_, signedPayload) = coseVerified
+                        // The metadata must pin the out-of-band L2 payload: its l2PayloadHash
+                        // equals blake2b_256(l2Payload). Once the deposit tx is signed, its
+                        // witnesses commit to the pin via the auxiliary-data hash
+                        // (docs/l2-isomorphism.md).
                         expectedL2PayloadHash = blake2b_256(l2Payload)
                         _ <- Either.cond(
-                          signedPayload == expectedL2PayloadHash,
+                          l2PayloadHash == expectedL2PayloadHash,
                           (),
-                          CoseSignedPayloadMismatch(signedPayload, expectedL2PayloadHash)
+                          L2PayloadHashMismatch(l2PayloadHash, expectedL2PayloadHash)
                         )
 
                         // Grab the deposit output at the index specified in the metadata

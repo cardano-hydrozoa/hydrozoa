@@ -19,7 +19,6 @@ import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
-import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 import test.*
 import test.Generators.Hydrozoa.*
@@ -102,17 +101,10 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
         _ <- genPubkeyAddress()(using config)
 
         l2Payload = GenesisObligation.serialize(l2Outputs)
-        // The depositor endorses the L2 payload: COSE-sign its hash with the depositor's wallet
-        // (docs/l2-isomorphism.md).
-        l2PayloadCose = multiNodeConfig
-            .nodeConfigs(depositor)
-            .ownWallet
-            .signCoseCip30(blake2b_256(l2Payload).bytes)
 
     } yield DepositTx.Build(
       utxosFunding = fundingUtxos,
       l2Payload = l2Payload,
-      l2PayloadCose = l2PayloadCose,
       depositFee = depositFee,
       changeAddress = depositorAddress,
       requestValidityEndTime = requestValidityEndTime,
@@ -131,22 +123,18 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
             val gen = for {
                 index <- Gen.posNum[Int].map(_ - 1)
                 fee <- Gen.choose(0, 100_000_000).map(Coin(_))
-                keyLen <- Gen.choose(1, 100)
-                // A COSE_Sign1 exceeds the 64-byte metadata-string cap, so force sizes that
-                // exercise the multi-chunk encoding.
-                sigLen <- Gen.choose(65, 300)
-                coseKey <- genByteStringOfN(keyLen)
-                coseSignature <- genByteStringOfN(sigLen)
-            } yield (index, fee, coseKey, coseSignature)
+                // blake2b_256 output — always 32 bytes.
+                l2PayloadHash <- genByteStringOfN(32)
+            } yield (index, fee, l2PayloadHash)
 
-            Prop.forAll(gen)((idx, fee, coseKey, coseSignature) =>
+            Prop.forAll(gen)((idx, fee, l2PayloadHash) =>
                 val aux: AuxiliaryData.Metadata =
                     AuxiliaryData.Metadata(
-                      MD.Deposit(idx, fee, coseKey, coseSignature)
+                      MD.Deposit(idx, fee, l2PayloadHash)
                           .asAuxData(config.headId)
                           .getMetadata
                     )
-                val expectedX = MD.Deposit(idx, fee, coseKey, coseSignature)
+                val expectedX = MD.Deposit(idx, fee, l2PayloadHash)
 
                 MD.Deposit.parse(aux) match {
                     case Right(_, x) if x.isInstanceOf[MD.Deposit] =>
@@ -164,11 +152,11 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                 depositBuilder.result match {
                     case Left(e) => s"Build failed: $e" |: Prop(false)
                     case Right(depositTx) =>
-                        DepositTx
-                            .Parse(config)(
-                              ByteString.fromArray(depositTx.tx.toCbor),
-                              depositTx.depositProduced.l2Payload
-                            )
+                        val txSerialized = ByteString.fromArray(depositTx.tx.toCbor)
+                        val l2Payload = depositTx.depositProduced.l2Payload
+
+                        val parsesBack = DepositTx
+                            .Parse(config)(txSerialized, l2Payload)
                             .result match {
                             case Left(e) =>
                                 s"Produced deposit tx deserializes from CBOR: ${e.getMessage}"
@@ -178,6 +166,23 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                                 "Parsed cbor round-trips" |: Prop(false)
                             case _ => Prop(true)
                         }
+
+                        // The l2Payload pin: a payload that differs from the one hashed into the
+                        // tx metadata must fail the parse.
+                        val tamperedL2Payload = ByteString.fromArray(
+                          l2Payload.bytes.updated(0, (l2Payload.bytes(0) ^ 0xff).toByte)
+                        )
+                        val rejectsTamperedPayload = DepositTx
+                            .Parse(config)(txSerialized, tamperedL2Payload)
+                            .result match {
+                            case Left(DepositTx.Parse.Error.L2PayloadHashMismatch(_, _)) =>
+                                Prop(true)
+                            case other =>
+                                s"Tampered l2Payload must fail with L2PayloadHashMismatch, got: $other"
+                                    |: Prop(false)
+                        }
+
+                        parsesBack && rejectsTamperedPayload
                 }
             )
         }

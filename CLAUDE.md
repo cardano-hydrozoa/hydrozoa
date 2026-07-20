@@ -90,7 +90,7 @@ Working design and reference docs live in `docs/`:
 - [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
   cycles without changing consensus logic.
 - [`l2-isomorphism.md`](docs/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
-  txs: headId pin, screening vs submission, deposit authentication, backend selection.
+  txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
 
 **API**
 - [`l2-query-endpoints.md`](docs/l2-query-endpoints.md) — the user-facing server's read-only L2

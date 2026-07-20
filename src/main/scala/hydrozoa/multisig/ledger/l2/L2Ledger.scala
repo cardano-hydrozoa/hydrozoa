@@ -96,16 +96,17 @@ trait L2Ledger[F[_]] {
     /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
       * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
       * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
-      * transaction has no pre-screening stage: it self-authenticates through its own witnesses, so
+      * transaction has no L1 screening stage: it self-authenticates through its own witnesses, so
       * this is the whole of its screening. Conservative: only definite, stateless failures;
       * stateful checks (balance, inputs, completeness) stay at submission.
       */
     def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
 
     /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
-      * Hydrozoa's deposit pre-screening (COSE authentication + the accept-by check) has passed. The
-      * ledger checks that the `l2Payload` is well-formed for it and consistent with the deposit's
-      * reference data — for the EUTXO ledger, that `depositL2Value` covers the `l2Payload` outputs.
+      * Hydrozoa's deposit L1 screening (the l2Payload pin check + the accept-by check) has passed.
+      * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
+      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
+      * `l2Payload` outputs.
       */
     def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
 

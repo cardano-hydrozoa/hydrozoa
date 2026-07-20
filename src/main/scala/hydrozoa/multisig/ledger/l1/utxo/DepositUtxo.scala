@@ -18,9 +18,8 @@ import scalus.uplc.builtin.{ByteString, Data, FromData, ToData}
 
 /** @param l2Payload
   *   The L2 payload associated with the deposit transaction that created this deposit utxo. The
-  *   deposit tx metadata must carry the depositor's COSE endorsement of this payload's blake2b_256
-  *   hash (docs/l2-isomorphism.md). This includes ONLY the part relevant to L2, and not the
-  *   hydrozoa/cardano/L1-specific stuff.
+  *   deposit tx metadata must carry this payload's blake2b_256 hash (docs/l2-isomorphism.md). This
+  *   includes ONLY the part relevant to L2, and not the hydrozoa/cardano/L1-specific stuff.
   */
 final case class DepositUtxo(
     utxoId: Input,
