@@ -1,0 +1,239 @@
+package hydrozoa.multisig.server
+
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import com.suprnation.actor.Actor.{Actor, Receive}
+import com.suprnation.actor.ActorSystem
+import hydrozoa.config.node.MultiNodeConfig
+import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.UserRequest.{DepositRequest, TransactionRequest}
+import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
+import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
+import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import io.circe.Json
+import java.time.Instant
+import org.http4s.circe.*
+import org.http4s.implicits.*
+import org.http4s.{HttpApp, Method, Request, Status, Uri}
+import org.scalacheck.Gen
+import org.scalacheck.rng.Seed
+import org.scalatest.funsuite.AnyFunSuite
+import scalus.uplc.builtin.ByteString
+
+/** The `/head/requests` queries through the HTTP layer against a stubbed [[ConsensusStoreReader]]:
+  * the head-wide and per-peer listings, and the request-details lifecycle ladder (UNPROCESSED →
+  * LOCALLY_PROCESSED → SOFT_CONFIRMED → HARD_CONFIRMED), plus the 404 / 400 edges.
+  */
+class HeadRequestsEndpointsTest extends AnyFunSuite:
+
+    private val multiNodeConfig: MultiNodeConfig =
+        MultiNodeConfig.generateDefault.pureApply(Gen.Parameters.default, Seed(0L))
+    private val headConfig = multiNodeConfig.headConfig
+    private val peer0 = HeadPeerNumber(0)
+
+    private val receivedAt = Instant.parse("2026-01-01T00:00:00Z")
+    private val softAt = Instant.parse("2026-01-01T00:01:00Z")
+    private val hardAt = Instant.parse("2026-01-01T00:05:00Z")
+
+    private def txRequest(peer: HeadPeerNumber, num: Long): UserRequestWithId =
+        UserRequestWithId(
+          TransactionRequest(TransactionRequestBody(ByteString.empty)),
+          RequestId(peer, RequestNumber(num)),
+          receivedAt
+        )
+
+    private def depositRequest(peer: HeadPeerNumber, num: Long): UserRequestWithId =
+        UserRequestWithId(
+          DepositRequest(DepositRequestBody(ByteString.empty, ByteString.empty)),
+          RequestId(peer, RequestNumber(num)),
+          receivedAt
+        )
+
+    /** A reader over a fixed per-peer request map, plus an optional lifecycle for request
+      * `(peer0, 0)`: its processing block/verdict and that block's confirmation moments.
+      */
+    private def stubReader(
+        requests: Map[HeadPeerNumber, List[UserRequestWithId]],
+        processed: Option[RequestBlockEntry] = None,
+        softBlock: Option[(BlockNumber, Instant)] = None,
+        hardStack: Option[(BlockNumber, StackNumber, Instant)] = None
+    ): ConsensusStoreReader[IO] =
+        new ConsensusStoreReader[IO]:
+            def blockBriefs: IO[List[BlockBrief.Next]] = IO.pure(Nil)
+            def blockBrief(num: BlockNumber): IO[Option[BlockBrief.Next]] = IO.pure(None)
+            def softConfirmation(
+                num: BlockNumber
+            ): IO[Option[Timestamped[Block.SoftConfirmed.Next]]] =
+                IO.pure(softBlock.collect { case (b, at) if b == num => Timestamped(at, null) })
+            def stackOf(num: BlockNumber): IO[Option[StackNumber]] =
+                IO.pure(hardStack.collect { case (b, s, _) if b == num => s })
+            def hardConfirmation(
+                num: StackNumber
+            ): IO[Option[Timestamped[StackEffects.HardConfirmed]]] =
+                IO.pure(hardStack.collect { case (_, s, at) if s == num => Timestamped(at, null) })
+            def requestsOf(peer: HeadPeerNumber): IO[List[UserRequestWithId]] =
+                IO.pure(requests.getOrElse(peer, Nil))
+            def request(peer: HeadPeerNumber, num: RequestNumber): IO[Option[UserRequestWithId]] =
+                IO.pure(
+                  requests.getOrElse(peer, Nil).find(_.requestId.requestNum == num)
+                )
+            def requestBlock(
+                peer: HeadPeerNumber,
+                num: RequestNumber
+            ): IO[Option[RequestBlockEntry]] =
+                IO.pure(
+                  processed.filter(_ => peer == peer0 && num == RequestNumber(0))
+                )
+
+    private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
+        ActorSystem[IO]("HeadRequestsEndpointsTest")
+            .use { system =>
+                for {
+                    requestSequencerStub <- system.actorOf(
+                      new Actor[IO, RequestSequencer.Request] {
+                          override def receive: Receive[IO, RequestSequencer.Request] =
+                              _ => IO.pure(())
+                      }
+                    )
+                    blockWeaverStub <- system.actorOf(
+                      new Actor[IO, BlockWeaver.Request] {
+                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                      }
+                    )
+                    routes <- HydrozoaRoutes(
+                      requestSequencerStub,
+                      blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
+                      reader,
+                      None,
+                      headConfig,
+                      HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
+                    )
+                    _ <- check(routes.routes.orNotFound)
+                } yield ()
+            }
+            .unsafeRunSync()
+
+    private def get(app: HttpApp[IO], path: String): IO[(Status, Json)] =
+        for {
+            resp <- app.run(Request[IO](Method.GET, Uri.unsafeFromString(path)))
+            body <- resp.as[Json]
+        } yield (resp.status, body)
+
+    test("GET /head/requests lists every peer's requests with full ids and types") {
+        val reader = stubReader(
+          Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1)))
+        )
+        withRoutes(reader) { app =>
+            get(app, "/head/requests").map { (status, body) =>
+                val _ = assert(status == Status.Ok)
+                val rows = body.asArray.get
+                val _ = assert(rows.size == 2)
+                val r0 = rows(0).hcursor
+                val _ = assert(r0.downField("requestId").get[Int]("headPeerNumber") == Right(0))
+                val _ = assert(r0.downField("requestId").get[Long]("requestNumber") == Right(0L))
+                val _ = assert(r0.get[String]("requestType") == Right("transaction"))
+                val _ = assert(rows(1).hcursor.get[String]("requestType") == Right("deposit"))
+                ()
+            }
+        }
+    }
+
+    test("GET /head/requests/0 lists that peer's requests by number and type") {
+        val reader = stubReader(Map(peer0 -> List(txRequest(peer0, 0), depositRequest(peer0, 1))))
+        withRoutes(reader) { app =>
+            get(app, "/head/requests/0").map { (status, body) =>
+                val _ = assert(status == Status.Ok)
+                val rows = body.asArray.get
+                val _ = assert(rows.size == 2)
+                val _ = assert(rows(0).hcursor.get[Long]("requestNumber") == Right(0L))
+                val _ = assert(rows(1).hcursor.get[String]("requestType") == Right("deposit"))
+                ()
+            }
+        }
+    }
+
+    test("GET /head/requests/0/0 walks the lifecycle: UNPROCESSED to HARD_CONFIRMED") {
+        def statusOf(reader: ConsensusStoreReader[IO]): (String, Option[Int], Option[String]) =
+            var out: (String, Option[Int], Option[String]) = ("", None, None)
+            withRoutes(reader) { app =>
+                get(app, "/head/requests/0/0").map { (status, body) =>
+                    val _ = assert(status == Status.Ok)
+                    val s = body.hcursor.downField("status")
+                    out = (
+                      s.get[String]("status").toOption.get,
+                      s.get[Int]("blockNumber").toOption,
+                      s.get[String]("hardConfirmedAt").toOption
+                    )
+                }
+            }
+            out
+
+        val base = Map(peer0 -> List(txRequest(peer0, 0)))
+        val entry = RequestBlockEntry(BlockNumber(3), ValidityFlag.Valid)
+
+        val _ = assert(statusOf(stubReader(base)) == ("UNPROCESSED", None, None))
+        val _ = assert(
+          statusOf(stubReader(base, processed = Some(entry))) ==
+              ("LOCALLY_PROCESSED", Some(3), None)
+        )
+        val _ = assert(
+          statusOf(
+            stubReader(base, processed = Some(entry), softBlock = Some((BlockNumber(3), softAt)))
+          ) == ("SOFT_CONFIRMED", Some(3), None)
+        )
+        assert(
+          statusOf(
+            stubReader(
+              base,
+              processed = Some(entry),
+              softBlock = Some((BlockNumber(3), softAt)),
+              hardStack = Some((BlockNumber(3), StackNumber(1), hardAt))
+            )
+          ) == ("HARD_CONFIRMED", Some(3), Some(hardAt.toString))
+        )
+    }
+
+    test("GET /head/requests/0/0 carries the receive time and the invalid verdict") {
+        val reader = stubReader(
+          Map(peer0 -> List(txRequest(peer0, 0))),
+          processed = Some(RequestBlockEntry(BlockNumber(2), ValidityFlag.Invalid))
+        )
+        withRoutes(reader) { app =>
+            get(app, "/head/requests/0/0").map { (status, body) =>
+                val _ = assert(status == Status.Ok)
+                val _ = assert(body.hcursor.get[String]("receivedAt") == Right(receivedAt.toString))
+                val _ = assert(
+                  body.hcursor.downField("status").get[String]("validity") == Right("invalid")
+                )
+                ()
+            }
+        }
+    }
+
+    test("GET /head/requests/{unknown} is a 404; a malformed segment is a 4xx, not a 500") {
+        val reader = stubReader(Map(peer0 -> List(txRequest(peer0, 0))))
+        withRoutes(reader) { app =>
+            for {
+                missing <- get(app, "/head/requests/0/99")
+                badPeer <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/oops"))
+                )
+                badNum <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/head/requests/0/oops"))
+                )
+            } yield {
+                val _ = assert(missing._1 == Status.NotFound)
+                val _ = assert(badPeer.status.code >= 400 && badPeer.status.code < 500)
+                val _ = assert(badNum.status.code >= 400 && badNum.status.code < 500)
+                ()
+            }
+        }
+    }

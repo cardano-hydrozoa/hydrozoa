@@ -68,6 +68,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /head/requests:
+    get:
+      description: Every request the head has assigned an id, across all head peers
+        — request id (author peer number + request number) and type (transaction or
+        deposit).
+      operationId: getHeadRequests
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestSummaryView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/requests/{head-peer-number}:
+    get:
+      description: Every request authored by one head peer, in request-number order
+        — request number and type.
+      operationId: getHeadPeerRequests
+      parameters:
+      - name: head-peer-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PeerRequestSummaryView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/requests/{head-peer-number}/{request-number}:
+    get:
+      description: 'One request''s type, receive time, and lifecycle status: UNPROCESSED,
+        LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ this node''s soft-confirmation
+        time), or HARD_CONFIRMED (+ its hard-confirmation time).'
+      operationId: getHeadRequest
+      parameters:
+      - name: head-peer-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      - name: request-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestDetailsView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /head/blocks:
     get:
       description: Every block of the head in block order — number, fast-cycle leader,
@@ -296,6 +376,18 @@ components:
       properties:
         status:
           type: string
+    PeerRequestSummaryView:
+      title: PeerRequestSummaryView
+      type: object
+      required:
+      - requestNumber
+      - requestType
+      properties:
+        requestNumber:
+          type: integer
+          format: int64
+        requestType:
+          type: string
     ReadinessResponse:
       title: ReadinessResponse
       type: object
@@ -313,6 +405,69 @@ components:
         requestId:
           type: integer
           format: int64
+    RequestDetailsView:
+      title: RequestDetailsView
+      type: object
+      required:
+      - requestId
+      - requestType
+      - receivedAt
+      - status
+      properties:
+        requestId:
+          $ref: '#/components/schemas/RequestIdView'
+        requestType:
+          type: string
+        receivedAt:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatusView'
+    RequestIdView:
+      title: RequestIdView
+      type: object
+      required:
+      - headPeerNumber
+      - requestNumber
+      properties:
+        headPeerNumber:
+          type: integer
+          format: int32
+        requestNumber:
+          type: integer
+          format: int64
+    RequestStatusView:
+      title: RequestStatusView
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        validity:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        relatedEffects:
+          type: array
+          items:
+            type: integer
+            format: int32
+    RequestSummaryView:
+      title: RequestSummaryView
+      type: object
+      required:
+      - requestId
+      - requestType
+      properties:
+        requestId:
+          $ref: '#/components/schemas/RequestIdView'
+        requestType:
+          type: string
     TxInputView:
       title: TxInputView
       type: object

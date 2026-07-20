@@ -1,12 +1,15 @@
 package hydrozoa.multisig.server
 
 import cats.effect.IO
+import cats.syntax.traverse.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.ApiDto.*
@@ -15,6 +18,7 @@ import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
 import hydrozoa.multisig.server.TapirJson.*
 import io.circe.Json
 import io.circe.syntax.*
+import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
 import scalus.cardano.address.Address
@@ -131,6 +135,32 @@ class HydrozoaRoutes(
                 )
         )(_.convert)
 
+    /** `{head-peer-number}` path segments decode to a validated [[HeadPeerNumber]] (0..255); an
+      * out-of-range number is a 400 at decode, not a throw in the type's `apply`.
+      */
+    private given Codec[String, HeadPeerNumber, CodecFormat.TextPlain] =
+        Codec.int.mapDecode(i =>
+            if i >= 0 && i < (1 << 8) then DecodeResult.Value(HeadPeerNumber(i))
+            else
+                DecodeResult.Error(
+                  i.toString,
+                  new IllegalArgumentException("head peer number out of range [0, 256)")
+                )
+        )(_.convert)
+
+    /** `{request-number}` path segments decode to a validated [[RequestNumber]] (a 40-bit
+      * non-negative), a 400 at decode rather than a throw.
+      */
+    private given Codec[String, RequestNumber, CodecFormat.TextPlain] =
+        Codec.long.mapDecode(n =>
+            if n >= 0 && n < (1L << 40) then DecodeResult.Value(RequestNumber(n))
+            else
+                DecodeResult.Error(
+                  n.toString,
+                  new IllegalArgumentException("request number out of range [0, 2^40)")
+                )
+        )(_.convert)
+
     private val blocksEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "blocks")
@@ -179,6 +209,59 @@ class HydrozoaRoutes(
             )
             .serverLogic(num =>
                 blockHeader(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val requestsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests")
+            .name("getHeadRequests")
+            .out(jsonBody[List[RequestSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Every request the head has assigned an id, across all head peers — request id " +
+                  "(author peer number + request number) and type (transaction or deposit)."
+            )
+            .serverLogic(_ =>
+                headConfig.headPeerNums.toList
+                    .traverse(consensusReader.requestsOf)
+                    .map(perPeer => Right(perPeer.flatten.map(ApiDto.mkRequestSummaryView)))
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val peerRequestsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests" / path[HeadPeerNumber]("head-peer-number"))
+            .name("getHeadPeerRequests")
+            .out(jsonBody[List[PeerRequestSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Every request authored by one head peer, in request-number order — request " +
+                  "number and type."
+            )
+            .serverLogic(peer =>
+                consensusReader
+                    .requestsOf(peer)
+                    .map(requests => Right(requests.map(ApiDto.mkPeerRequestSummaryView)))
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val requestDetailsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in(
+              "head" / "requests" / path[HeadPeerNumber]("head-peer-number") /
+                  path[RequestNumber]("request-number")
+            )
+            .name("getHeadRequest")
+            .out(jsonBody[RequestDetailsView])
+            .errorOut(errorOut)
+            .description(
+              "One request's type, receive time, and lifecycle status: UNPROCESSED, " +
+                  "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ this node's " +
+                  "soft-confirmation time), or HARD_CONFIRMED (+ its hard-confirmation time)."
+            )
+            .serverLogic((peer, num) =>
+                requestDetails(peer, num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -321,6 +404,9 @@ class HydrozoaRoutes(
           submitEndpoint,
           registerDepositEndpoint,
           headInfoEndpoint,
+          requestsEndpoint,
+          peerRequestsEndpoint,
+          requestDetailsEndpoint,
           blocksEndpoint,
           blockDetailsEndpoint,
           blockHeaderEndpoint,
@@ -458,6 +544,12 @@ class HydrozoaRoutes(
       * moment, and — through the block → stack index — the hard-confirmation moment.
       */
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
+        confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
+
+    /** This node's `(soft, hard)` confirmation moments for a block: the soft-confirmation record's
+      * stamp, and — through the block → stack index — the hard-confirmation record's stamp.
+      */
+    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
             soft <- consensusReader.softConfirmation(num)
             stack <- consensusReader.stackOf(num)
@@ -465,7 +557,42 @@ class HydrozoaRoutes(
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-        } yield ApiDto.mkBlockConfirmationView(soft.map(_.at), hard.map(_.at))
+        } yield (soft.map(_.at), hard.map(_.at))
+
+    /** The request-details body for `(peer, num)`, or a 404 when the head has assigned no such id.
+      * The lifecycle status resolves through the request → block index and the block's confirmation
+      * records.
+      */
+    private def requestDetails(
+        peer: HeadPeerNumber,
+        num: RequestNumber
+    ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
+        consensusReader.request(peer, num).flatMap {
+            case None => IO.pure(Left(requestNotFound(peer, num)))
+            case Some(request) =>
+                for {
+                    processed <- consensusReader.requestBlock(peer, num)
+                    confirmation <- processed match {
+                        case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                        case Some(entry) => confirmationTimes(entry.blockNum)
+                    }
+                    (softAt, hardAt) = confirmation
+                    status = ApiDto.mkRequestStatusView(
+                      block = processed.map(e => (e.blockNum.convert, e.validity)),
+                      softConfirmedAt = softAt,
+                      hardConfirmedAt = hardAt
+                    )
+                } yield Right(ApiDto.mkRequestDetailsView(request, status))
+        }
+
+    private def requestNotFound(
+        peer: HeadPeerNumber,
+        num: RequestNumber
+    ): (StatusCode, ErrorResponse) =
+        fail(
+          StatusCode.NotFound,
+          s"Request ${peer.convert}/${num.convert} not found"
+        )
 
     private def blockNotFound(num: BlockNumber): (StatusCode, ErrorResponse) =
         fail(StatusCode.NotFound, s"Block ${num.convert} not found")
