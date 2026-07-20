@@ -404,7 +404,7 @@ just deposit
 
 Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
 is head peer 0, the funded one), and enter the L2 outputs the deposit should spawn. The tool
-serializes the L2 payload, COSE-signs its hash with the peer wallet, registers the deposit with
+serializes the L2 payload (its hash rides in the deposit tx metadata), registers the deposit with
 `POST /api/deposit/register`, then signs the deposit tx and submits it to L1 via Blockfrost,
 polling until the utxo lands. An example session — deposit 3 ADA from head-0's L1 funds to
 coil-0's L2 address:

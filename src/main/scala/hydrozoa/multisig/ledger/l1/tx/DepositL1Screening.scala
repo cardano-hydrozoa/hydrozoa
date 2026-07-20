@@ -13,13 +13,13 @@ import scala.language.implicitConversions
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.uplc.builtin.ByteString
 
-/** Deposit pre-screening — Hydrozoa's stage of deposit screening (docs/l2-isomorphism.md), run
+/** Deposit L1 screening — Hydrozoa's stage of deposit screening (docs/l2-isomorphism.md), run
   * before the ledger's [[hydrozoa.multisig.ledger.l2.L2Ledger.sendScreenDeposit]]. A deposit is not
-  * an L2 tx and cannot self-authenticate, so unlike transactions (which have no pre-screening
-  * stage) it is authenticated and time-gated here:
+  * an L2 tx, and its `l2Payload` arrives out-of-band, so unlike transactions (which have no L1
+  * screening stage) it is payload-checked and time-gated here:
   *
   *   - the deposit tx must parse — [[DepositTx.Parse]] establishes well-formedness and verifies the
-  *     depositor's endorsement of the `l2Payload` carried in the tx metadata;
+  *     tx metadata pins `blake2b_256(l2Payload)`;
   *   - the deposit must not be past its accept-by deadline (`now < validityEnd`, with `validityEnd`
   *     derived from the deposit tx's TTL). The block-time accept-by check at application
   *     (`JointLedger.registerDeposit`) still runs; this is the earlier, wall-clock gate.
@@ -27,7 +27,7 @@ import scalus.uplc.builtin.ByteString
   * On success it yields the [[L2LedgerCommand.ScreenDeposit]] reference data the ledger's screening
   * stage consumes.
   */
-object DepositPreScreening {
+object DepositL1Screening {
 
     /** The sections [[DepositTx.Parse]] needs, plus nothing else. */
     type Config = CardanoNetwork.Section & HeadPeers.Section & InitialBlock.Section &
@@ -44,20 +44,20 @@ object DepositPreScreening {
         }
     }
 
-    /** Pre-screen a deposit request: parse + authenticate the deposit tx, gate on the accept-by
-      * deadline, and derive the ledger-screening reference data.
+    /** Screen a deposit request's L1 side: parse the deposit tx and check it pins the `l2Payload`,
+      * gate on the accept-by deadline, and derive the ledger-screening reference data.
       */
-    def preScreen(
+    def screen(
         l1Payload: ByteString,
         l2Payload: ByteString,
         now: QuantizedInstant
     )(config: Config): Either[Error, L2LedgerCommand.ScreenDeposit] =
         for {
-            // NB: the COSE authentication happens INSIDE the parse — DepositTx.Parse verifies that
-            // the metadata's (coseKey, coseSignature) pair is a valid COSE_Sign1 and that it covers
-            // blake2b_256(l2Payload), so a failed authentication surfaces as DepositTxParseFailed
-            // here. TODO: Parse does far more than parsing (validation, authentication); extract
-            // those steps (or rename it) so pre-screening's checks are visible at this call site.
+            // NB: the l2Payload pin check happens INSIDE the parse — DepositTx.Parse verifies that
+            // the metadata's l2PayloadHash equals blake2b_256(l2Payload), so a failed pin surfaces
+            // as DepositTxParseFailed here. TODO: Parse does far more than parsing (validation,
+            // payload pinning); extract those steps (or rename it) so this screening's checks are
+            // visible at this call site.
             depositTx <- DepositTx
                 .Parse(config)(l1Payload, l2Payload)
                 .result
