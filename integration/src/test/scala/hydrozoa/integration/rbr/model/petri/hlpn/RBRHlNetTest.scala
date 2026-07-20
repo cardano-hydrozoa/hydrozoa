@@ -1,132 +1,240 @@
 package hydrozoa.integration.rbr.model.petri.hlpn
 
-import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{RBRPlaceId, RBRTransitionId}
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId}
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Abstained, Awaiting, Voted}
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalatest.funsuite.AnyFunSuite
 import spire.math.SafeLong
 
+/** Drives the RBR HLPN with explicit modes (the tally transitions bind 9 variables — the
+  * enumerating selector's candidate space is ~10⁵, so tests construct bindings directly).
+  */
 class RBRHlNetTest extends AnyFunSuite:
 
-    private val (peer0, peer1) = (HeadPeerNumber(0), HeadPeerNumber(1))
+    private val (peer0, peer1, peer2) =
+        (HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(2))
 
+    // n = 3 peers → boxes (0,(1,(Voted,0))) public, (1,(2,·)), (2,(3,·)), (3,(0,·)) for peers 0..2
     private def net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
+
+    private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
+
+    private def box(k: Int, l: Int, s: BallotStatus, v: Int): Ballot =
+        (BigInt(k), (BigInt(l), (s, BigInt(v))))
+
+    private def ballotCount(n: Net, b: Ballot): SafeLong =
+        n.placesMap(RBRPlaceId.Ballots).marking.get(b)
+
+    private def bindAll(n: Net, tid: RBRTransitionId)(values: Any*): Binding =
+        n.transitionsMap(tid)
+            .variables
+            .zip(values)
+            .foldLeft(Binding.empty) { case (acc, (variable, value)) =>
+                Binding.bind(acc, variable, value)
+            }
+
+    // Transition variable orders: Vote(p,k,l,v) · Abstain(p,k,l) · RatchetVote(q,k,l,s,vOld,vNew)
+    // · Tally*(q,k1,l1,s1,v1,k2,l2,s2,v2) · VotingDeadline()
+    private def voteMode(n: Net, p: HeadPeerNumber, k: Int, l: Int, v: Int): Binding =
+        bindAll(n, RBRTransitionId.Vote)(p, BigInt(k), BigInt(l), BigInt(v))
+    private def abstainMode(n: Net, p: HeadPeerNumber, k: Int, l: Int): Binding =
+        bindAll(n, RBRTransitionId.Abstain)(p, BigInt(k), BigInt(l))
+    private def ratchetMode(
+        n: Net,
+        q: HeadPeerNumber,
+        k: Int,
+        l: Int,
+        s: BallotStatus,
+        vOld: Int,
+        vNew: Int
+    ): Binding =
+        bindAll(n, RBRTransitionId.RatchetVote)(
+          q,
+          BigInt(k),
+          BigInt(l),
+          s,
+          BigInt(vOld),
+          BigInt(vNew)
+        )
+    private def tallyMode(
+        n: Net,
+        tid: RBRTransitionId,
+        q: HeadPeerNumber,
+        continuing: Ballot,
+        removed: Ballot
+    ): Binding =
+        bindAll(n, tid)(
+          q,
+          continuing._1,
+          continuing._2._1,
+          continuing._2._2._1,
+          continuing._2._2._2,
+          removed._1,
+          removed._2._1,
+          removed._2._2._1,
+          removed._2._2._2
+        )
+
+    private def fired(n: Net, tid: RBRTransitionId, mode: Binding): Net =
+        n.fire(tid, mode).toOption.get
 
     test("the net assembles and is well-sorted") {
         assert(SortCheck.errors(net).isEmpty)
     }
 
-    test("Vote: a peer's pending ballot becomes a (peer, version) ballot; references unchanged") {
-        val n = net
-        val vote = n.transitionsMap(RBRTransitionId.Vote)
-        val (p, v) = (vote.variables(0), vote.variables(1))
-        val mode = Binding.bind(Binding.bind(Binding.empty, p, peer0), v, BigInt(1))
+    test("Vote: the pending box flips to Voted(v); owner, collateral, references restored") {
+        val n = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        val _ = assert(ballotCount(n, box(1, 2, Awaiting, 0)) == SafeLong(0))
+        val _ = assert(ballotCount(n, box(1, 2, Voted, 1)) == SafeLong(1))
+        val _ = assert(n.placesMap(RBRPlaceId.Owner).marking.get((peer0, BigInt(1))) == SafeLong(1))
+        val _ = assert(n.placesMap(RBRPlaceId.Collateral).marking.get(peer0) == SafeLong(1))
+        assert(n.placesMap(RBRPlaceId.UnresolvedTreasury).marking.get(()) == SafeLong(1))
+    }
 
-        val fired = n.fire(RBRTransitionId.Vote, mode).toOption.get
-        val _ = assert(fired.placesMap(RBRPlaceId.AwaitingVote).marking.get(peer0) == SafeLong(0))
-        val _ = assert(fired.placesMap(RBRPlaceId.AwaitingVote).marking.get(peer1) == SafeLong(1))
-        val _ =
-            assert(fired.placesMap(RBRPlaceId.Voted).marking.get((peer0, BigInt(1))) == SafeLong(1))
-        // collateral is spent and recreated; references are read back
-        val _ = assert(fired.placesMap(RBRPlaceId.Collateral).marking.get(peer0) == SafeLong(1))
-        assert(fired.placesMap(RBRPlaceId.UnresolvedTreasury).marking.get(()) == SafeLong(1))
+    test("Vote: only the box's owner can vote it") {
+        // peer1 does not own box key=1 (peer0 does) — the Owner read fails
+        assert(!net.isModeEnabled(RBRTransitionId.Vote, voteMode(net, peer1, 1, 2, 1)))
     }
 
     test("Vote: a peer cannot vote twice") {
-        val n = net
-        val vote = n.transitionsMap(RBRTransitionId.Vote)
-        val (p, v) = (vote.variables(0), vote.variables(1))
-        def mode(peer: HeadPeerNumber, version: Int) =
-            Binding.bind(Binding.bind(Binding.empty, p, peer), v, BigInt(version))
-
-        val once = n.fire(RBRTransitionId.Vote, mode(peer0, 1)).toOption.get
-        val _ = assert(!once.isModeEnabled(RBRTransitionId.Vote, mode(peer0, 2)))
-        assert(once.isModeEnabled(RBRTransitionId.Vote, mode(peer1, 2)))
+        val n = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        assert(!n.isModeEnabled(RBRTransitionId.Vote, voteMode(n, peer0, 1, 2, 2)))
     }
 
-    test("Vote: the enumerating selector finds peers × versions modes") {
-        val sim = HlSimulator(net, ModeSelector.enumerating)
-        // 3 pending peers × 2 versions
-        assert(sim.enabledModes(RBRTransitionId.Vote).size == 6)
+    test("VotingDeadline: closes voting for Vote and RatchetVote, opens tallying") {
+        val n0 = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        val n = fired(n0, RBRTransitionId.VotingDeadline, Binding.empty)
+        val _ = assert(!n.isModeEnabled(RBRTransitionId.Vote, voteMode(n, peer1, 2, 3, 1)))
+        val _ = assert(
+          !n.isModeEnabled(
+            RBRTransitionId.RatchetVote,
+            ratchetMode(n, peer2, 1, 2, Voted, 1, 2)
+          )
+        )
+        // tallying the public box with box 1 is now possible (removed box has the higher vote)
+        assert(
+          n.isModeEnabled(
+            RBRTransitionId.TallyRemovedWins,
+            tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 1, Voted, 0), box(1, 2, Voted, 1))
+          )
+        )
     }
 
-    test("RatchetVoted: strictly monotonic; any peer q supplies the collateral") {
-        val n = net
-        val vote = n.transitionsMap(RBRTransitionId.Vote)
-        val voted = n
-            .fire(
-              RBRTransitionId.Vote,
-              Binding.bind(
-                Binding.bind(Binding.empty, vote.variables(0), peer0),
-                vote.variables(1),
-                BigInt(1)
-              )
-            )
-            .toOption
-            .get
-
-        val ratchet = n.transitionsMap(RBRTransitionId.RatchetVoted)
-        val (p, vOld, vNew, q) =
-            (ratchet.variables(0), ratchet.variables(1), ratchet.variables(2), ratchet.variables(3))
-        def mode(oldV: Int, newV: Int, actor: HeadPeerNumber) =
-            Binding.bind(
-              Binding.bind(
-                Binding.bind(Binding.bind(Binding.empty, p, peer0), vOld, BigInt(oldV)),
-                vNew,
-                BigInt(newV)
-              ),
-              q,
-              actor
-            )
-
-        // 1 → 2, ratcheted by a different peer than the box owner
-        val fired = voted.fire(RBRTransitionId.RatchetVoted, mode(1, 2, peer1)).toOption.get
-        val _ = assert(fired.placesMap(RBRPlaceId.Voted).marking.get((peer0, BigInt(2))) == SafeLong(1))
-        val _ = assert(fired.placesMap(RBRPlaceId.Voted).marking.get((peer0, BigInt(1))) == SafeLong(0))
-        val _ = assert(fired.placesMap(RBRPlaceId.Collateral).marking.get(peer1) == SafeLong(1))
-        // non-monotonic ratchets are rejected by the Lt guard
-        val _ = assert(!voted.isModeEnabled(RBRTransitionId.RatchetVoted, mode(1, 1, peer1)))
-        assert(!fired.isModeEnabled(RBRTransitionId.RatchetVoted, mode(2, 1, peer1)))
+    test("Abstain: has no validity window — enabled even after the deadline") {
+        val n = fired(net, RBRTransitionId.VotingDeadline, Binding.empty)
+        val n2 = fired(n, RBRTransitionId.Abstain, abstainMode(n, peer1, 2, 3))
+        val _ = assert(ballotCount(n2, box(2, 3, Abstained, 0)) == SafeLong(1))
+        assert(ballotCount(n2, box(2, 3, Awaiting, 0)) == SafeLong(0))
     }
 
-    test("RatchetAbstained: an abstained box ratchets to Voted at any version") {
-        val n = net
-        val abstain = n.transitionsMap(RBRTransitionId.Abstain)
-        val abstainedNet = n
-            .fire(RBRTransitionId.Abstain, Binding.bind(Binding.empty, abstain.variables(0), peer0))
-            .toOption
-            .get
+    test("RatchetVote: Voted boxes ratchet strictly monotonically, by any acting peer") {
+        val n0 = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        // vOld=1 → vNew=2, acted by peer2 (not the owner)
+        val n = fired(n0, RBRTransitionId.RatchetVote, ratchetMode(n0, peer2, 1, 2, Voted, 1, 2))
+        val _ = assert(ballotCount(n, box(1, 2, Voted, 2)) == SafeLong(1))
+        val _ = assert(ballotCount(n, box(1, 2, Voted, 1)) == SafeLong(0))
+        // non-monotonic: vNew == vOld and vNew < vOld both rejected
+        val _ = assert(
+          !n0.isModeEnabled(RBRTransitionId.RatchetVote, ratchetMode(n0, peer2, 1, 2, Voted, 1, 1))
+        )
+        assert(
+          !n.isModeEnabled(RBRTransitionId.RatchetVote, ratchetMode(n, peer2, 1, 2, Voted, 2, 1))
+        )
+    }
 
-        val ratchet = n.transitionsMap(RBRTransitionId.RatchetAbstained)
-        val (p, vNew, q) = (ratchet.variables(0), ratchet.variables(1), ratchet.variables(2))
-        val mode = Binding.bind(
-          Binding.bind(Binding.bind(Binding.empty, p, peer0), vNew, BigInt(1)),
-          q,
-          peer1
+    test("RatchetVote: an Abstained box ratchets from version 0; an Awaiting box cannot ratchet") {
+        val n0 = fired(net, RBRTransitionId.Abstain, abstainMode(net, peer0, 1, 2))
+        // Abstained box carries version 0 — the prev=0 rule is the same Lt guard
+        val n = fired(
+          n0,
+          RBRTransitionId.RatchetVote,
+          ratchetMode(n0, peer1, 1, 2, Abstained, 0, 1)
+        )
+        val _ = assert(ballotCount(n, box(1, 2, Voted, 1)) == SafeLong(1))
+        // Awaiting boxes are not Open-phase — the status guard rejects them
+        assert(
+          !net.isModeEnabled(
+            RBRTransitionId.RatchetVote,
+            ratchetMode(net, peer1, 2, 3, Awaiting, 0, 1)
+          )
+        )
+    }
+
+    test("Tally: adjacency is required; tallying is disabled before the deadline") {
+        val n = fired(net, RBRTransitionId.VotingDeadline, Binding.empty)
+        // non-adjacent: continuing (0, link 1) with removed key 2
+        val _ = assert(
+          !n.isModeEnabled(
+            RBRTransitionId.TallyRemovedWins,
+            tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 1, Voted, 0), box(2, 3, Awaiting, 0))
+          )
+        )
+        // before the deadline nothing tallies
+        assert(
+          !net.isModeEnabled(
+            RBRTransitionId.TallyContinuingWins,
+            tallyMode(net, RBRTransitionId.TallyContinuingWins, peer0, box(0, 1, Voted, 0), box(1, 2, Awaiting, 0))
+          )
+        )
+    }
+
+    test("Tally: maxVote winner selection — status precedence, version order, tie to removed") {
+        // Voted beats Awaiting: continuing (0,(1,(Voted,0))) absorbs awaiting box 1
+        val closed = fired(net, RBRTransitionId.VotingDeadline, Binding.empty)
+        val a = fired(
+          closed,
+          RBRTransitionId.TallyContinuingWins,
+          tallyMode(closed, RBRTransitionId.TallyContinuingWins, peer0, box(0, 1, Voted, 0), box(1, 2, Awaiting, 0))
+        )
+        val _ = assert(ballotCount(a, box(0, 2, Voted, 0)) == SafeLong(1))
+
+        // Higher version wins (removed): vote box 1 at v=2 first
+        val n0 = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 2))
+        val n1 = fired(n0, RBRTransitionId.VotingDeadline, Binding.empty)
+        val b1 = fired(
+          n1,
+          RBRTransitionId.TallyRemovedWins,
+          tallyMode(n1, RBRTransitionId.TallyRemovedWins, peer1, box(0, 1, Voted, 0), box(1, 2, Voted, 2))
+        )
+        val _ = assert(ballotCount(b1, box(0, 2, Voted, 2)) == SafeLong(1))
+
+        // Voted tie goes to the removed box: continuing-wins is not enabled on a tie
+        assert(
+          !n1.isModeEnabled(
+            RBRTransitionId.TallyContinuingWins,
+            tallyMode(n1, RBRTransitionId.TallyContinuingWins, peer1, box(0, 1, Voted, 0), box(1, 2, Voted, 0))
+          )
+        )
+    }
+
+    test("Tally: full fold converges to the single box (0,(0,(Voted,vmax)))") {
+        // peer0 votes v=1, peer1 votes v=2, peer2 abstains; then the deadline passes
+        var n = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        n = fired(n, RBRTransitionId.Vote, voteMode(n, peer1, 2, 3, 2))
+        n = fired(n, RBRTransitionId.Abstain, abstainMode(n, peer2, 3, 0))
+        n = fired(n, RBRTransitionId.VotingDeadline, Binding.empty)
+
+        // (0,(1,(V,0))) ⊕ (1,(2,(V,1))) → removed wins → (0,(2,(V,1)))
+        n = fired(
+          n,
+          RBRTransitionId.TallyRemovedWins,
+          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 1, Voted, 0), box(1, 2, Voted, 1))
+        )
+        // (0,(2,(V,1))) ⊕ (2,(3,(V,2))) → removed wins → (0,(3,(V,2)))
+        n = fired(
+          n,
+          RBRTransitionId.TallyRemovedWins,
+          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 2, Voted, 1), box(2, 3, Voted, 2))
+        )
+        // (0,(3,(V,2))) ⊕ (3,(0,(Abst,0))) → continuing wins → (0,(0,(V,2)))
+        n = fired(
+          n,
+          RBRTransitionId.TallyContinuingWins,
+          tallyMode(n, RBRTransitionId.TallyContinuingWins, peer0, box(0, 3, Voted, 2), box(3, 0, Abstained, 0))
         )
 
-        val fired = abstainedNet.fire(RBRTransitionId.RatchetAbstained, mode).toOption.get
-        val _ = assert(fired.placesMap(RBRPlaceId.Abstained).marking.get(peer0) == SafeLong(0))
-        assert(fired.placesMap(RBRPlaceId.Voted).marking.get((peer0, BigInt(1))) == SafeLong(1))
-    }
-
-    test("Abstain: a peer's pending ballot moves to abstained; voting it afterwards is disabled") {
-        val n = net
-        val abstain = n.transitionsMap(RBRTransitionId.Abstain)
-        val p = abstain.variables(0)
-        val mode = Binding.bind(Binding.empty, p, peer0)
-
-        val fired = n.fire(RBRTransitionId.Abstain, mode).toOption.get
-        val _ = assert(fired.placesMap(RBRPlaceId.AwaitingVote).marking.get(peer0) == SafeLong(0))
-        val _ = assert(fired.placesMap(RBRPlaceId.Abstained).marking.get(peer0) == SafeLong(1))
-        val _ = assert(fired.placesMap(RBRPlaceId.Collateral).marking.get(peer0) == SafeLong(1))
-
-        // The abstained peer can no longer vote (its pending ballot is gone)
-        val vote = n.transitionsMap(RBRTransitionId.Vote)
-        val voteMode = Binding.bind(
-          Binding.bind(Binding.empty, vote.variables(0), peer0),
-          vote.variables(1),
-          BigInt(1)
-        )
-        assert(!fired.isModeEnabled(RBRTransitionId.Vote, voteMode))
+        val ballots = n.placesMap(RBRPlaceId.Ballots).marking.multiplicityMap
+        val _ = assert(ballots.size == 1)
+        assert(ballotCount(n, box(0, 0, Voted, 2)) == SafeLong(1))
     }
