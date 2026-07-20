@@ -27,8 +27,9 @@ import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.ByteString
 
 /** The `/head/requests` queries through the HTTP layer against a stubbed [[ConsensusStoreReader]]:
-  * the head-wide and per-peer listings, and the request-details lifecycle ladder (UNPROCESSED →
-  * LOCALLY_PROCESSED → SOFT_CONFIRMED → HARD_CONFIRMED), plus the 404 / 400 edges.
+  * the listing (with its `?type=` / `?peer_number=` filters), keyed by the opaque request id, and
+  * the request-details lifecycle ladder (UNPROCESSED → LOCALLY_PROCESSED → SOFT_CONFIRMED →
+  * HARD_CONFIRMED), plus the 404 / 400 edges.
   */
 class HeadRequestsEndpointsTest extends AnyFunSuite:
 

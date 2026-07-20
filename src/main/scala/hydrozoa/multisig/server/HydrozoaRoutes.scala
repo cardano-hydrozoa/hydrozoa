@@ -536,7 +536,7 @@ class HydrozoaRoutes(
             hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
         } yield (softAt, hardAt)
 
-    /** The request-details body for `(peer, num)`, or a 404 when the head has assigned no such id.
+    /** The request-details body for a request id, or a 404 when the head has assigned no such id.
       * The lifecycle status resolves through the request → block index and the block's confirmation
       * records.
       */

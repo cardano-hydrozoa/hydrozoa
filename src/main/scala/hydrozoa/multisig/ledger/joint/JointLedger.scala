@@ -668,7 +668,7 @@ final case class JointLedger(
       *     `L2CommandNumber[blockNum]` (recover reads the fast-anchor entry and calls
       *     `l2Ledger.restoreTo` to co-anchor the committed L2 state, §R2b);
       *   - one request → (block, validity) reverse-index row per event in this block →
-      *     `RequestBlockIndex[(author, requestNum)]`.
+      *     `RequestBlockIndex[requestId]` (keyed by the opaque request id's packed i64).
       *
       * A head peer adds its own `Block` (leader) + `SoftAck` lanes on top
       * ([[persistOwnAckBundle]]); a coil peer persists exactly this subset
