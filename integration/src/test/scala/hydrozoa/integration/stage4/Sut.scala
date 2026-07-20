@@ -178,8 +178,8 @@ extension (self: UserRequestWithId)
 
     /** One-way loosing conversion */
     def asUserRequest: UserRequest = self match {
-        case UserRequestWithId.DepositRequest(_, r) =>
+        case UserRequestWithId.DepositRequest(_, r, _) =>
             UserRequest.DepositRequest(body = r.body)
-        case UserRequestWithId.TransactionRequest(_, r) =>
+        case UserRequestWithId.TransactionRequest(_, r, _) =>
             UserRequest.TransactionRequest(body = r.body)
     }

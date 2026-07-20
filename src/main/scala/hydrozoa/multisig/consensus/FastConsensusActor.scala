@@ -13,7 +13,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{SoftAck, SoftAckId}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockHeader, BlockNumber}
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 import scala.util.control.NonFatal
 import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.{ByteString, platform}
@@ -299,9 +299,13 @@ class FastConsensusActor(
 
         // Persist the SoftConfirmation record (header + aggregated multisig) before fanning out
         // (CR4 write-before-send). `softConfirmed` derives as max(SoftConfirmation.key); we keep
-        // the subsumed soft-acks (no compaction on confirmation).
+        // the subsumed soft-acks (no compaction on confirmation). The value carries this node's
+        // local confirmation moment (the instant its signature set saturated).
+        now <- IO.realTimeInstant
         _ <- persistence.write(
-          WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(confirmed)
+          WriteBatch.start.put(StoreKey.SoftConfirmation(confirmed.blockNum))(
+            Timestamped(now, confirmed)
+          )
         )
 
         // Fan out the soft-confirmed block. (Peer liaisons no longer receive BlockConfirmed: the

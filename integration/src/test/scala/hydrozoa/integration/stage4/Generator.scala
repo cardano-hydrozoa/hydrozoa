@@ -21,6 +21,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
+import java.time.Instant
 import scala.concurrent.duration.{DurationInt, DurationLong, FiniteDuration}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.AuxiliaryData.Metadata
@@ -191,7 +192,8 @@ object CommandGenerators:
                   requestId = state.nextRequestId(peerNum),
                   request = UserRequest.TransactionRequest(
                     body = body.asInstanceOf[TransactionRequestBody]
-                  )
+                  ),
+                  receivedAt = Instant.EPOCH
                 ),
                 txStrategy = txStrategy,
                 txMutator = txMutator,
@@ -324,7 +326,8 @@ object CommandGenerators:
                                           requestId = requestId,
                                           request = UserRequest.DepositRequest(
                                             body = body.asInstanceOf[DepositRequestBody]
-                                          )
+                                          ),
+                                          receivedAt = Instant.EPOCH
                                         ),
                                         l2Payload =
                                             depositRefundSeq.depositTx.depositProduced.l2Payload,
