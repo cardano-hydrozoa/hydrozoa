@@ -37,6 +37,9 @@ class StoreKeyTest extends AnyFunSuite:
               Cf.RequestBlockIndex,
           StoreKey.DepositAbsorptionIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
               Cf.DepositAbsorptionIndex,
+          StoreKey
+              .WithdrawalEffectIndex(RequestId(HeadPeerNumber(0), RequestNumber(0)), sampleHash) ->
+              Cf.WithdrawalEffectIndex,
           StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
           StoreKey.EffectStackIndex(sampleHash) -> Cf.EffectStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta
@@ -75,6 +78,24 @@ class StoreKeyTest extends AnyFunSuite:
         // Different authors: the author sits in the high bits, so each author's rows stay
         // contiguous. (1L << 40) - 1 is RequestNumber's maximum — the 40-bit low half.
         assert(java.util.Arrays.compareUnsigned(key(0, (1L << 40) - 1), key(1, 0)) < 0)
+    }
+
+    test(
+      "WithdrawalEffectIndex keys encode as [requestId i64 : 8][l1TxId : 32], request-prefixed"
+    ) {
+        def key(num: Long, txByte: Byte) =
+            StoreKey
+                .WithdrawalEffectIndex(
+                  RequestId(HeadPeerNumber(0), RequestNumber(num)),
+                  TransactionHash.fromByteString(ByteString.fromArray(Array.fill(32)(txByte)))
+                )
+                .encode
+        val k = key(7, 1)
+        val _ = assert(k.length == 40, s"encoded to ${k.length} bytes, expected 40")
+        // The request-id prefix (8 bytes) dominates, so a prefix scan by request id is contiguous;
+        // within one request, different l1TxIds are distinct rows.
+        val _ = assert(java.util.Arrays.compareUnsigned(key(1, 1), key(2, 1)) < 0)
+        assert(java.util.Arrays.compareUnsigned(key(1, 1), key(1, 2)) < 0)
     }
 
     test("singleton snapshot keys all encode to the same empty key") {

@@ -108,6 +108,14 @@ object Cf:
     case object DepositAbsorptionIndex extends Cf:
         def name = "DepositAbsorptionIndex"
 
+    /** Withdrawal-request → effect reverse index: a set of `(requestId, l1TxId)` pairs (both in the
+      * key, empty value), so a prefix scan by the packed-i64 request id yields the settlement /
+      * rollout / finalization txs that pay that request's L1-bound outputs. Written by SC at stack
+      * close.
+      */
+    case object WithdrawalEffectIndex extends Cf:
+        def name = "WithdrawalEffectIndex"
+
     /** Store-level metadata (schema version + arrival-stamp generation). */
     case object Meta extends Cf:
         def name = "Meta"
@@ -150,6 +158,7 @@ object Cf:
       EvacuationMap,
       RequestBlockIndex,
       DepositAbsorptionIndex,
+      WithdrawalEffectIndex,
       BlockStackIndex,
       EffectStackIndex,
       Meta

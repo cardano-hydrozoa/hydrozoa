@@ -11,6 +11,7 @@ import hydrozoa.multisig.persistence.recovery.CursorScan
 import java.nio.ByteBuffer
 import java.time.Instant
 import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 
 /** Read-only view over the consensus store for the user-facing HTTP API (the
   * [[hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader]] pattern): block briefs from the block spine,
@@ -65,6 +66,12 @@ trait ConsensusStoreReader[F[_]]:
       * unabsorbed (or the request is not a deposit).
       */
     def absorptionBlock(id: RequestId): F[Option[BlockNumber]]
+
+    /** The L1 effect txs that pay a withdrawing request's L1-bound outputs (settlement / rollout /
+      * finalization), by their `l1TxId`. Empty for a non-withdrawing request, or one whose covering
+      * stack has not closed yet.
+      */
+    def withdrawalEffects(id: RequestId): F[List[TransactionHash]]
 
     /** The wall-clock instant an arrival stamp was recorded at, via the store's per-generation
       * zero-time anchor. `None` for a stamp whose generation predates the anchor.
@@ -131,6 +138,21 @@ object ConsensusStoreReader:
             def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] =
                 persistence.get(StoreKey.DepositAbsorptionIndex(id))
 
+            def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] =
+                // Prefix scan the (requestId, l1TxId) index: seek to the 8-byte packed-i64 prefix,
+                // stop once the request-id prefix changes; each key's trailing 32 bytes are l1TxId.
+                CursorScan.cursorWalk(
+                  persistence.backend,
+                  Cf.WithdrawalEffectIndex,
+                  JournalKey.longBytes(id.asI64),
+                  keyBytes =>
+                      (
+                        ByteBuffer.wrap(keyBytes, 0, 8).getLong,
+                        TransactionHash.fromByteString(ByteString.fromArray(keyBytes.drop(8)))
+                      ),
+                  stop = (k: (Long, TransactionHash)) => k._1 != id.asI64
+                )((k, _) => k._2)
+
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 persistence.wallClockOf(stamp)
 
@@ -155,4 +177,5 @@ object ConsensusStoreReader:
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
             def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
