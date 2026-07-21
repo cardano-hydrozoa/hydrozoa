@@ -2,6 +2,7 @@ package hydrozoa.multisig.ledger.l2
 
 import cats.*
 import cats.data.*
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import scalus.uplc.builtin.ByteString
@@ -25,20 +26,30 @@ case class L2LedgerError(message: String) extends Throwable {
   *
   * @param payouts
   *   Payouts generated from [[L2LedgerCommand.ApplyTransaction]]
+  *
+  * @param payoutRequestIds
+  *   The producing request of each entry in `payouts`, in the same order (all payouts of one
+  *   `ApplyTransaction` share its `requestId`). Local-only provenance for withdrawal-effect
+  *   tracking; never on the wire or on-chain.
   */
 final case class L2LedgerState private (
     diffs: Vector[EvacuationDiff],
-    payouts: Vector[Payout.Obligation]
+    payouts: Vector[Payout.Obligation],
+    payoutRequestIds: Vector[RequestId]
 )
 
 object L2LedgerState:
-    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty)
+    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty, Vector.empty)
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
       * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerCommand]].
       */
-    protected[l2] def apply(diffs: Vector[EvacuationDiff], payouts: Vector[Payout.Obligation]) =
-        new L2LedgerState(diffs, payouts)
+    protected[l2] def apply(
+        diffs: Vector[EvacuationDiff],
+        payouts: Vector[Payout.Obligation],
+        payoutRequestIds: Vector[RequestId]
+    ) =
+        new L2LedgerState(diffs, payouts, payoutRequestIds)
 
 /** A trait defining an interface to interact with a black-box ledger component (i.e., via the Joint
   * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
@@ -163,7 +174,11 @@ trait L2Ledger[F[_]] {
               Kleisli(ledgerState =>
                   for {
                       resDiffs <- sendApplyDepositDecisions(req)
-                      newState = L2LedgerState(ledgerState.diffs ++ resDiffs, ledgerState.payouts)
+                      newState = L2LedgerState(
+                        ledgerState.diffs ++ resDiffs,
+                        ledgerState.payouts,
+                        ledgerState.payoutRequestIds
+                      )
                   } yield newState
               )
             )
@@ -174,8 +189,13 @@ trait L2Ledger[F[_]] {
           Kleisli(ledgerState =>
               for {
                   res <- sendApplyTransaction(req)
-                  newState =
-                      L2LedgerState(ledgerState.diffs ++ res._1, ledgerState.payouts ++ res._2)
+                  // All of this tx's payouts share its requestId — the ledger-agnostic provenance
+                  // tag for withdrawal-effect tracking (works for any L2 ledger backend).
+                  newState = L2LedgerState(
+                    ledgerState.diffs ++ res._1,
+                    ledgerState.payouts ++ res._2,
+                    ledgerState.payoutRequestIds ++ Vector.fill(res._2.length)(req.requestId)
+                  )
               } yield newState
           )
         )

@@ -25,6 +25,7 @@ object RolloutTxCodec:
           "tx" -> t.tx.asJson,
           "rolloutSpent" -> t.rolloutSpent.asJson,
           "payoutCount" -> t.payoutCount.asJson,
+          "payoutOffset" -> t.payoutOffset.asJson,
           "resolvedUtxos" -> t.resolvedUtxos.asJson
         )
     }
@@ -34,11 +35,13 @@ object RolloutTxCodec:
             tx <- c.downField("tx").as[Transaction]
             rolloutSpent <- c.downField("rolloutSpent").as[RolloutUtxo]
             payoutCount <- c.downField("payoutCount").as[Int]
+            payoutOffset <- c.downField("payoutOffset").as[Int]
             resolvedUtxos <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield RolloutTx.Last(
           tx = tx,
           rolloutSpent = rolloutSpent,
           payoutCount = payoutCount,
+          payoutOffset = payoutOffset,
           resolvedUtxos = resolvedUtxos
         )
     }
@@ -49,6 +52,7 @@ object RolloutTxCodec:
           "rolloutSpent" -> t.rolloutSpent.asJson,
           "rolloutProduced" -> t.rolloutProduced.asJson,
           "payoutCount" -> t.payoutCount.asJson,
+          "payoutOffset" -> t.payoutOffset.asJson,
           "resolvedUtxos" -> t.resolvedUtxos.asJson
         )
     }
@@ -63,12 +67,14 @@ object RolloutTxCodec:
                 .downField("rolloutProduced")
                 .as[RolloutUtxo]
             payoutCount <- c.downField("payoutCount").as[Int]
+            payoutOffset <- c.downField("payoutOffset").as[Int]
             resolvedUtxos <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield RolloutTx.NotLast(
           tx = tx,
           rolloutSpent = rolloutSpent,
           rolloutProduced = rolloutProduced,
           payoutCount = payoutCount,
+          payoutOffset = payoutOffset,
           resolvedUtxos = resolvedUtxos
         )
     }

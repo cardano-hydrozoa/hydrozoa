@@ -36,7 +36,8 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
         for {
             multiNodeConfig <- MultiNodeConfig.generate(TestPeersSpec.default)()
             payouts <- genPayouts(multiNodeConfig.headConfig)
-        } yield RolloutTx.Build.Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts)
+        } yield RolloutTx.Build
+            .Last(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, payouts.length)
 
     given ppNotLastBuilder: (RolloutTx.Build.NotLast => Pretty) = _ =>
         Pretty(_ => "NotLast (too long to print)")
@@ -46,7 +47,11 @@ object RolloutTxTest extends Properties("RolloutTxTest") {
             payouts <- genPayouts(multiNodeConfig.headConfig)
             rolloutSpentVal <- Gen.choose(1, 100_000_000).map((x: Int) => Value(Coin(x)))
         } yield RolloutTx.Build
-            .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(payouts, rolloutSpentVal)
+            .NotLast(multiNodeConfig.nodeConfigs(HeadPeerNumber.zero))(
+              payouts,
+              rolloutSpentVal,
+              payouts.length
+            )
 
     // ===================================
     // Last

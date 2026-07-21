@@ -48,6 +48,13 @@ object SettlementTx {
 
     sealed trait WithPayouts extends SettlementTx {
         def payoutCount: Int
+
+        /** The start index, in the settlement's original ordered payout-obligation vector, of the
+          * contiguous slice this tx discharges directly (`[payoutOffset, payoutOffset +
+          * payoutCount)` — the merged first rollout's slice). Off-tx provenance for
+          * withdrawal-effect tracking.
+          */
+        def payoutOffset: Int
     }
 
     sealed trait NoRollouts extends SettlementTx
@@ -74,6 +81,7 @@ object SettlementTx {
         override val treasuryProduced: MultisigTreasuryUtxo,
         override val depositsSpent: List[DepositUtxo],
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
@@ -90,6 +98,7 @@ object SettlementTx {
         override val depositsSpent: List[DepositUtxo],
         override val rolloutProduced: RolloutUtxo,
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[SettlementTx, Transaction] =
             Focus[WithRollouts](_.tx).asInstanceOf[Lens[SettlementTx, Transaction]]
@@ -390,6 +399,7 @@ private object SettlementTxOps {
 
                 withOnlyDirectPayouts = (
                     payoutCount: Int,
+                    payoutOffset: Int,
                     treasuryProduced: MultisigTreasuryUtxo
                 ) =>
                     Result.WithOnlyDirectPayouts(
@@ -403,12 +413,14 @@ private object SettlementTxOps {
                         settlementTxEndTime = settlementTxEndTime,
                         depositsSpent = depositsToSpend,
                         payoutCount = payoutCount,
+                        payoutOffset = payoutOffset,
                         resolvedUtxos = finished.resolvedUtxos
                       )
                     )
 
                 withRollouts = (
                     payoutCount: Int,
+                    payoutOffset: Int,
                     rollouts: RolloutTxSeq.PartialResult,
                     treasuryProduced: MultisigTreasuryUtxo
                 ) => {
@@ -424,6 +436,7 @@ private object SettlementTxOps {
                         // this is safe since we always set ttl
                         settlementTxEndTime = settlementTxEndTime,
                         payoutCount = payoutCount,
+                        payoutOffset = payoutOffset,
                         resolvedUtxos = finished.resolvedUtxos
                       ),
                       rolloutTxSeqPartial = rollouts,
@@ -434,14 +447,16 @@ private object SettlementTxOps {
                     case TryMerge.Result.NotMerged =>
                         Complete
                             .treasuryProduced(finished, rolloutTxSeqPartial.totalFee)
-                            .flatMap(utxo => Right(withRollouts(0, rolloutTxSeqPartial, utxo)))
-                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
+                            .flatMap(utxo => Right(withRollouts(0, 0, rolloutTxSeqPartial, utxo)))
+                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount, payoutOffset) =>
                         mbFirstSkipped match {
                             case None =>
                                 Complete
                                     .treasuryProduced(finished, Coin.zero)
                                     .flatMap(utxo =>
-                                        Right(withOnlyDirectPayouts(payoutCount, utxo))
+                                        Right(
+                                          withOnlyDirectPayouts(payoutCount, payoutOffset, utxo)
+                                        )
                                     )
                             case Some(firstSkipped) =>
                                 Complete
@@ -450,6 +465,7 @@ private object SettlementTxOps {
                                         Right(
                                           withRollouts(
                                             payoutCount,
+                                            payoutOffset,
                                             firstSkipped.partialResult,
                                             utxo
                                           )
@@ -498,7 +514,8 @@ private object SettlementTxOps {
                         mbRolloutTxSeqPartialSkipped: Option[
                           RolloutTxSeq.PartialResult.SkipFirst
                         ],
-                        payoutCount: Int
+                        payoutCount: Int,
+                        payoutOffset: Int
                     )
                 }
 
@@ -548,7 +565,8 @@ private object SettlementTxOps {
                             else
                                 Merged(
                                   mbRolloutTxSeqPartialSkipped = rolloutTxSeqPartial.skipFirst,
-                                  payoutCount = firstRolloutTxPartial.payoutCount
+                                  payoutCount = firstRolloutTxPartial.payoutCount,
+                                  payoutOffset = firstRolloutTxPartial.builder.payoutOffset
                                 )
 
                     } yield (newCtx, mergeResult)

@@ -434,6 +434,7 @@ final case class JointLedger(
                   brief = blockBrief,
                   evacuationMapDiff = evacDiffs,
                   payoutObligations = newJlState.l2LedgerState.payouts.toList,
+                  payoutRequestIds = newJlState.l2LedgerState.payoutRequestIds.toList,
                   postDatedRefundTxs = pBlockBrief.userRequestState.postDatedRefundTxs.toList,
                   absorbedDeposits = split.decisions.absorbed.depositUtxos,
                   competingFallbackTxTime = pBlockBrief.competingFallbackTxTime
@@ -573,15 +574,17 @@ final case class JointLedger(
 
                 _ <- state.set(p.done(blockBrief.header))
 
-                // Final block: the fast side does not maintain the cumulative evacuation
-                // map, so it cannot enumerate the drain. evacuationMapDiff / payoutObligations
-                // are empty here; the slow side fills them from its own cumulative state (see
-                // StackEffectsBuilder).
-                // TODO: verify - don't we get the diff to drain everything from L2?
+                // Final block: the fast side does not maintain the cumulative evacuation map, so it
+                // cannot enumerate the residual-balance drain — `evacuationMapDiff` is empty and the
+                // slow side recovers those from its own running map. But the final block's OWN
+                // withdrawals (`payouts`) are real L2 requests that must still be paid out, so they
+                // ride here in `payoutObligations` (with their provenance); the finalization tx pays
+                // them alongside the residual balances (StackEffectsBuilder Final branch).
                 blockResult = BlockResult(
                   brief = blockBrief,
                   evacuationMapDiff = Nil,
-                  payoutObligations = Nil,
+                  payoutObligations = p.l2LedgerState.payouts.toList,
+                  payoutRequestIds = p.l2LedgerState.payoutRequestIds.toList,
                   postDatedRefundTxs = Nil,
                   absorbedDeposits = Nil,
                   competingFallbackTxTime = p.competingFallbackTxTime

@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.block
 
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
@@ -24,9 +25,10 @@ import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
   *   - `payoutObligations` — L2 **withdrawal** obligations visible at this block (snapshot of the
   *     L2 ledger's `payouts` after this block's L2 mutations applied) — funds an L2 request moves
   *     out to L1. A Major block's snapshot drains into its own settlement tx
-  *     (`mkSettlementTxSeq.payoutObligations`). Final blocks ignore this field: JointLedger emits
-  *     no cumulative snapshot for Final, so the builder recovers the remaining payouts from its
-  *     running evacuation map.
+  *     (`mkSettlementTxSeq.payoutObligations`); the **Final** block's snapshot drains into its
+  *     finalization tx alongside the running evacuation map's residual balances.
+  *   - `payoutRequestIds` — the producing request of each `payoutObligations` entry, in the same
+  *     order (local-only provenance for withdrawal-effect tracking; never on the wire or on-chain).
   *   - `postDatedRefundTxs` — pre-built refund txs from deposit registration (signed at deposit
   *     time per spec); the L1 way to return a deposit that was not absorbed. The builder collects
   *     them per partition (`partitionRefunds`) into each Minor / Major `PartitionEffects.refunds`.
@@ -41,6 +43,7 @@ final case class BlockResult(
     brief: BlockBrief.Next,
     evacuationMapDiff: Seq[EvacuationDiff],
     payoutObligations: List[Payout.Obligation],
+    payoutRequestIds: List[RequestId],
     postDatedRefundTxs: List[RefundTx.PostDated],
     absorbedDeposits: List[DepositUtxo],
     competingFallbackTxTime: FallbackTxStartTime
@@ -57,6 +60,7 @@ final case class BlockResult(
         BlockResult.Persisted(
           evacuationMapDiff,
           payoutObligations,
+          payoutRequestIds,
           postDatedRefundTxs,
           absorbedDeposits,
           competingFallbackTxTime
@@ -70,6 +74,7 @@ object BlockResult:
     final case class Persisted(
         evacuationMapDiff: Seq[EvacuationDiff],
         payoutObligations: List[Payout.Obligation],
+        payoutRequestIds: List[RequestId],
         postDatedRefundTxs: List[RefundTx.PostDated],
         absorbedDeposits: List[DepositUtxo],
         competingFallbackTxTime: FallbackTxStartTime
@@ -83,6 +88,7 @@ object BlockResult:
           brief,
           p.evacuationMapDiff,
           p.payoutObligations,
+          p.payoutRequestIds,
           p.postDatedRefundTxs,
           p.absorbedDeposits,
           p.competingFallbackTxTime

@@ -39,6 +39,13 @@ object FinalizationTx {
 
     sealed trait WithPayouts extends FinalizationTx {
         def payoutCount: Int
+
+        /** The start index, in the finalization's original ordered payout-obligation vector, of the
+          * contiguous slice this tx discharges directly (`[payoutOffset, payoutOffset +
+          * payoutCount)` — the merged first rollout's slice). Off-tx provenance for
+          * withdrawal-effect tracking.
+          */
+        def payoutOffset: Int
     }
 
     sealed trait NoRollouts extends FinalizationTx
@@ -63,6 +70,7 @@ object FinalizationTx {
         override val treasurySpent: MultisigTreasuryUtxo,
         override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithOnlyDirectPayouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -79,6 +87,7 @@ object FinalizationTx {
         override val multisigRegimeUtxoSpent: MultisigRegimeUtxo,
         override val rolloutProduced: RolloutUtxo,
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos,
         override val txLens: Lens[FinalizationTx, Transaction] =
             Focus[WithRollouts](_.tx).asInstanceOf[Lens[FinalizationTx, Transaction]]
@@ -366,7 +375,7 @@ private object FinalizationTxOps {
                 (finished, mergeResult) = mergeTrial
                 tx = finished.ctx.transaction
 
-                withOnlyDirectPayouts = (payoutCount: Int) =>
+                withOnlyDirectPayouts = (payoutCount: Int, payoutOffset: Int) =>
                     Result.WithOnlyDirectPayouts(
                       transaction = FinalizationTx.WithOnlyDirectPayouts(
                         majorVersionProduced = majorVersionProduced,
@@ -375,12 +384,14 @@ private object FinalizationTxOps {
                         tx = tx,
                         finalizationTxEndTime = finalizationTxEndTime,
                         payoutCount = payoutCount,
+                        payoutOffset = payoutOffset,
                         resolvedUtxos = finished.ctx.resolvedUtxos
                       )
                     )
 
                 withRollouts = (
                     payoutCount: Int,
+                    payoutOffset: Int,
                     rollouts: RolloutTxSeq.PartialResult
                 ) =>
                     val totalFee = rolloutTxSeqPartial.totalFee
@@ -411,6 +422,7 @@ private object FinalizationTxOps {
                               // this is safe since we always set ttl
                               finalizationTxEndTime = finalizationTxEndTime,
                               payoutCount = payoutCount,
+                              payoutOffset = payoutOffset,
                               resolvedUtxos = finished.ctx.resolvedUtxos
                             ),
                             rolloutTxSeqPartial = rollouts,
@@ -418,12 +430,12 @@ private object FinalizationTxOps {
                         )
 
                 res <- mergeResult match {
-                    case TryMerge.Result.NotMerged => withRollouts(0, rolloutTxSeqPartial)
-                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount) =>
+                    case TryMerge.Result.NotMerged => withRollouts(0, 0, rolloutTxSeqPartial)
+                    case TryMerge.Result.Merged(mbFirstSkipped, payoutCount, payoutOffset) =>
                         mbFirstSkipped match {
-                            case None => Right(withOnlyDirectPayouts(payoutCount))
+                            case None => Right(withOnlyDirectPayouts(payoutCount, payoutOffset))
                             case Some(firstSkipped) =>
-                                withRollouts(payoutCount, firstSkipped.partialResult)
+                                withRollouts(payoutCount, payoutOffset, firstSkipped.partialResult)
                         }
                 }
             } yield res
@@ -466,7 +478,8 @@ private object FinalizationTxOps {
                         mbRolloutTxSeqPartialSkipped: Option[
                           RolloutTxSeq.PartialResult.SkipFirst
                         ],
-                        payoutCount: Int
+                        payoutCount: Int,
+                        payoutOffset: Int
                     )
                 }
 
@@ -519,7 +532,8 @@ private object FinalizationTxOps {
                             else
                                 Merged(
                                   mbRolloutTxSeqPartialSkipped = rolloutTxSeqPartial.skipFirst,
-                                  payoutCount = firstRolloutTxPartial.payoutCount
+                                  payoutCount = firstRolloutTxPartial.payoutCount,
+                                  payoutOffset = firstRolloutTxPartial.builder.payoutOffset
                                 )
 
                     } yield (finishedState, mergeResult)

@@ -72,6 +72,7 @@ object SettlementTxCodec:
           "treasuryProduced" -> t.treasuryProduced.asJson,
           "depositsSpent" -> t.depositsSpent.asJson,
           "payoutCount" -> t.payoutCount.asJson,
+          "payoutOffset" -> t.payoutOffset.asJson,
           "resolvedUtxos" -> t.resolvedUtxos.asJson
         )
     }
@@ -88,6 +89,7 @@ object SettlementTxCodec:
             tp <- c.downField("treasuryProduced").as[MultisigTreasuryUtxo]
             ds <- c.downField("depositsSpent").as[List[DepositUtxo]]
             pc <- c.downField("payoutCount").as[Int]
+            po <- c.downField("payoutOffset").as[Int]
             ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield SettlementTx.WithOnlyDirectPayouts(
           settlementTxEndTime = set,
@@ -98,6 +100,7 @@ object SettlementTxCodec:
           treasuryProduced = tp,
           depositsSpent = ds,
           payoutCount = pc,
+          payoutOffset = po,
           resolvedUtxos = ru
         )
     }
@@ -114,6 +117,7 @@ object SettlementTxCodec:
               "depositsSpent" -> t.depositsSpent.asJson,
               "rolloutProduced" -> t.rolloutProduced.asJson,
               "payoutCount" -> t.payoutCount.asJson,
+              "payoutOffset" -> t.payoutOffset.asJson,
               "resolvedUtxos" -> t.resolvedUtxos.asJson
             )
         }
@@ -130,6 +134,7 @@ object SettlementTxCodec:
                 ds <- c.downField("depositsSpent").as[List[DepositUtxo]]
                 rp <- c.downField("rolloutProduced").as[RolloutUtxo]
                 pc <- c.downField("payoutCount").as[Int]
+                po <- c.downField("payoutOffset").as[Int]
                 ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
             yield SettlementTx.WithRollouts(
               settlementTxEndTime = set,
@@ -141,6 +146,7 @@ object SettlementTxCodec:
               depositsSpent = ds,
               rolloutProduced = rp,
               payoutCount = pc,
+              payoutOffset = po,
               resolvedUtxos = ru
             )
         }

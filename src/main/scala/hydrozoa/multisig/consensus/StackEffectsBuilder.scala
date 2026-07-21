@@ -149,15 +149,18 @@ object StackEffectsBuilder {
                                 )
                         }
                     case StackPartition.Kind.Final =>
-                        // Final block drains the entire evac map. JointLedger emits no
-                        // `delete-all` diff / cumulative `payoutObligations` for Final blocks
-                        // (it does not maintain the cumulative map); we recover both from the
-                        // slow-side running map here: payoutObligations = the map's values; the
-                        // map is reset to empty for any subsequent partition / stack. The
-                        // treasury is drained by finalization, so it is left unchanged (chain
-                        // ends here).
+                        // The finalization tx pays out two things: the final block's OWN withdrawals
+                        // (`fin.payoutObligations` — real L2 requests, never settled by a Major
+                        // since the final block is not Major), and the residual L2 balances. The
+                        // fast side does not maintain the cumulative evac map, so it emits no
+                        // `delete-all` diff and leaves the residual drain to us: we recover it from
+                        // the slow-side running map (`runningMap.outputs`). Withdrawals come first so
+                        // they stay a recognizable prefix (they carry request provenance; the
+                        // residual balances do not). The map is reset to empty for any subsequent
+                        // partition / stack; the treasury is drained by finalization (chain ends).
                         val fin = p.blocks.head
-                        val payoutObligationsRemaining = runningMap.outputs.toVector
+                        val payoutObligationsRemaining =
+                            fin.payoutObligations.toVector ++ runningMap.outputs.toVector
                         finalizeLedger(
                           config = config,
                           treasury = tre,

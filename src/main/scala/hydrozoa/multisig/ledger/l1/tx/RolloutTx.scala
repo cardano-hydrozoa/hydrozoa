@@ -24,6 +24,12 @@ sealed trait RolloutTx extends EnrichedTx[RolloutTx], RolloutUtxo.Spent, Rollout
     def tx: Transaction
     def txLens: Lens[RolloutTx, Transaction]
     def payoutCount: Int
+
+    /** The start index, in the sequence's original ordered payout-obligation vector, of the
+      * contiguous slice this tx discharges (`[payoutOffset, payoutOffset + payoutCount)`). Off-tx
+      * provenance for withdrawal-effect tracking; never serialized into the tx.
+      */
+    def payoutOffset: Int
 }
 
 object RolloutTx {
@@ -40,6 +46,7 @@ object RolloutTx {
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx {
         override def transactionFamily: String = "RolloutTx.Last"
@@ -57,6 +64,7 @@ object RolloutTx {
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
         override val payoutCount: Int,
+        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
           RolloutUtxo.Produced {
@@ -73,6 +81,7 @@ private object RolloutTxOps {
 
         final case class Last(override val config: Config)(
             override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
+            override val total: Int
         ) extends Build[RolloutTx.Last](mbRolloutOutputValue = None) {
 
             /** Post-process a transaction builder context into a [[RolloutTx.Last]].
@@ -87,7 +96,8 @@ private object RolloutTxOps {
 
         final case class NotLast(override val config: Config)(
             override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
-            rolloutOutputValue: Value
+            rolloutOutputValue: Value,
+            override val total: Int
         ) extends Build[RolloutTx.NotLast](mbRolloutOutputValue = Some(rolloutOutputValue)) {
             override def postProcess(ctx: TransactionBuilder.Context): RolloutTx.NotLast =
                 this.PostProcess.notLast(ctx)
@@ -125,6 +135,17 @@ private object RolloutTxOps {
         extends Payout.Obligation.Many.Remaining.NonEmpty {
         import Build.*
         def config: Build.Config
+
+        /** The size of the sequence's original ordered payout-obligation vector. This build was
+          * handed a suffix of it (`nePayoutObligationsRemaining`), so the slice it discharges
+          * starts at [[payoutOffset]] — off-tx provenance for withdrawal-effect tracking.
+          */
+        def total: Int
+
+        /** The start index of this tx's discharged slice in the original vector — the obligations
+          * before it are exactly those a suffix does not cover.
+          */
+        final val payoutOffset: Int = total - nePayoutObligationsRemaining.length
 
         private val mbRolloutOutput = mbRolloutOutputValue.map(v =>
             TxOutput.Babbage(
@@ -274,6 +295,7 @@ private object RolloutTxOps {
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   tx = ctx.transaction,
                   payoutCount = payoutCount(ctx),
+                  payoutOffset = payoutOffset,
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }
@@ -301,6 +323,7 @@ private object RolloutTxOps {
                   rolloutProduced = RolloutUtxo(rolloutProduced),
                   tx = tx,
                   payoutCount = payoutCount(ctx),
+                  payoutOffset = payoutOffset,
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }

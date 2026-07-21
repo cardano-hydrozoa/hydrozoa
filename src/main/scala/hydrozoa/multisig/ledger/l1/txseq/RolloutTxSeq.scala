@@ -54,9 +54,13 @@ private object RolloutTxSeqOps {
           * working towards the first.
           * @return
           */
+        // The size of the original obligation vector — every single-builder is handed a suffix of
+        // it, so each tx's discharged slice starts at `total - suffix.size` (its `payoutOffset`).
+        private val total: Int = payouts.length
+
         lazy val partialResult: BuilderResultSimple[PartialResult] =
             for {
-                lastRolloutTx <- singleBuilderLast(payouts).partialResult
+                lastRolloutTx <- singleBuilderLast(payouts, total).partialResult
                 partialResult <- lastRolloutTx match {
                     case only: SinglePartialResult.First[RolloutTx.Last] =>
                         Right(PartialResult.Singleton(only))
@@ -65,7 +69,8 @@ private object RolloutTxSeqOps {
                         for {
                             current <- singleBuilderNotLast(
                               last.nePayoutObligationsRemaining,
-                              last.inputValueNeeded
+                              last.inputValueNeeded,
+                              total
                             ).partialResult
                             loopResult <- loop(current, initialState)
                         } yield loopResult
@@ -82,7 +87,8 @@ private object RolloutTxSeqOps {
                     val newAcc = acc.copy(notLast = intermediate +: acc.notLast)
                     val eNewCurrent = singleBuilderNotLast(
                       intermediate.nePayoutObligationsRemaining,
-                      intermediate.inputValueNeeded
+                      intermediate.inputValueNeeded,
+                      total
                     ).partialResult
                     eNewCurrent match {
                         case Right(newCurrent) => loop(newCurrent, newAcc)

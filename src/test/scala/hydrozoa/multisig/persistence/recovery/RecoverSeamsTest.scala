@@ -577,6 +577,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               brief = minorBrief(blockNum, now),
               evacuationMapDiff = Nil,
               payoutObligations = Nil,
+              payoutRequestIds = Nil,
               postDatedRefundTxs = Nil,
               absorbedDeposits = Nil,
               competingFallbackTxTime = headConfig.txTiming.newFallbackStartTime(end)
