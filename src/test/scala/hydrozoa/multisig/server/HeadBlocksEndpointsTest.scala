@@ -151,6 +151,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
         ActorSystem[IO]("HeadBlocksEndpointsTest")

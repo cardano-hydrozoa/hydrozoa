@@ -165,6 +165,11 @@ class EffectsResolverTest extends AnyFunSuite:
                     RequestBlockEntry(BlockNumber(1), ValidityFlag.Valid)
                   )
                 )
+            // The deposit's absorbing block is the minor block 1 (its partition has no settlement),
+            // so absorption resolves to no effect — the positive major-settlement path is exercised
+            // by the stage suites, which build real settlement transactions.
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] =
+                IO.pure(Option.when(id == depositRequestId)(BlockNumber(1)))
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
 
     private val resolver = EffectsResolver(reader)

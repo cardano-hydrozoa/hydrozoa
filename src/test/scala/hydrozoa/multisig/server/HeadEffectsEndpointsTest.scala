@@ -151,6 +151,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                     RequestBlockEntry(BlockNumber(1), ValidityFlag.Valid)
                   )
                 )
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
 
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =

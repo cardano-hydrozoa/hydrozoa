@@ -35,6 +35,8 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
           StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
               Cf.RequestBlockIndex,
+          StoreKey.DepositAbsorptionIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
+              Cf.DepositAbsorptionIndex,
           StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
           StoreKey.EffectStackIndex(sampleHash) -> Cf.EffectStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta

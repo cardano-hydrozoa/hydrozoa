@@ -89,28 +89,54 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
       *
       * A transaction's effects are the carriers of its inclusion-block partition: the SEC for a
       * minor partition, the settlement for a major, the finalization for the final. A deposit's
-      * effect is its post-dated refund, matched by the `requestId` the refund carries, in the
-      * partition of the block where the deposit was registered. (A deposit's absorbing settlement
-      * is a separate link, tracked via the deposit-absorption index.)
+      * effects are its post-dated refund (matched by the `requestId` the refund carries, in the
+      * registration-block partition) and, once absorbed, the settlement of its absorbing block's
+      * partition (via the deposit-absorption index).
       */
     def relatedEffects(requestId: RequestId): IO[List[ResolvedEffect]] =
         reader.request(requestId).flatMap {
             case None => IO.pure(Nil)
             case Some(stamped) =>
-                reader.requestBlock(requestId).flatMap {
-                    case None => IO.pure(Nil)
-                    case Some(entry) =>
-                        partitionForBlock(entry.blockNum).map {
-                            case None => Nil
-                            case Some((blockNums, pe)) =>
-                                stamped.payload match
-                                    case _: UserRequestWithId.DepositRequest =>
-                                        depositRefundEffect(requestId, entry.blockNum, pe).toList
-                                    case _: UserRequestWithId.TransactionRequest =>
-                                        carrierEffects(blockNums.head, pe)
-                        }
+                stamped.payload match
+                    case _: UserRequestWithId.TransactionRequest => transactionEffects(requestId)
+                    case _: UserRequestWithId.DepositRequest     => depositEffects(requestId)
+        }
+
+    /** A transaction's carriers: the effects of its inclusion-block partition. */
+    private def transactionEffects(requestId: RequestId): IO[List[ResolvedEffect]] =
+        reader.requestBlock(requestId).flatMap {
+            case None => IO.pure(Nil)
+            case Some(entry) =>
+                partitionForBlock(entry.blockNum).map {
+                    case None                  => Nil
+                    case Some((blockNums, pe)) => carrierEffects(blockNums.head, pe)
                 }
         }
+
+    /** A deposit's effects: its post-dated refund (registration-block partition) and, once
+      * absorbed, the settlement of its absorbing block's partition.
+      */
+    private def depositEffects(requestId: RequestId): IO[List[ResolvedEffect]] =
+        val refund: IO[List[ResolvedEffect]] =
+            reader.requestBlock(requestId).flatMap {
+                case None => IO.pure(Nil)
+                case Some(entry) =>
+                    partitionForBlock(entry.blockNum).map {
+                        case None => Nil
+                        case Some((_, pe)) =>
+                            depositRefundEffect(requestId, entry.blockNum, pe).toList
+                    }
+            }
+        val settlement: IO[List[ResolvedEffect]] =
+            reader.absorptionBlock(requestId).flatMap {
+                case None => IO.pure(Nil)
+                case Some(block) =>
+                    partitionForBlock(block).map {
+                        case None                  => Nil
+                        case Some((blockNums, pe)) => settlementEffect(blockNums.head, pe).toList
+                    }
+            }
+        (refund, settlement).mapN(_ ++ _)
 
     /** Every effect a hard-confirmed stack carries, attributed per block. Empty when the stack is
       * not hard-confirmed.
@@ -282,6 +308,19 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
                   ResolvedEffect
                       .Sec(EffectIds.secL1TxId(p.sec.commitment), p.sec.commitment.blockNum, p.sec)
                 )
+
+    /** The settlement of a major partition — the effect that absorbs its deposits — if any. */
+    private def settlementEffect(
+        opener: BlockNumber,
+        pe: PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]
+    ): Option[ResolvedEffect] =
+        pe match
+            case p: Major[StandaloneEvacuationCommitment.MultiSigned] =>
+                Some(
+                  ResolvedEffect
+                      .Tx(p.settlement.tx.id, opener, EffectKind.Settlement, p.settlement.tx, None)
+                )
+            case _ => None
 
     /** A deposit's post-dated refund in `pe`, matched by the `requestId` it carries; attributed to
       * the deposit's registration block.

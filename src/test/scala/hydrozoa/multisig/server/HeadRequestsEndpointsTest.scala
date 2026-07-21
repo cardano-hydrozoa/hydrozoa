@@ -110,6 +110,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   processed.filter(_ => id == RequestId(peer0, RequestNumber(0)))
                 )
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
             def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
             def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
