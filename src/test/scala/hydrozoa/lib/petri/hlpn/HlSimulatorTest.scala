@@ -102,3 +102,37 @@ class HlSimulatorTest extends AnyFunSuite:
         // 2 present peers × 2 free vote values
         assert(sim.enabledModes("castVote").size == 4)
     }
+
+    test("the unifying selector finds the same enabled modes as enumerating") {
+        val n = net(ms("p0" -> 1, "p2" -> 1))
+        val enumerated = HlSimulator(n, ModeSelector.enumerating)
+            .enabledModes("advance")
+            .flatMap(Binding.lookup(_, p))
+            .toSet
+        val unified = HlSimulator(n, ModeSelector.unifying)
+            .enabledModes("advance")
+            .flatMap(Binding.lookup(_, p))
+            .toSet
+        // unification binds p from the *present* tokens — never proposing the absent p1.
+        val _ = assert(unified == Set("p0", "p2"))
+        assert(unified == enumerated)
+    }
+
+    test("the unifying selector unifies the input variable and enumerates the free one") {
+        val b = NetBuilder[String, String]()
+        val program =
+            for
+                pending <- b.place("pending", Tokens(ms("p0" -> 1, "p1" -> 1), peer))
+                castVote <- b.transition("castVote", List(p, v), Guard.True)
+                _ <- b.input(pending, castVote, wp)
+            yield ()
+        val net = b.build(program).toOption.get // HlNet[String, String, Any]
+        def assignments(selector: ModeSelector[String, String, Any]) =
+            HlSimulator(net, selector)
+                .enabledModes("castVote")
+                .map(m => (Binding.lookup(m, p), Binding.lookup(m, v)))
+                .toSet
+        // p unified against the 2 present peers, v enumerated over its 2 carrier values.
+        val _ = assert(assignments(ModeSelector.unifying).size == 4)
+        assert(assignments(ModeSelector.unifying) == assignments(ModeSelector.enumerating))
+    }

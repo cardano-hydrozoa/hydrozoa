@@ -1,5 +1,7 @@
 package hydrozoa.lib.petri.hlpn
 
+import hydrozoa.lib.petri.net.components.Arc
+
 /** A strategy for proposing candidate modes of a transition — the pluggable search side of HLPN
   * simulation (enumeration, unification, or a domain-specific method).
   *
@@ -21,30 +23,130 @@ object ModeSelector {
 
     /** The enumerating selector: the cartesian product of the transition's variable carriers.
       * Complete for the symmetric-net fragment (finite classes) but exponential in the variable
-      * count and materializes each class — suits small nets; a unification-based selector that
-      * matches inscriptions against the tokens present in the marking is the scalable alternative.
+      * count and materializes each class — suits small nets. See [[unifying]] for the scalable
+      * alternative.
       */
     def enumerating[PlaceId, TransitionId, C]: ModeSelector[PlaceId, TransitionId, C] =
         (net, tid) =>
-            net.transitionsMap.get(tid) match {
-                case None             => LazyList.empty
-                case Some(transition) => candidateBindings(transition.variables)
-            }
+            net.transitionsMap
+                .get(tid)
+                .fold(LazyList.empty)(t => complete(Binding.empty, t.variables))
 
-    /** All candidate bindings: the cartesian product of each variable's carrier. */
-    private def candidateBindings[C](variables: List[Var[C]]): LazyList[Binding] =
-        variables.foldLeft(LazyList(Binding.empty)) { (bindings, v) =>
+    /** The unifying selector: bind each variable by *matching* the transition's input-arc
+      * inscriptions against the tokens actually present in `M(p)`, rather than enumerating
+      * carriers.
+      *
+      * For every input arc `p → t`, each weighted-color leaf of its inscription is unified against
+      * each token in `M(p)` (a partial binding, or nothing). Those partials are joined across all
+      * input leaves — a shared variable must resolve consistently — so the bound variables are
+      * pinned by real tokens, bounded by the *marking* size, not the class size. Variables the
+      * transition declares but no input arc mentions ("free" — e.g. the vote value in `castVote`,
+      * or `versionNew` in a ratchet) cannot be matched, so those alone are enumerated.
+      *
+      * Complete: every enabled mode `β` has `W(p,t)⟦β⟧ ≤ M(p)`, so each input leaf's color under
+      * `β` is a present token that the unification recovers; the free part is enumerated. It may
+      * over-propose (multiplicity and the guard are not checked here) — [[HlSimulator]] filters.
+      */
+    def unifying[PlaceId, TransitionId, C]: ModeSelector[PlaceId, TransitionId, C] =
+        (net, tid) =>
+            net.transitionsMap.get(tid) match
+                case None             => LazyList.empty
+                case Some(transition) =>
+                    // Each input-arc leaf: a color term paired with the tokens present in its place.
+                    val demands: List[(ColorTerm[?], List[Any])] =
+                        net.arcsMap.toList
+                            .collect {
+                                case (Arc.Flow.Pt(place, t), arc) if t == tid =>
+                                    (arc.inscription, net.marking(place))
+                            }
+                            .flatMap { (inscription, marking) =>
+                                val tokens = marking.multiplicityMap.keys.toList
+                                leaves(inscription).map(term => (term, tokens))
+                            }
+
+                    // Join: partial bindings consistent with every input demand.
+                    val partials = demands.foldLeft(LazyList(Binding.empty)) {
+                        case (bindings, (term, tokens)) =>
+                            for
+                                partial <- bindings
+                                token <- LazyList.from(tokens)
+                                unified <- unify(term, token, partial).to(LazyList)
+                            yield unified
+                    }
+
+                    // Variables the input arcs never bind still need enumerating.
+                    val boundVars = demands.flatMap((term, _) => termVars(term)).toSet
+                    val freeVars = transition.variables.filterNot(boundVars.contains)
+
+                    partials.flatMap(complete(_, freeVars))
+
+    /** Extend `partial` by binding each variable in `vars` to every color of its carrier — the
+      * cartesian completion shared by [[enumerating]] (all variables) and [[unifying]] (only the
+      * free ones).
+      */
+    private def complete(partial: Binding, vars: List[Var[?]]): LazyList[Binding] =
+        vars.foldLeft(LazyList(partial)) { (bindings, v) =>
             for
                 b <- bindings
                 value <- LazyList.from(enumerate(v.sort))
-            yield Binding.bind(b, v, value)
+            yield Binding.bind(b, v.asInstanceOf[Var[Any]], value)
         }
 
-    /** Enumerate every color of a finite sort. Enumeration is specific to this strategy, so it
-      * lives here rather than on `Sort` (which offers only membership).
+    /** Unify a color term against a concrete token, extending `partial` — `None` on a clash. The
+      * inverse of [[Binding.evalColor]]: `Const` by equality, `Ref` binds or checks, `Tuple`
+      * component-wise, `Succ` by inverting the successor (its predecessor).
+      */
+    private def unify(term: ColorTerm[?], value: Any, partial: Binding): Option[Binding] =
+        term match
+            case ColorTerm.Const(c, _) => Option.when(c == value)(partial)
+            case ColorTerm.Ref(v) =>
+                val variable = v.asInstanceOf[Var[Any]]
+                Binding.lookup(partial, variable) match
+                    case Some(bound) => Option.when(bound == value)(partial)
+                    case None        => Some(Binding.bind(partial, variable, value))
+            case ColorTerm.Tuple(l, r) =>
+                value match
+                    case (a, b) => unify(l, a, partial).flatMap(unify(r, b, _))
+                    case _      => None
+            case ColorTerm.Succ(inner) =>
+                predecessor(inner.sort, value).flatMap(unify(inner, _, partial))
+
+    /** The predecessor of `value` in `sort` — the inverse of [[Binding]]'s successor: `Circular`
+      * wraps, `Linear` has none before the first element, `Unordered`/non-class none.
+      */
+    private def predecessor(sort: Sort[?], value: Any): Option[Any] =
+        sort match
+            case Sort.Class(_, carrier, discipline, _) =>
+                val elems = carrier.toSortedSet.toList
+                val i = elems.indexOf(value)
+                if i < 0 then None
+                else
+                    discipline match
+                        case Sort.Discipline.Circular =>
+                            Some(elems((i - 1 + elems.size) % elems.size))
+                        case Sort.Discipline.Linear    => Option.when(i > 0)(elems(i - 1))
+                        case Sort.Discipline.Unordered => None
+            case _ => None
+
+    /** The color of every weighted leaf of an inscription (both branches of a `Union`). */
+    private def leaves(inscription: Inscription[?]): List[ColorTerm[?]] =
+        inscription match
+            case Inscription.Weighted(_, color) => List(color)
+            case Inscription.Union(l, r)        => leaves(l) ++ leaves(r)
+
+    /** The variables a color term references. */
+    private def termVars(term: ColorTerm[?]): Set[Var[?]] =
+        term match
+            case ColorTerm.Ref(v)      => Set(v)
+            case ColorTerm.Const(_, _) => Set.empty
+            case ColorTerm.Tuple(l, r) => termVars(l) ++ termVars(r)
+            case ColorTerm.Succ(inner) => termVars(inner)
+
+    /** Enumerate every color of a finite sort. Specific to the carrier-materializing strategies, so
+      * it lives here rather than on `Sort` (which offers only membership).
       */
     private def enumerate[C](sort: Sort[C]): List[C] =
-        sort match {
+        sort match
             case Sort.Dot                     => List(())
             case Sort.Class(_, carrier, _, _) => carrier.toSortedSet.toList
             case Sort.Prod(left, right) =>
@@ -52,5 +154,4 @@ object ModeSelector {
                     x <- enumerate(left)
                     y <- enumerate(right)
                 yield (x, y)
-        }
 }
