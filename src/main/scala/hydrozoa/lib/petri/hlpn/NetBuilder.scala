@@ -14,9 +14,10 @@ type Build[PlaceId, TransitionId, A] = State[NetBuilder.Accum[PlaceId, Transitio
 /** A typed assembly for an [[HlNet]]: each place is declared with its own color type and yields a
   * typed [[PlaceRef]]; an arc is wired with [[input]] (`(p,t) ∈ F`) or [[output]] (`(t,p) ∈ F`),
   * and its inscription's color must equal the place ref's — a `Peer`-inscription on a `Vote`-place
-  * does not compile. [[build]] runs the program, then validates with `ValidatedNel` so every id
-  * clash, duplicate flow element, and dangling reference is reported at once, and erases the
-  * per-place colors to `Any` (sound because agreement was checked at wiring).
+  * does not compile. [[build]] runs the program, then validates with `ValidatedNel` — structure (id
+  * clashes, duplicate flow elements, dangling references) and then well-sortedness ([[SortCheck]]:
+  * undeclared variables, `Succ`/`Lt` on unordered classes, mismatched guard/inscription sorts) —
+  * and erases the per-place colors to `Any` (sound because agreement was checked at wiring).
   *
   * Fix the two id types once per net, then assemble in a `for`-comprehension:
   * {{{
@@ -80,8 +81,10 @@ final class NetBuilder[PlaceId, TransitionId]:
             (accum.copy(arcs = accum.arcs :+ entry), ())
         }
 
-    /** Run the program and validate it, accumulating every id clash, duplicate flow element, and
-      * dangling reference.
+    /** Run the program and validate it: first structure (id clashes, duplicate flow elements,
+      * dangling references), then — on a structurally sound net — well-sortedness via
+      * [[SortCheck]]. All violations of a passing stage are accumulated; the sort check runs only
+      * once the net is coherent enough to assemble.
       */
     def build[A](
         program: B[A]
@@ -104,7 +107,11 @@ final class NetBuilder[PlaceId, TransitionId]:
             NonEmptyList.fromList(dangling).fold(arcs.validNel)(_.invalid)
         }
 
-        (placesV, transitionsV, arcsV).mapN(HlNet(_, _, _))
+        (placesV, transitionsV, arcsV).mapN(HlNet(_, _, _)).andThen { net =>
+            NonEmptyList
+                .fromList(SortCheck.errors(net).map(Error.NotWellSorted(_)))
+                .fold(net.validNel)(_.invalid)
+        }
 
     /** Collect the entries into a map, reporting one error per duplicated key. */
     private def uniqueMap[K, V](entries: List[(K, V)])(
@@ -150,3 +157,6 @@ object NetBuilder:
         final case class ArcMissingTransition[PlaceId, TransitionId](
             flow: Arc.Flow[PlaceId, TransitionId]
         ) extends Error
+
+        /** A term in the assembled net is not well-sorted (see [[SortCheck]]). */
+        final case class NotWellSorted(error: SortError) extends Error

@@ -65,3 +65,23 @@ class NetBuilderTest extends AnyFunSuite:
             case _                                                            => false
         })
     }
+
+    test("build rejects an ill-sorted term (Succ over an unordered class)") {
+        // Typed input/output can't produce this — Succ over the unordered Peer is well-typed but
+        // not well-sorted, so it must surface at build via SortCheck.
+        val succWp =
+            Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Succ(ColorTerm.Ref(p)))
+        val program =
+            for
+                in <- b.place("pending", Tokens(ms(), peer))
+                out <- b.place("done", Tokens(ms(), peer))
+                t <- b.transition("advance", List(p), Guard.True)
+                _ <- b.input(in, t, wp)
+                _ <- b.output(t, out, succWp)
+            yield ()
+
+        assert(b.build(program).fold(_.toList, _ => Nil).exists {
+            case NetBuilder.Error.NotWellSorted(_: SortError.SuccOnUnordered) => true
+            case _                                                            => false
+        })
+    }
