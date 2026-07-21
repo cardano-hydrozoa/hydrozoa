@@ -77,8 +77,35 @@ class RBRHlNetTest extends AnyFunSuite:
           removed.versionMinor
         )
 
+    private def resolutionMode(n: Net, version: Int, q: HeadPeerNumber): Binding =
+        bindAll(n, RBRTransitionId.Resolution)(BigInt(version), q)
+
     private def fired(n: Net, tid: RBRTransitionId, mode: Binding): Net =
         n.fire(tid, mode).toOption.get
+
+    /** Drive the dispute to the single fully-tallied box `(0, 0, Voted, 2)`: peer0 votes v=1, peer1
+      * votes v=2, peer2 abstains, the deadline passes, and the four boxes fold in.
+      */
+    private def fullyTallied: Net =
+        var n = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
+        n = fired(n, RBRTransitionId.Vote, voteMode(n, peer1, 2, 3, 2))
+        n = fired(n, RBRTransitionId.Abstain, abstainMode(n, peer2, 3, 0))
+        n = fired(n, RBRTransitionId.VotingDeadline, Binding.empty)
+        n = fired(
+          n,
+          RBRTransitionId.TallyRemovedWins,
+          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 1, Voted, 0), box(1, 2, Voted, 1))
+        )
+        n = fired(
+          n,
+          RBRTransitionId.TallyRemovedWins,
+          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 2, Voted, 1), box(2, 3, Voted, 2))
+        )
+        fired(
+          n,
+          RBRTransitionId.TallyContinuingWins,
+          tallyMode(n, RBRTransitionId.TallyContinuingWins, peer0, box(0, 3, Voted, 2), box(3, 0, Abstained, 0))
+        )
 
     test("BallotStatus order matches maxVote precedence: Abstained < Awaiting < Voted") {
         val order = summon[Order[BallotStatus]]
@@ -217,32 +244,25 @@ class RBRHlNetTest extends AnyFunSuite:
     }
 
     test("Tally: full fold converges to the single box (0,(0,(Voted,vmax)))") {
-        // peer0 votes v=1, peer1 votes v=2, peer2 abstains; then the deadline passes
-        var n = fired(net, RBRTransitionId.Vote, voteMode(net, peer0, 1, 2, 1))
-        n = fired(n, RBRTransitionId.Vote, voteMode(n, peer1, 2, 3, 2))
-        n = fired(n, RBRTransitionId.Abstain, abstainMode(n, peer2, 3, 0))
-        n = fired(n, RBRTransitionId.VotingDeadline, Binding.empty)
-
-        // (0,(1,(V,0))) ⊕ (1,(2,(V,1))) → removed wins → (0,(2,(V,1)))
-        n = fired(
-          n,
-          RBRTransitionId.TallyRemovedWins,
-          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 1, Voted, 0), box(1, 2, Voted, 1))
-        )
-        // (0,(2,(V,1))) ⊕ (2,(3,(V,2))) → removed wins → (0,(3,(V,2)))
-        n = fired(
-          n,
-          RBRTransitionId.TallyRemovedWins,
-          tallyMode(n, RBRTransitionId.TallyRemovedWins, peer0, box(0, 2, Voted, 1), box(2, 3, Voted, 2))
-        )
-        // (0,(3,(V,2))) ⊕ (3,(0,(Abst,0))) → continuing wins → (0,(0,(V,2)))
-        n = fired(
-          n,
-          RBRTransitionId.TallyContinuingWins,
-          tallyMode(n, RBRTransitionId.TallyContinuingWins, peer0, box(0, 3, Voted, 2), box(3, 0, Abstained, 0))
-        )
-
+        val n = fullyTallied
         val ballots = n.placesMap(RBRPlaceId.Ballots).marking.multiplicityMap
         val _ = assert(ballots.size == 1)
         assert(ballotCount(n, box(0, 0, Voted, 2)) == SafeLong(1))
+    }
+
+    test("Resolution: not enabled until the fully-tallied box exists") {
+        // the terminal (0, 0, Voted, ·) box does not exist before the fold completes
+        assert(!net.isModeEnabled(RBRTransitionId.Resolution, resolutionMode(net, 0, peer0)))
+    }
+
+    test("Resolution: consumes the tallied box and flips the treasury to Resolved") {
+        val n = fired(fullyTallied, RBRTransitionId.Resolution, resolutionMode(fullyTallied, 2, peer0))
+        // the tallied box is spent — ballots empty
+        val _ = assert(n.placesMap(RBRPlaceId.Ballots).marking.multiplicityMap.isEmpty)
+        // treasury flips Unresolved → Resolved
+        val _ = assert(n.placesMap(RBRPlaceId.UnresolvedTreasury).marking.get(()) == SafeLong(0))
+        val _ = assert(n.placesMap(RBRPlaceId.ResolvedTreasury).marking.get(()) == SafeLong(1))
+        // collateral spent and recreated; script/regime references read back
+        val _ = assert(n.placesMap(RBRPlaceId.Collateral).marking.get(peer0) == SafeLong(1))
+        assert(n.placesMap(RBRPlaceId.TreasuryScriptRef).marking.get(()) == SafeLong(1))
     }

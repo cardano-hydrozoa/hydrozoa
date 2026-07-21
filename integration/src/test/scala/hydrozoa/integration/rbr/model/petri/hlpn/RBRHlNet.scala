@@ -60,6 +60,7 @@ object RBRHlNet {
         case ResolvedTreasury
         case RegimeRef
         case DisputeScriptRef
+        case TreasuryScriptRef
         case Collateral
         case SetupLadder
         case Ambient
@@ -120,6 +121,7 @@ object RBRHlNet {
         resolvedTreasury: PlaceRef[RBRPlaceId, Unit],
         regimeRef: PlaceRef[RBRPlaceId, Unit],
         disputeScriptRef: PlaceRef[RBRPlaceId, Unit],
+        treasuryScriptRef: PlaceRef[RBRPlaceId, Unit],
         collateral: PlaceRef[RBRPlaceId, HeadPeerNumber],
     )
 
@@ -215,6 +217,7 @@ object RBRHlNet {
         val voted = Const(BallotStatus.Voted, statusClass)
         val abstainedStatus = Const(BallotStatus.Abstained, statusClass)
         val version0 = Const(BigInt(0), versionClass)
+        val key0 = Const(BigInt(0), keyClass) // the fully-tallied box's key and link (Resolution)
 
         val peerToken = one(Ref(peer)) // ⟨peer⟩
         val collateralPeerToken = one(Ref(collateralPeer)) // ⟨collateralPeer⟩
@@ -252,6 +255,7 @@ object RBRHlNet {
                 resolvedTreasury <- b.place(ResolvedTreasury, RBRPlace(noDots, Sort.Dot))
                 regimeRef <- b.place(RegimeRef, RBRPlace(oneDot, Sort.Dot))
                 disputeScriptRef <- b.place(DisputeScriptRef, RBRPlace(oneDot, Sort.Dot))
+                treasuryScriptRef <- b.place(TreasuryScriptRef, RBRPlace(oneDot, Sort.Dot))
                 collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
             } yield RBRPlaces(
               ballots,
@@ -262,6 +266,7 @@ object RBRHlNet {
               resolvedTreasury,
               regimeRef,
               disputeScriptRef,
+              treasuryScriptRef,
               collateral
             )
 
@@ -446,6 +451,31 @@ object RBRHlNet {
                 _ <- b.output(t, places.votingClosed, dotToken)
             } yield ()
 
+        // ---- Resolution (mirrors ResolutionTx.Build.buildResolutionTx) ----
+        // The single fully-tallied box — key = link = 0, Voted (link 0 is reachable only from a full
+        // fold; on-chain this is "carries all n+1 vote tokens") — is consumed, and the treasury
+        // flips Unresolved → Resolved. `version` is the box's minor version, bound from its token.
+        // No validity window: the terminal box exists only post-deadline, so timing is implicit.
+        def resolution(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(RBRTransitionId.Resolution, List(version, collateralPeer), Guard.True)
+                // talliedBallotBox.spend(Resolve): consume (0, 0, Voted, version)
+                _ <- b.input(places.ballots, t, one(ballot(key0, key0, voted, Ref(version))))
+                // treasuryUtxo.spendAttached(Resolve) / newTreasury.send: Unresolved → Resolved
+                _ <- b.input(places.unresolvedTreasury, t, dotToken)
+                _ <- b.output(t, places.resolvedTreasury, dotToken)
+                // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
+                _ <- b.input(places.collateral, t, collateralPeerToken)
+                _ <- b.output(t, places.collateral, collateralPeerToken)
+                // config.referenceTreasury / config.referenceDispute / regimeUtxo.referenceOutput
+                _ <- b.input(places.treasuryScriptRef, t, dotToken)
+                _ <- b.output(t, places.treasuryScriptRef, dotToken)
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                _ <- b.output(t, places.regimeRef, dotToken)
+            } yield ()
+
         val program = for {
             places <- addPlaces
             _ <- vote(places)
@@ -454,6 +484,7 @@ object RBRHlNet {
             _ <- tallyContinuingWins(places)
             _ <- tallyRemovedWins(places)
             _ <- votingDeadline(places)
+            _ <- resolution(places)
         } yield ()
 
         b.build(program)
