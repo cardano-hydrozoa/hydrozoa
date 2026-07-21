@@ -5,6 +5,7 @@ import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Abstaine
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalatest.funsuite.AnyFunSuite
+import spire.algebra.Order
 import spire.math.SafeLong
 
 /** Drives the RBR HLPN with explicit modes (the tally transitions bind 9 variables — the
@@ -78,6 +79,13 @@ class RBRHlNetTest extends AnyFunSuite:
 
     private def fired(n: Net, tid: RBRTransitionId, mode: Binding): Net =
         n.fire(tid, mode).toOption.get
+
+    test("BallotStatus order matches maxVote precedence: Abstained < Awaiting < Voted") {
+        val order = summon[Order[BallotStatus]]
+        val _ = assert(order.lt(Abstained, Awaiting))
+        val _ = assert(order.lt(Awaiting, Voted))
+        assert(order.lt(Abstained, Voted))
+    }
 
     test("the net assembles and is well-sorted") {
         assert(SortCheck.errors(net).isEmpty)

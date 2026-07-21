@@ -6,6 +6,7 @@ import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.number.PositiveInt
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.rulebased.ledger.l1.state.VoteState.{Key, Link}
 import scala.collection.immutable.SortedMap
 import spire.algebra.Order
 import spire.math.SafeLong
@@ -40,7 +41,14 @@ object RBRHlNet {
         case Voted
 
     object BallotStatus {
-        given Order[BallotStatus] = Order.by(_.ordinal)
+        // Explicit `maxVote` precedence, not `_.ordinal`: reordering or inserting an enum case must
+        // not silently invert the order that tally winner selection and `Lt` depend on.
+        private def rank(status: BallotStatus): Int = status match
+            case Abstained => 0
+            case Awaiting  => 1
+            case Voted     => 2
+
+        given Order[BallotStatus] = Order.by(rank)
     }
 
     enum RBRPlaceId:
@@ -83,8 +91,10 @@ object RBRHlNet {
         def mark(m: MultiSet[C]): RBRPlace[C] = copy(marking = m)
     }
 
-    /** A ballot-box color value: `(key, (link, (status, versionMinor)))`. */
-    type Ballot = (BigInt, (BigInt, (BallotStatus, BigInt)))
+    /** A ballot-box color value: `(key, (link, (status, versionMinor)))`. `Key`/`Link` reuse the
+      * on-chain `VoteState` aliases (both `BigInt`); the version minor stays a plain `BigInt`.
+      */
+    type Ballot = (Key, (Link, (BallotStatus, BigInt)))
 
     /** Build the RBR net for the given head-peer count and minor-version bound.
       *
@@ -127,31 +137,41 @@ object RBRHlNet {
           Sort.Discipline.Linear,
           Map.empty
         )
+        // TODO: harden. The product domain `Key × Key × Status × Version` over-approximates valid
+        // ballots — it admits structurally-impossible colors like `key == link` (a box linking to
+        // itself). The initial marking seeds only well-formed boxes, but nothing rejects an invalid
+        // one arising during firing. Enforce via a `ColoredPlace.markingError` invariant on the
+        // Ballots place (e.g. `key != link`) or a domain refinement.
         val ballotSort: Sort[Ballot] =
             Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass)))
+        // TODO: harden. `Peer × Key` admits any (peer, key) pair; only the diagonal `(i, i+1)`
+        // ("peer i owns box key i+1") is real. The initial `Owner` marking seeds the diagonal, but
+        // the relation isn't enforced — a markingError invariant (or making Owner a derived
+        // function rather than free tokens) would pin it.
         val ownerSort: Sort[(HeadPeerNumber, BigInt)] = Sort.Prod(peerClass, keyClass)
 
         given Order[Ballot] = ballotSort.order
         given Order[(HeadPeerNumber, BigInt)] = ownerSort.order
 
         // ---- Variables ----
-        val p = Var("p", peerClass) // the box owner (Vote / Abstain signer)
-        val q = Var("q", peerClass) // the acting peer supplying collateral (ratchet / tally)
-        val k = Var("k", keyClass)
-        val l = Var("l", keyClass)
-        val s = Var("s", statusClass)
-        val v = Var("v", versionClass)
-        val vOld = Var("vOld", versionClass)
-        val vNew = Var("vNew", versionClass)
+        val peer = Var("peer", peerClass) // the box owner (Vote / Abstain signer)
+        // the acting peer supplying collateral (ratchet / tally)
+        val collateralPeer = Var("collateralPeer", peerClass)
+        val key = Var("key", keyClass)
+        val link = Var("link", keyClass)
+        val status = Var("status", statusClass)
+        val version = Var("version", versionClass)
+        val versionOld = Var("versionOld", versionClass)
+        val versionNew = Var("versionNew", versionClass)
         // Tally operands: the continuing box (1) and the removed box (2)
-        val k1 = Var("k1", keyClass)
-        val l1 = Var("l1", keyClass)
-        val s1 = Var("s1", statusClass)
-        val v1 = Var("v1", versionClass)
-        val k2 = Var("k2", keyClass)
-        val l2 = Var("l2", keyClass)
-        val s2 = Var("s2", statusClass)
-        val v2 = Var("v2", versionClass)
+        val key1 = Var("key1", keyClass)
+        val link1 = Var("link1", keyClass)
+        val status1 = Var("status1", statusClass)
+        val version1 = Var("version1", versionClass)
+        val key2 = Var("key2", keyClass)
+        val link2 = Var("link2", keyClass)
+        val status2 = Var("status2", statusClass)
+        val version2 = Var("version2", versionClass)
 
         // ---- Terms ----
         import ColorTerm.{Const, Ref, Tuple}
@@ -169,9 +189,9 @@ object RBRHlNet {
         val abstainedStatus = Const(BallotStatus.Abstained, statusClass)
         val version0 = Const(BigInt(0), versionClass)
 
-        val peerToken = one(Ref(p)) // ⟨p⟩
-        val actorToken = one(Ref(q)) // ⟨q⟩
-        val ownerToken = one(Tuple(Ref(p), Ref(k))) // ⟨(p, k)⟩
+        val peerToken = one(Ref(peer)) // ⟨peer⟩
+        val collateralPeerToken = one(Ref(collateralPeer)) // ⟨collateralPeer⟩
+        val ownerToken = one(Tuple(Ref(peer), Ref(key))) // ⟨(peer, key)⟩
         val dotToken = one(Const((), Sort.Dot)) // ⟨•⟩
 
         // ---- Initial markings ----
@@ -210,10 +230,10 @@ object RBRHlNet {
             collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
 
             // ---- Vote (mirrors VoteTx.Build.buildVoteTx) ----
-            vote <- b.transition(RBRTransitionId.Vote, List(p, k, l, v), Guard.True)
-            // uncastBallotBox.votingSpend / votedOutput.send: AwaitingVote → Voted(v)
-            _ <- b.input(ballots, vote, one(ballot(Ref(k), Ref(l), awaiting, version0)))
-            _ <- b.output(vote, ballots, one(ballot(Ref(k), Ref(l), voted, Ref(v))))
+            vote <- b.transition(RBRTransitionId.Vote, List(peer, key, link, version), Guard.True)
+            // uncastBallotBox.votingSpend / votedOutput.send: AwaitingVote → Voted(version)
+            _ <- b.input(ballots, vote, one(ballot(Ref(key), Ref(link), awaiting, version0)))
+            _ <- b.output(vote, ballots, one(ballot(Ref(key), Ref(link), voted, Ref(version))))
             // addRequiredSigners(votingSigners): the box's peer signs — presence in Owner
             _ <- b.input(owner, vote, ownerToken)
             _ <- b.output(vote, owner, ownerToken)
@@ -233,10 +253,10 @@ object RBRHlNet {
 
             // ---- Abstain (mirrors AbstainTx.Build.buildAbstainTx) ----
             // Leaner than Vote: no treasury/regime references, no validity window.
-            abstain <- b.transition(RBRTransitionId.Abstain, List(p, k, l), Guard.True)
+            abstain <- b.transition(RBRTransitionId.Abstain, List(peer, key, link), Guard.True)
             // uncastBallotBox.votingSpend(Abstain) / abstainOutput.send: AwaitingVote → Abstain
-            _ <- b.input(ballots, abstain, one(ballot(Ref(k), Ref(l), awaiting, version0)))
-            _ <- b.output(abstain, ballots, one(ballot(Ref(k), Ref(l), abstainedStatus, version0)))
+            _ <- b.input(ballots, abstain, one(ballot(Ref(key), Ref(link), awaiting, version0)))
+            _ <- b.output(abstain, ballots, one(ballot(Ref(key), Ref(link), abstainedStatus, version0)))
             // addRequiredSigners(votingSigners): the box's peer signs
             _ <- b.input(owner, abstain, ownerToken)
             _ <- b.output(abstain, owner, ownerToken)
@@ -254,18 +274,18 @@ object RBRHlNet {
             // Abstained boxes carry version 0, so "Abstain ratchets as prev = 0" is the same guard.
             ratchet <- b.transition(
               RBRTransitionId.RatchetVote,
-              List(q, k, l, s, vOld, vNew),
+              List(collateralPeer, key, link, status, versionOld, versionNew),
               Guard.And(
-                Guard.Not(Guard.Eq(Ref(s), awaiting)),
-                Guard.Lt(Ref(vOld), Ref(vNew))
+                Guard.Not(Guard.Eq(Ref(status), awaiting)),
+                Guard.Lt(Ref(versionOld), Ref(versionNew))
               )
             )
-            // openBallotBox.spend / votedOutput.send: (s, vOld) → Voted(vNew)
-            _ <- b.input(ballots, ratchet, one(ballot(Ref(k), Ref(l), Ref(s), Ref(vOld))))
-            _ <- b.output(ratchet, ballots, one(ballot(Ref(k), Ref(l), voted, Ref(vNew))))
+            // openBallotBox.spend / votedOutput.send: (status, versionOld) → Voted(versionNew)
+            _ <- b.input(ballots, ratchet, one(ballot(Ref(key), Ref(link), Ref(status), Ref(versionOld))))
+            _ <- b.output(ratchet, ballots, one(ballot(Ref(key), Ref(link), voted, Ref(versionNew))))
             // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
-            _ <- b.input(collateral, ratchet, actorToken)
-            _ <- b.output(ratchet, collateral, actorToken)
+            _ <- b.input(collateral, ratchet, collateralPeerToken)
+            _ <- b.output(ratchet, collateral, collateralPeerToken)
             // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
             _ <- b.input(unresolvedTreasury, ratchet, dotToken)
             _ <- b.output(ratchet, unresolvedTreasury, dotToken)
@@ -283,12 +303,12 @@ object RBRHlNet {
             // Status/Version linear orders; ties go to the removed box (`else b` in maxVote).
             tallyContinuing <- b.transition(
               RBRTransitionId.TallyContinuingWins,
-              List(q, k1, l1, s1, v1, k2, l2, s2, v2),
+              List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
               Guard.And(
-                Guard.Eq(Ref(l1), Ref(k2)),
+                Guard.Eq(Ref(link1), Ref(key2)),
                 Guard.Or(
-                  Guard.Lt(Ref(s2), Ref(s1)),
-                  Guard.And(Guard.Eq(Ref(s1), Ref(s2)), Guard.Lt(Ref(v2), Ref(v1)))
+                  Guard.Lt(Ref(status2), Ref(status1)),
+                  Guard.And(Guard.Eq(Ref(status1), Ref(status2)), Guard.Lt(Ref(version2), Ref(version1)))
                 )
               )
             )
@@ -298,14 +318,18 @@ object RBRHlNet {
               ballots,
               tallyContinuing,
               Inscription.Union(
-                one(ballot(Ref(k1), Ref(l1), Ref(s1), Ref(v1))),
-                one(ballot(Ref(k2), Ref(l2), Ref(s2), Ref(v2)))
+                one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
+                one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
               )
             )
-            _ <- b.output(tallyContinuing, ballots, one(ballot(Ref(k1), Ref(l2), Ref(s1), Ref(v1))))
+            _ <- b.output(
+              tallyContinuing,
+              ballots,
+              one(ballot(Ref(key1), Ref(link2), Ref(status1), Ref(version1)))
+            )
             // collateralUtxo.add only — presence, never spent
-            _ <- b.input(collateral, tallyContinuing, actorToken)
-            _ <- b.output(tallyContinuing, collateral, actorToken)
+            _ <- b.input(collateral, tallyContinuing, collateralPeerToken)
+            _ <- b.output(tallyContinuing, collateral, collateralPeerToken)
             // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
             _ <- b.input(unresolvedTreasury, tallyContinuing, dotToken)
             _ <- b.output(tallyContinuing, unresolvedTreasury, dotToken)
@@ -319,14 +343,14 @@ object RBRHlNet {
 
             tallyRemoved <- b.transition(
               RBRTransitionId.TallyRemovedWins,
-              List(q, k1, l1, s1, v1, k2, l2, s2, v2),
+              List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
               Guard.And(
-                Guard.Eq(Ref(l1), Ref(k2)),
+                Guard.Eq(Ref(link1), Ref(key2)),
                 Guard.Or(
-                  Guard.Lt(Ref(s1), Ref(s2)),
+                  Guard.Lt(Ref(status1), Ref(status2)),
                   Guard.And(
-                    Guard.Eq(Ref(s1), Ref(s2)),
-                    Guard.Or(Guard.Lt(Ref(v1), Ref(v2)), Guard.Eq(Ref(v1), Ref(v2)))
+                    Guard.Eq(Ref(status1), Ref(status2)),
+                    Guard.Or(Guard.Lt(Ref(version1), Ref(version2)), Guard.Eq(Ref(version1), Ref(version2)))
                   )
                 )
               )
@@ -335,13 +359,17 @@ object RBRHlNet {
               ballots,
               tallyRemoved,
               Inscription.Union(
-                one(ballot(Ref(k1), Ref(l1), Ref(s1), Ref(v1))),
-                one(ballot(Ref(k2), Ref(l2), Ref(s2), Ref(v2)))
+                one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
+                one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
               )
             )
-            _ <- b.output(tallyRemoved, ballots, one(ballot(Ref(k1), Ref(l2), Ref(s2), Ref(v2))))
-            _ <- b.input(collateral, tallyRemoved, actorToken)
-            _ <- b.output(tallyRemoved, collateral, actorToken)
+            _ <- b.output(
+              tallyRemoved,
+              ballots,
+              one(ballot(Ref(key1), Ref(link2), Ref(status2), Ref(version2)))
+            )
+            _ <- b.input(collateral, tallyRemoved, collateralPeerToken)
+            _ <- b.output(tallyRemoved, collateral, collateralPeerToken)
             _ <- b.input(unresolvedTreasury, tallyRemoved, dotToken)
             _ <- b.output(tallyRemoved, unresolvedTreasury, dotToken)
             _ <- b.input(regimeRef, tallyRemoved, dotToken)
