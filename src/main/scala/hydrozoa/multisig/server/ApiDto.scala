@@ -159,11 +159,22 @@ object ApiDto {
     final case class RequestSummaryView(requestId: Long, peerNumber: Int, requestType: String)
     given Codec[RequestSummaryView] = deriveCodec
 
+    /** One L1 effect a request became: its `l1TxId` (hex — the same value the `/head/effects/{id}`
+      * and block-effects queries use) and its kind (`settlement`, `finalization`, `sec`, `refund`).
+      */
+    final case class EffectRefView(l1TxId: String, kind: String)
+    given Codec[EffectRefView] = deriveCodec
+
+    /** Map a resolved effect to its request-facing reference. */
+    def mkEffectRefView(effect: ResolvedEffect): EffectRefView =
+        EffectRefView(effect.l1TxId.toHex, effectKindName(effect.kind))
+
     /** A request's lifecycle status from this node's viewpoint: `UNPROCESSED`, `LOCALLY_PROCESSED`,
       * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. Each confirmation
       * time records a **local event at this peer**, so different peers report different times for
-      * the same request. This is by design. `relatedEffects` is always absent for now (per-request
-      * effect tracking is a separate change).
+      * the same request. This is by design. `relatedEffects` — the L1 effects the request became —
+      * is present once those effects are hard-confirmed (a transaction's
+      * settlement/SEC/finalization carriers, a deposit's post-dated refund), absent otherwise.
       */
     final case class RequestStatusView(
         status: String,
@@ -171,7 +182,7 @@ object ApiDto {
         validity: Option[String],
         softConfirmedAt: Option[String],
         hardConfirmedAt: Option[String],
-        relatedEffects: Option[List[Int]]
+        relatedEffects: Option[List[EffectRefView]]
     )
     given Codec[RequestStatusView] = deriveCodec
 
@@ -206,12 +217,14 @@ object ApiDto {
         case ValidityFlag.Invalid => "invalid"
 
     /** Assemble the request-status view from its resolved lifecycle stages: the processing block
-      * and verdict (absent while unprocessed) and the node-local confirmation moments.
+      * and verdict (absent while unprocessed), the node-local confirmation moments, and the L1
+      * effects the request became (empty until they are hard-confirmed).
       */
     def mkRequestStatusView(
         block: Option[(Int, ValidityFlag)],
         softConfirmedAt: Option[Instant],
-        hardConfirmedAt: Option[Instant]
+        hardConfirmedAt: Option[Instant],
+        relatedEffects: List[EffectRefView]
     ): RequestStatusView =
         val status = block match
             case None => "UNPROCESSED"
@@ -225,7 +238,7 @@ object ApiDto {
           validity = block.map((_, v) => validityName(v)),
           softConfirmedAt = softConfirmedAt.map(_.toString),
           hardConfirmedAt = hardConfirmedAt.map(_.toString),
-          relatedEffects = None
+          relatedEffects = Option.when(relatedEffects.nonEmpty)(relatedEffects)
         )
 
     /** Map a request, its derived receive time, and its resolved status to the details body. */

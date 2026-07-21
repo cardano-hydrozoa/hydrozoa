@@ -12,10 +12,13 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
+import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
@@ -30,6 +33,7 @@ import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
 import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 
 /** The block-effects queries through the HTTP layer against a stubbed [[ConsensusStoreReader]],
   * exercising a single-minor stack whose only effect is a standalone evacuation commitment (SEC):
@@ -91,6 +95,11 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
 
     private val secId: TransactionHash = EffectIds.secL1TxId(sec.commitment)
 
+    /** A transaction request processed in block 1 — its related effect is that block's SEC. */
+    private val txRequestId: RequestId = RequestId(HeadPeerNumber(0), RequestNumber(0))
+    private val txRequest: UserRequestWithId =
+        UserRequestWithId(TransactionRequest(TransactionRequestBody(ByteString.empty)), txRequestId)
+
     private val stackEffects: StackEffects.HardConfirmed =
         StackEffects.HardConfirmed.Regular(
           NonEmptyList.of(PartitionEffects.Minor(sec = sec, refunds = List.empty))
@@ -132,8 +141,16 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 IO.pure(Option.when(l1TxId == secId)(StackNumber(1)))
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(Nil)
-            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
-            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
+            def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =
+                IO.pure(
+                  Option.when(id == txRequestId)(Timestamped(ArrivalStamp(0, 0L), txRequest))
+                )
+            def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] =
+                IO.pure(
+                  Option.when(id == txRequestId)(
+                    RequestBlockEntry(BlockNumber(1), ValidityFlag.Valid)
+                  )
+                )
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
 
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
@@ -209,6 +226,18 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 val _ = assert(status == Status.Ok)
                 val _ = assert(body.hcursor.get[String]("l1TxId") == Right(secId.toHex))
                 val _ = assert(body.hcursor.get[String]("kind") == Right("sec"))
+                ()
+            }
+        }
+    }
+
+    test("GET /head/requests/<id> carries the transaction's related effect (its block's SEC)") {
+        withRoutes { app =>
+            get(app, s"/head/requests/${txRequestId.asI64}").map { (status, body) =>
+                val _ = assert(status == Status.Ok)
+                val effects = body.hcursor.downField("status").downField("relatedEffects")
+                val _ = assert(effects.downN(0).get[String]("l1TxId") == Right(secId.toHex))
+                val _ = assert(effects.downN(0).get[String]("kind") == Right("sec"))
                 ()
             }
         }

@@ -105,10 +105,11 @@ paths:
     get:
       description: 'One request''s peer, type, receive time, and lifecycle status:
         UNPROCESSED, LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation
-        time), or HARD_CONFIRMED (+ hard-confirmation time). Every time records a
-        local event at this peer — when it received the request, and when it produced
-        the soft/hard confirmation — so different peers report different times for
-        the same request. This is by design.'
+        time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects
+        — the l1TxIds the request became). Every time records a local event at this
+        peer — when it received the request, and when it produced the soft/hard confirmation
+        — so different peers report different times for the same request. This is
+        by design.'
       operationId: getHeadRequest
       parameters:
       - name: request-id
@@ -522,6 +523,17 @@ components:
           format: int32
         blockType:
           type: string
+    EffectRefView:
+      title: EffectRefView
+      type: object
+      required:
+      - l1TxId
+      - kind
+      properties:
+        l1TxId:
+          type: string
+        kind:
+          type: string
     EffectView:
       title: EffectView
       type: object
@@ -670,8 +682,7 @@ components:
         relatedEffects:
           type: array
           items:
-            type: integer
-            format: int32
+            $ref: '#/components/schemas/EffectRefView'
     RequestSummaryView:
       title: RequestSummaryView
       type: object
