@@ -22,7 +22,7 @@ class RBRHlNetTest extends AnyFunSuite:
     private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
 
     private def box(k: Int, l: Int, s: BallotStatus, v: Int): Ballot =
-        (BigInt(k), (BigInt(l), (s, BigInt(v))))
+        Ballot(BigInt(k), BigInt(l), s, BigInt(v))
 
     private def ballotCount(n: Net, b: Ballot): SafeLong =
         n.placesMap(RBRPlaceId.Ballots).marking.get(b)
@@ -67,14 +67,14 @@ class RBRHlNetTest extends AnyFunSuite:
     ): Binding =
         bindAll(n, tid)(
           q,
-          continuing._1,
-          continuing._2._1,
-          continuing._2._2._1,
-          continuing._2._2._2,
-          removed._1,
-          removed._2._1,
-          removed._2._2._1,
-          removed._2._2._2
+          continuing.key,
+          continuing.link,
+          continuing.status,
+          continuing.versionMinor,
+          removed.key,
+          removed.link,
+          removed.status,
+          removed.versionMinor
         )
 
     private def fired(n: Net, tid: RBRTransitionId, mode: Binding): Net =

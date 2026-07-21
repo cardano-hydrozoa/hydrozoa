@@ -91,10 +91,37 @@ object RBRHlNet {
         def mark(m: MultiSet[C]): RBRPlace[C] = copy(marking = m)
     }
 
-    /** A ballot-box color value: `(key, (link, (status, versionMinor)))`. `Key`/`Link` reuse the
-      * on-chain `VoteState` aliases (both `BigInt`); the version minor stays a plain `BigInt`.
+    /** A ballot-box color value: key, link (both `VoteState` aliases over `BigInt`), status, and
+      * minor version. Opaque over the underlying `(Key, (Link, (BallotStatus, BigInt)))` product:
+      * the color algebra requires the runtime color to be that tuple (Concept 14, and the marking is
+      * keyed by it), so this is a named product with a constructor and accessors rather than a
+      * `case class` — whose instances would not match the tuple-keyed marking.
       */
-    type Ballot = (Key, (Link, (BallotStatus, BigInt)))
+    opaque type Ballot = (Key, (Link, (BallotStatus, BigInt)))
+
+    object Ballot {
+        def apply(key: Key, link: Link, status: BallotStatus, versionMinor: BigInt): Ballot =
+            (key, (link, (status, versionMinor)))
+
+        extension (ballot: Ballot)
+            def key: Key = ballot._1
+            def link: Link = ballot._2._1
+            def status: BallotStatus = ballot._2._2._1
+            def versionMinor: BigInt = ballot._2._2._2
+    }
+
+    /** The net's places, grouped so each transition helper references them by name. */
+    final case class RBRPlaces(
+        ballots: PlaceRef[RBRPlaceId, Ballot],
+        owner: PlaceRef[RBRPlaceId, (HeadPeerNumber, Key)],
+        votingOpen: PlaceRef[RBRPlaceId, Unit],
+        votingClosed: PlaceRef[RBRPlaceId, Unit],
+        unresolvedTreasury: PlaceRef[RBRPlaceId, Unit],
+        resolvedTreasury: PlaceRef[RBRPlaceId, Unit],
+        regimeRef: PlaceRef[RBRPlaceId, Unit],
+        disputeScriptRef: PlaceRef[RBRPlaceId, Unit],
+        collateral: PlaceRef[RBRPlaceId, HeadPeerNumber],
+    )
 
     /** Build the RBR net for the given head-peer count and minor-version bound.
       *
@@ -204,185 +231,229 @@ object RBRHlNet {
         // FallbackTx seeds: the public box (key 0, already Voted at version 0) and one AwaitingVote
         // box per peer; the last box's link is the 0 sentinel.
         val initialBallots: MultiSet[Ballot] = bagOf(
-          (
-            (BigInt(0), (BigInt(1), (BallotStatus.Voted, BigInt(0)))): Ballot,
-            1
-          ) +: (0 until nHeadPeers).map { i =>
-              val link = if i < nHeadPeers - 1 then BigInt(i + 2) else BigInt(0)
-              ((BigInt(i + 1), (link, (BallotStatus.Awaiting, BigInt(0)))): Ballot, 1)
-          }*
+          (Ballot(BigInt(0), BigInt(1), BallotStatus.Voted, BigInt(0)), 1)
+              +: (0 until nHeadPeers).map { i =>
+                  val link: Link = if i < nHeadPeers - 1 then BigInt(i + 2) else BigInt(0)
+                  (Ballot(BigInt(i + 1), link, BallotStatus.Awaiting, BigInt(0)), 1)
+              }*
         )
         val ownership: MultiSet[(HeadPeerNumber, BigInt)] =
             bagOf((0 until nHeadPeers).map(i => (HeadPeerNumber(i), BigInt(i + 1)) -> 1)*)
 
         val b = NetBuilder[RBRPlaceId, RBRTransitionId]()
 
-        val program = for {
-            // ---- Places ----
-            ballots <- b.place(Ballots, RBRPlace(initialBallots, ballotSort))
-            owner <- b.place(Owner, RBRPlace(ownership, ownerSort))
-            votingOpen <- b.place(VotingOpen, RBRPlace(oneDot, Sort.Dot))
-            votingClosed <- b.place(VotingClosed, RBRPlace(noDots, Sort.Dot))
-            unresolvedTreasury <- b.place(UnresolvedTreasury, RBRPlace(oneDot, Sort.Dot))
-            _ <- b.place(ResolvedTreasury, RBRPlace(noDots, Sort.Dot))
-            regimeRef <- b.place(RegimeRef, RBRPlace(oneDot, Sort.Dot))
-            disputeScriptRef <- b.place(DisputeScriptRef, RBRPlace(oneDot, Sort.Dot))
-            collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
-
-            // ---- Vote (mirrors VoteTx.Build.buildVoteTx) ----
-            vote <- b.transition(RBRTransitionId.Vote, List(peer, key, link, version), Guard.True)
-            // uncastBallotBox.votingSpend / votedOutput.send: AwaitingVote → Voted(version)
-            _ <- b.input(ballots, vote, one(ballot(Ref(key), Ref(link), awaiting, version0)))
-            _ <- b.output(vote, ballots, one(ballot(Ref(key), Ref(link), voted, Ref(version))))
-            // addRequiredSigners(votingSigners): the box's peer signs — presence in Owner
-            _ <- b.input(owner, vote, ownerToken)
-            _ <- b.output(vote, owner, ownerToken)
-            // collateralUtxo.spend / collateralOutput.send: the peer's collateral, recreated
-            _ <- b.input(collateral, vote, peerToken)
-            _ <- b.output(vote, collateral, peerToken)
-            // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-            _ <- b.input(unresolvedTreasury, vote, dotToken)
-            _ <- b.output(vote, unresolvedTreasury, dotToken)
-            _ <- b.input(regimeRef, vote, dotToken)
-            _ <- b.output(vote, regimeRef, dotToken)
-            _ <- b.input(disputeScriptRef, vote, dotToken)
-            _ <- b.output(vote, disputeScriptRef, dotToken)
-            // ValidityEndSlot(votingDeadline): only while voting is open
-            _ <- b.input(votingOpen, vote, dotToken)
-            _ <- b.output(vote, votingOpen, dotToken)
-
-            // ---- Abstain (mirrors AbstainTx.Build.buildAbstainTx) ----
-            // Leaner than Vote: no treasury/regime references, no validity window.
-            abstain <- b.transition(RBRTransitionId.Abstain, List(peer, key, link), Guard.True)
-            // uncastBallotBox.votingSpend(Abstain) / abstainOutput.send: AwaitingVote → Abstain
-            _ <- b.input(ballots, abstain, one(ballot(Ref(key), Ref(link), awaiting, version0)))
-            _ <- b.output(abstain, ballots, one(ballot(Ref(key), Ref(link), abstainedStatus, version0)))
-            // addRequiredSigners(votingSigners): the box's peer signs
-            _ <- b.input(owner, abstain, ownerToken)
-            _ <- b.output(abstain, owner, ownerToken)
-            // collateralUtxo.spend / collateralOutput.send
-            _ <- b.input(collateral, abstain, peerToken)
-            _ <- b.output(abstain, collateral, peerToken)
-            // config.referenceDispute
-            _ <- b.input(disputeScriptRef, abstain, dotToken)
-            _ <- b.output(abstain, disputeScriptRef, dotToken)
-
-            // ---- RatchetVote (mirrors RatchetVoteTx.Build; spent box is Voted or Abstain) ----
-            // The on-chain script skips the tx-signer check: any peer q ratchets with a
-            // multisigned SEC, supplying its own collateral. Monotonicity (the on-chain
-            // `VoteRatchetNotMonotonic` check) is the Lt guard on the linear Version class —
-            // Abstained boxes carry version 0, so "Abstain ratchets as prev = 0" is the same guard.
-            ratchet <- b.transition(
-              RBRTransitionId.RatchetVote,
-              List(collateralPeer, key, link, status, versionOld, versionNew),
-              Guard.And(
-                Guard.Not(Guard.Eq(Ref(status), awaiting)),
-                Guard.Lt(Ref(versionOld), Ref(versionNew))
-              )
+        def addPlaces: Build[RBRPlaceId, RBRTransitionId, RBRPlaces] =
+            for {
+                ballots <- b.place(Ballots, RBRPlace(initialBallots, ballotSort))
+                owner <- b.place(Owner, RBRPlace(ownership, ownerSort))
+                votingOpen <- b.place(VotingOpen, RBRPlace(oneDot, Sort.Dot))
+                votingClosed <- b.place(VotingClosed, RBRPlace(noDots, Sort.Dot))
+                unresolvedTreasury <- b.place(UnresolvedTreasury, RBRPlace(oneDot, Sort.Dot))
+                resolvedTreasury <- b.place(ResolvedTreasury, RBRPlace(noDots, Sort.Dot))
+                regimeRef <- b.place(RegimeRef, RBRPlace(oneDot, Sort.Dot))
+                disputeScriptRef <- b.place(DisputeScriptRef, RBRPlace(oneDot, Sort.Dot))
+                collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
+            } yield RBRPlaces(
+              ballots,
+              owner,
+              votingOpen,
+              votingClosed,
+              unresolvedTreasury,
+              resolvedTreasury,
+              regimeRef,
+              disputeScriptRef,
+              collateral
             )
-            // openBallotBox.spend / votedOutput.send: (status, versionOld) → Voted(versionNew)
-            _ <- b.input(ballots, ratchet, one(ballot(Ref(key), Ref(link), Ref(status), Ref(versionOld))))
-            _ <- b.output(ratchet, ballots, one(ballot(Ref(key), Ref(link), voted, Ref(versionNew))))
-            // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
-            _ <- b.input(collateral, ratchet, collateralPeerToken)
-            _ <- b.output(ratchet, collateral, collateralPeerToken)
-            // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-            _ <- b.input(unresolvedTreasury, ratchet, dotToken)
-            _ <- b.output(ratchet, unresolvedTreasury, dotToken)
-            _ <- b.input(regimeRef, ratchet, dotToken)
-            _ <- b.output(ratchet, regimeRef, dotToken)
-            _ <- b.input(disputeScriptRef, ratchet, dotToken)
-            _ <- b.output(ratchet, disputeScriptRef, dotToken)
-            // ValidityEndSlot(votingDeadline)
-            _ <- b.input(votingOpen, ratchet, dotToken)
-            _ <- b.output(ratchet, votingOpen, dotToken)
 
-            // ---- Tally (mirrors TallyTx.Build; split by the maxVote winner) ----
-            // The continuing box (k1, l1) absorbs its successor (k2, l2): adjacency is the
-            // Eq(l1, k2) guard, and the result keeps k1 and inherits l2. maxVote's ordering is the
-            // Status/Version linear orders; ties go to the removed box (`else b` in maxVote).
-            tallyContinuing <- b.transition(
-              RBRTransitionId.TallyContinuingWins,
-              List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
-              Guard.And(
-                Guard.Eq(Ref(link1), Ref(key2)),
-                Guard.Or(
-                  Guard.Lt(Ref(status2), Ref(status1)),
-                  Guard.And(Guard.Eq(Ref(status1), Ref(status2)), Guard.Lt(Ref(version2), Ref(version1)))
+        // ---- Vote (mirrors VoteTx.Build.buildVoteTx) ----
+        def vote(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(RBRTransitionId.Vote, List(peer, key, link, version), Guard.True)
+                // uncastBallotBox.votingSpend / votedOutput.send: AwaitingVote → Voted(version)
+                _ <- b.input(places.ballots, t, one(ballot(Ref(key), Ref(link), awaiting, version0)))
+                _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(version))))
+                // addRequiredSigners(votingSigners): the box's peer signs — presence in Owner
+                _ <- b.input(places.owner, t, ownerToken)
+                _ <- b.output(t, places.owner, ownerToken)
+                // collateralUtxo.spend / collateralOutput.send: the peer's collateral, recreated
+                _ <- b.input(places.collateral, t, peerToken)
+                _ <- b.output(t, places.collateral, peerToken)
+                // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
+                _ <- b.input(places.unresolvedTreasury, t, dotToken)
+                _ <- b.output(t, places.unresolvedTreasury, dotToken)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                _ <- b.output(t, places.regimeRef, dotToken)
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                // ValidityEndSlot(votingDeadline): only while voting is open
+                _ <- b.input(places.votingOpen, t, dotToken)
+                _ <- b.output(t, places.votingOpen, dotToken)
+            } yield ()
+
+        // ---- Abstain (mirrors AbstainTx.Build.buildAbstainTx) ----
+        // Leaner than Vote: no treasury/regime references, no validity window.
+        def abstain(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(RBRTransitionId.Abstain, List(peer, key, link), Guard.True)
+                // uncastBallotBox.votingSpend(Abstain) / abstainOutput.send: AwaitingVote → Abstain
+                _ <- b.input(places.ballots, t, one(ballot(Ref(key), Ref(link), awaiting, version0)))
+                _ <- b.output(
+                  t,
+                  places.ballots,
+                  one(ballot(Ref(key), Ref(link), abstainedStatus, version0))
                 )
-              )
-            )
-            // continuingBallotBox.spend + removedBallotBox.spend (one Union inscription — W is a
-            // function on F, so both boxes ride a single input arc) / tallied.send
-            _ <- b.input(
-              ballots,
-              tallyContinuing,
-              Inscription.Union(
-                one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
-                one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
-              )
-            )
-            _ <- b.output(
-              tallyContinuing,
-              ballots,
-              one(ballot(Ref(key1), Ref(link2), Ref(status1), Ref(version1)))
-            )
-            // collateralUtxo.add only — presence, never spent
-            _ <- b.input(collateral, tallyContinuing, collateralPeerToken)
-            _ <- b.output(tallyContinuing, collateral, collateralPeerToken)
-            // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-            _ <- b.input(unresolvedTreasury, tallyContinuing, dotToken)
-            _ <- b.output(tallyContinuing, unresolvedTreasury, dotToken)
-            _ <- b.input(regimeRef, tallyContinuing, dotToken)
-            _ <- b.output(tallyContinuing, regimeRef, dotToken)
-            _ <- b.input(disputeScriptRef, tallyContinuing, dotToken)
-            _ <- b.output(tallyContinuing, disputeScriptRef, dotToken)
-            // ValidityStartSlot(votingDeadline + 1): only after the deadline
-            _ <- b.input(votingClosed, tallyContinuing, dotToken)
-            _ <- b.output(tallyContinuing, votingClosed, dotToken)
+                // addRequiredSigners(votingSigners): the box's peer signs
+                _ <- b.input(places.owner, t, ownerToken)
+                _ <- b.output(t, places.owner, ownerToken)
+                // collateralUtxo.spend / collateralOutput.send
+                _ <- b.input(places.collateral, t, peerToken)
+                _ <- b.output(t, places.collateral, peerToken)
+                // config.referenceDispute
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+            } yield ()
 
-            tallyRemoved <- b.transition(
-              RBRTransitionId.TallyRemovedWins,
-              List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
-              Guard.And(
-                Guard.Eq(Ref(link1), Ref(key2)),
-                Guard.Or(
-                  Guard.Lt(Ref(status1), Ref(status2)),
+        // ---- RatchetVote (mirrors RatchetVoteTx.Build; spent box is Voted or Abstain) ----
+        // The on-chain script skips the tx-signer check: any peer ratchets with a multisigned SEC,
+        // supplying its own collateral. Monotonicity (the on-chain `VoteRatchetNotMonotonic` check)
+        // is the Lt guard on the linear Version class — Abstained boxes carry version 0, so "Abstain
+        // ratchets as prev = 0" is the same guard.
+        def ratchetVote(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(
+                  RBRTransitionId.RatchetVote,
+                  List(collateralPeer, key, link, status, versionOld, versionNew),
                   Guard.And(
-                    Guard.Eq(Ref(status1), Ref(status2)),
-                    Guard.Or(Guard.Lt(Ref(version1), Ref(version2)), Guard.Eq(Ref(version1), Ref(version2)))
+                    Guard.Not(Guard.Eq(Ref(status), awaiting)),
+                    Guard.Lt(Ref(versionOld), Ref(versionNew))
                   )
                 )
-              )
-            )
-            _ <- b.input(
-              ballots,
-              tallyRemoved,
-              Inscription.Union(
-                one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
-                one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
-              )
-            )
-            _ <- b.output(
-              tallyRemoved,
-              ballots,
-              one(ballot(Ref(key1), Ref(link2), Ref(status2), Ref(version2)))
-            )
-            _ <- b.input(collateral, tallyRemoved, collateralPeerToken)
-            _ <- b.output(tallyRemoved, collateral, collateralPeerToken)
-            _ <- b.input(unresolvedTreasury, tallyRemoved, dotToken)
-            _ <- b.output(tallyRemoved, unresolvedTreasury, dotToken)
-            _ <- b.input(regimeRef, tallyRemoved, dotToken)
-            _ <- b.output(tallyRemoved, regimeRef, dotToken)
-            _ <- b.input(disputeScriptRef, tallyRemoved, dotToken)
-            _ <- b.output(tallyRemoved, disputeScriptRef, dotToken)
-            _ <- b.input(votingClosed, tallyRemoved, dotToken)
-            _ <- b.output(tallyRemoved, votingClosed, dotToken)
+                // openBallotBox.spend / votedOutput.send: (status, versionOld) → Voted(versionNew)
+                _ <- b.input(
+                  places.ballots,
+                  t,
+                  one(ballot(Ref(key), Ref(link), Ref(status), Ref(versionOld)))
+                )
+                _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(versionNew))))
+                // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
+                _ <- b.input(places.collateral, t, collateralPeerToken)
+                _ <- b.output(t, places.collateral, collateralPeerToken)
+                // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
+                _ <- b.input(places.unresolvedTreasury, t, dotToken)
+                _ <- b.output(t, places.unresolvedTreasury, dotToken)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                _ <- b.output(t, places.regimeRef, dotToken)
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                // ValidityEndSlot(votingDeadline)
+                _ <- b.input(places.votingOpen, t, dotToken)
+                _ <- b.output(t, places.votingOpen, dotToken)
+            } yield ()
 
-            // ---- VotingDeadline (untimed ISO Clause-10 [D,D] projection) ----
-            deadline <- b.transition(RBRTransitionId.VotingDeadline, List(), Guard.True)
-            _ <- b.input(votingOpen, deadline, dotToken)
-            _ <- b.output(deadline, votingClosed, dotToken)
+        // ---- Tally (mirrors TallyTx.Build; split by the maxVote winner) ----
+        // The continuing box (1) absorbs its successor (2): adjacency is the Eq(link1, key2) guard,
+        // and the result keeps key1 and inherits link2. maxVote's ordering is the Status/Version
+        // linear orders; ties go to the removed box (`else b` in maxVote).
+        def tallyContinuingWins(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(
+                  RBRTransitionId.TallyContinuingWins,
+                  List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
+                  Guard.And(
+                    Guard.Eq(Ref(link1), Ref(key2)),
+                    Guard.Or(
+                      Guard.Lt(Ref(status2), Ref(status1)),
+                      Guard.And(Guard.Eq(Ref(status1), Ref(status2)), Guard.Lt(Ref(version2), Ref(version1)))
+                    )
+                  )
+                )
+                // continuingBallotBox.spend + removedBallotBox.spend (one Union inscription — W is a
+                // function on F, so both boxes ride a single input arc) / tallied.send
+                _ <- b.input(
+                  places.ballots,
+                  t,
+                  Inscription.Union(
+                    one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
+                    one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
+                  )
+                )
+                _ <- b.output(
+                  t,
+                  places.ballots,
+                  one(ballot(Ref(key1), Ref(link2), Ref(status1), Ref(version1)))
+                )
+                // collateralUtxo.add only — presence, never spent
+                _ <- b.input(places.collateral, t, collateralPeerToken)
+                _ <- b.output(t, places.collateral, collateralPeerToken)
+                // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
+                _ <- b.input(places.unresolvedTreasury, t, dotToken)
+                _ <- b.output(t, places.unresolvedTreasury, dotToken)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                _ <- b.output(t, places.regimeRef, dotToken)
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                // ValidityStartSlot(votingDeadline + 1): only after the deadline
+                _ <- b.input(places.votingClosed, t, dotToken)
+                _ <- b.output(t, places.votingClosed, dotToken)
+            } yield ()
+
+        def tallyRemovedWins(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(
+                  RBRTransitionId.TallyRemovedWins,
+                  List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
+                  Guard.And(
+                    Guard.Eq(Ref(link1), Ref(key2)),
+                    Guard.Or(
+                      Guard.Lt(Ref(status1), Ref(status2)),
+                      Guard.And(
+                        Guard.Eq(Ref(status1), Ref(status2)),
+                        Guard.Or(Guard.Lt(Ref(version1), Ref(version2)), Guard.Eq(Ref(version1), Ref(version2)))
+                      )
+                    )
+                  )
+                )
+                _ <- b.input(
+                  places.ballots,
+                  t,
+                  Inscription.Union(
+                    one(ballot(Ref(key1), Ref(link1), Ref(status1), Ref(version1))),
+                    one(ballot(Ref(key2), Ref(link2), Ref(status2), Ref(version2)))
+                  )
+                )
+                _ <- b.output(
+                  t,
+                  places.ballots,
+                  one(ballot(Ref(key1), Ref(link2), Ref(status2), Ref(version2)))
+                )
+                _ <- b.input(places.collateral, t, collateralPeerToken)
+                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.input(places.unresolvedTreasury, t, dotToken)
+                _ <- b.output(t, places.unresolvedTreasury, dotToken)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                _ <- b.output(t, places.regimeRef, dotToken)
+                _ <- b.input(places.disputeScriptRef, t, dotToken)
+                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.input(places.votingClosed, t, dotToken)
+                _ <- b.output(t, places.votingClosed, dotToken)
+            } yield ()
+
+        // ---- VotingDeadline (untimed ISO Clause-10 [D,D] projection) ----
+        def votingDeadline(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(RBRTransitionId.VotingDeadline, List(), Guard.True)
+                _ <- b.input(places.votingOpen, t, dotToken)
+                _ <- b.output(t, places.votingClosed, dotToken)
+            } yield ()
+
+        val program = for {
+            places <- addPlaces
+            _ <- vote(places)
+            _ <- abstain(places)
+            _ <- ratchetVote(places)
+            _ <- tallyContinuingWins(places)
+            _ <- tallyRemovedWins(places)
+            _ <- votingDeadline(places)
         } yield ()
 
         b.build(program)
