@@ -7,8 +7,11 @@ package hydrozoa.lib.petri.hlpn
   * they must be caught here.
   *
   * Checked: variables referenced but not declared by the transition; `Succ` / `Lt` over a class
-  * with no successor order; subclass names absent from a sort's partition; and an arc inscription
-  * whose sort is not the connected place's color domain (`W(p,t)` must range over `Bag(C(p))`).
+  * with no successor order; guard operands (`Eq` / `Lt`) whose sorts differ — the type parameter
+  * cannot catch this, since distinct color classes may share a Scala type (e.g. `Key` and the
+  * version minor are both `BigInt`); subclass names absent from a sort's partition; every leaf of
+  * an arc inscription whose sort is not the connected place's color domain (`W(p,t)` must range
+  * over `Bag(C(p))`); and arcs referencing a place or transition absent from the net.
   */
 object SortCheck:
 
@@ -20,12 +23,17 @@ object SortCheck:
             walkGuard(decl.guard, decl.variables)
         }
         val arcErrors = net.arcsMap.toList.flatMap { (flow, arc) =>
-            val declared = net.transitionsMap.get(flow.transition).map(_.variables).getOrElse(Nil)
-            walkInscription(arc.inscription, declared) ++
+            val placeErrors =
                 domainErrors(flow.toString, flow.place, arc.inscription, net.placesMap)
+            // A dangling transition would make every arc variable look undeclared; report it once
+            // and skip the term walk. (Topology validation also flags it, at the net level.)
+            net.transitionsMap.get(flow.transition) match
+                case None => SortError.MissingTransition(flow.transition.toString) :: placeErrors
+                case Some(decl) => walkInscription(arc.inscription, decl.variables) ++ placeErrors
         }
         guardErrors ++ arcErrors
 
+    /** Each distinct leaf sort of `inscription` that is not the connected place's color domain. */
     private def domainErrors[PlaceId, C](
         arcId: String,
         place: PlaceId,
@@ -34,24 +42,41 @@ object SortCheck:
     ): List[SortError] =
         places.get(place) match
             case None => List(SortError.MissingPlace(place.toString))
-            case Some(p) if inscription.sort != p.colorDomain =>
-                List(
-                  SortError.ArcDomainMismatch(arcId, name(inscription.sort), name(p.colorDomain))
-                )
-            case Some(_) => Nil
+            case Some(p) =>
+                leafSorts(inscription).distinct
+                    .filter(_ != p.colorDomain)
+                    .map(s => SortError.ArcDomainMismatch(arcId, name(s), name(p.colorDomain)))
+
+    /** The sort of every weighted color in an inscription — both branches of a `Union`, not just
+      * the root (whose sort is only the left branch's).
+      */
+    private def leafSorts(inscription: Inscription[?]): List[Sort[?]] =
+        inscription match
+            case Inscription.Weighted(_, color) => List(color.sort)
+            case Inscription.Union(l, r)        => leafSorts(l) ++ leafSorts(r)
 
     private def walkGuard(guard: Guard, declared: List[Var[?]]): List[SortError] =
         guard match
             case Guard.True      => Nil
-            case Guard.Eq(l, r)  => walkColor(l, declared) ++ walkColor(r, declared)
             case Guard.Not(g)    => walkGuard(g, declared)
             case Guard.And(l, r) => walkGuard(l, declared) ++ walkGuard(r, declared)
             case Guard.Or(l, r)  => walkGuard(l, declared) ++ walkGuard(r, declared)
+            case Guard.Eq(l, r) =>
+                operandMismatch("Eq", l.sort, r.sort).toList ++
+                    walkColor(l, declared) ++ walkColor(r, declared)
             case Guard.Lt(l, r) =>
-                val order = Option.unless(isOrdered(l.sort))(SortError.LtOnUnordered(name(l.sort)))
-                order.toList ++ walkColor(l, declared) ++ walkColor(r, declared)
+                val unordered =
+                    Option.unless(isOrdered(l.sort))(SortError.LtOnUnordered(name(l.sort)))
+                operandMismatch("Lt", l.sort, r.sort).toList ++ unordered.toList ++
+                    walkColor(l, declared) ++ walkColor(r, declared)
             case Guard.InSubclass(c, sub) =>
                 subclassError(c.sort, sub).toList ++ walkColor(c, declared)
+
+    /** `Eq` / `Lt` require both operands to have the same sort; the type parameter alone does not
+      * guarantee it (two color classes may share a Scala type).
+      */
+    private def operandMismatch(op: String, left: Sort[?], right: Sort[?]): Option[SortError] =
+        Option.when(left != right)(SortError.OperandSortMismatch(op, name(left), name(right)))
 
     private def walkInscription(
         inscription: Inscription[?],
@@ -102,11 +127,19 @@ enum SortError:
     /** `Lt` over a class with no order. */
     case LtOnUnordered(sort: String)
 
+    /** `Eq` / `Lt` compares operands of different sorts — possible when distinct color classes
+      * share a Scala type (e.g. `Key` and the version minor are both `BigInt`).
+      */
+    case OperandSortMismatch(guard: String, leftSort: String, rightSort: String)
+
     /** A subclass name absent from the sort's partition. */
     case UnknownSubclass(sort: String, subclass: String)
 
-    /** An arc inscription's sort is not the connected place's color domain. */
+    /** An arc inscription leaf's sort is not the connected place's color domain. */
     case ArcDomainMismatch(arc: String, inscriptionSort: String, placeDomain: String)
 
     /** An arc references a place absent from the net. */
     case MissingPlace(place: String)
+
+    /** An arc references a transition absent from the net. */
+    case MissingTransition(transition: String)

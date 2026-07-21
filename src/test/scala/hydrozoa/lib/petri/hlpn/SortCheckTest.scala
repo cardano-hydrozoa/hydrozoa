@@ -100,3 +100,42 @@ class SortCheckTest extends AnyFunSuite:
             case _                              => false
         })
     }
+
+    // (A) Peer and Vote are both `Sort.Class` over `String`, so `Eq`/`Lt` across them typecheck.
+    test("a guard comparing operands of different sorts is rejected") {
+        val g = Guard.Eq(ColorTerm.Ref(p), ColorTerm.Const("No", vote))
+        assert(SortCheck.errors(netWith(List(p), g, wp)).exists {
+            case SortError.OperandSortMismatch("Eq", _, _) => true
+            case _                                         => false
+        })
+    }
+
+    // (B) A Union whose left branch matches the place domain but whose right branch does not — the
+    // old check only inspected the root sort (= the left branch), missing this.
+    test("a union inscription whose non-left branch mismatches the place domain is rejected") {
+        val wv = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(v))
+        val net = netWith(List(p, v), Guard.True, Inscription.Union(wp, wv))
+        assert(SortCheck.errors(net).exists {
+            case _: SortError.ArcDomainMismatch => true
+            case _                              => false
+        })
+    }
+
+    // (C) An arc to a transition absent from the net: reported cleanly, without a spurious
+    // UndeclaredVariable per referenced variable.
+    test("an arc referencing a missing transition is reported without a variable cascade") {
+        val net = HlNet[String, String, String](
+          placesMap = Map[String, ColoredPlace[String]]("in" -> Tokens(ms(), peer)),
+          transitionsMap = Map("t" -> HlTransition(List(p), Guard.True)),
+          arcsMap = Map(Flow.Pt("in", "ghost") -> InscribedArc(wp))
+        )
+        val errs = SortCheck.errors(net)
+        val _ = assert(errs.exists {
+            case SortError.MissingTransition("ghost") => true
+            case _                                    => false
+        })
+        assert(!errs.exists {
+            case _: SortError.UndeclaredVariable => true
+            case _                               => false
+        })
+    }
