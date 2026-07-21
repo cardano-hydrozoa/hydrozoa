@@ -42,6 +42,11 @@ object Sort:
         name: String,
         carrier: NonEmptySet[C],
         discipline: Discipline,
+        // Concept 15's static subclasses: named subsets used as `Guard.InSubclass` domains and, in
+        // symmetric nets, to refine the color-permutation symmetry group (permutations preserve
+        // each subclass). ISO requires a genuine partition (disjoint + covering); `Map[String,
+        // Set[C]]` does not enforce that — a partition check (SortCheck rule, or a stronger type)
+        // is future work, needed once the symmetry-refinement meaning is relied on.
         subclasses: Map[String, Set[C]]
     )(using ord: Order[C])
         extends Sort[C]:
