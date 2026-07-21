@@ -2,6 +2,19 @@ package hydrozoa.lib.petri.hlpn
 
 import hydrozoa.lib.number.PositiveInt
 
+// TODO (symmetry): this term language is the *symmetric-net* color-function fragment (projection /
+// `Succ` / tuple; `=`/`<`/subclass guards) — not general HLPN §8 operators — but the SN symmetry
+// property is not enforced. `Const` names a specific color (symmetry-breaking on an unordered class
+// unless it is a static subclass, i.e. a fixed point of the group), and `Lt` is equivariant only on
+// linear classes. Future work, in order:
+//   1. A firing-equivariance property: `σ · fire(t, β, M) == fire(t, σ·β, σ·M)` for permutations σ
+//      in a net's admissible group (full S_n on a constant-free unordered class, rotations on
+//      circular, trivial on linear, ∩ the subgroup fixing every `Const` / static subclass). Turns
+//      "is this net symmetric?" into a ScalaCheck test and grounds later symmetry reduction.
+//   2. A symmetry *classifier* (a `SortCheck`-style pass computing a net's admissible group / what
+//      breaks it) — a classifier, not a restrictive `Symmetric` sublanguage, since real nets (the
+//      RBR one) legitimately use constants and we want to know their symmetry, not forbid it.
+
 /** A typed variable of a transition (ISO 15909-1 `V`, the S-indexed variable set): a name with a
   * color sort. Bound to a value by a [[Binding]] to form a transition mode.
   */
