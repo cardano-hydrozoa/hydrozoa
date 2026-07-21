@@ -27,9 +27,8 @@ final case class HlTransition[C](variables: List[Var[C]], guard: Guard)
   * function `W : F → TERM(O ∪ V)` (Concept 21). Structural validation (ids, dangling arcs,
   * totality) is inherited from [[Net]] / [[Net.Topology.NoDanglingArcs]].
   *
-  * Simulation is *mode-relative* (Concepts 23/24), which is why this net does not extend the
-  * framework's mode-less [[Simulator]]: [[fire]] takes the mode `β`, evaluates each connected
-  * inscription under it, checks the guard `Φ⟦β⟧`, and applies the same per-place
+  * Simulation is *mode-relative* (Concepts 23/24): [[fire]] takes the mode `β`, evaluates each
+  * connected inscription under it, checks the guard `Φ⟦β⟧`, and applies the same per-place
   * `covers`/`minus`/`plus` core at the multiset [[MarkingAlgebra]] instance. Finding enabled modes
   * is a search strategy layered on top (unification, or a scenario-specific driver) — the net
   * offers only [[isModeEnabled]] and [[fire]].

@@ -25,10 +25,9 @@ object Place {
         val id: PlaceId
     }
 
-    // Stub. Component-side acceptance predicates (e.g. "acceptArc") are deferred until the
-    // builder (IndexedStateT stack) is designed. Type-level arc-type compatibility is enforced
-    // by MapNet's `A` type bound at compile time. Net-wide structural validation (dangling
-    // arcs, multiplicity) lives in net.Topology.
+    // Stub. Component-side acceptance predicates (e.g. "acceptArc") are deferred. Type-level
+    // arc↔place color compatibility is enforced by the net builder; net-wide structural validation
+    // (dangling arcs) lives in net.Topology.
     trait Topology
 
     /** Otherwise known as a "marking"

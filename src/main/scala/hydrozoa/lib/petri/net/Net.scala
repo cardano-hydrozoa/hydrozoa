@@ -221,7 +221,7 @@ object Net {
         // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs)
         // could be used here for richer invariants beyond totality — for example:
         //   - every transition must have at least one connected arc
-        //   - every BoundedPlace must start below capacity
+        //   - every place must start within its declared capacity
         // To add constraints: override semanticsErrors with `super.semanticsErrors ++ myErrors`.
     }
 
