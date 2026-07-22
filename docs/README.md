@@ -11,6 +11,7 @@ protocol spec). For project-wide conventions, start with the style guide.
 | Doc | Summary |
 |---|---|
 | [codecs.md](codecs.md) | Conventions for wire/storage codecs (working notes). |
+| [effect-tracking.md](effect-tracking.md) | Linking blocks and requests to their L1 effects: effect identity (`l1TxId`), the reverse-index CFs, per-block decomposition, `relatedEffects`, and consensus-safe withdrawal-effect tracking (the `payoutRequestIds` / `payoutOffset` side-channel + the finalization payout fix). |
 | [fast-consensus.md](fast-consensus.md) | The fast cycle: per-peer soft-confirmation of block headers, eager signature collection, BlockWeaver / JointLedger / FastConsensusActor roles. |
 | [integration-stages.md](integration-stages.md) | The two integration test stages under `integration/`: which stage tests what, where to add a test, what each property checks. |
 | [l2-isomorphism.md](l2-isomorphism.md) | L2 isomorphism: driving the EUTXO ledger with native Cardano txs — the headId pin, mandatory tx metadata, screening vs submission, how deposits pin their L2 payload, and the `cardano-eutxo` / `any-remote` backend selection. |
