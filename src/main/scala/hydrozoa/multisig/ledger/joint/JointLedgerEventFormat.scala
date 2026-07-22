@@ -24,7 +24,7 @@ object JointLedgerEventFormat:
             case BriefProduced(b) =>
                 val v = b.header.blockVersion
                 info(
-                  s"brief produced: block=${b.blockNum: Int} type=${briefTypeName(b)} v${v.major: Int}.${v.minor: Int} events=${b.body.events.size}",
+                  s"brief produced: block=${b.blockNum: Int} type=${briefTypeName(b)} v${v.major: Int}.${v.minor: Int} requests=${b.body.requests.size}",
                   "blockNum" -> s"${b.blockNum: Int}"
                 )
             case L2CommandFailed(err) =>
@@ -49,7 +49,7 @@ object JointLedgerEventFormat:
                   "requestId" -> rid.toString,
                   "blockNum" -> s"${bn: Int}"
                 )
-            case RequestRejected(rid, bn, reason) =>
+            case RequestInvalidated(rid, bn, reason) =>
                 warn(
                   s"Request rejected ($rid): $reason",
                   "requestId" -> rid.toString,
@@ -70,14 +70,14 @@ object JointLedgerEventFormat:
                   s"completing block $bn (blockCreationEndTime=$endTime, competingFallbackTxTime=$fallbackTime, split=$split)",
                   "blockNum" -> s"${bn: Int}"
                 )
-            case BlockBriefBuilding(prev, start, fallback, events, absorbed, refunded) =>
+            case BlockBriefBuilding(prev, start, fallback, events, absorbed, rejected) =>
                 trace(
                   s"mkBlockBrief: previousHeader=$prev\n" +
                       s"mkBlockBrief: blockStartTime=$start\n" +
                       s"mkBlockBrief: competingFallbackValidityStart=$fallback\n" +
                       s"mkBlockBrief: events=$events\n" +
                       s"mkBlockBrief: decisions.absorbed=$absorbed\n" +
-                      s"mkBlockBrief: decisions.refunded=$refunded"
+                      s"mkBlockBrief: decisions.rejected=$rejected"
                 )
             case BlockBriefBuilt(brief) =>
                 trace(

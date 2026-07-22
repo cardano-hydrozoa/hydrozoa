@@ -91,7 +91,7 @@ object ApiDto {
         case L2TxKind.Transaction       => "transaction"
         case L2TxKind.DepositRegistered => "depositRegistered"
         case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
-        case L2TxKind.DepositRefunded   => "depositRefunded"
+        case L2TxKind.DepositRejected   => "depositRejected"
 
     /** One row of the block listing: number, fast-cycle leader (absent for the initial block, which
       * is config, not woven), and block type.

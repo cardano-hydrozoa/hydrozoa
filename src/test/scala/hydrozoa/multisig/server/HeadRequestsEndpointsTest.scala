@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import io.circe.Json
 import java.time.Instant
 import org.http4s.circe.*
@@ -110,7 +110,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   processed.filter(_ => id == RequestId(peer0, RequestNumber(0)))
                 )
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
             def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
             def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)

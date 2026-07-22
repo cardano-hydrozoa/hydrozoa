@@ -72,7 +72,7 @@ class StackEffectsBuilderTest extends AnyFunSuite {
               startTime = BlockCreationStartTime(now),
               endTime = BlockCreationEndTime(now + 1.second)
             ),
-            BlockBody.Final(events = List.empty, depositsRefunded = List.empty)
+            BlockBody.Final(requests = List.empty, depositsRejected = List.empty)
           ),
           evacuationMapDiff = Seq(EvacuationDiff.Delete(keyX)),
           payoutObligations = List(oblY),

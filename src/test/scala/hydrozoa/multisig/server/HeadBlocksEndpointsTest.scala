@@ -15,7 +15,7 @@ import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import io.circe.Json
 import java.time.Instant
@@ -74,7 +74,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                     headConfig.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime),
                 mDepositDecisionWakeupTime = None
               ),
-              BlockBody.Minor(events = List.empty, depositsRefunded = List.empty)
+              BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
             )
         }
 
@@ -151,7 +151,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =

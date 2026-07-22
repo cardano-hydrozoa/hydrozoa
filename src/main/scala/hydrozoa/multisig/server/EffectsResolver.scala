@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.stack.PartitionEffects.{Final, Major, Minor}
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, DepositDecision}
 import scalus.cardano.ledger.{Transaction, TransactionHash}
 
 /** The kind of L1 effect an entry represents. */
@@ -141,14 +141,16 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
                             depositRefundEffect(requestId, entry.blockNum, pe).toList
                     }
             }
+        // Only an absorbed deposit has an absorbing settlement; a rejected or still-undecided
+        // deposit contributes none (it is repaid by the always-present post-dated refund above).
         val settlement: IO[List[ResolvedEffect]] =
-            reader.absorptionBlock(requestId).flatMap {
-                case None => IO.pure(Nil)
-                case Some(block) =>
+            reader.decision(requestId).flatMap {
+                case Some(DepositDecision.Absorbed(block)) =>
                     partitionForBlock(block).map {
                         case None                  => Nil
                         case Some((blockNums, pe)) => settlementEffect(blockNums.head, pe).toList
                     }
+                case _ => IO.pure(Nil)
             }
         (refund, settlement).mapN(_ ++ _)
 

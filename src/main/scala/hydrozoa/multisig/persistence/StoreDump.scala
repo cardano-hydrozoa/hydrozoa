@@ -130,9 +130,8 @@ object StoreDump:
             case Cf.RequestBlockIndex =>
                 if key.length == 8 then s"RequestBlockIndex(i64=${ByteBuffer.wrap(key).getLong})"
                 else hex(key)
-            case Cf.DepositAbsorptionIndex =>
-                if key.length == 8 then
-                    s"DepositAbsorptionIndex(i64=${ByteBuffer.wrap(key).getLong})"
+            case Cf.DepositDecisionIndex =>
+                if key.length == 8 then s"DepositDecisionIndex(i64=${ByteBuffer.wrap(key).getLong})"
                 else hex(key)
             case Cf.WithdrawalEffectIndex =>
                 if key.length == 40 then
