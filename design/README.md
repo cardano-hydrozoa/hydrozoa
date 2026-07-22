@@ -7,8 +7,8 @@ whitepaper and refined for implementation. They are more
 detailed and implementation-oriented than the whitepaper's prose, and they make
 the whitepaper's open questions explicit as decision points.
 
-Distinct from `specification/` (the LaTeX source of the formal PDF
-specification) and `.scratch/` (ephemeral working notes).
+Distinct from the [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction)
+(the protocol spec) and `.scratch/` (ephemeral working notes).
 
 | Spec | Status        | Summary |
 |---|---------------|---|

@@ -54,15 +54,6 @@ sbtn scalafixAll --check
 sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ```
 
-### Specification
-```bash
-# Build PDF specification
-make spec
-
-# Clean specification files
-make spec-clean
-```
-
 ## Architecture
 
 ### Key Technologies
