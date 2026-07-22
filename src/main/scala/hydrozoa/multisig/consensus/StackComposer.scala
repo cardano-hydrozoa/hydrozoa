@@ -204,7 +204,8 @@ final case class StackComposer(
                       )
                     )
                     res <- mkStackUnsigned(brief, prefix, s.treasury, s.evacuationMap)
-                    ComposedStack(unsigned, newTreasury, newMap, partitions, withdrawalRows) = res
+                    ComposedStack(unsigned, newTreasury, newMap, partitions, withdrawalTracking) =
+                        res
                     handoff <- buildHandoff(unsigned)
                     conn <- getConnections
                     // Persist the close bundle BEFORE anything leaves this node (CR4/CR8): the brief
@@ -217,7 +218,7 @@ final case class StackComposer(
                       newTreasury,
                       unsigned,
                       handoff.ownAcks,
-                      withdrawalRows
+                      withdrawalTracking
                     )
                     // Broadcast brief directly to PeerLiaisons (briefs go DIRECT, not via
                     // SlowConsensusActor). Each peer's outbox has a stackBrief lane.
@@ -261,7 +262,7 @@ final case class StackComposer(
         newTreasury: MultisigTreasuryUtxo,
         unsigned: Stack.Unsigned,
         ownAcks: List[HardAck],
-        withdrawalRows: List[(RequestId, TransactionHash)]
+        withdrawalTracking: List[(RequestId, TransactionHash)]
     ): IO[Unit] = {
         val brief = unsigned.brief
         val committed = committedBlockNums(partitions)
@@ -283,7 +284,7 @@ final case class StackComposer(
                 // One withdrawal-effect reverse-index row per (withdrawing request, paying effect):
                 // GET /head/requests/<id> resolves a withdrawal's settlement/rollout/finalization
                 // effects through it. Deterministic across peers, so every peer writes the same rows.
-                withdrawalRows.foldLeft(withAcks) { case (b, (requestId, l1TxId)) =>
+                withdrawalTracking.foldLeft(withAcks) { case (b, (requestId, l1TxId)) =>
                     b.put(StoreKey.WithdrawalEffectIndex(requestId, l1TxId))(Array.emptyByteArray)
                 }
             }
@@ -399,7 +400,7 @@ final case class StackComposer(
                                   newTreasury,
                                   newMap,
                                   partitions,
-                                  withdrawalRows
+                                  withdrawalTracking
                                 ) = res
                                 handoff <- buildHandoff(unsigned)
                                 conn <- getConnections
@@ -411,7 +412,7 @@ final case class StackComposer(
                                   newTreasury,
                                   unsigned,
                                   handoff.ownAcks,
-                                  withdrawalRows
+                                  withdrawalTracking
                                 )
                                 _ <- conn.slowConsensusActor ! handoff
                                 _ <- state.update(
@@ -439,14 +440,14 @@ final case class StackComposer(
         val results = NonEmptyList.fromListUnsafe(prefix.map(_.result))
         val partitions = StackPartition.partition(results)
         StackEffectsBuilder.mkEffectsRegular(config, treasury, partitions, evacuationMap) match {
-            case Right((effects, newTreasury, newMap, withdrawalRows)) =>
+            case Right((effects, newTreasury, newMap, withdrawalTracking)) =>
                 IO.pure(
                   ComposedStack(
                     Stack.Unsigned(brief, effects),
                     newTreasury,
                     newMap,
                     partitions,
-                    withdrawalRows
+                    withdrawalTracking
                   )
                 )
             case Left(err) =>
@@ -792,10 +793,10 @@ object StackComposer {
         newTreasury: MultisigTreasuryUtxo,
         newEvacuationMap: EvacuationMap,
         partitions: NonEmptyList[StackPartition],
-        // Withdrawal-effect rows this stack contributes: `(requestId, l1TxId)` linking a withdrawing
-        // request to a settlement / rollout / finalization tx paying one of its L1-bound outputs.
-        // Local-only; persisted at stack close into the WithdrawalEffectIndex CF.
-        withdrawalRows: List[(RequestId, TransactionHash)]
+        // Withdrawal-effect tracking this stack contributes: `(requestId, l1TxId)` links from a
+        // withdrawing request to a settlement / rollout / finalization tx paying one of its L1-bound
+        // outputs. Local-only; persisted at stack close into the WithdrawalEffectIndex CF.
+        withdrawalTracking: List[(RequestId, TransactionHash)]
     )
 
     final case class State(

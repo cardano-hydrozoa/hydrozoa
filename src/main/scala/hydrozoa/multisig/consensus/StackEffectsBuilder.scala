@@ -74,8 +74,8 @@ object StackEffectsBuilder {
           StackEffects.Unsigned.Regular,
           MultisigTreasuryUtxo,
           EvacuationMap,
-          // The withdrawal-effect rows this stack contributes: each `(requestId, l1TxId)` links a
-          // withdrawing request to a settlement / rollout / finalization tx that pays one of its
+          // The withdrawal-effect tracking this stack contributes: each `(requestId, l1TxId)` links
+          // a withdrawing request to a settlement / rollout / finalization tx that pays one of its
           // L1-bound outputs. A local-only side value — never inside the signed effects.
           List[(RequestId, TransactionHash)]
       )
@@ -86,14 +86,14 @@ object StackEffectsBuilder {
         def partitionRefunds(bs: List[BlockResult]): List[RefundTx] =
             bs.flatMap(_.postDatedRefundTxs)
 
-        // Withdrawal-effect rows for a partition: `provenance` is the partition's ordered payout
+        // Withdrawal-effect tracking for a partition: `provenance` is the partition's ordered payout
         // provenance (one entry per obligation the builder consumed — `Some(requestId)` for a
         // withdrawal, `None` for a finalization residual balance), and `slices` are the effect txs
         // that discharged a contiguous `[offset, offset+count)` of it. Each distinct withdrawing
-        // request in a tx's slice contributes one `(requestId, l1TxId)` row; residuals contribute
+        // request in a tx's slice contributes one `(requestId, l1TxId)` link; residuals contribute
         // none. The offsets/counts come from the builder (off-tx `payoutOffset` / `payoutCount`),
         // so this needs no re-derivation of the packing.
-        def withdrawalRows(
+        def trackWithdrawals(
             provenance: Vector[Option[RequestId]],
             slices: List[(Int, Int, TransactionHash)]
         ): List[(RequestId, TransactionHash)] =
@@ -158,7 +158,7 @@ object StackEffectsBuilder {
         val seed: Either[Error, Acc] = Right((Nil, treasury, initialEvacuationMap, Nil))
 
         val folded: Either[Error, Acc] = partitions.toList.foldLeft(seed) { (accE, p) =>
-            accE.flatMap { case (effectsAcc, tre, runningMap, rowsAcc) =>
+            accE.flatMap { case (effectsAcc, tre, runningMap, withdrawalTrackingAcc) =>
                 p.kind match {
                     case StackPartition.Kind.Major =>
                         val major = p.blocks.head
@@ -193,12 +193,13 @@ object StackEffectsBuilder {
                                     // The settlement drains the major block's withdrawals — all
                                     // real requests (the settlement input is `major.payoutObligations`).
                                     val prov = major.payoutRequestIds.toVector.map(Some(_))
-                                    val rows = withdrawalRows(prov, settlementSlices(seq))
+                                    val withdrawalTracking =
+                                        trackWithdrawals(prov, settlementSlices(seq))
                                     (
                                       pe :: effectsAcc,
                                       newTreasury,
                                       mapAfterPartition,
-                                      rows ++ rowsAcc
+                                      withdrawalTracking ++ withdrawalTrackingAcc
                                     )
                                 }
                             case _ =>
@@ -208,16 +209,14 @@ object StackEffectsBuilder {
                         }
                     case StackPartition.Kind.Final =>
                         // The finalization tx pays out two things: the final block's OWN withdrawals
-                        // (`fin.payoutObligations` — real L2 requests, never settled by a Major
-                        // since the final block is not Major), and the residual L2 balances. Like a
+                        // (`fin.payoutObligations` — real L2 requests), and the residual L2 balances.
+                        // Like a
                         // Major, the final block carries its own `evacuationMapDiff` (the final
                         // window's L2 mutations); we fold it into the running map so `mapAfterFinal`
-                        // is the true post-final residual — the withdrawals' spent inputs are
-                        // deleted, their change outputs are present, and the withdrawal outputs
-                        // (L1-bound) were never map members. Withdrawals come first so they stay a
+                        // is the true post-final residual.
+                        // Withdrawals come first so they stay a
                         // recognizable prefix (they carry request provenance; the residual balances
-                        // do not). The map is then reset to empty for any subsequent partition /
-                        // stack; the treasury is drained by finalization (chain ends).
+                        // do not).
                         val fin = p.blocks.head
                         val mapAfterFinal = applyDiffs(runningMap, fin.evacuationMapDiff)
                         val payoutObligationsRemaining =
@@ -237,8 +236,13 @@ object StackEffectsBuilder {
                             // (no request) — matching `payoutObligationsRemaining` above.
                             val prov = fin.payoutRequestIds.toVector.map(Some(_)) ++
                                 Vector.fill(mapAfterFinal.outputs.size)(None)
-                            val rows = withdrawalRows(prov, finalizationSlices(seq))
-                            (pe :: effectsAcc, tre, EvacuationMap.empty, rows ++ rowsAcc)
+                            val withdrawalTracking = trackWithdrawals(prov, finalizationSlices(seq))
+                            (
+                              pe :: effectsAcc,
+                              tre,
+                              EvacuationMap.empty,
+                              withdrawalTracking ++ withdrawalTrackingAcc
+                            )
                         }
                     case StackPartition.Kind.Minor =>
                         val mapAfterRun = p.blocks.toList.foldLeft(runningMap)((m, b) =>
@@ -249,7 +253,7 @@ object StackEffectsBuilder {
                           refunds = partitionRefunds(p.blocks.toList)
                         ): PartitionEffects[StandaloneEvacuationCommitment]
                         // Minor blocks carry no withdrawals (a withdrawal forces a Major block).
-                        Right((pe :: effectsAcc, tre, mapAfterRun, rowsAcc))
+                        Right((pe :: effectsAcc, tre, mapAfterRun, withdrawalTrackingAcc))
                     case StackPartition.Kind.Initial =>
                         throw new IllegalStateException(
                           "mkEffectsRegular received an Initial partition " +
@@ -259,13 +263,13 @@ object StackEffectsBuilder {
             }
         }
 
-        folded.map { case (effectsReversed, finalTreasury, finalMap, rows) =>
+        folded.map { case (effectsReversed, finalTreasury, finalMap, withdrawalTracking) =>
             val nel = NonEmptyList
                 .fromList(effectsReversed.reverse)
                 .getOrElse(
                   throw new IllegalStateException("Empty partition list — impossible")
                 )
-            (StackEffects.Unsigned.Regular(nel), finalTreasury, finalMap, rows)
+            (StackEffects.Unsigned.Regular(nel), finalTreasury, finalMap, withdrawalTracking)
         }
     }
 

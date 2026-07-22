@@ -175,23 +175,23 @@ The chain is assembled back-to-front (the tail rollout is built first from the f
 rollout has no rollout output, so a slightly larger budget); the offsets/counts are **read off** the
 built txs, never assumed.
 
-### Computing and persisting the rows
+### Computing and persisting `withdrawalTracking`
 
 `StackEffectsBuilder.mkEffectsRegular` holds both the ordered obligations and the built tx-seq (each
-effect tx's `payoutOffset`/`payoutCount` and final `tx.id`). Per partition it builds a `provenance`
-vector — settlement: `major.payoutRequestIds.map(Some)`; finalization: `fin.payoutRequestIds.map(Some)
-++ Vector.fill(residualCount)(None)` — and slices it per effect tx:
+effect tx's `payoutOffset`/`payoutCount` and final `tx.id`). Per partition its `trackWithdrawals`
+helper builds a `provenance` vector — settlement: `major.payoutRequestIds.map(Some)`; finalization:
+`fin.payoutRequestIds.map(Some) ++ Vector.fill(residualCount)(None)` — and slices it per effect tx:
 
 ```
 provenance.slice(payoutOffset, payoutOffset + payoutCount).flatten.distinct.map(r => (r, l1TxId))
 ```
 
-One `(requestId, l1TxId)` per distinct withdrawing request in the tx's chunk; residual
-(finalization-only, `None`) positions produce no rows. The rows are returned as a **side value** —
-not inside the hard-ack-signed `StackEffects`, which would break multisig. `StackComposer` threads
-them through `ComposedStack` and writes them into `WithdrawalEffectIndex` at **stack close**
-(`persistOwnStackClose`), where they are locally in hand; reaching hard-confirmation would mean
-threading them through the consensus rounds, and the resolver gates on hard-confirmation via
+One `(requestId, l1TxId)` link per distinct withdrawing request in the tx's chunk; residual
+(finalization-only, `None`) positions produce none. The resulting `withdrawalTracking` is returned as
+a **side value** — not inside the hard-ack-signed `StackEffects`, which would break multisig.
+`StackComposer` threads it through `ComposedStack` and writes it into `WithdrawalEffectIndex` at
+**stack close** (`persistOwnStackClose`), where it is locally in hand; reaching hard-confirmation would
+mean threading it through the consensus rounds, and the resolver gates on hard-confirmation via
 `EffectStackIndex` anyway.
 
 `ConsensusStoreReader.withdrawalEffects(requestId)` prefix-scans the CF; the resolver resolves each
