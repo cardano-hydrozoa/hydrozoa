@@ -51,6 +51,7 @@ object RBRHlNetDot {
             case Inscription.Union(l, r) => s"${renderInscription(l)} ⊕ ${renderInscription(r)}"
             case Inscription.Collect(cv, pattern) =>
                 s"⟦${cv.name}≤${cv.bound}: ${renderColor(pattern)}⟧"
+            case Inscription.Inhibit(pattern) => s"○ ${renderColor(pattern)}"
 
     private def renderColor(term: ColorTerm[?]): String =
         term match

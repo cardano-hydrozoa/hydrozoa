@@ -80,6 +80,11 @@ class RBRHlNetTest extends AnyFunSuite:
     private def resolutionMode(n: Net, version: Int, q: HeadPeerNumber): Binding =
         bindAll(n, RBRTransitionId.Resolution)(BigInt(version), q)
 
+    // Deinit binds only scalars (version, collateralPeer); its emptiness inhibitor is a net-level
+    // enabling check, so an explicit mode is fine.
+    private def deinitMode(n: Net, version: Int, q: HeadPeerNumber): Binding =
+        bindAll(n, RBRTransitionId.Deinit)(BigInt(version), q)
+
     private def fired(n: Net, tid: RBRTransitionId, mode: Binding): Net =
         n.fire(tid, mode).toOption.get
 
@@ -313,4 +318,20 @@ class RBRHlNetTest extends AnyFunSuite:
         // the entire version-2 batch leaves in a single firing, so a second is not enabled
         val once = firedVia(resolved, RBRTransitionId.Evacuation)
         assert(!enabledVia(once, RBRTransitionId.Evacuation))
+    }
+
+    test("Deinit: not enabled while a resolved-version obligation remains") {
+        // resolved but not yet evacuated — the emptiness inhibitor blocks Deinit
+        assert(!resolved.isModeEnabled(RBRTransitionId.Deinit, deinitMode(resolved, 2, peer0)))
+    }
+
+    test("Deinit: after evacuation, spends the treasury and regime, tearing down the head") {
+        val evacuated = firedVia(resolved, RBRTransitionId.Evacuation)
+        // the obligations are drained, so Deinit is now enabled
+        val _ = assert(evacuated.isModeEnabled(RBRTransitionId.Deinit, deinitMode(evacuated, 2, peer0)))
+        val n = fired(evacuated, RBRTransitionId.Deinit, deinitMode(evacuated, 2, peer0))
+        // treasury and regime are spent (not recreated); collateral returns
+        val _ = assert(n.placesMap(RBRPlaceId.ResolvedTreasury).marking.get(()) == SafeLong(0))
+        val _ = assert(n.placesMap(RBRPlaceId.RegimeRef).marking.get(()) == SafeLong(0))
+        assert(n.placesMap(RBRPlaceId.Collateral).marking.get(peer0) == SafeLong(1))
     }

@@ -580,6 +580,36 @@ object RBRHlNet {
                 _ <- b.output(t, places.setupLadder, dotToken)
             } yield ()
 
+        // ---- Deinit (mirrors DeinitTx.Build) ----
+        // The teardown: spend the (now empty) resolved treasury and the regime utxo, closing the
+        // head. "Empty" — no resolved-version obligation left to evacuate — is the inhibitor on
+        // PayoutObligations: Deinit is disabled while any `(version, *)` obligation remains, so it
+        // can only fire once Evacuation has drained them. Treasury and regime are spent, not
+        // recreated (head-token burns are unmodeled — no places).
+        def deinit(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
+            for {
+                t <- b.transition(RBRTransitionId.Deinit, List(version, collateralPeer), Guard.True)
+                // resolved-version read: binds `version` for the emptiness inhibitor
+                _ <- b.input(places.resolvedVersion, t, one(Ref(version)))
+                _ <- b.output(t, places.resolvedVersion, one(Ref(version)))
+                // empty treasury: no obligation of the resolved version remains
+                _ <- b.input(
+                  places.payoutObligations,
+                  t,
+                  Inscription.Inhibit(Tuple(Ref(version), Wildcard(outputClass)))
+                )
+                // treasuryUtxo.spendAttached(Deinit): the resolved treasury is spent, not recreated
+                _ <- b.input(places.resolvedTreasury, t, dotToken)
+                // regimeUtxo.spend: the regime is spent (earlier transitions only read it)
+                _ <- b.input(places.regimeRef, t, dotToken)
+                // collateralUtxo.spend / collateralOutput.send
+                _ <- b.input(places.collateral, t, collateralPeerToken)
+                _ <- b.output(t, places.collateral, collateralPeerToken)
+                // config.referenceTreasury
+                _ <- b.input(places.treasuryScriptRef, t, dotToken)
+                _ <- b.output(t, places.treasuryScriptRef, dotToken)
+            } yield ()
+
         val program = for {
             places <- addPlaces
             _ <- vote(places)
@@ -590,6 +620,7 @@ object RBRHlNet {
             _ <- votingDeadline(places)
             _ <- resolution(places)
             _ <- evacuation(places)
+            _ <- deinit(places)
         } yield ()
 
         b.build(program)
