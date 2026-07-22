@@ -102,7 +102,8 @@ object RBRHlNetDot {
             case ColorTerm.Ref(v) => v.name
             case ColorTerm.Const(value, _) =>
                 value match
-                    case _: Unit => "•"
+                    // the singleton dot color, written as the word per ISO 15909-1:2019 Annex B
+                    case _: Unit => "dot"
                     case other   => other.toString
             case ColorTerm.Succ(inner) => s"${renderColor(inner)}++"
             case ColorTerm.Tuple(l, r) => s"(${renderColor(l)},${renderColor(r)})"
