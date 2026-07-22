@@ -7,8 +7,8 @@ import spire.math.SafeLong
 /** A quick-and-dirty Graphviz DOT rendering of an [[HlNet]], for eyeballing structure. Places are
   * ellipses (id + current token count, filled when marked), transitions are boxes (id + guard), and
   * each `Arc.Flow` is an edge labelled with its inscription — ordinary consume/produce arcs are
-  * plain arrows, ISO 15909-3 read (test) arcs are double-headed (§A.5) and inhibitor arcs end in a
-  * circle at the transition (§A.4). [[toDot]] draws the whole net; [[toDotPerTransition]] draws one
+  * plain arrows, ISO 15909-3 read (test) arcs are a plain undirected segment (§A.5) and inhibitor
+  * arcs end in a circle at the transition (§A.4). [[toDot]] draws the whole net; [[toDotPerTransition]] draws one
   * small diagram per transition (the whole net is too dense to read). Render with e.g.
   * `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
   */
@@ -63,9 +63,9 @@ object RBRHlNetDot {
     private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String = {
         val (tail, head) = ends(flow)
         arc.inscription match
-            // ISO 15909-3 §A.5 read (test) arc: a line with arrowheads at both ends.
+            // ISO 15909-3 §A.5 read (test) arc: a plain undirected segment (no arrowheads).
             case Inscription.Read(inner) =>
-                s"""  "$tail" -> "$head" [dir=both label="${esc(renderInscription(inner))}"];"""
+                s"""  "$tail" -> "$head" [dir=none label="${esc(renderInscription(inner))}"];"""
             // ISO 15909-3 §A.4 inhibitor arc: a line ending in a circle at the transition.
             case Inscription.Inhibit(pattern) =>
                 s"""  "$tail" -> "$head" [arrowhead=odot label="${esc(renderColor(pattern))}"];"""

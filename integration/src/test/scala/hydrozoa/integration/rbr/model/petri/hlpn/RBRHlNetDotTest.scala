@@ -28,8 +28,8 @@ class RBRHlNetDotTest extends AnyFunSuite:
         val _ = assert(perTransition.map(_._1).toSet == net.transitionsMap.keySet)
         val _ = assert(perTransition.forall((tid, dot) => dot.startsWith("digraph") && dot.contains(tid.toString)))
         // the ISO 15909-3 enrichments render on their transitions: Evacuation's batch (collection),
-        // Deinit's inhibitor (§A.4 circle head), and read arcs (§A.5 double-headed)
+        // Deinit's inhibitor (§A.4 circle head), and read arcs (§A.5 plain undirected segment)
         val _ = assert(perTransition.exists((tid, dot) => tid.toString == "Evacuation" && dot.contains("batch")))
         val _ = assert(perTransition.exists((tid, dot) => tid.toString == "Deinit" && dot.contains("arrowhead=odot")))
-        assert(perTransition.exists((_, dot) => dot.contains("dir=both")))
+        assert(perTransition.exists((_, dot) => dot.contains("dir=none")))
     }
