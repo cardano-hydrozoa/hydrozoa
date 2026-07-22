@@ -6,9 +6,11 @@ import spire.math.SafeLong
 
 /** A quick-and-dirty Graphviz DOT rendering of an [[HlNet]], for eyeballing structure. Places are
   * ellipses (id + current token count, filled when marked), transitions are boxes (id + guard), and
-  * every `Arc.Flow` is a directed edge labelled with its inscription. [[toDot]] draws the whole net;
-  * [[toDotPerTransition]] draws one small diagram per transition (the whole net is too dense to
-  * read). Render with e.g. `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
+  * each `Arc.Flow` is an edge labelled with its inscription — ordinary consume/produce arcs are
+  * plain arrows, ISO 15909-3 read (test) arcs are double-headed (§A.5) and inhibitor arcs end in a
+  * circle at the transition (§A.4). [[toDot]] draws the whole net; [[toDotPerTransition]] draws one
+  * small diagram per transition (the whole net is too dense to read). Render with e.g.
+  * `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
   */
 object RBRHlNetDot {
 
@@ -58,19 +60,22 @@ object RBRHlNetDot {
         s"""  "T_$id" [shape=box style=filled fillcolor="#eeeeee" label="$label"];"""
     }
 
-    private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String =
+    private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String = {
+        val (tail, head) = ends(flow)
         arc.inscription match
-            // a read (test) arc: one undirected dashed edge — required but not consumed
+            // ISO 15909-3 §A.5 read (test) arc: a line with arrowheads at both ends.
             case Inscription.Read(inner) =>
-                val w = esc(renderInscription(inner))
-                val (a, z) = ends(flow)
-                s"""  "$a" -> "$z" [dir=none style=dashed label="$w"];"""
+                s"""  "$tail" -> "$head" [dir=both label="${esc(renderInscription(inner))}"];"""
+            // ISO 15909-3 §A.4 inhibitor arc: a line ending in a circle at the transition.
+            case Inscription.Inhibit(pattern) =>
+                s"""  "$tail" -> "$head" [arrowhead=odot label="${esc(renderColor(pattern))}"];"""
             case insc =>
-                val w = esc(renderInscription(insc))
-                flow match
-                    case Arc.Flow.Pt(p, t) => s"""  "P_$p" -> "T_$t" [label="$w"];"""
-                    case Arc.Flow.Tp(t, p) => s"""  "T_$t" -> "P_$p" [label="$w"];"""
+                s"""  "$tail" -> "$head" [label="${esc(renderInscription(insc))}"];"""
+    }
 
+    /** The `(tail, head)` node ids of a flow — `head` is the transition for `Pt`, the place for
+      * `Tp`, so the default arrowhead sits at the standard end.
+      */
     private def ends[P, T](flow: Arc.Flow[P, T]): (String, String) =
         flow match
             case Arc.Flow.Pt(p, t) => (s"P_$p", s"T_$t")
@@ -89,7 +94,7 @@ object RBRHlNetDot {
             case Inscription.Union(l, r) => s"${renderInscription(l)} ⊕ ${renderInscription(r)}"
             case Inscription.Collect(cv, pattern) =>
                 s"⟦${cv.name}≤${cv.bound}: ${renderColor(pattern)}⟧"
-            case Inscription.Inhibit(pattern) => s"○ ${renderColor(pattern)}"
+            case Inscription.Inhibit(pattern) => renderColor(pattern)
             case Inscription.Read(inner)      => renderInscription(inner)
 
     private def renderColor(term: ColorTerm[?]): String =
