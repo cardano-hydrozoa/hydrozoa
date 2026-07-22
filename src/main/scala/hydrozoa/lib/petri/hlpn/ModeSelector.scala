@@ -131,6 +131,7 @@ object ModeSelector {
             case Inscription.Union(l, r)        => leaves(l) ++ leaves(r)
             case Inscription.Collect(_, _)      => Nil
             case Inscription.Inhibit(_)         => Nil
+            case Inscription.Read(inner)        => leaves(inner)
 
     /** The variables a color term references. */
     private def termVars(term: ColorTerm[?]): Set[Var[?]] =

@@ -70,6 +70,8 @@ object Binding:
                 lookupCollected(b, cv).toRight(EvalError.UnboundVariable(cv.name))
             // A pure precondition (checked in HlNet.fire) — it consumes nothing.
             case Inscription.Inhibit(_) => Right(bag(Nil))
+            // A read requires `inner`'s tokens; HlNet.fire gives them straight back.
+            case Inscription.Read(inner) => evalInscription(inner, b)
 
     /** Evaluate a guard to a boolean. */
     def evalGuard(guard: Guard, b: Binding): Either[EvalError, Boolean] =

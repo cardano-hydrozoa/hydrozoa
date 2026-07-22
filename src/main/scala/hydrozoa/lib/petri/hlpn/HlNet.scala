@@ -148,14 +148,37 @@ final case class HlNet[PlaceId, TransitionId, C](
                         _ <- inhibitorViolation(tid, mode).toLeft(())
                         evaluated <- arcsMap.toList
                             .filter((flow, _) => flow.transition == tid)
-                            .traverse { (flow, arc) =>
-                                Binding
-                                    .evalInscription(arc.inscription, mode)
-                                    .bimap(FiringError.EvalFailed(tid, _), flow -> _)
+                            .flatTraverse { (flow, arc) =>
+                                arc.inscription match
+                                    // A read arc is a self-loop: require the tokens, give them back.
+                                    case Inscription.Read(inner) =>
+                                        Binding
+                                            .evalInscription(inner, mode)
+                                            .bimap(
+                                              FiringError.EvalFailed(tid, _),
+                                              readSelfLoop(flow, _)
+                                            )
+                                    case insc =>
+                                        Binding
+                                            .evalInscription(insc, mode)
+                                            .bimap(
+                                              FiringError.EvalFailed(tid, _),
+                                              w => List(flow -> w)
+                                            )
                             }
                         updates <- firedPlaces(evaluated)
                     } yield copy(placesMap = placesMap ++ updates)
         }
+
+    // A read arc `p → t` with evaluated annotation `w`, as the self-loop it stands for: consume `w`
+    // (enforcing the enabling check) and produce it straight back, for a net-zero read.
+    private def readSelfLoop(
+        flow: Arc.Flow[PlaceId, TransitionId],
+        w: MultiSet[C]
+    ): List[(Arc.Flow[PlaceId, TransitionId], MultiSet[C])] =
+        flow match
+            case Arc.Flow.Pt(p, t) => List(Arc.Flow.Pt(p, t) -> w, Arc.Flow.Tp(t, p) -> w)
+            case other             => List(other -> w)
 
     // The first connected inhibitor arc `p → t` whose place holds a token matching its pattern under
     // `mode` — the transition is disabled while such a token is present (ISO 15909-3).

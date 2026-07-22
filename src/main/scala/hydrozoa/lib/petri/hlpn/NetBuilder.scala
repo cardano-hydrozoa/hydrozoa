@@ -68,6 +68,17 @@ final class NetBuilder[PlaceId, TransitionId]:
             (accum.copy(arcs = accum.arcs :+ entry), ())
         }
 
+    /** Wire a read (test) arc `(p,t) ∈ F`: `t` requires `inscription`'s tokens present but consumes
+      * none (ISO 15909-3) — sugar for an input arc annotated `Inscription.Read`, i.e. a `Pt`+`Tp`
+      * self-loop of `inscription` collapsed into one arc.
+      */
+    def read[C](
+        place: PlaceRef[PlaceId, C],
+        transition: TransitionRef[TransitionId],
+        inscription: Inscription[C]
+    ): B[Unit] =
+        input(place, transition, Inscription.Read(inscription))
+
     /** Wire an output arc `(t,p) ∈ F` with annotation `W(t,p) = inscription`. */
     def output[C](
         transition: TransitionRef[TransitionId],

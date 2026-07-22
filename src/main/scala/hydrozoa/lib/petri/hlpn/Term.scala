@@ -99,6 +99,14 @@ object Inscription:
     final case class Inhibit[C](pattern: ColorTerm[C]) extends Inscription[C]:
         def sort: Sort[C] = pattern.sort
 
+    /** A read (test) arc (ISO 15909-3): on an input arc `p → t`, `t` is enabled only if `M(p)`
+      * covers `inner`, but firing consumes nothing — exactly as a `Pt`+`Tp` self-loop of `inner`
+      * would. `HlNet.fire` realizes it as that self-loop, so it is a semantic no-op versus the
+      * pair; it exists to say "read, not consume" in a single arc (and to render as a single edge).
+      */
+    final case class Read[C](inner: Inscription[C]) extends Inscription[C]:
+        def sort: Sort[C] = inner.sort
+
 /** A transition guard (ISO Φ, Concept 15): evaluates under a [[Binding]] to a boolean.
   * Symmetric-net guards compare colors (`=`, `<` on ordered classes) and test static-subclass
   * membership, closed under the boolean connectives.

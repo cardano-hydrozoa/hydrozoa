@@ -251,3 +251,42 @@ class HlSimulatorTest extends AnyFunSuite:
         val _ = assert(!sim(ms("No" -> 1)).enabledTransitions.contains("go"))
         assert(sim(ms("Yes" -> 1)).enabledTransitions.contains("go"))
     }
+
+    test("a read arc requires a token but consumes none") {
+        val readP1 = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Const("p1", peer))
+        val b = NetBuilder[String, String]()
+        val program =
+            for
+                source <- b.place("source", Tokens(ms("p0" -> 1), peer))
+                gate <- b.place("gate", Tokens(ms("p1" -> 1), peer))
+                sink <- b.place("sink", Tokens(ms(), peer))
+                t <- b.transition("go", List(p), Guard.True)
+                _ <- b.input(source, t, wp)
+                _ <- b.output(t, sink, wp)
+                _ <- b.read(gate, t, readP1)
+            yield ()
+        val net = b.build(program).toOption.get
+        val (advanced, _) = HlSimulator(net, ModeSelector.unifying).fire("go").toOption.get
+        // the gate token is untouched (read, not consumed); the source token was consumed
+        val _ = assert(advanced.net.placesMap("gate").marking.get("p1") == SafeLong(1))
+        assert(advanced.net.placesMap("source").marking.get("p0") == SafeLong(0))
+    }
+
+    test("a read arc disables its transition when the token is absent") {
+        val readP1 = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Const("p1", peer))
+        def sim(gate: MultiSet[String]) =
+            val b = NetBuilder[String, String]()
+            val program =
+                for
+                    source <- b.place("source", Tokens(ms("p0" -> 1), peer))
+                    g <- b.place("gate", Tokens(gate, peer))
+                    sink <- b.place("sink", Tokens(ms(), peer))
+                    t <- b.transition("go", List(p), Guard.True)
+                    _ <- b.input(source, t, wp)
+                    _ <- b.output(t, sink, wp)
+                    _ <- b.read(g, t, readP1)
+                yield ()
+            HlSimulator(b.build(program).toOption.get, ModeSelector.unifying)
+        val _ = assert(sim(ms("p1" -> 1)).enabledTransitions.contains("go"))
+        assert(!sim(ms()).enabledTransitions.contains("go"))
+    }
