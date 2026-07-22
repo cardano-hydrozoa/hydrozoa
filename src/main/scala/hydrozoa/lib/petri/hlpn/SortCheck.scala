@@ -55,6 +55,7 @@ object SortCheck:
             case Inscription.Weighted(_, color) => List(color.sort)
             case Inscription.Union(l, r)        => leafSorts(l) ++ leafSorts(r)
             case Inscription.Collect(cv, _)     => List(cv.sort)
+            case Inscription.Inhibit(pattern)   => List(pattern.sort)
 
     private def walkGuard(guard: Guard, declared: List[Var[?]]): List[SortError] =
         guard match
@@ -88,6 +89,7 @@ object SortCheck:
             case Inscription.Union(l, r) =>
                 walkInscription(l, declared) ++ walkInscription(r, declared)
             case Inscription.Collect(_, pattern) => walkColor(pattern, declared)
+            case Inscription.Inhibit(pattern)    => walkColor(pattern, declared)
 
     private def walkColor(term: ColorTerm[?], declared: List[Var[?]]): List[SortError] =
         term match

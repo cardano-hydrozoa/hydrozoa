@@ -145,6 +145,7 @@ final case class HlNet[PlaceId, TransitionId, C](
                             .evalGuard(transition.guard, mode)
                             .leftMap(FiringError.EvalFailed(tid, _))
                         _ <- Either.cond(guardHolds, (), FiringError.NotEnabled(tid))
+                        _ <- inhibitorViolation(tid, mode).toLeft(())
                         evaluated <- arcsMap.toList
                             .filter((flow, _) => flow.transition == tid)
                             .traverse { (flow, arc) =>
@@ -154,6 +155,18 @@ final case class HlNet[PlaceId, TransitionId, C](
                             }
                         updates <- firedPlaces(evaluated)
                     } yield copy(placesMap = placesMap ++ updates)
+        }
+
+    // The first connected inhibitor arc `p → t` whose place holds a token matching its pattern under
+    // `mode` — the transition is disabled while such a token is present (ISO 15909-3).
+    private def inhibitorViolation(tid: TransitionId, mode: Binding): Option[FiringError] =
+        arcsMap.collectFirst {
+            case (flow @ Arc.Flow.Pt(place, t), InscribedArc(Inscription.Inhibit(pattern)))
+                if t == tid &&
+                    marking(place).multiplicityMap.keysIterator.exists(
+                      Binding.matches(pattern, _, mode)
+                    ) =>
+                FiringError.InhibitorViolated(flow)
         }
 
     // Concept 24 at the multiset algebra, per connected place. Each place has at most one arc per
@@ -235,6 +248,13 @@ object HlNet {
         final case class PlaceInvalid[PlaceId](
             place: PlaceId,
             error: Place.Semantics.MarkingError
+        ) extends FiringError
+
+        /** An inhibitor arc `flow` is violated: its place holds a token matching the pattern, so
+          * the transition is disabled (ISO 15909-3).
+          */
+        final case class InhibitorViolated[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
         ) extends FiringError
     }
 }

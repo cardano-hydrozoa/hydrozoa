@@ -91,6 +91,14 @@ object Inscription:
         extends Inscription[C]:
         def sort: Sort[C] = collected.sort
 
+    /** An inhibitor arc (ISO 15909-3): on an input arc `p → t`, `t` is enabled only if `p` holds
+      * **no** token matching `pattern` under the mode (free [[ColorTerm.Wildcard]] positions match
+      * anything) — the dual of [[Collect]]. It is a pure precondition: it consumes nothing, so it
+      * evaluates to the empty multiset, and the absence check lives in `HlNet.fire`.
+      */
+    final case class Inhibit[C](pattern: ColorTerm[C]) extends Inscription[C]:
+        def sort: Sort[C] = pattern.sort
+
 /** A transition guard (ISO Φ, Concept 15): evaluates under a [[Binding]] to a boolean.
   * Symmetric-net guards compare colors (`=`, `<` on ordered classes) and test static-subclass
   * membership, closed under the boolean connectives.

@@ -213,3 +213,41 @@ class HlSimulatorTest extends AnyFunSuite:
         val _ = assert(drainedTokens.get(("No", "p2")) == SafeLong(0))
         assert(poolTokens.get(("No", "p2")) == SafeLong(1))
     }
+
+    test("an inhibitor arc disables its transition while a matching token is present") {
+        def sim(blocker: MultiSet[String]) =
+            val b = NetBuilder[String, String]()
+            val program =
+                for
+                    source <- b.place("source", Tokens(ms("p0" -> 1), peer))
+                    blk <- b.place("blocker", Tokens(blocker, peer))
+                    sink <- b.place("sink", Tokens(ms(), peer))
+                    t <- b.transition("go", List(p), Guard.True)
+                    _ <- b.input(source, t, wp)
+                    _ <- b.output(t, sink, wp)
+                    _ <- b.input(blk, t, Inscription.Inhibit(ColorTerm.Wildcard(peer)))
+                yield ()
+            HlSimulator(b.build(program).toOption.get, ModeSelector.unifying)
+        // any blocker token disables `go`; it re-enables once the blocker place is empty
+        val _ = assert(!sim(ms("p1" -> 1)).enabledTransitions.contains("go"))
+        assert(sim(ms()).enabledTransitions.contains("go"))
+    }
+
+    test("an inhibitor arc blocks only on a token matching its pattern") {
+        def sim(blocker: MultiSet[String]) =
+            val b = NetBuilder[String, String]()
+            val program =
+                for
+                    source <- b.place("source", Tokens(ms("p0" -> 1), peer))
+                    blk <- b.place("blocker", Tokens(blocker, vote))
+                    sink <- b.place("sink", Tokens(ms(), peer))
+                    t <- b.transition("go", List(p), Guard.True)
+                    _ <- b.input(source, t, wp)
+                    _ <- b.output(t, sink, wp)
+                    _ <- b.input(blk, t, Inscription.Inhibit(ColorTerm.Const("No", vote)))
+                yield ()
+            HlSimulator(b.build(program).toOption.get, ModeSelector.unifying)
+        // a "No" token blocks; a non-matching "Yes" token does not
+        val _ = assert(!sim(ms("No" -> 1)).enabledTransitions.contains("go"))
+        assert(sim(ms("Yes" -> 1)).enabledTransitions.contains("go"))
+    }

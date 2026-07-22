@@ -68,6 +68,8 @@ object Binding:
             // The batch is materialized by the mode search; the annotation just reads it back.
             case Inscription.Collect(cv, _) =>
                 lookupCollected(b, cv).toRight(EvalError.UnboundVariable(cv.name))
+            // A pure precondition (checked in HlNet.fire) — it consumes nothing.
+            case Inscription.Inhibit(_) => Right(bag(Nil))
 
     /** Evaluate a guard to a boolean. */
     def evalGuard(guard: Guard, b: Binding): Either[EvalError, Boolean] =
@@ -90,6 +92,40 @@ object Binding:
             case Guard.Not(g)    => evalGuard(g, b).map(!_)
             case Guard.And(l, r) => for a <- evalGuard(l, b); c <- evalGuard(r, b) yield a && c
             case Guard.Or(l, r)  => for a <- evalGuard(l, b); c <- evalGuard(r, b) yield a || c
+
+    /** Whether `value` matches `term` under `b` — the boolean core of unification, used to test an
+      * [[Inscription.Inhibit]] pattern against a token and (via [[ModeSelector]]) to collect a
+      * batch. `Const` by equality, a bound `Ref` by equality (an unbound one matches — it could
+      * bind), `Tuple` component-wise, `Succ` by its predecessor, `Wildcard` always.
+      */
+    def matches(term: ColorTerm[?], value: Any, b: Binding): Boolean =
+        term match
+            case ColorTerm.Const(c, _) => c == value
+            case ColorTerm.Ref(v)      => lookup(b, v.asInstanceOf[Var[Any]]).forall(_ == value)
+            case ColorTerm.Wildcard(_) => true
+            case ColorTerm.Tuple(l, r) =>
+                value match
+                    case (a, c) => matches(l, a, b) && matches(r, c, b)
+                    case _      => false
+            case ColorTerm.Succ(inner) =>
+                predecessor(inner.sort, value).exists(matches(inner, _, b))
+
+    /** The predecessor of `value` in `sort` — the inverse of [[successor]]: `Circular` wraps,
+      * `Linear` has none before the first element, `Unordered`/non-class none.
+      */
+    private[hlpn] def predecessor(sort: Sort[?], value: Any): Option[Any] =
+        sort match
+            case Sort.Class(_, carrier, discipline, _) =>
+                val elems = carrier.toSortedSet.toList
+                val i = elems.indexOf(value)
+                if i < 0 then None
+                else
+                    discipline match
+                        case Sort.Discipline.Circular =>
+                            Some(elems((i - 1 + elems.size) % elems.size))
+                        case Sort.Discipline.Linear    => Option.when(i > 0)(elems(i - 1))
+                        case Sort.Discipline.Unordered => None
+            case _ => None
 
     /** The successor of `value` in `sort`, per the class discipline: `Circular` wraps, `Linear` has
       * none past the last element, `Unordered` has none.

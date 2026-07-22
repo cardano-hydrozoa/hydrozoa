@@ -118,34 +118,19 @@ object ModeSelector {
                     case (a, b) => unify(l, a, partial).flatMap(unify(r, b, _))
                     case _      => None
             case ColorTerm.Succ(inner) =>
-                predecessor(inner.sort, value).flatMap(unify(inner, _, partial))
+                Binding.predecessor(inner.sort, value).flatMap(unify(inner, _, partial))
             case ColorTerm.Wildcard(_) => Some(partial)
 
-    /** The predecessor of `value` in `sort` — the inverse of [[Binding]]'s successor: `Circular`
-      * wraps, `Linear` has none before the first element, `Unordered`/non-class none.
-      */
-    private def predecessor(sort: Sort[?], value: Any): Option[Any] =
-        sort match
-            case Sort.Class(_, carrier, discipline, _) =>
-                val elems = carrier.toSortedSet.toList
-                val i = elems.indexOf(value)
-                if i < 0 then None
-                else
-                    discipline match
-                        case Sort.Discipline.Circular =>
-                            Some(elems((i - 1 + elems.size) % elems.size))
-                        case Sort.Discipline.Linear    => Option.when(i > 0)(elems(i - 1))
-                        case Sort.Discipline.Unordered => None
-            case _ => None
-
-    /** The color of every weighted leaf of an inscription (both branches of a `Union`). A `Collect`
-      * arc has no scalar leaves — its variable is bound by [[bindCollections]], not unification.
+    /** The color of every weighted leaf of an inscription (both branches of a `Union`). `Collect`
+      * (its variable is bound by [[bindCollections]]) and `Inhibit` (a precondition, checked by the
+      * net) contribute no scalar leaves.
       */
     private def leaves(inscription: Inscription[?]): List[ColorTerm[?]] =
         inscription match
             case Inscription.Weighted(_, color) => List(color)
             case Inscription.Union(l, r)        => leaves(l) ++ leaves(r)
             case Inscription.Collect(_, _)      => Nil
+            case Inscription.Inhibit(_)         => Nil
 
     /** The variables a color term references. */
     private def termVars(term: ColorTerm[?]): Set[Var[?]] =
