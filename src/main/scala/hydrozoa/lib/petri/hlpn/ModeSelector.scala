@@ -1,6 +1,11 @@
 package hydrozoa.lib.petri.hlpn
 
+import cats.implicits.catsKernelOrderingForOrder
+import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.petri.net.components.Arc
+import scala.collection.immutable.SortedMap
+import spire.algebra.Order
+import spire.math.SafeLong
 
 /** A strategy for proposing candidate modes of a transition — the pluggable search side of HLPN
   * simulation (enumeration, unification, or a domain-specific method).
@@ -30,7 +35,9 @@ object ModeSelector {
         (net, tid) =>
             net.transitionsMap
                 .get(tid)
-                .fold(LazyList.empty)(t => complete(Binding.empty, t.variables))
+                .fold(LazyList.empty)(t =>
+                    complete(Binding.empty, t.variables).flatMap(bindCollections(net, tid, _))
+                )
 
     /** The unifying selector: bind each variable by *matching* the transition's input-arc
       * inscriptions against the tokens actually present in `M(p)`, rather than enumerating
@@ -78,7 +85,9 @@ object ModeSelector {
                     val boundVars = demands.flatMap((term, _) => termVars(term)).toSet
                     val freeVars = transition.variables.filterNot(boundVars.contains)
 
-                    partials.flatMap(complete(_, freeVars))
+                    partials
+                        .flatMap(complete(_, freeVars))
+                        .flatMap(bindCollections(net, tid, _))
 
     /** Extend `partial` by binding each variable in `vars` to every color of its carrier — the
       * cartesian completion shared by [[enumerating]] (all variables) and [[unifying]] (only the
@@ -110,6 +119,7 @@ object ModeSelector {
                     case _      => None
             case ColorTerm.Succ(inner) =>
                 predecessor(inner.sort, value).flatMap(unify(inner, _, partial))
+            case ColorTerm.Wildcard(_) => Some(partial)
 
     /** The predecessor of `value` in `sort` — the inverse of [[Binding]]'s successor: `Circular`
       * wraps, `Linear` has none before the first element, `Unordered`/non-class none.
@@ -128,11 +138,14 @@ object ModeSelector {
                         case Sort.Discipline.Unordered => None
             case _ => None
 
-    /** The color of every weighted leaf of an inscription (both branches of a `Union`). */
+    /** The color of every weighted leaf of an inscription (both branches of a `Union`). A `Collect`
+      * arc has no scalar leaves — its variable is bound by [[bindCollections]], not unification.
+      */
     private def leaves(inscription: Inscription[?]): List[ColorTerm[?]] =
         inscription match
             case Inscription.Weighted(_, color) => List(color)
             case Inscription.Union(l, r)        => leaves(l) ++ leaves(r)
+            case Inscription.Collect(_, _)      => Nil
 
     /** The variables a color term references. */
     private def termVars(term: ColorTerm[?]): Set[Var[?]] =
@@ -141,6 +154,64 @@ object ModeSelector {
             case ColorTerm.Const(_, _) => Set.empty
             case ColorTerm.Tuple(l, r) => termVars(l) ++ termVars(r)
             case ColorTerm.Succ(inner) => termVars(inner)
+            case ColorTerm.Wildcard(_) => Set.empty
+
+    /** Bind every collection variable of `tid`: for each input `Collect(cv, pattern)` arc, gather
+      * the sub-multiset of the place's tokens matching `pattern` under `binding` (free `Wildcard`
+      * positions range over the collected dimension), capped at `cv.bound`. Deterministic given the
+      * scalar binding, so it extends each candidate in place. Yields `None` — dropping the
+      * candidate — if any collection is empty, since a batch firing over nothing is a spurious
+      * no-op.
+      */
+    private def bindCollections[PlaceId, TransitionId, C](
+        net: HlNet[PlaceId, TransitionId, C],
+        tid: TransitionId,
+        binding: Binding
+    ): Option[Binding] =
+        net.arcsMap.toList.foldLeft(Option(binding)) {
+            case (Some(b), (Arc.Flow.Pt(place, t), arc)) if t == tid =>
+                arc.inscription match
+                    case Inscription.Collect(cv, pattern) =>
+                        bindOneCollection(net, place, cv, pattern, b)
+                    case _ => Some(b)
+            case (acc, _) => acc
+        }
+
+    /** Bind one collection variable to the capped sub-multiset of `place`'s tokens matching
+      * `pattern` under `binding`; `None` if nothing matches (an empty batch does not fire).
+      */
+    private def bindOneCollection[PlaceId, TransitionId, C](
+        net: HlNet[PlaceId, TransitionId, C],
+        place: PlaceId,
+        cv: CollectVar[C],
+        pattern: ColorTerm[C],
+        binding: Binding
+    ): Option[Binding] =
+        given Order[C] = net.placesMap(place).colorDomain.order
+        val matched = net
+            .marking(place)
+            .multiplicityMap
+            .toList
+            .filter((token, _) => unify(pattern, token, binding).isDefined)
+        val batch = Multiset(capTo(matched, cv.bound).to(SortedMap))
+        Option.when(batch.multiplicityMap.nonEmpty)(Binding.bindCollected(binding, cv, batch))
+
+    /** The longest prefix of `entries` whose multiplicities sum to at most `bound` (splitting the
+      * final entry if it would overrun).
+      */
+    private def capTo[C](entries: List[(C, SafeLong)], bound: Int): List[(C, SafeLong)] =
+        @annotation.tailrec
+        def go(
+            rem: List[(C, SafeLong)],
+            budget: SafeLong,
+            acc: List[(C, SafeLong)]
+        ): List[(C, SafeLong)] =
+            rem match
+                case (color, n) :: tail if budget > SafeLong(0) =>
+                    val take = if n <= budget then n else budget
+                    go(tail, budget - take, (color -> take) :: acc)
+                case _ => acc.reverse
+        go(entries, SafeLong(bound.max(0)), Nil)
 
     /** Enumerate every color of a finite sort. Specific to the carrier-materializing strategies, so
       * it lives here rather than on `Sort` (which offers only membership).

@@ -11,7 +11,7 @@ import spire.math.SafeLong
   * evaluation of an incomplete binding fails with [[EvalError.UnboundVariable]]. Mode search (the
   * enabling engine) builds partial bindings internally and only exposes complete ones.
   */
-opaque type Binding = Map[Var[?], Any]
+opaque type Binding = Map[Matchable, Any]
 
 object Binding:
 
@@ -25,6 +25,16 @@ object Binding:
       */
     def lookup[C](b: Binding, v: Var[C]): Option[C] = b.get(v).map(_.asInstanceOf[C])
 
+    /** Extend a binding, assigning a whole sub-multiset `batch` to a collection variable `cv`. */
+    def bindCollected[C](b: Binding, cv: CollectVar[C], batch: Multiset[C, SafeLong]): Binding =
+        b.updated(cv, batch)
+
+    /** Look up the batch assigned to `cv`, if any. The cast is sound: [[bindCollected]] stores a
+      * `Multiset[C, SafeLong]` under a `CollectVar[C]`.
+      */
+    def lookupCollected[C](b: Binding, cv: CollectVar[C]): Option[Multiset[C, SafeLong]] =
+        b.get(cv).map(_.asInstanceOf[Multiset[C, SafeLong]])
+
     /** Evaluate a color function to a single color. `Left` if a referenced variable is unbound
       * (incomplete binding) or a class operation is undefined for its sort (e.g. `Succ` off an
       * unordered class, or off the last element of a `Linear` class).
@@ -37,6 +47,7 @@ object Binding:
                 for a <- evalColor(l, b); c <- evalColor(r, b) yield (a, c)
             case ColorTerm.Succ(inner) =>
                 evalColor(inner, b).flatMap(successor(inner.sort, _))
+            case ColorTerm.Wildcard(_) => Left(EvalError.WildcardEvaluated)
 
     /** Evaluate an inscription to a concrete multiset over C. The key order is taken from the
       * term's sort.
@@ -54,6 +65,9 @@ object Binding:
             case Inscription.Union(l, r) =>
                 for lb <- evalInscription(l, b); rb <- evalInscription(r, b)
                 yield lb.combineWith(rb)((x, y) => x + y)
+            // The batch is materialized by the mode search; the annotation just reads it back.
+            case Inscription.Collect(cv, _) =>
+                lookupCollected(b, cv).toRight(EvalError.UnboundVariable(cv.name))
 
     /** Evaluate a guard to a boolean. */
     def evalGuard(guard: Guard, b: Binding): Either[EvalError, Boolean] =
@@ -103,3 +117,7 @@ enum EvalError:
 
     /** A guard or inscription referenced a subclass name absent from the sort's partition. */
     case UnknownSubclass(sort: String, subclass: String)
+
+    /** A `Wildcard` was evaluated as a color — it is match-only, valid only in a `Collect` pattern.
+      */
+    case WildcardEvaluated

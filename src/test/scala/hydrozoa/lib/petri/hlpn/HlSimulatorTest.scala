@@ -26,6 +26,12 @@ class HlSimulatorTest extends AnyFunSuite:
         extends ColoredPlace[String]:
         def mark(m: MultiSet[String]): Tokens = copy(marking = m)
 
+    private case class Pairs(
+        marking: MultiSet[(String, String)],
+        colorDomain: Sort[(String, String)]
+    ) extends ColoredPlace[(String, String)]:
+        def mark(m: MultiSet[(String, String)]): Pairs = copy(marking = m)
+
     private val p = Var("p", peer)
     private val v = Var("v", vote)
     private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
@@ -135,4 +141,75 @@ class HlSimulatorTest extends AnyFunSuite:
         // p unified against the 2 present peers, v enumerated over its 2 carrier values.
         val _ = assert(assignments(ModeSelector.unifying).size == 4)
         assert(assignments(ModeSelector.unifying) == assignments(ModeSelector.enumerating))
+    }
+
+    test("a collection arc drains a whole batch in one firing, capped at its bound") {
+        val batch = CollectVar("batch", peer, bound = 2)
+        val b = NetBuilder[String, String]()
+        val program =
+            for
+                pending <- b.place("pending", Tokens(ms("p0" -> 1, "p1" -> 1, "p2" -> 1), peer))
+                done <- b.place("done", Tokens(ms(), peer))
+                drain <- b.transition("drain", List.empty, Guard.True)
+                _ <- b.input(pending, drain, Inscription.Collect(batch, ColorTerm.Wildcard(peer)))
+                _ <- b.output(drain, done, Inscription.Collect(batch, ColorTerm.Wildcard(peer)))
+            yield ()
+        val net = b.build(program).toOption.get
+        val (advanced, _) = HlSimulator(net, ModeSelector.unifying).fire("drain").toOption.get
+        // bound = 2 → exactly two tokens move in one firing; one stays behind
+        val moved = advanced.net.placesMap("done").marking.multiplicityMap.values.toList
+        val left = advanced.net.placesMap("pending").marking.multiplicityMap.values.toList
+        val _ = assert(moved.foldLeft(SafeLong(0))(_ + _) == SafeLong(2))
+        assert(left.foldLeft(SafeLong(0))(_ + _) == SafeLong(1))
+    }
+
+    test("a collection arc with nothing to collect does not enable its transition") {
+        val batch = CollectVar("batch", peer, bound = 2)
+        val b = NetBuilder[String, String]()
+        val program =
+            for
+                pending <- b.place("pending", Tokens(ms(), peer))
+                done <- b.place("done", Tokens(ms(), peer))
+                drain <- b.transition("drain", List.empty, Guard.True)
+                _ <- b.input(pending, drain, Inscription.Collect(batch, ColorTerm.Wildcard(peer)))
+                _ <- b.output(drain, done, Inscription.Collect(batch, ColorTerm.Wildcard(peer)))
+            yield ()
+        val net = b.build(program).toOption.get
+        // an empty batch would be a no-op firing — the selector must not propose it
+        assert(HlSimulator(net, ModeSelector.unifying).enabledTransitions.isEmpty)
+    }
+
+    test("a collection arc drains only the batch matching its bound filter") {
+        val votePeer: Sort[(String, String)] = Sort.Prod(vote, peer)
+        given Order[(String, String)] = votePeer.order
+        def pairs(es: ((String, String), Int)*): MultiSet[(String, String)] =
+            Multiset(es.map((k, n) => k -> SafeLong(n)).to(SortedMap))
+        val batch = CollectVar("batch", votePeer, bound = 64)
+        val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(v))
+        val pattern = ColorTerm.Tuple(ColorTerm.Ref(v), ColorTerm.Wildcard(peer))
+        val b = NetBuilder[String, String]()
+        val program =
+            for
+                // the selector fixes `v = Yes`; the collection then drains every (Yes, *) token
+                selector <- b.place("selector", Tokens(ms("Yes" -> 1), vote))
+                pool <- b.place(
+                  "pool",
+                  Pairs(pairs(("Yes", "p0") -> 1, ("Yes", "p1") -> 1, ("No", "p2") -> 1), votePeer)
+                )
+                drained <- b.place("drained", Pairs(pairs(), votePeer))
+                t <- b.transition("drain", List(v), Guard.True)
+                _ <- b.input(selector, t, wp)
+                _ <- b.output(t, selector, wp)
+                _ <- b.input(pool, t, Inscription.Collect(batch, pattern))
+                _ <- b.output(t, drained, Inscription.Collect(batch, pattern))
+            yield ()
+        val net = b.build(program).toOption.get
+        val (advanced, _) = HlSimulator(net, ModeSelector.unifying).fire("drain").toOption.get
+        val drainedTokens = advanced.net.placesMap("drained").marking
+        val poolTokens = advanced.net.placesMap("pool").marking
+        // both Yes tokens drained in one firing; the No token stays in the pool
+        val _ = assert(drainedTokens.get(("Yes", "p0")) == SafeLong(1))
+        val _ = assert(drainedTokens.get(("Yes", "p1")) == SafeLong(1))
+        val _ = assert(drainedTokens.get(("No", "p2")) == SafeLong(0))
+        assert(poolTokens.get(("No", "p2")) == SafeLong(1))
     }
