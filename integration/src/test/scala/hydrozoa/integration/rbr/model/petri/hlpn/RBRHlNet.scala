@@ -347,21 +347,15 @@ object RBRHlNet {
                 _ <- b.input(places.ballots, t, one(ballot(Ref(key), Ref(link), awaiting, version0)))
                 _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(version))))
                 // addRequiredSigners(votingSigners): the box's peer signs — presence in Owner
-                _ <- b.input(places.owner, t, ownerToken)
-                _ <- b.output(t, places.owner, ownerToken)
+                _ <- b.read(places.owner, t, ownerToken)
                 // collateralUtxo.spend / collateralOutput.send: the peer's collateral, recreated
-                _ <- b.input(places.collateral, t, peerToken)
-                _ <- b.output(t, places.collateral, peerToken)
+                _ <- b.read(places.collateral, t, peerToken)
                 // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-                _ <- b.input(places.unresolvedTreasury, t, dotToken)
-                _ <- b.output(t, places.unresolvedTreasury, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.read(places.unresolvedTreasury, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
                 // ValidityEndSlot(votingDeadline): only while voting is open
-                _ <- b.input(places.votingOpen, t, dotToken)
-                _ <- b.output(t, places.votingOpen, dotToken)
+                _ <- b.read(places.votingOpen, t, dotToken)
             } yield ()
 
         // ---- Abstain (mirrors AbstainTx.Build.buildAbstainTx) ----
@@ -377,14 +371,11 @@ object RBRHlNet {
                   one(ballot(Ref(key), Ref(link), abstainedStatus, version0))
                 )
                 // addRequiredSigners(votingSigners): the box's peer signs
-                _ <- b.input(places.owner, t, ownerToken)
-                _ <- b.output(t, places.owner, ownerToken)
+                _ <- b.read(places.owner, t, ownerToken)
                 // collateralUtxo.spend / collateralOutput.send
-                _ <- b.input(places.collateral, t, peerToken)
-                _ <- b.output(t, places.collateral, peerToken)
+                _ <- b.read(places.collateral, t, peerToken)
                 // config.referenceDispute
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
             } yield ()
 
         // ---- RatchetVote (mirrors RatchetVoteTx.Build; spent box is Voted or Abstain) ----
@@ -410,18 +401,13 @@ object RBRHlNet {
                 )
                 _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(versionNew))))
                 // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
                 // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-                _ <- b.input(places.unresolvedTreasury, t, dotToken)
-                _ <- b.output(t, places.unresolvedTreasury, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.read(places.unresolvedTreasury, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
                 // ValidityEndSlot(votingDeadline)
-                _ <- b.input(places.votingOpen, t, dotToken)
-                _ <- b.output(t, places.votingOpen, dotToken)
+                _ <- b.read(places.votingOpen, t, dotToken)
             } yield ()
 
         // ---- Tally (mirrors TallyTx.Build; split by the maxVote winner) ----
@@ -457,18 +443,13 @@ object RBRHlNet {
                   one(ballot(Ref(key1), Ref(link2), Ref(status1), Ref(version1)))
                 )
                 // collateralUtxo.add only — presence, never spent
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
                 // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
-                _ <- b.input(places.unresolvedTreasury, t, dotToken)
-                _ <- b.output(t, places.unresolvedTreasury, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
+                _ <- b.read(places.unresolvedTreasury, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
                 // ValidityStartSlot(votingDeadline + 1): only after the deadline
-                _ <- b.input(places.votingClosed, t, dotToken)
-                _ <- b.output(t, places.votingClosed, dotToken)
+                _ <- b.read(places.votingClosed, t, dotToken)
             } yield ()
 
         def tallyRemovedWins(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
@@ -500,16 +481,11 @@ object RBRHlNet {
                   places.ballots,
                   one(ballot(Ref(key1), Ref(link2), Ref(status2), Ref(version2)))
                 )
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
-                _ <- b.input(places.unresolvedTreasury, t, dotToken)
-                _ <- b.output(t, places.unresolvedTreasury, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
-                _ <- b.input(places.votingClosed, t, dotToken)
-                _ <- b.output(t, places.votingClosed, dotToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
+                _ <- b.read(places.unresolvedTreasury, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
+                _ <- b.read(places.votingClosed, t, dotToken)
             } yield ()
 
         // ---- VotingDeadline (untimed ISO Clause-10 [D,D] projection) ----
@@ -536,15 +512,11 @@ object RBRHlNet {
                 // resolved-version selector: reveals which SEC won → gates Evacuation to its obligations
                 _ <- b.output(t, places.resolvedVersion, one(Ref(version)))
                 // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
                 // config.referenceTreasury / config.referenceDispute / regimeUtxo.referenceOutput
-                _ <- b.input(places.treasuryScriptRef, t, dotToken)
-                _ <- b.output(t, places.treasuryScriptRef, dotToken)
-                _ <- b.input(places.disputeScriptRef, t, dotToken)
-                _ <- b.output(t, places.disputeScriptRef, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
+                _ <- b.read(places.treasuryScriptRef, t, dotToken)
+                _ <- b.read(places.disputeScriptRef, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
             } yield ()
 
         // ---- Evacuation (mirrors EvacuationTx.Build) ----
@@ -560,24 +532,18 @@ object RBRHlNet {
             for {
                 t <- b.transition(RBRTransitionId.Evacuation, List(version, collateralPeer), Guard.True)
                 // ValidityStartSlot / resolved-version read: binds `version` to the resolved SEC
-                _ <- b.input(places.resolvedVersion, t, one(Ref(version)))
-                _ <- b.output(t, places.resolvedVersion, one(Ref(version)))
+                _ <- b.read(places.resolvedVersion, t, one(Ref(version)))
                 // treasuryUtxo.spendAttached(Evacuate) / newTreasury.send: treasury stays Resolved
-                _ <- b.input(places.resolvedTreasury, t, dotToken)
-                _ <- b.output(t, places.resolvedTreasury, dotToken)
+                _ <- b.read(places.resolvedTreasury, t, dotToken)
                 // the resolved version's committed batch → evacuatedOutputs.send
                 _ <- b.input(places.payoutObligations, t, evacuatedBatch)
                 _ <- b.output(t, places.evacuationOutput, evacuatedBatch)
                 // collateralUtxo.spend / collateralOutput.send
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
                 // config.referenceTreasury / regimeUtxo.referenceOutput / ReferenceOutput(setupRung)
-                _ <- b.input(places.treasuryScriptRef, t, dotToken)
-                _ <- b.output(t, places.treasuryScriptRef, dotToken)
-                _ <- b.input(places.regimeRef, t, dotToken)
-                _ <- b.output(t, places.regimeRef, dotToken)
-                _ <- b.input(places.setupLadder, t, dotToken)
-                _ <- b.output(t, places.setupLadder, dotToken)
+                _ <- b.read(places.treasuryScriptRef, t, dotToken)
+                _ <- b.read(places.regimeRef, t, dotToken)
+                _ <- b.read(places.setupLadder, t, dotToken)
             } yield ()
 
         // ---- Deinit (mirrors DeinitTx.Build) ----
@@ -590,8 +556,7 @@ object RBRHlNet {
             for {
                 t <- b.transition(RBRTransitionId.Deinit, List(version, collateralPeer), Guard.True)
                 // resolved-version read: binds `version` for the emptiness inhibitor
-                _ <- b.input(places.resolvedVersion, t, one(Ref(version)))
-                _ <- b.output(t, places.resolvedVersion, one(Ref(version)))
+                _ <- b.read(places.resolvedVersion, t, one(Ref(version)))
                 // empty treasury: no obligation of the resolved version remains
                 _ <- b.input(
                   places.payoutObligations,
@@ -603,11 +568,9 @@ object RBRHlNet {
                 // regimeUtxo.spend: the regime is spent (earlier transitions only read it)
                 _ <- b.input(places.regimeRef, t, dotToken)
                 // collateralUtxo.spend / collateralOutput.send
-                _ <- b.input(places.collateral, t, collateralPeerToken)
-                _ <- b.output(t, places.collateral, collateralPeerToken)
+                _ <- b.read(places.collateral, t, collateralPeerToken)
                 // config.referenceTreasury
-                _ <- b.input(places.treasuryScriptRef, t, dotToken)
-                _ <- b.output(t, places.treasuryScriptRef, dotToken)
+                _ <- b.read(places.treasuryScriptRef, t, dotToken)
             } yield ()
 
         val program = for {

@@ -58,12 +58,23 @@ object RBRHlNetDot {
         s"""  "T_$id" [shape=box style=filled fillcolor="#eeeeee" label="$label"];"""
     }
 
-    private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String = {
-        val w = esc(renderInscription(arc.inscription))
+    private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String =
+        arc.inscription match
+            // a read (test) arc: one undirected dashed edge — required but not consumed
+            case Inscription.Read(inner) =>
+                val w = esc(renderInscription(inner))
+                val (a, z) = ends(flow)
+                s"""  "$a" -> "$z" [dir=none style=dashed label="$w"];"""
+            case insc =>
+                val w = esc(renderInscription(insc))
+                flow match
+                    case Arc.Flow.Pt(p, t) => s"""  "P_$p" -> "T_$t" [label="$w"];"""
+                    case Arc.Flow.Tp(t, p) => s"""  "T_$t" -> "P_$p" [label="$w"];"""
+
+    private def ends[P, T](flow: Arc.Flow[P, T]): (String, String) =
         flow match
-            case Arc.Flow.Pt(p, t) => s"""  "P_$p" -> "T_$t" [label="$w"];"""
-            case Arc.Flow.Tp(t, p) => s"""  "T_$t" -> "P_$p" [label="$w"];"""
-    }
+            case Arc.Flow.Pt(p, t) => (s"P_$p", s"T_$t")
+            case Arc.Flow.Tp(t, p) => (s"T_$t", s"P_$p")
 
     /** A line break inside a DOT label (literal backslash-n in the emitted text). */
     private val nl = "\\n"
@@ -79,6 +90,7 @@ object RBRHlNetDot {
             case Inscription.Collect(cv, pattern) =>
                 s"⟦${cv.name}≤${cv.bound}: ${renderColor(pattern)}⟧"
             case Inscription.Inhibit(pattern) => s"○ ${renderColor(pattern)}"
+            case Inscription.Read(inner)      => renderInscription(inner)
 
     private def renderColor(term: ColorTerm[?]): String =
         term match
