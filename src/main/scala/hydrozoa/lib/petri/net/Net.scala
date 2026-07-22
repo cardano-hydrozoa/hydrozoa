@@ -1,73 +1,57 @@
 package hydrozoa.lib.petri.net
 
-import cats.data.NonEmptyList
-import hydrozoa.lib.petri.net.Net.Topology.{MissingArcTopology, MissingPlaceTopology, MissingTransitionTopology}
+import hydrozoa.lib.petri.net.Net.Topology.{MissingPlaceTopology, MissingTransitionTopology}
 import hydrozoa.lib.petri.net.components.*
 import scala.annotation.unused
 
 trait Net[
-    ArcId,
     PlaceId,
     TransitionId,
-    A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+    A <: Arc.Syntax,
     P <: Place.Topology & Place.Syntax[P] & Place.Semantics[P],
     T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-    Self <: Net[ArcId, PlaceId, TransitionId, A, P, T, Self]
-] extends Net.Ids[
-      ArcId,
-      PlaceId,
-      TransitionId
-    ],
-      Net.Topology[ArcId, PlaceId, TransitionId, A, P, T],
-      Net.Syntax[ArcId, PlaceId, TransitionId, A, P, T],
-      Net.Semantics[ArcId, PlaceId, TransitionId, A, P, T]
+    Self <: Net[PlaceId, TransitionId, A, P, T, Self]
+] extends Net.Ids[PlaceId, TransitionId],
+      Net.Topology[PlaceId, TransitionId, P, T],
+      Net.Syntax[PlaceId, TransitionId, A, P, T],
+      Net.Semantics[PlaceId, TransitionId, P, T]
 
 object Net {
 
     trait Error extends Throwable
 
-    /** This the authoritative source of IDs in the net in the following sense:
-      *   - If there is some data that MUST be associated every ID of a component (such as topology,
-      *     configuration, etc), then it is invalid to NOT have a total mapping from these sets to
-      *     the associated data
-      *   - If an association between an ID and data exists, then the ID MUST appear in this set for
-      *     the association to be considered valid.
-      *
-      * @tparam PlaceId
-      * @tparam TransitionId
-      * @tparam ArcId
+    /** The authoritative structure of the net (ISO Concept 1): the place set, the transition set,
+      * and the flow relation `F`. Any data that must be associated with every element (annotations,
+      * semantics, presentation) must be a total mapping over these sets, and an association whose
+      * key is absent from them is invalid.
       */
-    trait Ids[ArcId, PlaceId, TransitionId] {
-        val arcIds: Set[ArcId]
+    trait Ids[PlaceId, TransitionId] {
         val placeIds: Set[PlaceId]
         val transitionIds: Set[TransitionId]
+
+        /** `F ⊆ (P×T) ∪ (T×P)` — the arcs of the net. */
+        val flowRelation: Set[Arc.Flow[PlaceId, TransitionId]]
     }
 
     // =========================================================================
     // Topology
     // =========================================================================
 
-    /** Structural query and validation interface for a net. * * `topologyErrors` is abstract —
-      * topology constraints are always explicit. Concrete nets * implement it either directly or by
-      * composing the mixin traits from [[Topology]]: * - [[Topology.Topology]]: base accessor
-      * trait; extend this and mix in below * - [[Topology.NoDanglingArcs]]: no arc references a
-      * missing place/transition ID * - [[Topology.SingleArc]]: at most one arc per (place,
-      * transition) pair * * Firing endomorphisms do not commute in general; the `SingleArc`
-      * constraint makes firing * order-independent. Topologies that permit multi-arcs must impose
-      * an explicit ordering or * prove/property-test commutativity for their arc combinations. See
-      * * [[hydrozoa.lib.petri.net.components]] for the full discussion.
+    /** Structural query and validation interface for a net. `topologyErrors` is abstract — topology
+      * constraints are always explicit. Concrete nets implement it either directly or by composing
+      * the mixin traits from [[Topology]]:
+      *   - [[Topology.NoDanglingArcs]]: no flow element references a missing place/transition ID
+      *
+      * There is no multiplicity constraint: an arc's identity is its `F`-element, so `W` is a
+      * function on `F` (Concept 8) by construction.
       */
     trait Topology[
-        ArcId,
         PlaceId,
         TransitionId,
-        A <: Arc.Topology[PlaceId, TransitionId],
         P <: Place.Topology,
         T <: Transition.Topology
-    ] extends Net.Ids[ArcId, PlaceId, TransitionId] {
+    ] extends Net.Ids[PlaceId, TransitionId] {
         type TopologyValidationError = Net.Topology.Error
-
-        def getArcTopology(arcId: ArcId): Either[MissingArcTopology[ArcId], A]
 
         def getPlaceTopology(placeId: PlaceId): Either[MissingPlaceTopology[PlaceId], P]
 
@@ -84,10 +68,6 @@ object Net {
     object Topology {
         trait Error extends Net.Error
 
-        case class MissingArcTopology[ArcId](arcId: ArcId) extends Error {
-            override def getMessage: String = s"Missing arc topology for arc ID: $arcId"
-        }
-
         case class MissingPlaceTopology[PlaceId](placeId: PlaceId) extends Error {
             override def getMessage: String = s"Missing place topology for place ID: $placeId"
         }
@@ -98,111 +78,42 @@ object Net {
                 s"Missing transition topology for transition ID: $transitionId"
         }
 
-        /** Mixin: validates that no arc references a place or transition ID absent from the net.
+        /** Mixin: validates that no flow element references a place or transition ID absent from
+          * the net.
           *
           * Uses the abstract-override list-accumulation pattern. Must be linearised after
           * [[Topology]] so that `super.topologyErrors` is concrete.
           */
         trait NoDanglingArcs[
-            ArcId,
             PlaceId,
             TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId],
             P <: Place.Topology,
             T <: Transition.Topology
-        ] extends Topology[ArcId, PlaceId, TransitionId, A, P, T] {
+        ] extends Topology[PlaceId, TransitionId, P, T] {
             abstract override def topologyErrors: List[this.TopologyValidationError] = {
-                val danglingErrors = for {
-                    aid <- arcIds.toList
-                    errors <- getArcTopology(aid) match {
-                        case Left(missingArcTopology) => List(missingArcTopology)
-                        case Right(arc) =>
-                            val pid: PlaceId = arc.arcPlaceId
-                            val tid: TransitionId = arc.arcTransitionId
-                            val placeError = Option.when(!placeIds.contains(pid))(
-                              NoDanglingArcs.Error.DanglingArcPlace[ArcId, PlaceId, TransitionId](
-                                aid,
-                                pid
-                              )
-                            )
-                            val transitionError = Option.when(!transitionIds.contains(tid))(
-                              NoDanglingArcs.Error
-                                  .DanglingArcTransition[ArcId, PlaceId, TransitionId](aid, tid)
-                            )
-                            placeError.toList ++ transitionError.toList
-                    }
-                } yield errors
+                val danglingErrors = flowRelation.toList.flatMap { flow =>
+                    val placeError = Option.when(!placeIds.contains(flow.place))(
+                      NoDanglingArcs.Error.DanglingArcPlace(flow)
+                    )
+                    val transitionError = Option.when(!transitionIds.contains(flow.transition))(
+                      NoDanglingArcs.Error.DanglingArcTransition(flow)
+                    )
+                    placeError.toList ++ transitionError.toList
+                }
                 danglingErrors ++ super.topologyErrors
             }
         }
 
         object NoDanglingArcs {
-            enum Error[ArcId, PlaceId, TransitionId] extends Net.Topology.Error:
-                case DanglingArcPlace(arcId: ArcId, placeId: PlaceId)
-                case DanglingArcTransition(arcId: ArcId, transitionId: TransitionId)
+            enum Error[PlaceId, TransitionId] extends Net.Topology.Error:
+                case DanglingArcPlace(flow: Arc.Flow[PlaceId, TransitionId])
+                case DanglingArcTransition(flow: Arc.Flow[PlaceId, TransitionId])
 
                 override def getMessage: String = this match
-                    case DanglingArcPlace(arcId, placeId) =>
-                        s"Arc $arcId references place $placeId which is not in the net"
-                    case DanglingArcTransition(arcId, transitionId) =>
-                        s"Arc $arcId references transition $transitionId which is not in the net"
-        }
-
-        /** Mixin: validates at most one arc per (place, transition) pair.
-          *
-          * Uses the abstract-override list-accumulation pattern. Must be linearised after
-          * [[Topology]] so that `super.topologyErrors` is concrete.
-          */
-        trait SingleArc[
-            ArcId,
-            PlaceId,
-            TransitionId,
-            A <: Arc.Topology[PlaceId, TransitionId],
-            P <: Place.Topology,
-            T <: Transition.Topology
-        ] extends Topology[ArcId, PlaceId, TransitionId, A, P, T] {
-
-            abstract override def topologyErrors: List[this.TopologyValidationError] = {
-                val eitherArcs
-                    : List[Either[MissingArcTopology[ArcId], (ArcId, PlaceId, TransitionId)]] =
-                    arcIds.toList.map(arcId =>
-                        getArcTopology(arcId).map(arc =>
-                            (arcId, arc.arcPlaceId, arc.arcTransitionId)
-                        )
-                    )
-                val partition = eitherArcs.partition(_.isLeft)
-                val missingArcs = partition._1.collect { case Left(error) => error }
-                val tuples: List[(ArcId, PlaceId, TransitionId)] =
-                    partition._2.collect { case Right(tuple) => tuple }
-                val grouped: Map[(PlaceId, TransitionId), List[ArcId]] =
-                    tuples.groupBy(t => (t._2, t._3)).map((k, v) => (k, v.map(_._1)))
-                val duplicateArcErrors = grouped
-                    .filter((_, v) => v.size > 1)
-                    .map((k, v) =>
-                        SingleArc.Error.DuplicateArc(
-                          arcIds = NonEmptyList.fromListUnsafe(v),
-                          placeId = k._1,
-                          transitionId = k._2
-                        )
-                    )
-                    .toList
-                duplicateArcErrors ++ missingArcs ++ super.topologyErrors
-            }
-        }
-
-        object SingleArc {
-            object Error {
-
-                /** Reported for every (place, transition) pair with more than one arc. */
-                case class DuplicateArc[ArcId, PlaceId, TransitionId](
-                    arcIds: NonEmptyList[ArcId],
-                    placeId: PlaceId,
-                    transitionId: TransitionId,
-                ) extends Topology.Error {
-                    override def getMessage: String =
-                        s"Multiple arcs [${arcIds.toList.mkString(", ")}] connect place $placeId to transition $transitionId"
-                }
-            }
+                    case DanglingArcPlace(flow) =>
+                        s"Arc $flow references place ${flow.place} which is not in the net"
+                    case DanglingArcTransition(flow) =>
+                        s"Arc $flow references transition ${flow.transition} which is not in the net"
         }
     }
 
@@ -216,14 +127,19 @@ object Net {
       * Named `Syntax` by analogy with [[Place.Syntax]] and [[Arc.Syntax]]: it describes what the
       * net _carries_, not how it behaves.
       */
-    trait Syntax[ArcId, PlaceId, TransitionId, A <: Arc.Syntax, P <: Place.Syntax[
+    trait Syntax[PlaceId, TransitionId, A <: Arc.Syntax, P <: Place.Syntax[
       P
     ], T <: Transition.Syntax]
-        extends Net.Ids[ArcId, PlaceId, TransitionId] {
+        extends Net.Ids[PlaceId, TransitionId] {
 
         import Syntax.*
 
-        def getArcSyntax(id: ArcId): Either[MissingArcSyntax[ArcId], A]
+        /** `W(f)`: the annotation of flow element `f`. Total over [[Ids.flowRelation]], making the
+          * accessor exactly the annotation function `W : F → AN` (Concept 8).
+          */
+        def getArcSyntax(
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ): Either[MissingArcSyntax[PlaceId, TransitionId], A]
 
         def getPlaceSyntax(id: PlaceId): Either[MissingPlaceSyntax[PlaceId], P]
 
@@ -231,16 +147,17 @@ object Net {
             id: TransitionId
         ): Either[MissingTransitionSyntax[TransitionId], T]
 
-        // Totality check: every ID registered in Net.Ids has a defined syntax entry.
-        // For map-backed nets this is guaranteed by construction, so this will always be empty.
+        // Totality check: every flow element and ID registered in Net.Ids has a defined syntax
+        // entry. For map-backed nets this is guaranteed by construction, so this will always be
+        // empty.
         final def syntaxErrors: List[Syntax.Error] =
-            arcIds.toList.flatMap(getArcSyntax(_).swap.toOption) ++
+            flowRelation.toList.flatMap(getArcSyntax(_).swap.toOption) ++
                 placeIds.toList.flatMap(getPlaceSyntax(_).swap.toOption) ++
                 transitionIds.toList.flatMap(getTransitionSyntax(_).swap.toOption)
 
         final lazy val isValidSyntax: Boolean = syntaxErrors.isEmpty
 
-        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs / SingleArc)
+        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs)
         // could be used here for richer invariants beyond totality — for example:
         //   - every transition must have at least one connected arc
         //   - no two places may share the same label
@@ -250,8 +167,10 @@ object Net {
     object Syntax {
         trait Error extends Net.Error
 
-        case class MissingArcSyntax[ArcId](arcId: ArcId) extends Error {
-            override def getMessage: String = s"No syntax entry for arc ID: $arcId"
+        case class MissingArcSyntax[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ) extends Error {
+            override def getMessage: String = s"No annotation entry for arc: $flow"
         }
 
         case class MissingPlaceSyntax[PlaceId](placeId: PlaceId) extends Error {
@@ -267,15 +186,15 @@ object Net {
     // Semantics
     // =========================================================================
 
-    /** Component semantics accessor interface. P is ordered first since A depends on it. P must
-      * carry both syntax and semantics because [[Arc.Semantics]] requires `P <: Place.Syntax[P]`.
+    /** Component semantics accessor interface for places and transitions. Arcs carry no semantics —
+      * an arc is its annotation ([[Arc.Syntax]]); enabling and firing are net-level rules
+      * implemented by the simulator.
       */
-    trait Semantics[ArcId, PlaceId, TransitionId, A <: Arc.Semantics[P], P <: Place.Syntax[
+    trait Semantics[PlaceId, TransitionId, P <: Place.Syntax[
       P
     ] & Place.Semantics[P], T <: Transition.Semantics]
-        extends Net.Ids[ArcId, PlaceId, TransitionId] {
+        extends Net.Ids[PlaceId, TransitionId] {
         import Semantics.Error.*
-        def getArcSemantics(id: ArcId): Either[MissingArcSemantics[ArcId], A]
 
         def getPlaceSemantics(id: PlaceId): Either[MissingPlaceSemantics[PlaceId], P]
 
@@ -283,8 +202,9 @@ object Net {
             id: TransitionId
         ): Either[MissingTransitionSemantics[TransitionId], T]
 
-        // Override (with abstract override) to add net-wide enabling conditions for transition t.
-        // Composed under AND with all other enabling predicate levels; commutative by conjunction.
+        // The filtering-function seam (ISO 15909-3, 5.3.4): net-level enabling conjuncts Fε for
+        // transition t, composed under AND with the base enabling rule. Override (with abstract
+        // override) to add enrichment conditions; empty = no enrichments.
         protected def netEnablingPredicates(@unused t: TransitionId): List[Boolean] = List.empty
 
         final def netEnablingPredicate(t: TransitionId): Boolean =
@@ -293,26 +213,21 @@ object Net {
         // Totality check: every ID registered in Net.Ids has a defined semantics entry.
         // For map-backed nets this is guaranteed by construction, so this will always be empty.
         final def semanticsErrors: List[Semantics.Error] =
-            arcIds.toList.flatMap(getArcSemantics(_).swap.toOption) ++
-                placeIds.toList.flatMap(getPlaceSemantics(_).swap.toOption) ++
+            placeIds.toList.flatMap(getPlaceSemantics(_).swap.toOption) ++
                 transitionIds.toList.flatMap(getTransitionSemantics(_).swap.toOption)
 
         final lazy val isValidSemantics: Boolean = semanticsErrors.isEmpty
 
-        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs / SingleArc)
+        // The abstract-override mixin pattern (like Net.Topology's NoDanglingArcs)
         // could be used here for richer invariants beyond totality — for example:
         //   - every transition must have at least one connected arc
-        //   - every BoundedPlace must start below capacity
+        //   - every place must start within its declared capacity
         // To add constraints: override semanticsErrors with `super.semanticsErrors ++ myErrors`.
     }
 
     object Semantics {
         trait Error extends Net.Error
         object Error {
-            case class MissingArcSemantics[ArcId](arcId: ArcId) extends Error {
-                override def getMessage: String = s"No semantics entry for arc ID: $arcId"
-            }
-
             case class MissingPlaceSemantics[PlaceId](placeId: PlaceId) extends Error {
                 override def getMessage: String = s"No semantics entry for place ID: $placeId"
             }
@@ -346,14 +261,13 @@ object Net {
             }
 
             extension [
-                ArcId,
                 PlaceId,
                 TransitionId,
-                A <: Arc.Topology[PlaceId, TransitionId] & Arc.Syntax & Arc.Semantics[P],
+                A <: Arc.Syntax,
                 P <: Place.Topology & Place.Syntax.HasFinalMarking[P] & Place.Semantics[P],
                 T <: Transition.Topology & Transition.Syntax & Transition.Semantics,
-                Self <: Net[ArcId, PlaceId, TransitionId, A, P, T, Self]
-            ](net: Net[ArcId, PlaceId, TransitionId, A, P, T, Self])
+                Self <: Net[PlaceId, TransitionId, A, P, T, Self]
+            ](net: Net[PlaceId, TransitionId, A, P, T, Self])
                 def terminalErrors: List[FinalMarking.Error] =
                     net.placeIds.toList.flatMap { pid =>
                         net.getPlaceSemantics(pid).toOption.toList.flatMap { place =>
@@ -376,7 +290,9 @@ object Net {
     object Presentation {
         trait Error extends Net.Error
 
-        case class MissingArcPresentation[ArcId](arcId: ArcId) extends Error
+        case class MissingArcPresentation[PlaceId, TransitionId](
+            flow: Arc.Flow[PlaceId, TransitionId]
+        ) extends Error
 
         case class MissingPlacePresentation[PlaceId](placeId: PlaceId) extends Error
 
@@ -387,14 +303,15 @@ object Net {
           * of the elements of the net.
           */
         trait Presentation[
-            ArcId,
             PlaceId,
             TransitionId,
             A <: Arc.Presentation,
             P <: Place.Presentation,
             T <: Transition.Presentation
         ] {
-            def getArcPresentation(id: ArcId): Either[MissingArcPresentation[ArcId], A]
+            def getArcPresentation(
+                flow: Arc.Flow[PlaceId, TransitionId]
+            ): Either[MissingArcPresentation[PlaceId, TransitionId], A]
 
             def getPlacePresentation(id: PlaceId): Either[MissingPlacePresentation[PlaceId], P]
 

@@ -17,12 +17,12 @@ package hydrozoa.lib.petri
   *   - [[Semantics]]: enabling rules, firing strategy, autofiring policy
   *   - [[Presentation]]: visual layout
   *
-  * ## Arc multiplicity and firing endomorphism ordering
+  * ## Arcs: the flow relation
   *
-  * See [[hydrozoa.lib.petri.net.components]] for the general discussion. At the net level: the
-  * default topology restricts to at most one arc per (place, transition) direction, making firing
-  * endomorphisms trivially order-independent. Topologies that permit multi-arcs must either impose
-  * an explicit ordering or prove/property-test commutativity for their arc combinations.
+  * Arcs follow ISO 15909-1's formulation: `F ⊆ (P×T) ∪ (T×P)` is a set of [[components.Arc.Flow]]
+  * elements, and the annotation `W : F → AN` is the net's arc map keyed by them (Concept 8). An
+  * arc's identity is its `F`-element, so `W` is a function by construction — there is no
+  * arc-multiplicity concern.
   *
   * ## Net composition
   *
