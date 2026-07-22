@@ -4,8 +4,9 @@ Implementation-facing documentation for Hydrozoa/Gummiworm: how the code is
 organized and how its subsystems actually work, keyed to the current sources.
 
 These describe the system **as built**, complementing `design/` (forward-looking
-specs and decision points) and `specification/` (the LaTeX source of the formal
-PDF). For project-wide conventions, start with the style guide.
+specs and decision points) and the
+[Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction) (the
+protocol spec). For project-wide conventions, start with the style guide.
 
 | Doc | Summary |
 |---|---|
