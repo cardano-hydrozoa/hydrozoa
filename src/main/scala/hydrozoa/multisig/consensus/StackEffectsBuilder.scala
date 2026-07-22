@@ -209,16 +209,19 @@ object StackEffectsBuilder {
                     case StackPartition.Kind.Final =>
                         // The finalization tx pays out two things: the final block's OWN withdrawals
                         // (`fin.payoutObligations` — real L2 requests, never settled by a Major
-                        // since the final block is not Major), and the residual L2 balances. The
-                        // fast side does not maintain the cumulative evac map, so it emits no
-                        // `delete-all` diff and leaves the residual drain to us: we recover it from
-                        // the slow-side running map (`runningMap.outputs`). Withdrawals come first so
-                        // they stay a recognizable prefix (they carry request provenance; the
-                        // residual balances do not). The map is reset to empty for any subsequent
-                        // partition / stack; the treasury is drained by finalization (chain ends).
+                        // since the final block is not Major), and the residual L2 balances. Like a
+                        // Major, the final block carries its own `evacuationMapDiff` (the final
+                        // window's L2 mutations); we fold it into the running map so `mapAfterFinal`
+                        // is the true post-final residual — the withdrawals' spent inputs are
+                        // deleted, their change outputs are present, and the withdrawal outputs
+                        // (L1-bound) were never map members. Withdrawals come first so they stay a
+                        // recognizable prefix (they carry request provenance; the residual balances
+                        // do not). The map is then reset to empty for any subsequent partition /
+                        // stack; the treasury is drained by finalization (chain ends).
                         val fin = p.blocks.head
+                        val mapAfterFinal = applyDiffs(runningMap, fin.evacuationMapDiff)
                         val payoutObligationsRemaining =
-                            fin.payoutObligations.toVector ++ runningMap.outputs.toVector
+                            fin.payoutObligations.toVector ++ mapAfterFinal.outputs.toVector
                         finalizeLedger(
                           config = config,
                           treasury = tre,
@@ -233,7 +236,7 @@ object StackEffectsBuilder {
                             // block's withdrawals (real requests) first, then the residual balances
                             // (no request) — matching `payoutObligationsRemaining` above.
                             val prov = fin.payoutRequestIds.toVector.map(Some(_)) ++
-                                Vector.fill(runningMap.outputs.size)(None)
+                                Vector.fill(mapAfterFinal.outputs.size)(None)
                             val rows = withdrawalRows(prov, finalizationSlices(seq))
                             (pe :: effectsAcc, tre, EvacuationMap.empty, rows ++ rowsAcc)
                         }

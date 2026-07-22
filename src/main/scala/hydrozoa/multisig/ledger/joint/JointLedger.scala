@@ -574,15 +574,19 @@ final case class JointLedger(
 
                 _ <- state.set(p.done(blockBrief.header))
 
-                // Final block: the fast side does not maintain the cumulative evacuation map, so it
-                // cannot enumerate the residual-balance drain — `evacuationMapDiff` is empty and the
-                // slow side recovers those from its own running map. But the final block's OWN
-                // withdrawals (`payouts`) are real L2 requests that must still be paid out, so they
-                // ride here in `payoutObligations` (with their provenance); the finalization tx pays
-                // them alongside the residual balances (StackEffectsBuilder Final branch).
+                // Final block: like a Major, it emits its own window's `evacuationMapDiff` (the L2
+                // mutations applied while producing this block) so the slow side can fold them into
+                // its running map and drain the *true* post-final residual. The fast side still does
+                // not maintain the cumulative map, so it does NOT enumerate the whole-head drain —
+                // the slow side reads that off its own running map after applying this diff. The
+                // final block's OWN withdrawals (`payouts`) are real L2 requests that must be paid
+                // out, so they ride here in `payoutObligations` (with their provenance); the
+                // finalization tx pays them alongside the residual balances (StackEffectsBuilder
+                // Final branch), with no double-count since the withdrawals' spent inputs are
+                // deleted by this diff.
                 blockResult = BlockResult(
                   brief = blockBrief,
-                  evacuationMapDiff = Nil,
+                  evacuationMapDiff = p.l2LedgerState.diffs,
                   payoutObligations = p.l2LedgerState.payouts.toList,
                   payoutRequestIds = p.l2LedgerState.payoutRequestIds.toList,
                   postDatedRefundTxs = Nil,

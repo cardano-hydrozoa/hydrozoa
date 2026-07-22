@@ -204,10 +204,21 @@ settlement. The **final** block is the exception: it is not a major, so its own 
 previously dropped — `completeBlockFinal` set `payoutObligations = Nil`, and finalization paid only
 the residual evacuation-map drain. They are now wired through: `completeBlockFinal` populates
 `payoutObligations` from `p.l2LedgerState.payouts`, and the `StackEffectsBuilder` Final branch pays
-`finalBlockWithdrawals ++ runningMap.outputs`. This changes finalization-tx bytes, so it is
-consensus-relevant, but deterministic across peers; it is a no-op when the final block has no
-withdrawals, and balances by construction (those withdrawals were never removed from the treasury,
-since the final block never got settled).
+`finalBlockWithdrawals ++ residual`.
+
+The residual must be the **true post-final** evacuation map, not the pre-final one. A final block's
+window can include L2 transactions that spend pre-existing evacuation-map utxos (nothing forces such
+a window to be drain-only), so the final block — like a major — emits its own `evacuationMapDiff`
+(`p.l2LedgerState.diffs`, the window's L2 mutations), and the Final branch folds it into the running
+map before draining: `residual = applyDiffs(runningMap, fin.evacuationMapDiff).outputs`. This deletes
+each withdrawal's spent inputs and adds its change outputs, so a withdrawn utxo is not paid twice
+(once as a residual, once via `payoutObligations`); the withdrawal outputs themselves are L1-bound and
+were never map members. The fast side still does not maintain the *cumulative* map — the whole-head
+drain is the running map read off after this diff, then reset to empty.
+
+This changes finalization-tx bytes, so it is consensus-relevant, but deterministic across peers; it
+is a no-op when the final block has no L2 activity, and balances by construction (those withdrawals
+were never removed from the treasury, since the final block never got settled).
 
 ## Scope and limitations
 
