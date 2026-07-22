@@ -14,6 +14,11 @@ import spire.math.SafeLong
   * own rules, so a wrong candidate is filtered, never fired. A selector that *omits* an enabled
   * mode, however, makes the simulator incomplete for it: completeness is the selector's burden,
   * soundness the net's.
+  *
+  * This is a *firing* search and need not be complete: [[HlSimulator.fire]] only needs it to
+  * propose *some* enabled candidate. Enumerating the *enabled set* is a different job — it must be
+  * complete by construction and must not lean on this selector (see the FIXME on
+  * [[HlSimulator.enabledModes]]).
   */
 trait ModeSelector[PlaceId, TransitionId, C] {
 

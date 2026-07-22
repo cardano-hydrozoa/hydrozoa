@@ -15,14 +15,21 @@ final case class HlSimulator[PlaceId, TransitionId, C](
     selector: ModeSelector[PlaceId, TransitionId, C]
 ) {
 
-    /** The selector's candidates that enable `tid` at the current marking, in preference order. */
+    /** FIXME (bug): this MUST return the *complete* set of enabled modes, but it filters the firing
+      * [[selector]]'s candidates — so a greedy/incomplete selector silently under-reports. On a
+      * `Collect` arc it yields only the single max batch, not every enabled sub-batch. The enabled
+      * set has to be enumerated completely, independent of the firing selector; the consequences of
+      * the current behaviour are severe (conformance/MBT and reachability miss real moves).
+      */
     def enabledModes(tid: TransitionId): LazyList[Binding] =
         selector.candidates(net, tid).filter(net.isModeEnabled(tid, _))
 
     /** Whether the selector finds any mode enabling `tid`. */
     def isEnabled(tid: TransitionId): Boolean = enabledModes(tid).nonEmpty
 
-    /** Every transition the selector finds an enabled mode for. */
+    /** Every transition with an enabled mode. FIXME: inherits the [[enabledModes]] completeness bug
+      * — under-reports whenever a transition's only enabled modes are ones the selector omits.
+      */
     def enabledTransitions: Set[TransitionId] = net.transitionIds.filter(isEnabled)
 
     /** Fire `tid` under the first enabled candidate, returning the advanced simulator and the mode
