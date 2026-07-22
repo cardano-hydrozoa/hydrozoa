@@ -6,36 +6,63 @@ import spire.math.SafeLong
 
 /** A quick-and-dirty Graphviz DOT rendering of an [[HlNet]], for eyeballing structure. Places are
   * ellipses (id + current token count, filled when marked), transitions are boxes (id + guard), and
-  * every `Arc.Flow` is a directed edge labelled with its inscription. Render with e.g.
-  * `dot -Tpng target/rbr-net.dot -o rbr.png`.
+  * every `Arc.Flow` is a directed edge labelled with its inscription. [[toDot]] draws the whole net;
+  * [[toDotPerTransition]] draws one small diagram per transition (the whole net is too dense to
+  * read). Render with e.g. `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
   */
 object RBRHlNetDot {
 
-    /** The net as a DOT `digraph`. */
-    def toDot[P, T, C](net: HlNet[P, T, C]): String = {
-        val places = net.placesMap.toList.map { (id, place) =>
-            val count = place.marking.multiplicityMap.values.foldLeft(SafeLong(0))(_ + _)
-            val fill = if count > SafeLong(0) then """style=filled fillcolor="#cce5ff" """ else ""
-            s"""  "P_$id" [shape=ellipse $fill label="${esc(id.toString)}$nl($count)"];"""
+    /** The whole net as one DOT `digraph` — every place, transition, and arc. Dense for a net this
+      * size; see [[toDotPerTransition]] for a readable split.
+      */
+    def toDot[P, T, C](net: HlNet[P, T, C]): String =
+        wrap(
+          "RBR",
+          net.placesMap.toList.map((id, p) => renderPlace(id, p)) ++
+              net.transitionsMap.toList.map((id, t) => renderTransition(id, t)) ++
+              net.arcsMap.toList.map((flow, arc) => renderEdge(flow, arc))
+        )
+
+    /** One DOT `digraph` per transition — just that transition, the places it connects to, and its
+      * arcs. Splits the dense whole-net view into a diagram small enough to eyeball per transition.
+      */
+    def toDotPerTransition[P, T, C](net: HlNet[P, T, C]): List[(T, String)] =
+        net.transitionsMap.toList.map { (tid, t) =>
+            val arcs = net.arcsMap.toList.filter((flow, _) => flow.transition == tid)
+            val placeNodes = arcs
+                .map((flow, _) => flow.place)
+                .distinct
+                .flatMap(pid => net.placesMap.get(pid).map(p => renderPlace(pid, p)))
+            val body = (renderTransition(tid, t) :: placeNodes) ++ arcs.map((flow, a) => renderEdge(flow, a))
+            tid -> wrap(tid.toString, body)
         }
-        val transitions = net.transitionsMap.toList.map { (id, t) =>
-            val guard = renderGuard(t.guard)
-            val label =
-                if guard.isEmpty then esc(id.toString) else s"${esc(id.toString)}$nl[${esc(guard)}]"
-            s"""  "T_$id" [shape=box style=filled fillcolor="#eeeeee" label="$label"];"""
-        }
-        val edges = net.arcsMap.toList.map { (flow, arc) =>
-            val w = esc(renderInscription(arc.inscription))
-            flow match
-                case Arc.Flow.Pt(p, t) => s"""  "P_$p" -> "T_$t" [label="$w"];"""
-                case Arc.Flow.Tp(t, p) => s"""  "T_$t" -> "P_$p" [label="$w"];"""
-        }
+
+    private def wrap(name: String, body: List[String]): String =
         (List(
-          "digraph RBR {",
+          s"""digraph "${esc(name)}" {""",
           "  rankdir=LR;",
           """  node [fontname="monospace" fontsize=10];""",
           """  edge [fontname="monospace" fontsize=9];"""
-        ) ++ places ++ transitions ++ edges ++ List("}")).mkString("\n")
+        ) ++ body ++ List("}")).mkString("\n")
+
+    private def renderPlace[P, C](id: P, place: ColoredPlace[C]): String = {
+        val count = place.marking.multiplicityMap.values.foldLeft(SafeLong(0))(_ + _)
+        val fill = if count > SafeLong(0) then """style=filled fillcolor="#cce5ff" """ else ""
+        s"""  "P_$id" [shape=ellipse $fill label="${esc(id.toString)}$nl($count)"];"""
+    }
+
+    private def renderTransition[T, C](id: T, t: HlTransition[C]): String = {
+        val guard = renderGuard(t.guard)
+        val label =
+            if guard.isEmpty then esc(id.toString) else s"${esc(id.toString)}$nl[${esc(guard)}]"
+        s"""  "T_$id" [shape=box style=filled fillcolor="#eeeeee" label="$label"];"""
+    }
+
+    private def renderEdge[P, T](flow: Arc.Flow[P, T], arc: InscribedArc[?]): String = {
+        val w = esc(renderInscription(arc.inscription))
+        flow match
+            case Arc.Flow.Pt(p, t) => s"""  "P_$p" -> "T_$t" [label="$w"];"""
+            case Arc.Flow.Tp(t, p) => s"""  "T_$t" -> "P_$p" [label="$w"];"""
     }
 
     /** A line break inside a DOT label (literal backslash-n in the emitted text). */

@@ -3,19 +3,31 @@ package hydrozoa.integration.rbr.model.petri.hlpn
 import java.nio.file.{Files, Path}
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Renders the RBR net to `target/rbr-net.dot` (then `dot -Tpng target/rbr-net.dot -o rbr.png`) and
-  * sanity-checks that the DOT names every place and transition.
+/** Renders the RBR net as DOT — the whole net to `target/rbr-net.dot` and one diagram per
+  * transition under `target/rbr-net/` (see `just graphviz`) — and sanity-checks the output.
   */
 class RBRHlNetDotTest extends AnyFunSuite:
 
-    test("RBRHlNetDot renders the RBR net to target/rbr-net.dot") {
+    test("RBRHlNetDot renders the RBR net, whole and per transition") {
         val net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
-        val dot = RBRHlNetDot.toDot(net)
-        val out = Path.of("target", "rbr-net.dot")
-        Files.createDirectories(out.toAbsolutePath.getParent)
-        val _ = Files.writeString(out, dot)
-        val _ = assert(dot.startsWith("digraph"))
-        val _ = assert(net.placesMap.keySet.forall(id => dot.contains(id.toString)))
-        val _ = assert(net.transitionsMap.keySet.forall(id => dot.contains(id.toString)))
-        assert(dot.contains("batch")) // the Evacuation collection arc rendered
+
+        // whole net (dense) — one file
+        val whole = Path.of("target", "rbr-net.dot")
+        Files.createDirectories(whole.toAbsolutePath.getParent)
+        val _ = Files.writeString(whole, RBRHlNetDot.toDot(net))
+
+        // one diagram per transition — the readable split
+        val dir = Path.of("target", "rbr-net")
+        Files.createDirectories(dir.toAbsolutePath)
+        val perTransition = RBRHlNetDot.toDotPerTransition(net)
+        perTransition.foreach { (tid, dot) =>
+            val _ = Files.writeString(dir.resolve(s"$tid.dot"), dot)
+        }
+
+        // one valid digraph per transition, each naming its own transition
+        val _ = assert(perTransition.map(_._1).toSet == net.transitionsMap.keySet)
+        val _ = assert(perTransition.forall((tid, dot) => dot.startsWith("digraph") && dot.contains(tid.toString)))
+        // the enrichments still render on their transitions: Evacuation's batch, Deinit's inhibitor
+        val _ = assert(perTransition.exists((tid, dot) => tid.toString == "Evacuation" && dot.contains("batch")))
+        assert(perTransition.exists((tid, dot) => tid.toString == "Deinit" && dot.contains("○")))
     }

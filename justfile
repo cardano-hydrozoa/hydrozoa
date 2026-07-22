@@ -158,9 +158,17 @@ graphviz:
   set -euo pipefail
   trap 'just notify "graphviz"' EXIT
   sbt "integration/testOnly hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNetDotTest"
-  dot -Tsvg target/rbr-net.dot -o target/rbr-net.svg
-  echo "wrote target/rbr-net.svg"
-  "${BROWSER:-xdg-open}" target/rbr-net.svg
+  # one SVG per transition, gathered into a single scrollable index page
+  for f in target/rbr-net/*.dot; do dot -Tsvg "$f" -o "${f%.dot}.svg"; done
+  {
+    echo "<html><body style='font-family:monospace'><h1>RBR net — per transition</h1>"
+    for f in target/rbr-net/*.svg; do
+      echo "<h3>$(basename "${f%.svg}")</h3><img src='$(basename "$f")'>"
+    done
+    echo "</body></html>"
+  } > target/rbr-net/index.html
+  echo "wrote target/rbr-net/index.html"
+  "${BROWSER:-xdg-open}" target/rbr-net/index.html
 
 integration-fast:
   #!/usr/bin/env bash
