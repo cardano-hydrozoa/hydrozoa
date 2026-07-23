@@ -1,6 +1,5 @@
 package hydrozoa.lib.petri.net.components
 
-import hydrozoa.lib.number.PositiveInt
 import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTokens
 import spire.math.Natural
 
@@ -14,8 +13,8 @@ import spire.math.Natural
   *   - [[Place.Presentation]]: how to render this place for a specific visualizer
   *
   * Note that the _type_ of [[Place.Syntax#PlaceMarking]] _also_ gives semantics the place -- using
-  * a `NonNegativeInt` means that the place cannot be constructed with negative tokens _ever_. This
-  * is _not_ the same as having a place with `PlaceMarking = Int` and then setting the
+  * a `Natural` means that the place cannot be constructed with negative tokens _ever_. This is
+  * _not_ the same as having a place with `PlaceMarking = Int` and then setting the
   * [[Place.Semantics]] to check for a non-negative number -- one is a compile-time check, one is a
   * run-time check. Prefer compile time when possible.
   */
@@ -86,15 +85,15 @@ object Place {
         trait Bounded[Self <: Place.Syntax.WithTokens[Self] & Semantics[Self]]
             extends Semantics[Self] {
             self: Self =>
-            val bound: PositiveInt
+            val bound: Natural
 
             override def markingError: Option[Place.Semantics.MarkingError] =
-                Option.when(marking > Natural(bound.toInt.toLong))(TooManyTokens(marking, bound))
+                Option.when(marking > bound)(TooManyTokens(marking, bound))
         }
 
         object Bounded {
             object Error {
-                case class TooManyTokens(tokens: Natural, bound: PositiveInt) extends MarkingError {
+                case class TooManyTokens(tokens: Natural, bound: Natural) extends MarkingError {
                     override def getMessage: String =
                         "Failed constructing place: too many tokens. " +
                             s"Max: $bound. Received: $tokens"
@@ -106,7 +105,7 @@ object Place {
     trait Presentation {
         val label: String
         val position: (Int, Int)
-        val radius: PositiveInt
+        val radius: Natural
     }
 
 }

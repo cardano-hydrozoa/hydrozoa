@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.hlpn
 import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
@@ -28,7 +28,7 @@ class HlNetTest extends AnyFunSuite:
         def mark(m: MultiSet[String]): Tokens = copy(marking = m)
 
     private val p = Var("p", peer)
-    private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
+    private val wp = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(p))
 
     private def net(pending: MultiSet[String]): HlNet[String, String, String] =
         HlNet(

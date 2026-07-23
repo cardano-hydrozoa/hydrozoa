@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.hlpn
 
 import cats.data.NonEmptySet
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import org.scalatest.funsuite.AnyFunSuite
 import spire.algebra.Order
 import spire.math.SafeLong
@@ -63,7 +63,7 @@ class BindingTest extends AnyFunSuite:
 
     test("evalInscription: weighted color is a scaled singleton bag") {
         val b = Binding.bind(Binding.empty, x, "p1")
-        val term = Inscription.Weighted(PositiveInt.unsafeApply(2), ColorTerm.Ref(x))
+        val term = Inscription.Weighted(Positive.unsafe(2), ColorTerm.Ref(x))
         val bag = Binding.evalInscription(term, b).toOption.get
         val _ = assert(bag.get("p1") == SafeLong(2))
         assert(bag.multiplicityMap.size == 1)
@@ -72,8 +72,8 @@ class BindingTest extends AnyFunSuite:
     test("evalInscription: union sums multiplicities") {
         val b = Binding.bind(Binding.empty, x, "p0")
         val term = Inscription.Union(
-          Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(x)),
-          Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Const("p0", peer))
+          Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(x)),
+          Inscription.Weighted(Positive.unsafe(1), ColorTerm.Const("p0", peer))
         )
         val bag = Binding.evalInscription(term, b).toOption.get
         val _ = assert(bag.get("p0") == SafeLong(2))

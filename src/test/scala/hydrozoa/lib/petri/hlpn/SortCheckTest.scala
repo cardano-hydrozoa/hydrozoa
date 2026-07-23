@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.hlpn
 import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
@@ -32,7 +32,7 @@ class SortCheckTest extends AnyFunSuite:
 
     private val p = Var("p", peer)
     private val v = Var("v", vote)
-    private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
+    private val wp = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(p))
 
     /** A one-place, one-transition, one-input-arc net for exercising a single term. */
     private def netWith(
@@ -53,7 +53,7 @@ class SortCheckTest extends AnyFunSuite:
 
     test("succ over an unordered class is rejected") {
         val inscription =
-            Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Succ(ColorTerm.Ref(p)))
+            Inscription.Weighted(Positive.unsafe(1), ColorTerm.Succ(ColorTerm.Ref(p)))
         assert(
           SortCheck.errors(netWith(List(p), Guard.True, inscription)).exists {
               case _: SortError.SuccOnUnordered => true
@@ -93,7 +93,7 @@ class SortCheckTest extends AnyFunSuite:
     }
 
     test("an arc inscription whose sort is not the place domain is rejected") {
-        val wv = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(v))
+        val wv = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(v))
         val net = netWith(List(p, v), Guard.True, wv)
         assert(SortCheck.errors(net).exists {
             case _: SortError.ArcDomainMismatch => true
@@ -113,7 +113,7 @@ class SortCheckTest extends AnyFunSuite:
     // (B) A Union whose left branch matches the place domain but whose right branch does not — the
     // old check only inspected the root sort (= the left branch), missing this.
     test("a union inscription whose non-left branch mismatches the place domain is rejected") {
-        val wv = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(v))
+        val wv = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(v))
         val net = netWith(List(p, v), Guard.True, Inscription.Union(wp, wv))
         assert(SortCheck.errors(net).exists {
             case _: SortError.ArcDomainMismatch => true

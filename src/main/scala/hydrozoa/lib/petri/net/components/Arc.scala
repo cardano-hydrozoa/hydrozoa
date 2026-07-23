@@ -1,6 +1,6 @@
 package hydrozoa.lib.petri.net.components
 
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import scala.collection.immutable.Queue
 
 /** Arcs per ISO 15909-1 (Concepts 1/8): the flow relation `F ⊆ (P×T) ∪ (T×P)` is a set of
@@ -64,11 +64,11 @@ object Arc {
         /** Refinement alias pinning the annotation type — used as the arc bound of simulators. */
         type Annotated[W] = Syntax { type Annotation = W }
 
-        /** The P/T annotation (Concept 8, `W : F → ℕ`): the arc weight. */
+        /** The P/T annotation (Concept 8, `W : F → ℕ⁺`): the arc weight. */
         trait Weighted extends Syntax {
-            final type Annotation = PositiveInt
-            val weight: PositiveInt
-            final def annotation: PositiveInt = weight
+            final type Annotation = Positive
+            val weight: Positive
+            final def annotation: Positive = weight
         }
     }
 

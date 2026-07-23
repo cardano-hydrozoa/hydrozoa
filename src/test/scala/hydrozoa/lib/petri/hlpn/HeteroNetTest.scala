@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.hlpn
 import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
 import spire.algebra.Order
@@ -39,9 +39,9 @@ class HeteroNetTest extends AnyFunSuite:
     private val p = Var("p", peer)
     private val v = Var("v", vote)
     // ⟨p⟩ over Peer, and ⟨(p, v)⟩ over Peer × Vote — different color types.
-    private val consumePeer = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
+    private val consumePeer = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(p))
     private val produceBallot = Inscription.Weighted(
-      PositiveInt.unsafeApply(1),
+      Positive.unsafe(1),
       ColorTerm.Tuple(ColorTerm.Ref(p), ColorTerm.Ref(v))
     )
 

@@ -1,6 +1,6 @@
 package hydrozoa.lib.petri.hlpn
 
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 
 // TODO (symmetry): this term language is the *symmetric-net* color-function fragment (projection /
 // `Succ` / tuple; `=`/`<`/subclass guards) — not general HLPN §8 operators — but the SN symmetry
@@ -61,19 +61,19 @@ object ColorTerm:
 
 /** An arc inscription (ISO Concept 17, "class color function"): evaluates under a [[Binding]] to a
   * multiset over C. This is `W(p,t)` / `W(t,p)`. Built as a positive linear combination of weighted
-  * colors; kept positive so an inscription never selects a negative number of tokens. A [[Collect]]
-  * arc additionally consumes/produces a variable-size *batch* of present tokens (ISO §8). (The
-  * `all` broadcast of Concept 16 — synchronizing over a whole *class* — remains omitted; `Collect`
-  * ranges over the tokens actually in a place, not the class carrier, so it forces no class
-  * enumeration.)
+  * colors (`Positive` coefficients — a weighted color moves ≥ 1 token, per ISO 15909-1's positive
+  * arc weights). A [[Collect]] arc additionally consumes/produces a variable-size *batch* of
+  * present tokens (ISO §8). (The `all` broadcast of Concept 16 — synchronizing over a whole *class*
+  * — remains omitted; `Collect` ranges over the tokens actually in a place, not the class carrier,
+  * so it forces no class enumeration.)
   */
 sealed trait Inscription[C]:
     def sort: Sort[C]
 
 object Inscription:
 
-    /** `n·⟨color⟩` — `n` copies of one color. `⟨x⟩` is `Weighted(1, x)`. */
-    final case class Weighted[C](coeff: PositiveInt, color: ColorTerm[C]) extends Inscription[C]:
+    /** `n·⟨color⟩` — `n` copies of one color. `⟨x⟩` is `Weighted(Positive.unsafe(1), x)`. */
+    final case class Weighted[C](coeff: Positive, color: ColorTerm[C]) extends Inscription[C]:
         def sort: Sort[C] = color.sort
 
     /** `⊕` — multiset union, i.e. the sum of a linear combination. */

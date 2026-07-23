@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.hlpn
 import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
@@ -34,7 +34,7 @@ class HlSimulatorTest extends AnyFunSuite:
 
     private val p = Var("p", peer)
     private val v = Var("v", vote)
-    private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
+    private val wp = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(p))
 
     private def net(pending: MultiSet[String]): HlNet[String, String, String] =
         HlNet(
@@ -185,7 +185,7 @@ class HlSimulatorTest extends AnyFunSuite:
         def pairs(es: ((String, String), Int)*): MultiSet[(String, String)] =
             Multiset(es.map((k, n) => k -> SafeLong(n)).to(SortedMap))
         val batch = CollectVar("batch", votePeer, bound = 64)
-        val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(v))
+        val wp = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(v))
         val pattern = ColorTerm.Tuple(ColorTerm.Ref(v), ColorTerm.Wildcard(peer))
         val b = NetBuilder[String, String]()
         val program =
@@ -253,7 +253,7 @@ class HlSimulatorTest extends AnyFunSuite:
     }
 
     test("a read arc requires a token but consumes none") {
-        val readP1 = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Const("p1", peer))
+        val readP1 = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Const("p1", peer))
         val b = NetBuilder[String, String]()
         val program =
             for
@@ -273,7 +273,7 @@ class HlSimulatorTest extends AnyFunSuite:
     }
 
     test("a read arc disables its transition when the token is absent") {
-        val readP1 = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Const("p1", peer))
+        val readP1 = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Const("p1", peer))
         def sim(gate: MultiSet[String]) =
             val b = NetBuilder[String, String]()
             val program =

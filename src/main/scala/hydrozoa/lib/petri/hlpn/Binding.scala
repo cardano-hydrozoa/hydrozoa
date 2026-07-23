@@ -61,7 +61,7 @@ object Binding:
             Multiset(entries.to(SortedMap))
         term match
             case Inscription.Weighted(coeff, color) =>
-                evalColor(color, b).map(c => bag(List(c -> SafeLong(coeff.toInt))))
+                evalColor(color, b).map(c => bag(List(c -> SafeLong(coeff.toLong))))
             case Inscription.Union(l, r) =>
                 for lb <- evalInscription(l, b); rb <- evalInscription(r, b)
                 yield lb.combineWith(rb)((x, y) => x + y)

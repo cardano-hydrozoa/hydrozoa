@@ -3,7 +3,7 @@ package hydrozoa.lib.petri.hlpn
 import cats.data.NonEmptySet
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.net.components.Arc.Flow
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.immutable.SortedMap
@@ -25,7 +25,7 @@ class NetBuilderTest extends AnyFunSuite:
         def mark(m: MultiSet[String]): Tokens = copy(marking = m)
 
     private val p = Var("p", peer)
-    private val wp = Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Ref(p))
+    private val wp = Inscription.Weighted(Positive.unsafe(1), ColorTerm.Ref(p))
 
     private val b = NetBuilder[String, String]()
 
@@ -70,7 +70,7 @@ class NetBuilderTest extends AnyFunSuite:
         // Typed input/output can't produce this — Succ over the unordered Peer is well-typed but
         // not well-sorted, so it must surface at build via SortCheck.
         val succWp =
-            Inscription.Weighted(PositiveInt.unsafeApply(1), ColorTerm.Succ(ColorTerm.Ref(p)))
+            Inscription.Weighted(Positive.unsafe(1), ColorTerm.Succ(ColorTerm.Ref(p)))
         val program =
             for
                 in <- b.place("pending", Tokens(ms(), peer))
