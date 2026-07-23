@@ -1,14 +1,16 @@
 package hydrozoa.multisig.server
 
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.UserRequestWithId
-import hydrozoa.multisig.ledger.block.BlockBrief
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.persistence.DepositDecision
 import io.bullet.borer.Cbor
+import io.circe.derivation.{Configuration as CirceConfig, ConfiguredCodec}
 import io.circe.generic.semiauto.deriveCodec
 import io.circe.{Codec, Decoder, Encoder}
 import java.time.Instant
@@ -16,6 +18,7 @@ import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{DatumOption, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
 import sttp.tapir.Schema
+import sttp.tapir.generic.Configuration as TapirConfig
 
 /** Flat data-transfer objects for the HTTP API responses.
   *
@@ -26,6 +29,41 @@ import sttp.tapir.Schema
   * conventions (bech32 addresses, hex hashes, decimal-string coins/quantities).
   */
 object ApiDto {
+
+    /** Screaming-snake-case a PascalCase constructor name — `SoftConfirmed` -> `SOFT_CONFIRMED` —
+      * so the `type` discriminator reads as the API's status vocabulary.
+      */
+    private def screamingSnake(name: String): String =
+        name.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toUpperCase
+
+    /** Sum-type DTOs are **internally tagged**: a `type` field selects the constructor (no
+      * flattening / duck typing). [[circeTag]] gives the codec that writes/reads `type`;
+      * [[tapirTag]] gives the schema that renders a `oneOf` with an OpenAPI `discriminator`, so the
+      * closed constructor set is expressed in the spec. Both take the SAME constructor-name
+      * transform, so the codec and the schema agree on every discriminator value.
+      *
+      * A discriminator value derives from a variant's constructor name, but the OpenAPI schema name
+      * derives from it too — so sums that share a status vocabulary (`SOFT_CONFIRMED`, ...) give
+      * their variants a sum-specific prefix (`RequestSoftConfirmed`) for a unique schema name, and
+      * the transform strips the prefix so the `type` value stays the shared word. See
+      * [[statusTag]].
+      */
+    private def circeTag(discriminatorValue: String => String): CirceConfig =
+        CirceConfig.default
+            .withDiscriminator("type")
+            .withTransformConstructorNames(discriminatorValue)
+    private def tapirTag(discriminatorValue: String => String): TapirConfig =
+        TapirConfig.default
+            .withDiscriminator("type")
+            .copy(toDiscriminatorValue =
+                sname => discriminatorValue(sname.fullName.split('.').last)
+            )
+
+    /** The name transform for a status ladder: strip the sum-specific `prefix`, then
+      * screaming-snake (`BlockSoftConfirmed` with prefix `Block` -> `SOFT_CONFIRMED`).
+      */
+    private def statusTag(prefix: String): String => String =
+        name => screamingSnake(name.stripPrefix(prefix))
 
     /** `{ "status": "ok" }` — the liveness body. */
     final case class HealthResponse(status: String)
@@ -101,27 +139,89 @@ object ApiDto {
     final case class BlockSummaryView(number: Int, leader: Option[Int], blockType: String)
     given Codec[BlockSummaryView] = deriveCodec
 
-    /** A block's confirmation from this node's viewpoint: `PROPOSED`, `SOFT`, or `HARD`, with the
-      * confirmation moments (ISO-8601) where reached. Each time records a **local event at this
-      * peer** — when it produced the confirmation — so different peers report different times for
-      * the same block. This is by design.
+    /** A block's confirmation from this node's viewpoint, `type`-tagged: `PROPOSED` (woven, not yet
+      * soft-confirmed) -> `SOFT_CONFIRMED` (+ soft time) -> `HARD_CONFIRMED` (+ hard time; soft
+      * time optional, since a block may be hard-confirmed with no local soft-confirmation record).
+      * Each time records a **local event at this peer**, so different peers report different times
+      * for the same block. This is by design.
       */
-    final case class BlockConfirmationView(
-        status: String,
-        softConfirmedAt: Option[String],
-        hardConfirmedAt: Option[String]
-    )
-    given Codec[BlockConfirmationView] = deriveCodec
+    sealed trait BlockConfirmationView
+    object BlockConfirmationView:
+        private given CirceConfig = circeTag(statusTag("Block"))
+        private given TapirConfig = tapirTag(statusTag("Block"))
+
+        case object BlockProposed extends BlockConfirmationView
+        final case class BlockSoftConfirmed(softConfirmedAt: String) extends BlockConfirmationView
+        final case class BlockHardConfirmed(
+            softConfirmedAt: Option[String],
+            hardConfirmedAt: String
+        ) extends BlockConfirmationView
+        given Codec[BlockConfirmationView] = ConfiguredCodec.derived
+        given Schema[BlockConfirmationView] = Schema.derived
+
+    /** A block header from this node's viewpoint, `type`-tagged by block type. All headers carry
+      * the block number, version (`major`.`minor`) and creation window (`startTime`/`endTime`,
+      * ISO-8601); `initial`, `minor` and `major` additionally carry the fallback and wakeup timing.
+      * `final` carries only the common fields.
+      */
+    sealed trait BlockHeaderView
+    object BlockHeaderView:
+        // Tag with the lowercase block type (`minor` / `major` / `final` / `initial`), matching
+        // `BlockDetailsView.blockType`; shadows the screaming-snake status tagging.
+        private given CirceConfig = circeTag(_.toLowerCase)
+        private given TapirConfig = tapirTag(_.toLowerCase)
+
+        final case class Initial(
+            number: Int,
+            versionMajor: Int,
+            versionMinor: Int,
+            startTime: String,
+            endTime: String,
+            fallbackTxStartTime: String,
+            forcedMajorBlockWakeupTime: String,
+            depositDecisionWakeupTime: Option[String]
+        ) extends BlockHeaderView
+        final case class Minor(
+            number: Int,
+            versionMajor: Int,
+            versionMinor: Int,
+            startTime: String,
+            endTime: String,
+            fallbackTxStartTime: String,
+            forcedMajorBlockWakeupTime: String,
+            depositDecisionWakeupTime: Option[String]
+        ) extends BlockHeaderView
+        final case class Major(
+            number: Int,
+            versionMajor: Int,
+            versionMinor: Int,
+            startTime: String,
+            endTime: String,
+            fallbackTxStartTime: String,
+            forcedMajorBlockWakeupTime: String,
+            depositDecisionWakeupTime: Option[String]
+        ) extends BlockHeaderView
+        final case class Final(
+            number: Int,
+            versionMajor: Int,
+            versionMinor: Int,
+            startTime: String,
+            endTime: String
+        ) extends BlockHeaderView
+        given Codec[BlockHeaderView] = ConfiguredCodec.derived
+        given Schema[BlockHeaderView] = Schema.derived
 
     /** The block-details body: the listing row, the hard-confirming stack's number (absent until
-      * the block is hard-confirmed), and the confirmation status.
+      * the block is hard-confirmed), the confirmation status, and the full block header (absent for
+      * the initial block, which has no persisted brief).
       */
     final case class BlockDetailsView(
         number: Int,
         leader: Option[Int],
         blockType: String,
         stackId: Option[Int],
-        confirmation: BlockConfirmationView
+        confirmation: BlockConfirmationView,
+        header: Option[BlockHeaderView]
     )
     given Codec[BlockDetailsView] = deriveCodec
 
@@ -171,25 +271,67 @@ object ApiDto {
     def mkInitialBlockSummaryView: BlockSummaryView =
         BlockSummaryView(number = 0, leader = None, blockType = "initial")
 
-    /** Assemble the confirmation view from the optional node-local confirmation moments. */
+    /** Assemble the confirmation rung from the node-local confirmation moments (present iff their
+      * record is held — `wallClockOf` is total).
+      */
     def mkBlockConfirmationView(
         softConfirmedAt: Option[Instant],
         hardConfirmedAt: Option[Instant]
     ): BlockConfirmationView =
-        val status =
-            if hardConfirmedAt.isDefined then "HARD"
-            else if softConfirmedAt.isDefined then "SOFT"
-            else "PROPOSED"
-        BlockConfirmationView(
-          status = status,
-          softConfirmedAt = softConfirmedAt.map(_.toString),
-          hardConfirmedAt = hardConfirmedAt.map(_.toString)
-        )
+        (softConfirmedAt, hardConfirmedAt) match
+            case (soft, Some(hard)) =>
+                BlockConfirmationView.BlockHardConfirmed(soft.map(_.toString), hard.toString)
+            case (Some(soft), None) => BlockConfirmationView.BlockSoftConfirmed(soft.toString)
+            case (None, None)       => BlockConfirmationView.BlockProposed
 
     private def blockTypeName(brief: BlockBrief.Next): String = brief match
         case _: BlockBrief.Minor => "minor"
         case _: BlockBrief.Major => "major"
         case _: BlockBrief.Final => "final"
+
+    /** Map a block header to its `type`-tagged view, rendering the quantized timing as ISO-8601. */
+    def mkBlockHeaderView(header: BlockHeader): BlockHeaderView =
+        val number = header.blockNum.convert
+        val versionMajor = header.blockVersion.major.convert
+        val versionMinor = header.blockVersion.minor.convert
+        val startTime = header.startTime.instant.toString
+        val endTime = header.endTime.instant.toString
+        header match
+            case h: BlockHeader.Initial =>
+                BlockHeaderView.Initial(
+                  number,
+                  versionMajor,
+                  versionMinor,
+                  startTime,
+                  endTime,
+                  h.fallbackTxStartTime.instant.toString,
+                  h.forcedMajorBlockWakeupTime.instant.toString,
+                  h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
+                )
+            case h: BlockHeader.Minor =>
+                BlockHeaderView.Minor(
+                  number,
+                  versionMajor,
+                  versionMinor,
+                  startTime,
+                  endTime,
+                  h.fallbackTxStartTime.instant.toString,
+                  h.forcedMajorBlockWakeupTime.instant.toString,
+                  h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
+                )
+            case h: BlockHeader.Major =>
+                BlockHeaderView.Major(
+                  number,
+                  versionMajor,
+                  versionMinor,
+                  startTime,
+                  endTime,
+                  h.fallbackTxStartTime.instant.toString,
+                  h.forcedMajorBlockWakeupTime.instant.toString,
+                  h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
+                )
+            case _: BlockHeader.Final =>
+                BlockHeaderView.Final(number, versionMajor, versionMinor, startTime, endTime)
 
     /** One row of the request listing: the opaque request id (the packed i64, the same value the
       * submit response returns), the author peer number, and the request type.
@@ -208,234 +350,94 @@ object ApiDto {
     def mkEffectRefView(effect: ResolvedEffect): EffectRefView =
         EffectRefView(effect.l1TxId.toHex, effectKindName(effect.kind))
 
-    /** A request's lifecycle status from this node's viewpoint, as a ladder where each stage adds
-      * the fields of the one below plus its own: `UNPROCESSED` → `LOCALLY_PROCESSED` (block,
-      * verdict) → `SOFT_CONFIRMED` (soft time) → `HARD_CONFIRMED` (hard time, effects). The ladder
-      * is modeled as traits that extend one another; the concrete statuses are the final case
-      * classes below. Each confirmation time records a **local event at this peer** — different
-      * peers report different times for the same request, by design. `relatedEffects` — the L1
-      * effects the request became (a transaction's settlement/SEC/finalization carriers, a
-      * deposit's post-dated refund) — is present once those effects are hard-confirmed.
-      *
-      * The wire form is flat (a `status` string plus the accumulated fields, nulls dropped): the
-      * codec / schema round-trip through the private [[RequestStatusView.Shape]].
+    /** A request's lifecycle status from this node's viewpoint, `type`-tagged, where each rung adds
+      * the fields of the one below plus its own: `UNPROCESSED` -> `PROPOSED` (block, verdict) ->
+      * `SOFT_CONFIRMED` (soft time) -> `HARD_CONFIRMED` (hard time; soft time optional, since a
+      * request may be hard-confirmed with no local soft record; and the effects). Each confirmation
+      * time records a **local event at this peer** — different peers report different times for the
+      * same request, by design. `relatedEffects` — the L1 effects the request became (a
+      * transaction's settlement/SEC/finalization carriers, a deposit's post-dated refund) — is
+      * present once those effects are hard-confirmed.
       */
-    sealed trait RequestStatusView:
-        def status: String
-
-    /** `LOCALLY_PROCESSED` and up: the request landed in a block with a validity verdict. */
-    sealed trait LocallyProcessedStatus extends RequestStatusView:
-        def blockNumber: Int
-        def validity: String
-
-    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the block. The time is optional because a
-      * hard-confirmed request that (exceptionally) has no soft-confirmation record still sits on
-      * the `HardConfirmed` rung, which inherits this field.
-      */
-    sealed trait SoftConfirmedStatus extends LocallyProcessedStatus:
-        def softConfirmedAt: Option[String]
-
-    /** `HARD_CONFIRMED`: this peer hard-confirmed the covering stack; effects are resolvable. */
-    sealed trait HardConfirmedStatus extends SoftConfirmedStatus:
-        def hardConfirmedAt: Option[String]
-        def relatedEffects: List[EffectRefView]
-
+    sealed trait RequestStatusView
     object RequestStatusView:
-        case object Unprocessed extends RequestStatusView:
-            val status = "UNPROCESSED"
+        private given CirceConfig = circeTag(statusTag("Request"))
+        private given TapirConfig = tapirTag(statusTag("Request"))
 
-        final case class LocallyProcessed(blockNumber: Int, validity: String)
-            extends LocallyProcessedStatus:
-            val status = "LOCALLY_PROCESSED"
-
-        final case class SoftConfirmed(
+        case object RequestUnprocessed extends RequestStatusView
+        final case class RequestProposed(blockNumber: Int, validity: String)
+            extends RequestStatusView
+        final case class RequestSoftConfirmed(
             blockNumber: Int,
             validity: String,
-            softConfirmedAt: Option[String]
-        ) extends SoftConfirmedStatus:
-            val status = "SOFT_CONFIRMED"
-
-        final case class HardConfirmed(
+            softConfirmedAt: String
+        ) extends RequestStatusView
+        final case class RequestHardConfirmed(
             blockNumber: Int,
             validity: String,
             softConfirmedAt: Option[String],
-            hardConfirmedAt: Option[String],
+            hardConfirmedAt: String,
             relatedEffects: List[EffectRefView]
-        ) extends HardConfirmedStatus:
-            val status = "HARD_CONFIRMED"
+        ) extends RequestStatusView
+        given Codec[RequestStatusView] = ConfiguredCodec.derived
+        given Schema[RequestStatusView] = Schema.derived
 
-        /** The flat serialization shape — one object, the status string plus every ladder field as
-          * an option; the drop-null printer omits the absent ones.
-          */
-        private final case class Shape(
-            status: String,
-            blockNumber: Option[Int],
-            validity: Option[String],
-            softConfirmedAt: Option[String],
-            hardConfirmedAt: Option[String],
-            relatedEffects: Option[List[EffectRefView]]
-        )
-        private object Shape:
-            given Codec[Shape] = deriveCodec
-            given Schema[Shape] = Schema.derived
-
-        private def toShape(v: RequestStatusView): Shape = v match
-            case Unprocessed => Shape("UNPROCESSED", None, None, None, None, None)
-            case LocallyProcessed(b, v) =>
-                Shape("LOCALLY_PROCESSED", Some(b), Some(v), None, None, None)
-            case SoftConfirmed(b, v, s) =>
-                Shape("SOFT_CONFIRMED", Some(b), Some(v), s, None, None)
-            case HardConfirmed(b, v, s, h, effects) =>
-                Shape(
-                  "HARD_CONFIRMED",
-                  Some(b),
-                  Some(v),
-                  s,
-                  h,
-                  Option.when(effects.nonEmpty)(effects)
-                )
-
-        private def fromShape(s: Shape): RequestStatusView = s.status match
-            case "LOCALLY_PROCESSED" =>
-                LocallyProcessed(s.blockNumber.getOrElse(0), s.validity.getOrElse(""))
-            case "SOFT_CONFIRMED" =>
-                SoftConfirmed(
-                  s.blockNumber.getOrElse(0),
-                  s.validity.getOrElse(""),
-                  s.softConfirmedAt
-                )
-            case "HARD_CONFIRMED" =>
-                HardConfirmed(
-                  s.blockNumber.getOrElse(0),
-                  s.validity.getOrElse(""),
-                  s.softConfirmedAt,
-                  s.hardConfirmedAt,
-                  s.relatedEffects.getOrElse(Nil)
-                )
-            case _ => Unprocessed
-
-        given Codec[RequestStatusView] = Codec.from(
-          summon[Decoder[Shape]].map(fromShape),
-          summon[Encoder[Shape]].contramap(toShape)
-        )
-        given Schema[RequestStatusView] =
-            summon[Schema[Shape]]
-                .map(s => Some(fromShape(s)))(toShape)
-                .name(Schema.SName("RequestStatusView"))
-
-    /** A valid deposit's decision status, a ladder parallel to [[RequestStatusView]] but tracking
-      * the absorb-or-reject decision: `UNDECIDED` → `LOCAL_DECISION` (deciding block + `ABSORBED` /
-      * `REJECTED`) → `SOFT_CONFIRMED` (soft time) → `HARD_CONFIRMED` (hard time, and — only for an
-      * absorbed deposit — the absorbing settlement's `l1TxId`). Times are of the **deciding**
-      * block. Present only for valid deposit requests; absent for transactions and invalid
-      * deposits.
+    /** A valid deposit's absorb-or-reject decision status, `type`-tagged in the same vocabulary as
+      * [[RequestStatusView]]: `UNPROCESSED` (no decision yet) -> `PROPOSED` (deciding block +
+      * `ABSORBED` / `REJECTED`) -> `SOFT_CONFIRMED` (soft time) -> `HARD_CONFIRMED` (hard time, and
+      * — only for an absorbed deposit — the absorbing settlement's `l1TxId`). Times are of the
+      * **deciding** block. Present only for valid deposit requests.
       */
-    sealed trait DepositDecisionStatusView:
-        def status: String
+    sealed trait AbsorptionDecisionStatusView
+    object AbsorptionDecisionStatusView:
+        private given CirceConfig = circeTag(statusTag("Absorption"))
+        private given TapirConfig = tapirTag(statusTag("Absorption"))
 
-    /** `LOCAL_DECISION` and up: a block decided the deposit. */
-    sealed trait LocalDecisionStatus extends DepositDecisionStatusView:
-        def blockNumber: Int
-        def decision: String
-
-    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the deciding block (time optional for the
-      * same reason as [[SoftConfirmedStatus]]).
-      */
-    sealed trait DecisionSoftConfirmedStatus extends LocalDecisionStatus:
-        def softConfirmedAt: Option[String]
-
-    /** `HARD_CONFIRMED`: this peer hard-confirmed the deciding block's stack. */
-    sealed trait DecisionHardConfirmedStatus extends DecisionSoftConfirmedStatus:
-        def hardConfirmedAt: Option[String]
-        def settlementEffect: Option[String]
-
-    object DepositDecisionStatusView:
-        case object Undecided extends DepositDecisionStatusView:
-            val status = "UNDECIDED"
-
-        final case class LocalDecision(blockNumber: Int, decision: String)
-            extends LocalDecisionStatus:
-            val status = "LOCAL_DECISION"
-
-        final case class SoftConfirmed(
+        case object AbsorptionUnprocessed extends AbsorptionDecisionStatusView
+        final case class AbsorptionProposed(blockNumber: Int, decision: String)
+            extends AbsorptionDecisionStatusView
+        final case class AbsorptionSoftConfirmed(
             blockNumber: Int,
             decision: String,
-            softConfirmedAt: Option[String]
-        ) extends DecisionSoftConfirmedStatus:
-            val status = "SOFT_CONFIRMED"
-
-        final case class HardConfirmed(
+            softConfirmedAt: String
+        ) extends AbsorptionDecisionStatusView
+        final case class AbsorptionHardConfirmed(
             blockNumber: Int,
             decision: String,
             softConfirmedAt: Option[String],
-            hardConfirmedAt: Option[String],
+            hardConfirmedAt: String,
             settlementEffect: Option[String]
-        ) extends DecisionHardConfirmedStatus:
-            val status = "HARD_CONFIRMED"
+        ) extends AbsorptionDecisionStatusView
+        given Codec[AbsorptionDecisionStatusView] = ConfiguredCodec.derived
+        given Schema[AbsorptionDecisionStatusView] = Schema.derived
 
-        private final case class Shape(
-            status: String,
-            blockNumber: Option[Int],
-            decision: Option[String],
-            softConfirmedAt: Option[String],
-            hardConfirmedAt: Option[String],
-            settlementEffect: Option[String]
-        )
-        private object Shape:
-            given Codec[Shape] = deriveCodec
-            given Schema[Shape] = Schema.derived
-
-        private def toShape(v: DepositDecisionStatusView): Shape = v match
-            case Undecided => Shape("UNDECIDED", None, None, None, None, None)
-            case LocalDecision(b, d) =>
-                Shape("LOCAL_DECISION", Some(b), Some(d), None, None, None)
-            case SoftConfirmed(b, d, s) =>
-                Shape("SOFT_CONFIRMED", Some(b), Some(d), s, None, None)
-            case HardConfirmed(b, d, s, h, settlement) =>
-                Shape("HARD_CONFIRMED", Some(b), Some(d), s, h, settlement)
-
-        private def fromShape(s: Shape): DepositDecisionStatusView = s.status match
-            case "LOCAL_DECISION" =>
-                LocalDecision(s.blockNumber.getOrElse(0), s.decision.getOrElse(""))
-            case "SOFT_CONFIRMED" =>
-                SoftConfirmed(
-                  s.blockNumber.getOrElse(0),
-                  s.decision.getOrElse(""),
-                  s.softConfirmedAt
-                )
-            case "HARD_CONFIRMED" =>
-                HardConfirmed(
-                  s.blockNumber.getOrElse(0),
-                  s.decision.getOrElse(""),
-                  s.softConfirmedAt,
-                  s.hardConfirmedAt,
-                  s.settlementEffect
-                )
-            case _ => Undecided
-
-        given Codec[DepositDecisionStatusView] = Codec.from(
-          summon[Decoder[Shape]].map(fromShape),
-          summon[Encoder[Shape]].contramap(toShape)
-        )
-        given Schema[DepositDecisionStatusView] =
-            summon[Schema[Shape]]
-                .map(s => Some(fromShape(s)))(toShape)
-                .name(Schema.SName("DepositDecisionStatusView"))
-
-    /** The request-details body: opaque id (echoed from the path), author peer, type, receive time
-      * (when this peer received the request — a local event, so different peers report different
-      * times for the same request, by design), the lifecycle status, and — for valid deposit
-      * requests only — the absorb/reject decision status.
+    /** The request-details body, `type`-tagged by request kind: `transaction` and `deposit` share
+      * the opaque id (echoed from the path), author peer, receive time (when this peer received the
+      * request — a local event, so different peers report different times, by design) and lifecycle
+      * status; only `deposit` carries the absorb/reject decision status.
       */
-    final case class RequestDetailsView(
-        requestId: Long,
-        peerNumber: Int,
-        requestType: String,
-        receivedAt: String,
-        status: RequestStatusView,
-        decisionStatus: Option[DepositDecisionStatusView]
-    )
-    given Codec[RequestDetailsView] = deriveCodec
+    sealed trait RequestDetailsView
+    object RequestDetailsView:
+        // Request-kind sums tag with the lowercase kind (`transaction` / `deposit`), shadowing the
+        // screaming-snake status tagging in the enclosing scope.
+        private given CirceConfig = circeTag(_.toLowerCase)
+        private given TapirConfig = tapirTag(_.toLowerCase)
+
+        final case class Transaction(
+            requestId: Long,
+            peerNumber: Int,
+            receivedAt: String,
+            status: RequestStatusView
+        ) extends RequestDetailsView
+        final case class Deposit(
+            requestId: Long,
+            peerNumber: Int,
+            receivedAt: String,
+            status: RequestStatusView,
+            absorptionDecisionStatus: AbsorptionDecisionStatusView
+        ) extends RequestDetailsView
+        given Codec[RequestDetailsView] = ConfiguredCodec.derived
+        given Schema[RequestDetailsView] = Schema.derived
 
     /** The request type discriminator, matching the submit-body field names. */
     def requestTypeName(request: UserRequestWithId): String = request match
@@ -466,77 +468,95 @@ object ApiDto {
         relatedEffects: List[EffectRefView]
     ): RequestStatusView =
         block match
-            case None => RequestStatusView.Unprocessed
+            case None => RequestStatusView.RequestUnprocessed
             case Some((blockNumber, v)) =>
                 val validity = validityName(v)
-                if hardConfirmedAt.isDefined then
-                    RequestStatusView.HardConfirmed(
-                      blockNumber,
-                      validity,
-                      softConfirmedAt.map(_.toString),
-                      hardConfirmedAt.map(_.toString),
-                      relatedEffects
-                    )
-                else if softConfirmedAt.isDefined then
-                    RequestStatusView.SoftConfirmed(
-                      blockNumber,
-                      validity,
-                      softConfirmedAt.map(_.toString)
-                    )
-                else RequestStatusView.LocallyProcessed(blockNumber, validity)
+                hardConfirmedAt match
+                    case Some(hard) =>
+                        RequestStatusView.RequestHardConfirmed(
+                          blockNumber,
+                          validity,
+                          softConfirmedAt.map(_.toString),
+                          hard.toString,
+                          relatedEffects
+                        )
+                    case None =>
+                        softConfirmedAt match
+                            case Some(soft) =>
+                                RequestStatusView.RequestSoftConfirmed(
+                                  blockNumber,
+                                  validity,
+                                  soft.toString
+                                )
+                            case None =>
+                                RequestStatusView.RequestProposed(blockNumber, validity)
 
     /** The `ABSORBED` / `REJECTED` label of a deposit decision. */
     def decisionName(decision: DepositDecision): String = decision match
         case _: DepositDecision.Absorbed => "ABSORBED"
         case _: DepositDecision.Rejected => "REJECTED"
 
-    /** Assemble the deposit decision-status ladder: undecided (no decision row yet), else the
+    /** Assemble the deposit absorption-decision ladder: unprocessed (no decision row yet), else the
       * deciding block + `ABSORBED`/`REJECTED`, promoted by the deciding block's node-local
       * confirmation moments. The absorbing settlement's `l1TxId` (`ABSORBED`, hard-confirmed only)
       * rides on the hard-confirmed rung.
       */
-    def mkDecisionStatus(
+    def mkAbsorptionDecisionStatus(
         decided: Option[(Int, String)],
         softConfirmedAt: Option[Instant],
         hardConfirmedAt: Option[Instant],
         settlementEffect: Option[String]
-    ): DepositDecisionStatusView =
+    ): AbsorptionDecisionStatusView =
         decided match
-            case None => DepositDecisionStatusView.Undecided
+            case None => AbsorptionDecisionStatusView.AbsorptionUnprocessed
             case Some((blockNumber, decision)) =>
-                if hardConfirmedAt.isDefined then
-                    DepositDecisionStatusView.HardConfirmed(
-                      blockNumber,
-                      decision,
-                      softConfirmedAt.map(_.toString),
-                      hardConfirmedAt.map(_.toString),
-                      settlementEffect
-                    )
-                else if softConfirmedAt.isDefined then
-                    DepositDecisionStatusView.SoftConfirmed(
-                      blockNumber,
-                      decision,
-                      softConfirmedAt.map(_.toString)
-                    )
-                else DepositDecisionStatusView.LocalDecision(blockNumber, decision)
+                hardConfirmedAt match
+                    case Some(hard) =>
+                        AbsorptionDecisionStatusView.AbsorptionHardConfirmed(
+                          blockNumber,
+                          decision,
+                          softConfirmedAt.map(_.toString),
+                          hard.toString,
+                          settlementEffect
+                        )
+                    case None =>
+                        softConfirmedAt match
+                            case Some(soft) =>
+                                AbsorptionDecisionStatusView.AbsorptionSoftConfirmed(
+                                  blockNumber,
+                                  decision,
+                                  soft.toString
+                                )
+                            case None =>
+                                AbsorptionDecisionStatusView.AbsorptionProposed(
+                                  blockNumber,
+                                  decision
+                                )
 
-    /** Map a request, its derived receive time, its lifecycle status, and — for valid deposits —
-      * its decision status to the details body.
+    /** Map a request, its derived receive time, its lifecycle status, and — for deposits — its
+      * absorption-decision status to the `type`-tagged details body.
       */
     def mkRequestDetailsView(
         request: UserRequestWithId,
         receivedAt: Instant,
         status: RequestStatusView,
-        decisionStatus: Option[DepositDecisionStatusView]
+        absorptionDecisionStatus: Option[AbsorptionDecisionStatusView]
     ): RequestDetailsView =
-        RequestDetailsView(
-          requestId = request.requestId.asI64,
-          peerNumber = request.requestId.peerNum.convert,
-          requestType = requestTypeName(request),
-          receivedAt = receivedAt.toString,
-          status = status,
-          decisionStatus = decisionStatus
-        )
+        val requestId = request.requestId.asI64
+        val peerNumber = request.requestId.peerNum.convert
+        request match
+            case _: UserRequestWithId.DepositRequest =>
+                RequestDetailsView.Deposit(
+                  requestId,
+                  peerNumber,
+                  receivedAt.toString,
+                  status,
+                  absorptionDecisionStatus.getOrElse(
+                    AbsorptionDecisionStatusView.AbsorptionUnprocessed
+                  )
+                )
+            case _: UserRequestWithId.TransactionRequest =>
+                RequestDetailsView.Transaction(requestId, peerNumber, receivedAt.toString, status)
 
     /** A block's L1 effects as `l1TxId`s, grouped by kind — the fields present depend on the block
       * type (INITIAL: initialization + fallback; MINOR: sec? + refunds; MAJOR: settlement +

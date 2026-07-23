@@ -299,7 +299,7 @@ class HydrozoaRoutes(
             .errorOut(errorOut)
             .description(
               "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
-                  "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
+                  "PROPOSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
                   "time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects — " +
                   "the l1TxIds the request became). Every time records a " +
                   "local event at this peer — when it received the request, and when it produced " +
@@ -558,7 +558,8 @@ class HydrozoaRoutes(
                     summary.leader,
                     summary.blockType,
                     stack.map(_.convert),
-                    confirmation
+                    confirmation,
+                    header = None
                   )
                 )
             }
@@ -577,7 +578,8 @@ class HydrozoaRoutes(
                             summary.leader,
                             summary.blockType,
                             stack.map(_.convert),
-                            confirmation
+                            confirmation,
+                            header = Some(ApiDto.mkBlockHeaderView(brief.header))
                           )
                         )
                     }
@@ -735,21 +737,27 @@ class HydrozoaRoutes(
                       hardConfirmedAt = hardAt,
                       relatedEffects = effects.map(ApiDto.mkEffectRefView)
                     )
-                    decisionStatus <- depositDecisionStatus(id, stamped.payload, processed)
+                    absorptionDecisionStatus <-
+                        depositAbsorptionDecisionStatus(id, stamped.payload, processed)
                 } yield Right(
-                  ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status, decisionStatus)
+                  ApiDto.mkRequestDetailsView(
+                    stamped.payload,
+                    receivedAt,
+                    status,
+                    absorptionDecisionStatus
+                  )
                 )
         }
 
-    /** A valid deposit request's decision status (undecided / local-decision / confirmed), or
-      * `None` for a transaction or a deposit already ruled invalid. The confirmation moments are of
-      * the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
+    /** A valid deposit request's absorption-decision status (unprocessed / proposed / confirmed),
+      * or `None` for a transaction or a deposit already ruled invalid. The confirmation moments are
+      * of the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
       */
-    private def depositDecisionStatus(
+    private def depositAbsorptionDecisionStatus(
         id: RequestId,
         request: UserRequestWithId,
         processed: Option[RequestBlockEntry]
-    ): IO[Option[DepositDecisionStatusView]] =
+    ): IO[Option[AbsorptionDecisionStatusView]] =
         val isDeposit = ApiDto.requestTypeName(request) == "deposit"
         val isInvalid = processed.exists(_.validity == RequestId.ValidityFlag.Invalid)
         if !isDeposit || isInvalid then IO.pure(None)
@@ -763,7 +771,7 @@ class HydrozoaRoutes(
                 (softAt, hardAt) = times
                 settlement <- effectsResolver.depositSettlement(id)
             } yield Some(
-              ApiDto.mkDecisionStatus(
+              ApiDto.mkAbsorptionDecisionStatus(
                 decided = decision.map(d => (d.block.convert, ApiDto.decisionName(d))),
                 softConfirmedAt = softAt,
                 hardConfirmedAt = hardAt,

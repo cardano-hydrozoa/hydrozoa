@@ -215,7 +215,9 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             .unsafeRunSync()
     }
 
-    test("GET /head/blocks/1 walks the confirmation ladder: PROPOSED, SOFT, HARD") {
+    test(
+      "GET /head/blocks/1 walks the confirmation ladder: PROPOSED, SOFT_CONFIRMED, HARD_CONFIRMED"
+    ) {
         mkMinorBrief1
             .flatMap { brief =>
                 def statusOf(
@@ -228,7 +230,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                             val _ = assert(status == Status.Ok)
                             val c = body.hcursor.downField("confirmation")
                             out = (
-                              c.get[String]("status").toOption.get,
+                              c.get[String]("type").toOption.get,
                               c.get[String]("softConfirmedAt").toOption,
                               c.get[String]("hardConfirmedAt").toOption
                             )
@@ -238,11 +240,12 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO {
                     val _ = assert(statusOf(soft = false, hard = false) == ("PROPOSED", None, None))
                     val _ = assert(
-                      statusOf(soft = true, hard = false) == ("SOFT", Some(softAt.toString), None)
+                      statusOf(soft = true, hard = false) ==
+                          ("SOFT_CONFIRMED", Some(softAt.toString), None)
                     )
                     assert(
                       statusOf(soft = true, hard = true) ==
-                          ("HARD", Some(softAt.toString), Some(hardAt.toString))
+                          ("HARD_CONFIRMED", Some(softAt.toString), Some(hardAt.toString))
                     )
                 }
             }

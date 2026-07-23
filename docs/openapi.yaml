@@ -82,7 +82,7 @@ paths:
   /head/requests/{request-id}:
     get:
       description: 'One request''s peer, type, receive time, and lifecycle status:
-        UNPROCESSED, LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation
+        UNPROCESSED, PROPOSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation
         time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects
         — the l1TxIds the request became). Every time records a local event at this
         peer — when it received the request, and when it produced the soft/hard confirmation
@@ -433,6 +433,87 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
+    AbsorptionDecisionStatusView:
+      title: AbsorptionDecisionStatusView
+      oneOf:
+      - $ref: '#/components/schemas/AbsorptionHardConfirmed'
+      - $ref: '#/components/schemas/AbsorptionProposed'
+      - $ref: '#/components/schemas/AbsorptionSoftConfirmed'
+      - $ref: '#/components/schemas/AbsorptionUnprocessed'
+      discriminator:
+        propertyName: type
+        mapping:
+          HARD_CONFIRMED: '#/components/schemas/AbsorptionHardConfirmed'
+          PROPOSED: '#/components/schemas/AbsorptionProposed'
+          SOFT_CONFIRMED: '#/components/schemas/AbsorptionSoftConfirmed'
+          UNPROCESSED: '#/components/schemas/AbsorptionUnprocessed'
+    AbsorptionHardConfirmed:
+      title: AbsorptionHardConfirmed
+      type: object
+      required:
+      - blockNumber
+      - decision
+      - hardConfirmedAt
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        decision:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        settlementEffect:
+          type: string
+        type:
+          type: string
+          const: HARD_CONFIRMED
+    AbsorptionProposed:
+      title: AbsorptionProposed
+      type: object
+      required:
+      - blockNumber
+      - decision
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        decision:
+          type: string
+        type:
+          type: string
+          const: PROPOSED
+    AbsorptionSoftConfirmed:
+      title: AbsorptionSoftConfirmed
+      type: object
+      required:
+      - blockNumber
+      - decision
+      - softConfirmedAt
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        decision:
+          type: string
+        softConfirmedAt:
+          type: string
+        type:
+          type: string
+          const: SOFT_CONFIRMED
+    AbsorptionUnprocessed:
+      title: AbsorptionUnprocessed
+      type: object
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          const: UNPROCESSED
     BlockBodyView:
       title: BlockBodyView
       type: object
@@ -461,16 +542,16 @@ components:
             format: int64
     BlockConfirmationView:
       title: BlockConfirmationView
-      type: object
-      required:
-      - status
-      properties:
-        status:
-          type: string
-        softConfirmedAt:
-          type: string
-        hardConfirmedAt:
-          type: string
+      oneOf:
+      - $ref: '#/components/schemas/BlockHardConfirmed'
+      - $ref: '#/components/schemas/BlockProposed'
+      - $ref: '#/components/schemas/BlockSoftConfirmed'
+      discriminator:
+        propertyName: type
+        mapping:
+          HARD_CONFIRMED: '#/components/schemas/BlockHardConfirmed'
+          PROPOSED: '#/components/schemas/BlockProposed'
+          SOFT_CONFIRMED: '#/components/schemas/BlockSoftConfirmed'
     BlockDetailsView:
       title: BlockDetailsView
       type: object
@@ -492,6 +573,8 @@ components:
           format: int32
         confirmation:
           $ref: '#/components/schemas/BlockConfirmationView'
+        header:
+          $ref: '#/components/schemas/BlockHeaderView'
     BlockEffectsView:
       title: BlockEffectsView
       type: object
@@ -518,6 +601,43 @@ components:
           type: array
           items:
             type: string
+    BlockHardConfirmed:
+      title: BlockHardConfirmed
+      type: object
+      required:
+      - hardConfirmedAt
+      - type
+      properties:
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        type:
+          type: string
+          const: HARD_CONFIRMED
+    BlockHeaderView:
+      title: BlockHeaderView
+      oneOf:
+      - $ref: '#/components/schemas/Final'
+      - $ref: '#/components/schemas/Initial'
+      - $ref: '#/components/schemas/Major'
+      - $ref: '#/components/schemas/Minor'
+      discriminator:
+        propertyName: type
+        mapping:
+          final: '#/components/schemas/Final'
+          initial: '#/components/schemas/Initial'
+          major: '#/components/schemas/Major'
+          minor: '#/components/schemas/Minor'
+    BlockProposed:
+      title: BlockProposed
+      type: object
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          const: PROPOSED
     BlockRequestView:
       title: BlockRequestView
       type: object
@@ -530,6 +650,18 @@ components:
           format: int64
         validity:
           type: string
+    BlockSoftConfirmed:
+      title: BlockSoftConfirmed
+      type: object
+      required:
+      - softConfirmedAt
+      - type
+      properties:
+        softConfirmedAt:
+          type: string
+        type:
+          type: string
+          const: SOFT_CONFIRMED
     BlockSummaryView:
       title: BlockSummaryView
       type: object
@@ -545,25 +677,32 @@ components:
           format: int32
         blockType:
           type: string
-    DepositDecisionStatusView:
-      title: DepositDecisionStatusView
+    Deposit:
+      title: Deposit
       type: object
       required:
+      - requestId
+      - peerNumber
+      - receivedAt
       - status
+      - absorptionDecisionStatus
+      - type
       properties:
-        status:
-          type: string
-        blockNumber:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
           type: integer
           format: int32
-        decision:
+        receivedAt:
           type: string
-        softConfirmedAt:
+        status:
+          $ref: '#/components/schemas/RequestStatusView'
+        absorptionDecisionStatus:
+          $ref: '#/components/schemas/AbsorptionDecisionStatusView'
+        type:
           type: string
-        hardConfirmedAt:
-          type: string
-        settlementEffect:
-          type: string
+          const: deposit
     EffectRefView:
       title: EffectRefView
       type: object
@@ -610,6 +749,33 @@ components:
       properties:
         error:
           type: string
+    Final:
+      title: Final
+      type: object
+      required:
+      - number
+      - versionMajor
+      - versionMinor
+      - startTime
+      - endTime
+      - type
+      properties:
+        number:
+          type: integer
+          format: int32
+        versionMajor:
+          type: integer
+          format: int32
+        versionMinor:
+          type: integer
+          format: int32
+        startTime:
+          type: string
+        endTime:
+          type: string
+        type:
+          type: string
+          const: final
     FinalizeResponse:
       title: FinalizeResponse
       type: object
@@ -665,6 +831,111 @@ components:
       properties:
         status:
           type: string
+    Initial:
+      title: Initial
+      type: object
+      required:
+      - number
+      - versionMajor
+      - versionMinor
+      - startTime
+      - endTime
+      - fallbackTxStartTime
+      - forcedMajorBlockWakeupTime
+      - type
+      properties:
+        number:
+          type: integer
+          format: int32
+        versionMajor:
+          type: integer
+          format: int32
+        versionMinor:
+          type: integer
+          format: int32
+        startTime:
+          type: string
+        endTime:
+          type: string
+        fallbackTxStartTime:
+          type: string
+        forcedMajorBlockWakeupTime:
+          type: string
+        depositDecisionWakeupTime:
+          type: string
+        type:
+          type: string
+          const: initial
+    Major:
+      title: Major
+      type: object
+      required:
+      - number
+      - versionMajor
+      - versionMinor
+      - startTime
+      - endTime
+      - fallbackTxStartTime
+      - forcedMajorBlockWakeupTime
+      - type
+      properties:
+        number:
+          type: integer
+          format: int32
+        versionMajor:
+          type: integer
+          format: int32
+        versionMinor:
+          type: integer
+          format: int32
+        startTime:
+          type: string
+        endTime:
+          type: string
+        fallbackTxStartTime:
+          type: string
+        forcedMajorBlockWakeupTime:
+          type: string
+        depositDecisionWakeupTime:
+          type: string
+        type:
+          type: string
+          const: major
+    Minor:
+      title: Minor
+      type: object
+      required:
+      - number
+      - versionMajor
+      - versionMinor
+      - startTime
+      - endTime
+      - fallbackTxStartTime
+      - forcedMajorBlockWakeupTime
+      - type
+      properties:
+        number:
+          type: integer
+          format: int32
+        versionMajor:
+          type: integer
+          format: int32
+        versionMinor:
+          type: integer
+          format: int32
+        startTime:
+          type: string
+        endTime:
+          type: string
+        fallbackTxStartTime:
+          type: string
+        forcedMajorBlockWakeupTime:
+          type: string
+        depositDecisionWakeupTime:
+          type: string
+        type:
+          type: string
+          const: minor
     ReadinessResponse:
       title: ReadinessResponse
       type: object
@@ -684,36 +955,23 @@ components:
           format: int64
     RequestDetailsView:
       title: RequestDetailsView
+      oneOf:
+      - $ref: '#/components/schemas/Deposit'
+      - $ref: '#/components/schemas/Transaction'
+      discriminator:
+        propertyName: type
+        mapping:
+          deposit: '#/components/schemas/Deposit'
+          transaction: '#/components/schemas/Transaction'
+    RequestHardConfirmed:
+      title: RequestHardConfirmed
       type: object
       required:
-      - requestId
-      - peerNumber
-      - requestType
-      - receivedAt
-      - status
+      - blockNumber
+      - validity
+      - hardConfirmedAt
+      - type
       properties:
-        requestId:
-          type: integer
-          format: int64
-        peerNumber:
-          type: integer
-          format: int32
-        requestType:
-          type: string
-        receivedAt:
-          type: string
-        status:
-          $ref: '#/components/schemas/RequestStatusView'
-        decisionStatus:
-          $ref: '#/components/schemas/DepositDecisionStatusView'
-    RequestStatusView:
-      title: RequestStatusView
-      type: object
-      required:
-      - status
-      properties:
-        status:
-          type: string
         blockNumber:
           type: integer
           format: int32
@@ -727,6 +985,58 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EffectRefView'
+        type:
+          type: string
+          const: HARD_CONFIRMED
+    RequestProposed:
+      title: RequestProposed
+      type: object
+      required:
+      - blockNumber
+      - validity
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        validity:
+          type: string
+        type:
+          type: string
+          const: PROPOSED
+    RequestSoftConfirmed:
+      title: RequestSoftConfirmed
+      type: object
+      required:
+      - blockNumber
+      - validity
+      - softConfirmedAt
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        validity:
+          type: string
+        softConfirmedAt:
+          type: string
+        type:
+          type: string
+          const: SOFT_CONFIRMED
+    RequestStatusView:
+      title: RequestStatusView
+      oneOf:
+      - $ref: '#/components/schemas/RequestHardConfirmed'
+      - $ref: '#/components/schemas/RequestProposed'
+      - $ref: '#/components/schemas/RequestSoftConfirmed'
+      - $ref: '#/components/schemas/RequestUnprocessed'
+      discriminator:
+        propertyName: type
+        mapping:
+          HARD_CONFIRMED: '#/components/schemas/RequestHardConfirmed'
+          PROPOSED: '#/components/schemas/RequestProposed'
+          SOFT_CONFIRMED: '#/components/schemas/RequestSoftConfirmed'
+          UNPROCESSED: '#/components/schemas/RequestUnprocessed'
     RequestSummaryView:
       title: RequestSummaryView
       type: object
@@ -743,6 +1053,38 @@ components:
           format: int32
         requestType:
           type: string
+    RequestUnprocessed:
+      title: RequestUnprocessed
+      type: object
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          const: UNPROCESSED
+    Transaction:
+      title: Transaction
+      type: object
+      required:
+      - requestId
+      - peerNumber
+      - receivedAt
+      - status
+      - type
+      properties:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
+          type: integer
+          format: int32
+        receivedAt:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatusView'
+        type:
+          type: string
+          const: transaction
     TxInputView:
       title: TxInputView
       type: object
