@@ -23,13 +23,14 @@ import scalus.uplc.builtin.ByteString
 sealed trait RolloutTx extends EnrichedTx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction
     def txLens: Lens[RolloutTx, Transaction]
-    def payoutCount: Int
 
-    /** The start index, in the sequence's original ordered payout-obligation vector, of the
-      * contiguous slice this tx discharges (`[payoutOffset, payoutOffset + payoutCount)`). Off-tx
-      * provenance for withdrawal-effect tracking; never serialized into the tx.
+    /** How many payout obligations this tx discharges. The sequence discharges the original ordered
+      * payout-obligation vector as a forward run of contiguous slices — the settlement /
+      * finalization takes `[0, payoutCount)`, then each rollout in order takes the next
+      * `payoutCount` — so the per-tx offsets are the running sum of `payoutCount`s and need not be
+      * stored.
       */
-    def payoutOffset: Int
+    def payoutCount: Int
 }
 
 object RolloutTx {
@@ -46,7 +47,6 @@ object RolloutTx {
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[Last](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
         override val payoutCount: Int,
-        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx {
         override def transactionFamily: String = "RolloutTx.Last"
@@ -64,7 +64,6 @@ object RolloutTx {
         override val txLens: Lens[RolloutTx, Transaction] =
             Focus[NotLast](_.tx).asInstanceOf[Lens[RolloutTx, Transaction]],
         override val payoutCount: Int,
-        override val payoutOffset: Int,
         override val resolvedUtxos: ResolvedUtxos
     ) extends RolloutTx,
           RolloutUtxo.Produced {
@@ -80,8 +79,7 @@ private object RolloutTxOps {
             InitializationParameters.Section
 
         final case class Last(override val config: Config)(
-            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
-            override val total: Int
+            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
         ) extends Build[RolloutTx.Last](mbRolloutOutputValue = None) {
 
             /** Post-process a transaction builder context into a [[RolloutTx.Last]].
@@ -96,8 +94,7 @@ private object RolloutTxOps {
 
         final case class NotLast(override val config: Config)(
             override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
-            rolloutOutputValue: Value,
-            override val total: Int
+            rolloutOutputValue: Value
         ) extends Build[RolloutTx.NotLast](mbRolloutOutputValue = Some(rolloutOutputValue)) {
             override def postProcess(ctx: TransactionBuilder.Context): RolloutTx.NotLast =
                 this.PostProcess.notLast(ctx)
@@ -135,17 +132,6 @@ private object RolloutTxOps {
         extends Payout.Obligation.Many.Remaining.NonEmpty {
         import Build.*
         def config: Build.Config
-
-        /** The size of the sequence's original ordered payout-obligation vector. This build was
-          * handed a suffix of it (`nePayoutObligationsRemaining`), so the slice it discharges
-          * starts at [[payoutOffset]] — off-tx provenance for withdrawal-effect tracking.
-          */
-        def total: Int
-
-        /** The start index of this tx's discharged slice in the original vector — the obligations
-          * before it are exactly those a suffix does not cover.
-          */
-        final val payoutOffset: Int = total - nePayoutObligationsRemaining.length
 
         private val mbRolloutOutput = mbRolloutOutputValue.map(v =>
             TxOutput.Babbage(
@@ -236,23 +222,30 @@ private object RolloutTxOps {
                         - rolloutSize
                         - margin
 
+                // Fill from the BACK of the handed suffix: this tx takes the highest-index
+                // obligations that fit, leaving the lower-index prefix for earlier txs in the chain.
+                // Across the whole sequence this lays the obligation vector out forward — the
+                // settlement / finalization (built last, absorbing the surviving front chunk) takes
+                // `[0, …)` and each rollout the next contiguous run — so `payoutCount` alone locates
+                // every tx's slice. Prepending each consumed obligation keeps this tx's discharged
+                // chunk in ascending (vector) order.
                 @tailrec
                 def go(
                     remainingSize: Long,
                     addedPayouts: Vector[Payout.Obligation],
                     remainingObligations: Vector[Payout.Obligation]
                 ): (Vector[Payout.Obligation], Vector[Payout.Obligation]) = {
-                    val currentObligation = remainingObligations.head
+                    val currentObligation = remainingObligations.last
                     val remainingSizeAfter = remainingSize - currentObligation.outputSize
                     if remainingSizeAfter >= 0
                     then {
-                        if remainingObligations.tail.isEmpty
+                        if remainingObligations.init.isEmpty
                         then (addedPayouts.prepended(currentObligation), Vector.empty)
                         else
                             go(
                               remainingSizeAfter,
                               addedPayouts.prepended(currentObligation),
-                              remainingObligations.tail
+                              remainingObligations.init
                             )
                     } else (addedPayouts, remainingObligations)
                 }
@@ -295,7 +288,6 @@ private object RolloutTxOps {
                   rolloutSpent = PostProcess.unsafeGetRolloutSpent(ctx),
                   tx = ctx.transaction,
                   payoutCount = payoutCount(ctx),
-                  payoutOffset = payoutOffset,
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }
@@ -323,7 +315,6 @@ private object RolloutTxOps {
                   rolloutProduced = RolloutUtxo(rolloutProduced),
                   tx = tx,
                   payoutCount = payoutCount(ctx),
-                  payoutOffset = payoutOffset,
                   resolvedUtxos = ctx.resolvedUtxos
                 )
             }

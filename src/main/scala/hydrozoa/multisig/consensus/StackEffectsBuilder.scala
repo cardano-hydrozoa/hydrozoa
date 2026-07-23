@@ -89,42 +89,50 @@ object StackEffectsBuilder {
         // Withdrawal-effect tracking for a partition: the withdrawals are the **prefix**
         // `withdrawalRequestIds` of the partition's payout-obligation vector — positions `[0, N)`,
         // one request id each — and any obligations at or beyond `N` are finalization residual
-        // balances, not withdrawals. `slices` are the effect txs, each discharging a contiguous
-        // `[offset, offset+count)`. Each distinct withdrawing request in a tx's in-prefix slice
-        // contributes one `(requestId, l1TxId)` link; residual positions contribute none. The
-        // offsets/counts come from the builder (off-tx `payoutOffset` / `payoutCount`), so this
-        // needs no re-derivation of the packing.
+        // balances, not withdrawals. `slices` are the effect txs in **offset order** (settlement /
+        // finalization first, then the rollouts), each with its `payoutCount`; the vector is
+        // discharged as a forward run of contiguous slices, so a tx's offset is the running sum of
+        // the preceding `payoutCount`s. Each distinct withdrawing request in a tx's in-prefix slice
+        // contributes one `(requestId, l1TxId)` link; residual positions contribute none.
         def trackWithdrawals(
             withdrawalRequestIds: Vector[RequestId],
-            slices: List[(Int, Int, TransactionHash)]
+            slices: List[(Int, TransactionHash)]
         ): List[(RequestId, TransactionHash)] =
             val n = withdrawalRequestIds.length
-            slices.flatMap { (offset, count, l1TxId) =>
-                val hi = math.min(offset + count, n)
-                if hi > offset then
-                    withdrawalRequestIds.slice(offset, hi).distinct.map(r => (r, l1TxId))
-                else Nil
-            }
+            slices
+                .foldLeft((0, List.empty[(RequestId, TransactionHash)])) {
+                    case ((offset, acc), (count, l1TxId)) =>
+                        val hi = math.min(offset + count, n)
+                        val rows =
+                            if hi > offset then
+                                withdrawalRequestIds
+                                    .slice(offset, hi)
+                                    .distinct
+                                    .map(r => (r, l1TxId))
+                            else Nil
+                        (offset + count, acc ++ rows)
+                }
+                ._2
 
-        // A treasury tx's directly-discharged slice (settlement / finalization absorbs the first
-        // rollout's payouts when they fit), plus each rollout tx's slice — as `(offset, count,
-        // l1TxId)`.
-        def settlementSlices(seq: SettlementTxSeq): List[(Int, Int, TransactionHash)] =
+        // The effect txs discharging the payout vector, in offset order: the treasury tx's direct
+        // slice first (it takes `[0, payoutCount)` — the merged first rollout, when it fits), then
+        // each rollout in chain order — as `(payoutCount, l1TxId)`.
+        def settlementSlices(seq: SettlementTxSeq): List[(Int, TransactionHash)] =
             val direct = seq.settlementTx match
                 case wp: SettlementTx.WithPayouts =>
-                    List((wp.payoutOffset, wp.payoutCount, seq.settlementTx.tx.id))
+                    List((wp.payoutCount, seq.settlementTx.tx.id))
                 case _ => Nil
             direct ++ rolloutSlices(seq.rolloutTxs)
 
-        def finalizationSlices(seq: FinalizationTxSeq): List[(Int, Int, TransactionHash)] =
+        def finalizationSlices(seq: FinalizationTxSeq): List[(Int, TransactionHash)] =
             val direct = seq.finalizationTx match
                 case wp: FinalizationTx.WithPayouts =>
-                    List((wp.payoutOffset, wp.payoutCount, seq.finalizationTx.tx.id))
+                    List((wp.payoutCount, seq.finalizationTx.tx.id))
                 case _ => Nil
             direct ++ rolloutSlices(seq.rolloutTxs)
 
-        def rolloutSlices(rollouts: List[RolloutTx]): List[(Int, Int, TransactionHash)] =
-            rollouts.map(rt => (rt.payoutOffset, rt.payoutCount, rt.tx.id))
+        def rolloutSlices(rollouts: List[RolloutTx]): List[(Int, TransactionHash)] =
+            rollouts.map(rt => (rt.payoutCount, rt.tx.id))
 
         // SEC over a (minor) block — self-contained: carries the serialized on-chain commitment
         // bytes so the signer/verifier need no BlockResult lookup (see StandaloneEvacuationCommitment).

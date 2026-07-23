@@ -62,7 +62,6 @@ object FinalizationTxCodec:
           "treasurySpent" -> t.treasurySpent.asJson,
           "multisigRegimeUtxoSpent" -> t.multisigRegimeUtxoSpent.asJson,
           "payoutCount" -> t.payoutCount.asJson,
-          "payoutOffset" -> t.payoutOffset.asJson,
           "resolvedUtxos" -> t.resolvedUtxos.asJson
         )
     }
@@ -77,7 +76,6 @@ object FinalizationTxCodec:
             ts <- c.downField("treasurySpent").as[MultisigTreasuryUtxo]
             mrus <- c.downField("multisigRegimeUtxoSpent").as[MultisigRegimeUtxo]
             pc <- c.downField("payoutCount").as[Int]
-            po <- c.downField("payoutOffset").as[Int]
             ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield FinalizationTx.WithOnlyDirectPayouts(
           finalizationTxEndTime = fet,
@@ -86,7 +84,6 @@ object FinalizationTxCodec:
           treasurySpent = ts,
           multisigRegimeUtxoSpent = mrus,
           payoutCount = pc,
-          payoutOffset = po,
           resolvedUtxos = ru
         )
     }
@@ -102,7 +99,6 @@ object FinalizationTxCodec:
           "multisigRegimeUtxoSpent" -> t.multisigRegimeUtxoSpent.asJson,
           "rolloutProduced" -> t.rolloutProduced.asJson,
           "payoutCount" -> t.payoutCount.asJson,
-          "payoutOffset" -> t.payoutOffset.asJson,
           "resolvedUtxos" -> t.resolvedUtxos.asJson
         )
     }
@@ -118,7 +114,6 @@ object FinalizationTxCodec:
             mrus <- c.downField("multisigRegimeUtxoSpent").as[MultisigRegimeUtxo]
             rp <- c.downField("rolloutProduced").as[RolloutUtxo]
             pc <- c.downField("payoutCount").as[Int]
-            po <- c.downField("payoutOffset").as[Int]
             ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
         yield FinalizationTx.WithRollouts(
           finalizationTxEndTime = fet,
@@ -128,7 +123,6 @@ object FinalizationTxCodec:
           multisigRegimeUtxoSpent = mrus,
           rolloutProduced = rp,
           payoutCount = pc,
-          payoutOffset = po,
           resolvedUtxos = ru
         )
     }
