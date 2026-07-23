@@ -1,11 +1,10 @@
 package hydrozoa.integration.rbr.property
 
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
 import hydrozoa.lib.classification.{Classifier, Histogram}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryUtxo}
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.{TransactionOutput, Utxo}
@@ -26,13 +25,13 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Collateral UTxOs carry the datum sentinel `"collateral"`
   *   - Evacuation outputs carry the datum sentinel `"evacuation"`
   *   - Script reference UTxOs are identified by their known [[scalus.cardano.ledger.TransactionInput]] keys
-  *   - Everything else falls into the [[AmbientPlaceId]] default bucket
+  *   - Everything else falls into the [[RBRPlaceId.Ambient]] default bucket
   *
   * TODO: the `"collateral"` sentinel only exists in the synthetic `InitialDisputeUtxos`
   * fixture — the real rule-based tx builders (`VoteTx`, `TallyTx`, `ResolutionTx`,
   * `AbstainTx`, `RatchetVoteTx`, `EvacuationTx`) draw collateral from plain Ada wallet
   * UTxOs whose `datumOption` is `None`, so content-based detection fails in end-to-end
-  * scenarios and collateral outputs land in [[AmbientPlaceId]]. The right fix is to bucket
+  * scenarios and collateral outputs land in [[RBRPlaceId.Ambient]]. The right fix is to bucket
   * collateral by role in the tx graph — mark any output that is later consumed as a
   * `collateral_input` of some downstream tx — rather than by a content sentinel. That
   * requires shifting the classifier from `Utxo => Option[Bucket]` to a form that has
@@ -41,7 +40,7 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   * Usage: `Histogram.empty(RBRClassifier(using env)).addAll(utxos.map(Utxo(_, _)))`
   */
 class RBRClassifier(using env: MultiNodeConfig)
-    extends Classifier[RBRPlaceId, Utxo](AmbientPlaceId):
+    extends Classifier[RBRPlaceId, Utxo](Ambient):
 
     def classifierFns: List[Utxo => Option[RBRPlaceId]] =
         val policyId              = env.headConfig.headMultisigScript.policyId
@@ -67,33 +66,29 @@ class RBRClassifier(using env: MultiNodeConfig)
             out.value.assets.assets.get(policyId).exists(_.contains(regimeWitnessToken))
 
         List(
-            (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryRefPlaceId),
-            (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeRefPlaceId),
-            (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadderRefPlaceId),
-            (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRefPlaceId),
-            // ResolvedTreasuryPlaceId / UnresolvedTreasuryPlaceId: carries treasury token; parse datum to distinguish
+            (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryScriptRef),
+            (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeScriptRef),
+            (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadder),
+            (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRef),
+            // ResolvedTreasury / UnresolvedTreasury: carries treasury token; parse datum to distinguish
             (u: Utxo) =>
                 Option
                     .when(hasTreasuryToken(u.output))(u)
                     .flatMap(RuleBasedTreasuryUtxo.parse(_)(using env.nodeConfigs.values.head).toOption)
                     .map(tu =>
                         if tu.treasuryOutput.datum.isInstanceOf[RuleBasedTreasuryDatum.Resolved] then
-                            ResolvedTreasuryPlaceId
-                        else UnresolvedTreasuryPlaceId
+                            ResolvedTreasury
+                        else UnresolvedTreasury
                     ),
-            // VotedPlaceId / UnvotedPlaceId: carries vote token; parse datum to distinguish
+            // Ballots: any vote-token box (Voted / Awaiting / Abstain) — one colored place. The
+            // per-status (status, version) split lives in the bisimulation projection, not the bucket.
             (u: Utxo) =>
                 Option
                     .when(hasVoteToken(u.output) && !hasTreasuryToken(u.output))(u)
                     .flatMap(BallotBox.parse(_)(using env.nodeConfigs.values.head).toOption)
-                    .map(vu =>
-                        if vu.ballotBoxOutput.status.isInstanceOf[VoteStatus.Voted] then VotedPlaceId
-                        else UnvotedPlaceId
-                    ),
+                    .map(_ => Ballots),
             (u: Utxo) =>
-                Option.when(hasInlineDatum(collateralDatumMarker)(u.output))(CollateralPlaceId),
+                Option.when(hasInlineDatum(collateralDatumMarker)(u.output))(Collateral),
             (u: Utxo) =>
-                Option.when(hasInlineDatum(evacuationDatumMarker)(u.output))(
-                    EvacuationOutputPlaceId
-                ),
+                Option.when(hasInlineDatum(evacuationDatumMarker)(u.output))(EvacuationOutput),
         )

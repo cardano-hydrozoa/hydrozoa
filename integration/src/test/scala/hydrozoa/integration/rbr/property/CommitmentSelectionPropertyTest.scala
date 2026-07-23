@@ -9,8 +9,8 @@ import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.{KickRequest, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
 import hydrozoa.lib.classification.Histogram
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
@@ -402,33 +402,29 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
 
     @unused
     private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
-        val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
+        val ambient = utxos.filter(u => classifier.classify(u).contains(Ambient))
         val lines = ambient.zipWithIndex.map { case (u, idx) =>
             s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
         }.mkString("\n")
         Slf4jTracer.sink.traceWith(
           hydrozoa.lib.logging.LogEvent
               .From(Map.empty, "AmbientDiagnostic")
-              .info(s"AmbientPlaceId utxos (${ambient.size}):\n$lines")
+              .info(s"Ambient utxos (${ambient.size}):\n$lines")
         )
 
     /** Shape identical to [[EvacuationPropertyTest.expectedCardinalities]]. Only
-      * `EvacuationOutputPlaceId` varies with the winning commitment; the count comes from
+      * `EvacuationOutput` varies with the winning commitment; the count comes from
       * `PayoutsLeft(n)` observed by the RBA at drain start, which equals the resolved
       * commitment's evacuation-map size.
       */
     private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
-        Map(
-          TreasuryRefPlaceId        -> 1,
-          DisputeRefPlaceId         -> 1,
-          RegimeRefPlaceId          -> 1,
-          SetupLadderRefPlaceId     -> 7,
-          ResolvedTreasuryPlaceId   -> 1,
-          UnresolvedTreasuryPlaceId -> 0,
-          VotedPlaceId              -> 0,
-          UnvotedPlaceId            -> 0,
-          CollateralPlaceId         -> 0,
-          EvacuationOutputPlaceId   -> evacuationCount,
-          PayoutObligationsPlaceId  -> 0,
-          AmbientPlaceId            -> (nHeadPeers * 2 + nCoilPeers)
+        val nonZero = Map(
+          TreasuryScriptRef -> 1,
+          DisputeScriptRef  -> 1,
+          RegimeRef         -> 1,
+          SetupLadder       -> 7,
+          ResolvedTreasury  -> 1,
+          EvacuationOutput  -> evacuationCount,
+          Ambient           -> (nHeadPeers * 2 + nCoilPeers),
         )
+        RBRPlaceId.values.toList.map(k => k -> nonZero.getOrElse(k, 0)).toMap
