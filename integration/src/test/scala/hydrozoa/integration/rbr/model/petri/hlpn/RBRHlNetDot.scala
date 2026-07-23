@@ -89,8 +89,8 @@ object RBRHlNetDot {
     private def renderInscription(insc: Inscription[?]): String =
         insc match
             case Inscription.Weighted(coeff, color) =>
-                if coeff.toInt == 1 then renderColor(color)
-                else s"${coeff.toInt}·${renderColor(color)}"
+                if coeff.toLong == 1 then renderColor(color)
+                else s"${coeff.toLong}·${renderColor(color)}"
             case Inscription.Union(l, r) => s"${renderInscription(l)} ⊕ ${renderInscription(r)}"
             case Inscription.Collect(cv, pattern) =>
                 s"⟦${cv.name}≤${cv.bound}: ${renderColor(pattern)}⟧"

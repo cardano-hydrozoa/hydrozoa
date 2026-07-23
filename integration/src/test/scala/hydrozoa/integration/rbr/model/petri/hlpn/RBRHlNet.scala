@@ -3,7 +3,7 @@ package hydrozoa.integration.rbr.model.petri.hlpn
 import cats.data.{NonEmptySet, ValidatedNel}
 import cats.implicits.catsKernelOrderingForOrder
 import hydrozoa.lib.collection.Multiset
-import hydrozoa.lib.number.PositiveInt
+import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{Key, Link}
@@ -260,7 +260,7 @@ object RBRHlNet {
         // ---- Terms ----
         import ColorTerm.{Const, Ref, Tuple, Wildcard}
         def one[C](term: ColorTerm[C]): Inscription[C] =
-            Inscription.Weighted(PositiveInt.unsafeApply(1), term)
+            Inscription.Weighted(Positive.unsafe(1), term)
         def ballot(
             key: ColorTerm[BigInt],
             link: ColorTerm[BigInt],
