@@ -69,9 +69,18 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
   (`peer-<label>/rocksdb`) and the EUTXO ledger store
   (`peer-<label>/l2-rocksdb`). Default data dir `.hydrozoa-data` relative to
   cwd; give each node its own.
-- **L2 query API** (head peers only, EUTXO only): `GET /l2/cardano-eutxo/utxos/{address}` and
-  `GET /l2/cardano-eutxo/transactions` are served only when the node runs the EUTXO ledger; a remote-ledger
-  node serves neither.
+- **User HTTP API** (head peers only, port 8080). One REST surface:
+  - **submit** — `POST /head/requests` (deposits and L2 transactions, distinguished by the body's
+    `type` tag);
+  - **queries** — `GET /head/blocks[/{n}[/body]]`, `GET /head/requests[/{id}]` (lifecycle status per
+    request), `GET /head/effects/{l1TxId}` (L1 effect by tx id);
+  - **observability** — `GET /health` (liveness), `GET /ready` (readiness);
+  - **admin** — `POST /api/admin/finalize` (basic-auth);
+  - **L2 EUTXO queries** (EUTXO ledger only — a remote-ledger node serves neither):
+    `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
+
+  Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is
+  [`docs/openapi.yaml`](docs/openapi.yaml) (regenerated from the endpoint definitions).
 
 ### Network matrix
 
@@ -445,6 +454,9 @@ curl "http://localhost:8080/l2/cardano-eutxo/utxos/<bech32-address>"     # curre
 `/l2/cardano-eutxo/transactions` covers plain L2 transactions plus deposit registrations, absorptions, and
 refunds (the `kind` field tells them apart); `/l2/cardano-eutxo/utxos` returns the utxos as CIP-0116 JSON.
 Both are the quickest way to watch a submitted tx or deposit land.
+
+Point a browser at `http://localhost:8080/docs` for the interactive Swagger UI over the full API
+(blocks, requests, effects, health/readiness, and the L2 queries above).
 
 ### Teardown / recovery of funds
 
