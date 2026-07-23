@@ -15,9 +15,9 @@ class HlSimulatorTest extends AnyFunSuite:
     private given Order[String] = Order.from((a, b) => a.compareTo(b))
 
     private val peer =
-        Sort.Class("Peer", NonEmptySet.of("p0", "p1", "p2"), Sort.Discipline.Unordered, Map.empty)
+        Sort.Class("Peer", NonEmptySet.of("p0", "p1", "p2"), Sort.Discipline.Unordered)
     private val vote =
-        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Unordered, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Unordered)
 
     private def ms(entries: (String, Int)*): MultiSet[String] =
         Multiset(entries.map((k, v) => k -> SafeLong(v)).to(SortedMap))

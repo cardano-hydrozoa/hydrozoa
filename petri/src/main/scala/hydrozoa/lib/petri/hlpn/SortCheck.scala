@@ -123,10 +123,15 @@ object SortCheck:
             case Sort.Class(n, _, _, _) => n
             case Sort.Prod(left, right) => s"(${name(left)}, ${name(right)})"
 
-/** A static well-sortedness violation in a net's terms. */
+/** A static well-sortedness violation in a net's terms or a sort definition. */
 enum SortError:
     /** A term references a variable the transition does not declare. */
     case UndeclaredVariable(name: String)
+
+    /** A `Sort.Class` was given a `subclasses` map that is not a genuine partition of its carrier
+      * (an empty block, a color outside the carrier, an overlap, or a gap).
+      */
+    case MalformedPartition(sort: String, reason: String)
 
     /** `Succ` over a class with no successor order (`Unordered`, or a non-class sort). */
     case SuccOnUnordered(sort: String)

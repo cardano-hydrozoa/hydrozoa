@@ -10,16 +10,18 @@ class BindingTest extends AnyFunSuite:
 
     private given Order[String] = Order.from((a, b) => a.compareTo(b))
 
-    // A circular peer class {p0, p1, p2} with a static subclass of the even-indexed peers.
-    private val peer = Sort.Class(
-      "Peer",
-      NonEmptySet.of("p0", "p1", "p2"),
-      Sort.Discipline.Circular,
-      Map("evens" -> Set("p0", "p2"))
-    )
+    // A circular peer class {p0, p1, p2} partitioned into the even-indexed peers and the rest.
+    private val peer = Sort
+        .Class(
+          "Peer",
+          NonEmptySet.of("p0", "p1", "p2"),
+          Sort.Discipline.Circular,
+          Map("evens" -> Set("p0", "p2"), "rest" -> Set("p1"))
+        )
+        .getOrElse(fail("peer fixture is not a genuine partition"))
     // A linear vote class {No, Yes} — no successor past the last element.
     private val vote =
-        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear)
 
     private val x = Var("x", peer)
     private val y = Var("y", vote)

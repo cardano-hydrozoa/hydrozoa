@@ -14,14 +14,16 @@ class SortCheckTest extends AnyFunSuite:
 
     private given Order[String] = Order.from((a, b) => a.compareTo(b))
 
-    private val peer = Sort.Class(
-      "Peer",
-      NonEmptySet.of("p0", "p1", "p2"),
-      Sort.Discipline.Unordered,
-      Map("evens" -> Set("p0", "p2"))
-    )
+    private val peer = Sort
+        .Class(
+          "Peer",
+          NonEmptySet.of("p0", "p1", "p2"),
+          Sort.Discipline.Unordered,
+          Map("evens" -> Set("p0", "p2"), "rest" -> Set("p1"))
+        )
+        .getOrElse(fail("peer fixture is not a genuine partition"))
     private val vote =
-        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear, Map.empty)
+        Sort.Class("Vote", NonEmptySet.of("No", "Yes"), Sort.Discipline.Linear)
 
     private def ms(entries: (String, Int)*): MultiSet[String] =
         Multiset(entries.map((k, v) => k -> SafeLong(v)).to(SortedMap))
