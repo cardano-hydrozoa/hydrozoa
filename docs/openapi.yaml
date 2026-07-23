@@ -157,11 +157,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /head/blocks/{block-number}/header:
+  /head/blocks/{block-number}/body:
     get:
-      description: The block's header content. The shape varies by block type (initial,
-        minor, major, final).
-      operationId: getHeadBlockHeader
+      description: 'The block''s content: its transactions (the request ids woven
+        into the block, each with its validity verdict) and its deposit decisions
+        (the request ids absorbed into the treasury and those rejected). 404 if the
+        block does not exist.'
+      operationId: getHeadBlockBody
       parameters:
       - name: block-number
         in: path
@@ -174,7 +176,8 @@ paths:
           description: ''
           content:
             application/json:
-              schema: {}
+              schema:
+                $ref: '#/components/schemas/BlockBodyView'
         default:
           description: ''
           content:
@@ -430,6 +433,32 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
+    BlockBodyView:
+      title: BlockBodyView
+      type: object
+      required:
+      - number
+      - blockType
+      properties:
+        number:
+          type: integer
+          format: int32
+        blockType:
+          type: string
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockRequestView'
+        depositsAbsorbed:
+          type: array
+          items:
+            type: integer
+            format: int64
+        depositsRejected:
+          type: array
+          items:
+            type: integer
+            format: int64
     BlockConfirmationView:
       title: BlockConfirmationView
       type: object
@@ -458,6 +487,9 @@ components:
           format: int32
         blockType:
           type: string
+        stackId:
+          type: integer
+          format: int32
         confirmation:
           $ref: '#/components/schemas/BlockConfirmationView'
     BlockEffectsView:
@@ -486,6 +518,18 @@ components:
           type: array
           items:
             type: string
+    BlockRequestView:
+      title: BlockRequestView
+      type: object
+      required:
+      - requestId
+      - validity
+      properties:
+        requestId:
+          type: integer
+          format: int64
+        validity:
+          type: string
     BlockSummaryView:
       title: BlockSummaryView
       type: object

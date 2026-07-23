@@ -3,7 +3,6 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import cats.syntax.traverse.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -16,8 +15,6 @@ import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
 import hydrozoa.multisig.server.TapirJson.*
-import io.circe.Json
-import io.circe.syntax.*
 import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
@@ -53,11 +50,6 @@ class HydrozoaRoutes(
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
-
-    /** The block-0 header encoder and the brief codecs are `CardanoNetwork.Section`-dependent;
-      * `headConfig` satisfies the section.
-      */
-    private given CardanoNetwork.Section = headConfig
 
     /** Decomposes hard-confirmed stacks' effects onto blocks for the effect queries. */
     private val effectsResolver: EffectsResolver = EffectsResolver(consensusReader)
@@ -194,18 +186,19 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
-    private val blockHeaderEndpoint: ServerEndpoint[Any, IO] =
+    private val blockBodyEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
-            .in("head" / "blocks" / path[BlockNumber]("block-number") / "header")
-            .name("getHeadBlockHeader")
-            .out(jsonBody[Json])
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "body")
+            .name("getHeadBlockBody")
+            .out(jsonBody[BlockBodyView])
             .errorOut(errorOut)
             .description(
-              "The block's header content. The shape varies by block type (initial, minor, " +
-                  "major, final)."
+              "The block's content: its transactions (the request ids woven into the block, each " +
+                  "with its validity verdict) and its deposit decisions (the request ids absorbed " +
+                  "into the treasury and those rejected). 404 if the block does not exist."
             )
             .serverLogic(num =>
-                blockHeader(num)
+                blockBody(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -460,7 +453,7 @@ class HydrozoaRoutes(
           requestDetailsEndpoint,
           blocksEndpoint,
           blockDetailsEndpoint,
-          blockHeaderEndpoint,
+          blockBodyEndpoint,
           blockEffectsEndpoint,
           effectByIdEndpoint,
           blockRolloutEndpoint,
@@ -554,44 +547,53 @@ class HydrozoaRoutes(
         num: BlockNumber
     ): IO[Either[(StatusCode, ErrorResponse), BlockDetailsView]] =
         if num == BlockNumber.zero then
-            blockConfirmation(num).map(confirmation =>
+            for {
+                confirmation <- blockConfirmation(num)
+                stack <- consensusReader.stackOf(num)
+            } yield {
                 val summary = ApiDto.mkInitialBlockSummaryView
                 Right(
-                  BlockDetailsView(summary.number, summary.leader, summary.blockType, confirmation)
+                  BlockDetailsView(
+                    summary.number,
+                    summary.leader,
+                    summary.blockType,
+                    stack.map(_.convert),
+                    confirmation
+                  )
                 )
-            )
+            }
         else
             consensusReader.blockBrief(num).flatMap {
                 case None => IO.pure(Left(blockNotFound(num)))
                 case Some(brief) =>
-                    blockConfirmation(num).map(confirmation =>
+                    for {
+                        confirmation <- blockConfirmation(num)
+                        stack <- consensusReader.stackOf(num)
+                    } yield {
                         val summary = ApiDto.mkBlockSummaryView(brief, headConfig.nHeadPeers)
                         Right(
                           BlockDetailsView(
                             summary.number,
                             summary.leader,
                             summary.blockType,
+                            stack.map(_.convert),
                             confirmation
                           )
                         )
-                    )
+                    }
             }
 
-    /** The block's header as JSON: block 0's comes from the head config, the rest from their
-      * persisted briefs.
+    /** The block's content: block 0 (config) has none; the rest read their transactions and deposit
+      * decisions from their persisted briefs.
       */
-    private def blockHeader(num: BlockNumber): IO[Either[(StatusCode, ErrorResponse), Json]] =
-        if num == BlockNumber.zero then
-            IO.pure(Right(headConfig.initialBlock.blockBrief.header.asJson))
+    private def blockBody(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockBodyView]] =
+        if num == BlockNumber.zero then IO.pure(Right(ApiDto.mkInitialBlockBodyView))
         else
             consensusReader.blockBrief(num).map {
-                case None => Left(blockNotFound(num))
-                case Some(brief) =>
-                    Right(brief match {
-                        case b: BlockBrief.Minor => b.header.asJson
-                        case b: BlockBrief.Major => b.header.asJson
-                        case b: BlockBrief.Final => b.header.asJson
-                    })
+                case None        => Left(blockNotFound(num))
+                case Some(brief) => Right(ApiDto.mkBlockBodyView(brief))
             }
 
     /** The block's type — `initial` for block 0 (config), else read from its brief. `None` if a

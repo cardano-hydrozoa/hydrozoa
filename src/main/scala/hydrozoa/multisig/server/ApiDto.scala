@@ -113,14 +113,50 @@ object ApiDto {
     )
     given Codec[BlockConfirmationView] = deriveCodec
 
-    /** The block-details body: the listing row plus the confirmation status. */
+    /** The block-details body: the listing row, the hard-confirming stack's number (absent until
+      * the block is hard-confirmed), and the confirmation status.
+      */
     final case class BlockDetailsView(
         number: Int,
         leader: Option[Int],
         blockType: String,
+        stackId: Option[Int],
         confirmation: BlockConfirmationView
     )
     given Codec[BlockDetailsView] = deriveCodec
+
+    /** One of a block's transactions: the opaque request id woven into the block and the validity
+      * verdict it received there.
+      */
+    final case class BlockRequestView(requestId: Long, validity: String)
+    given Codec[BlockRequestView] = deriveCodec
+
+    /** The block-body body — the block's content: its transactions (the requests woven into it,
+      * each with its verdict) and its deposit decisions (the request ids absorbed into the treasury
+      * and those rejected).
+      */
+    final case class BlockBodyView(
+        number: Int,
+        blockType: String,
+        transactions: List[BlockRequestView],
+        depositsAbsorbed: List[Long],
+        depositsRejected: List[Long]
+    )
+    given Codec[BlockBodyView] = deriveCodec
+
+    /** Map a block's brief to its content view. */
+    def mkBlockBodyView(brief: BlockBrief.Next): BlockBodyView =
+        BlockBodyView(
+          number = brief.blockNum.convert,
+          blockType = blockTypeName(brief),
+          transactions = brief.requests.map((id, v) => BlockRequestView(id.asI64, validityName(v))),
+          depositsAbsorbed = brief.depositsAbsorbed.map(_.asI64),
+          depositsRejected = brief.depositsRejected.map(_.asI64)
+        )
+
+    /** The initial block (block 0) has no woven content. */
+    def mkInitialBlockBodyView: BlockBodyView =
+        BlockBodyView(number = 0, blockType = "initial", transactions = Nil, Nil, Nil)
 
     /** Map a brief to its listing row; `nHeadPeers` fixes the round-robin leader. */
     def mkBlockSummaryView(brief: BlockBrief.Next, nHeadPeers: Int): BlockSummaryView =
