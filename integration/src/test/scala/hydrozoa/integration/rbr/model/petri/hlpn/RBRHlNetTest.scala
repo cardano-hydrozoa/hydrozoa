@@ -93,8 +93,10 @@ class RBRHlNetTest extends AnyFunSuite:
     private def firedVia(n: Net, tid: RBRTransitionId): Net =
         HlSimulator(n, ModeSelector.unifying).fire(tid).toOption.get._1.net
 
+    // The core offers no enabled-set query (it would be selector-relative); compose it from the
+    // unifying selector's candidates and the net's exact isModeEnabled.
     private def enabledVia(n: Net, tid: RBRTransitionId): Boolean =
-        HlSimulator(n, ModeSelector.unifying).enabledTransitions.contains(tid)
+        ModeSelector.unifying.candidates(n, tid).exists(n.isModeEnabled(tid, _))
 
     /** Drive the dispute to the single fully-tallied box `(0, 0, Voted, 2)`: peer0 votes v=1, peer1
       * votes v=2, peer2 abstains, the deadline passes, and the four boxes fold in.
