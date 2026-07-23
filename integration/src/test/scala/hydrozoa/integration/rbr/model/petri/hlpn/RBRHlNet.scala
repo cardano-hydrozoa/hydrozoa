@@ -174,24 +174,21 @@ object RBRHlNet {
               (1 until nHeadPeers).map(HeadPeerNumber(_))*
             )
         val peerClass =
-            Sort.Class("Peer", peers, Sort.Discipline.Unordered, Map.empty)
+            Sort.Class("Peer", peers, Sort.Discipline.Unordered)
         val keyClass = Sort.Class(
           "Key",
           NonEmptySet.of(BigInt(0), (1 to nHeadPeers).map(BigInt(_))*),
-          Sort.Discipline.Unordered,
-          Map.empty
+          Sort.Discipline.Unordered
         )
         val statusClass = Sort.Class(
           "Status",
           NonEmptySet.of(BallotStatus.Abstained, BallotStatus.Awaiting, BallotStatus.Voted),
-          Sort.Discipline.Linear,
-          Map.empty
+          Sort.Discipline.Linear
         )
         val versionClass = Sort.Class(
           "Version",
           NonEmptySet.of(BigInt(0), (1 to maxVersionMinor).map(BigInt(_))*),
-          Sort.Discipline.Linear,
-          Map.empty
+          Sort.Discipline.Linear
         )
         // A payout obligation is a real `TransactionOutput` (`EvacuationTx` drains
         // `evacuatedOutputs: List[TransactionOutput]`); its class carrier is the scenario's committed
@@ -213,8 +210,7 @@ object RBRHlNet {
             committedObligations.headOption.map(_._2).getOrElse(committedOutputs(0).head),
             committedObligations.drop(1).map(_._2)*
           ),
-          Sort.Discipline.Unordered,
-          Map.empty
+          Sort.Discipline.Unordered
         )
         // TODO: harden. The product domain `Key × Key × Status × Version` over-approximates valid
         // ballots — it admits structurally-impossible colors like `key == link` (a box linking to
