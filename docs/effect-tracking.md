@@ -132,63 +132,65 @@ The two grow in the same expression, so `payouts(i) ↔ payoutRequestIds(i)` by 
 tag). It flows `L2LedgerState.payoutRequestIds → BlockResult.payoutRequestIds` (per block). No
 per-output correspondence is needed — the tag is per-command, expanded to per-payout here.
 
-### Where each payout lands: packing and `payoutOffset`
+### Where each payout lands: forward-contiguous packing
 
 The payout vector is per **block** (a settlement runs over `major.payoutObligations`; the final tx
 over `finalBlockWithdrawals ++ residualBalances`). It splits in two steps:
 
 1. **Size-pack into a rollout chain** (`RolloutTx.AddPayouts.go`). Each tx has a byte budget ≈
-   `maxTxSize − dummySignatures − nativeScriptSize − (rolloutOutput, if any) − 500`. The packer walks
-   the vector in order, summing each `outputSize`, filling a tx until the next obligation would
-   overflow, then starting a new one — cutting the vector into **contiguous size-bounded chunks**,
-   one per tx. Membership is a pure function of (order, `outputSize`, budget), so every peer cuts
-   identically.
-2. **The settlement / finalization tx absorbs the leftover chunk if it fits** (`TryMerge`): it pulls
+   `maxTxSize − dummySignatures − nativeScriptSize − (rolloutOutput, if any) − 500`. The packer fills
+   each tx to its budget, cutting the vector into **contiguous size-bounded chunks**, one per tx.
+   Membership is a pure function of (order, `outputSize`, budget), so every peer cuts identically.
+2. **The settlement / finalization tx absorbs the adjacent chunk if it fits** (`TryMerge`): it pulls
    the first rollout's (smallest, leftover) chunk directly into itself and re-balances — `Merged` if
    it fits (that rollout drops out), else `NotMerged` (the treasury tx pays nothing directly).
 
-Each effect tx therefore owns one contiguous `[payoutOffset, payoutOffset + payoutCount)` of the
-block's vector. `payoutOffset` is recorded as an **off-tx** field on `RolloutTx.Last/NotLast`,
-`SettlementTx.WithPayouts`, and `FinalizationTx.WithPayouts` (alongside the existing `payoutCount`),
-computed as `total − nePayoutObligationsRemaining.length` (the build was handed a suffix of the
-original vector, so its chunk starts where the suffix starts). Being off-tx, it never affects the tx
-bytes; the persistence codecs carry it since it is deterministic. `payoutCount` alone cannot say
-*which* chunk a tx holds — the offset can.
+The chunks are laid out **forward-contiguous and ascending**: the settlement / finalization tx takes
+`[0, payoutCount)`, then each rollout in chain order takes the next `payoutCount`. So a tx's offset
+into the block's vector is simply the **running sum of the preceding txs' `payoutCount`s** —
+`payoutCount` alone locates the chunk, and there is **no stored `payoutOffset`** (nor any off-tx
+offset field on `RolloutTx` / `SettlementTx` / `FinalizationTx`). The packer builds the chain
+back-to-front — the tail rollout is built first and fills from the *back* of the vector
+(`remainingObligations.last` / `.init`) — precisely so the finished chain reads front-to-back as this
+ascending run.
 
-**Worked example** — 1000 payouts (indices `0..999`), ~300 fitting per tx → chunks `300+300+300+100`.
-The settlement tries to absorb the 100-chunk:
+**Worked example** — 1000 payouts (indices `0..999`), ~300 fitting per tx → chunks `100+300+300+300`
+(the leftover 100-chunk is the one adjacent to the treasury tx). The settlement tries to absorb it:
 
 `Merged` (settlement takes the leftover chunk) — 4 effect txs:
 
-| effect tx | `payoutOffset` | `payoutCount` | pays |
+| effect tx | offset (running sum) | `payoutCount` | pays |
 |---|--:|--:|---|
-| settlement (direct) | 900 | 100 | 900..999 |
-| rollout #1 | 600 | 300 | 600..899 |
-| rollout #2 | 300 | 300 | 300..599 |
-| rollout #3 | 0 | 300 | 0..299 |
+| settlement (direct) | 0 | 100 | 0..99 |
+| rollout #1 | 100 | 300 | 100..399 |
+| rollout #2 | 400 | 300 | 400..699 |
+| rollout #3 | 700 | 300 | 700..999 |
 
-`NotMerged` (settlement pays nothing directly) — 5 effect txs, the settlement with `payoutCount = 0`
-(contributing no rows) and four rollouts at offsets `900/600/300/0`.
+`NotMerged` (settlement pays nothing directly) — 5 effect txs: the settlement with `payoutCount = 0`
+(offset `0`, contributing no rows), then four rollouts at offsets `0/100/400/700`.
 
-The chain is assembled back-to-front (the tail rollout is built first from the full vector and takes
-`[0, k)`), which is why offset `0` lands on the *last* rollout. Chunk sizes vary in practice (the tail
-rollout has no rollout output, so a slightly larger budget); the offsets/counts are **read off** the
-built txs, never assumed.
+Chunk sizes vary in practice (the tail rollout has no rollout output, so a slightly larger budget);
+the counts are **read off** the built txs and the offsets accumulated from them, never assumed.
 
 ### Computing and persisting `withdrawalTracking`
 
 `StackEffectsBuilder.mkEffectsRegular` holds both the ordered obligations and the built tx-seq (each
-effect tx's `payoutOffset`/`payoutCount` and final `tx.id`). Per partition its `trackWithdrawals`
-helper builds a `provenance` vector — settlement: `major.payoutRequestIds.map(Some)`; finalization:
-`fin.payoutRequestIds.map(Some) ++ Vector.fill(residualCount)(None)` — and slices it per effect tx:
+effect tx's `payoutCount` and final `tx.id`). Per partition its `trackWithdrawals` helper takes the
+partition's **withdrawal request ids** — the prefix `[0, N)` of the payout vector, one id per
+withdrawing payout (settlement: `major.payoutRequestIds`; finalization: `fin.payoutRequestIds`, the
+residual balances being the obligations at or beyond `N`) — plus the effect-tx `slices` in offset
+order (`settlementSlices` / `finalizationSlices`: the treasury tx's direct slice, then the rollouts in
+chain order, each as `(payoutCount, l1TxId)`). It folds over the slices, tracking the running offset,
+and for each tx emits its in-prefix slice:
 
 ```
-provenance.slice(payoutOffset, payoutOffset + payoutCount).flatten.distinct.map(r => (r, l1TxId))
+withdrawalRequestIds.slice(offset, min(offset + payoutCount, N)).distinct.map(r => (r, l1TxId))
 ```
 
-One `(requestId, l1TxId)` link per distinct withdrawing request in the tx's chunk; residual
-(finalization-only, `None`) positions produce none. The resulting `withdrawalTracking` is returned as
-a **side value** — not inside the hard-ack-signed `StackEffects`, which would break multisig.
+One `(requestId, l1TxId)` link per distinct withdrawing request in the tx's chunk; a tx whose chunk
+lies entirely in the residual tail (`offset ≥ N`) produces none. The resulting `withdrawalTracking` is
+returned as a **side value** — not inside the hard-ack-signed `StackEffects`, which would break
+multisig.
 `StackComposer` threads it through `ComposedStack` and writes it into `WithdrawalEffectIndex` at
 **stack close** (`persistOwnStackClose`), where it is locally in hand; reaching hard-confirmation would
 mean threading it through the consensus rounds, and the resolver gates on hard-confirmation via
