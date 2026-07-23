@@ -2,6 +2,7 @@ package hydrozoa.integration.rbr.model.petri.hlpn
 
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId, committedOutputs}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Abstained, Awaiting, Voted}
+import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalatest.funsuite.AnyFunSuite
@@ -135,6 +136,34 @@ class RBRHlNetTest extends AnyFunSuite:
 
     test("the net assembles and is well-sorted") {
         assert(SortCheck.errors(net).isEmpty)
+    }
+
+    test("Ballot domain: the listing excludes self-links and non-Voted versions") {
+        val valid = RBRHlNet.validBallots(nHeadPeers = 3, maxVersionMinor = 2)
+        val _ = assert(valid.contains(box(0, 0, Voted, 2))) // fully-tallied terminal box
+        val _ = assert(valid.contains(box(1, 2, Awaiting, 0))) // awaiting box carries version 0
+        val _ = assert(!valid.contains(box(1, 1, Voted, 1))) // non-terminal self-link
+        assert(!valid.contains(box(1, 2, Awaiting, 1))) // non-Voted box with a version
+    }
+
+    test("Owner domain: the listing is exactly the ownership diagonal") {
+        val valid = RBRHlNet.validOwners(nHeadPeers = 3)
+        val _ = assert(valid == Set(peer0 -> BigInt(1), peer1 -> BigInt(2), peer2 -> BigInt(3)))
+        assert(!valid.contains(peer1 -> BigInt(1))) // peer1 does not own box key 1
+    }
+
+    test("Ballots place rejects a malformed box: a self-link fails markingError") {
+        val place = net.placesMap(RBRPlaceId.Ballots)
+        given Order[Any] = place.colorDomain.order
+        val bad = Multiset(place.marking.multiplicityMap.updated(box(1, 1, Voted, 1), SafeLong(1)))
+        assert(place.mark(bad).markingError.isDefined)
+    }
+
+    test("Owner place rejects an off-diagonal pair via markingError") {
+        val place = net.placesMap(RBRPlaceId.Owner)
+        given Order[Any] = place.colorDomain.order
+        val bad = Multiset(place.marking.multiplicityMap.updated((peer1, BigInt(1)), SafeLong(1)))
+        assert(place.mark(bad).markingError.isDefined)
     }
 
     test("Vote: the pending box flips to Voted(v); owner, collateral, references restored") {

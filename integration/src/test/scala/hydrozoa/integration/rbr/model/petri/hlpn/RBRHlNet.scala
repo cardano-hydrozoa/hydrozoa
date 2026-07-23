@@ -97,7 +97,9 @@ object RBRHlNet {
         given Ordering[RBRTransitionId] = Ordering.by(_.ordinal)
     }
 
-    /** A plain bag place: marking + declared color domain, no extra invariants (first draft). */
+    /** A plain bag place: marking + declared color domain, no extra invariants. Invalid colors are
+      * rejected by [[ColoredPlace.markingError]] when the domain is an enumerated [[Sort.Class]].
+      */
     final case class RBRPlace[C](marking: MultiSet[C], colorDomain: Sort[C])
         extends ColoredPlace[C] {
         def mark(m: MultiSet[C]): RBRPlace[C] = copy(marking = m)
@@ -151,6 +153,34 @@ object RBRHlNet {
 
     private val payoutAddress: Address =
         Address.fromBech32("addr_test1wqt2v8zcpjldyu2zcwz3yuu8p4wpk0hzaqwthh23qgs5xgg7266qn")
+
+    /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
+      * (Awaiting/Abstained carry 0), and a box never links to itself except the fully-tallied
+      * terminal box `(0, 0)`. Refines the `Key × Key × Status × Version` product on the Ballots place.
+      */
+    def validBallots(nHeadPeers: Int, maxVersionMinor: Int): Set[Ballot] =
+        val validStatusVersion: Set[(BallotStatus, BigInt)] =
+            Set(BallotStatus.Abstained -> BigInt(0), BallotStatus.Awaiting -> BigInt(0)) ++
+                (0 to maxVersionMinor).map(v => BallotStatus.Voted -> BigInt(v))
+        val keys = 0 to nHeadPeers
+        val validKeyLink: Set[(BigInt, BigInt)] =
+            (for { k <- keys; l <- keys if k != l } yield BigInt(k) -> BigInt(l)).toSet +
+                (BigInt(0) -> BigInt(0))
+        for {
+            (k, l) <- validKeyLink
+            (s, v) <- validStatusVersion
+        } yield Ballot(k, l, s, v)
+
+    /** The static ownership diagonal: peer `i` owns box key `i + 1`. Refines the `Peer × Key`
+      * product on the Owner place.
+      */
+    def validOwners(nHeadPeers: Int): Set[(HeadPeerNumber, Key)] =
+        (0 until nHeadPeers).map(i => HeadPeerNumber(i) -> BigInt(i + 1)).toSet
+
+    /** A flat color class whose carrier is an explicit listing of valid colors. */
+    private def enumerated[C](name: String, colors: Set[C])(using Order[C]): Sort[C] =
+        val cs = colors.toList
+        Sort.Class(name, NonEmptySet.of(cs.head, cs.tail*), Sort.Discipline.Unordered)
 
     /** Build the RBR net for the given head-peer count and minor-version bound.
       *
@@ -212,23 +242,19 @@ object RBRHlNet {
           ),
           Sort.Discipline.Unordered
         )
-        // TODO: harden. The product domain `Key × Key × Status × Version` over-approximates valid
-        // ballots — it admits structurally-impossible colors like `key == link` (a box linking to
-        // itself). The initial marking seeds only well-formed boxes, but nothing rejects an invalid
-        // one arising during firing. Enforce via a `ColoredPlace.markingError` invariant on the
-        // Ballots place (e.g. `key != link`) or a domain refinement.
-        val ballotSort: Sort[Ballot] =
-            Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass)))
-        // TODO: harden. `Peer × Key` admits any (peer, key) pair; only the diagonal `(i, i+1)`
-        // ("peer i owns box key i+1") is real. The initial `Owner` marking seeds the diagonal, but
-        // the relation isn't enforced — a markingError invariant (or making Owner a derived
-        // function rather than free tokens) would pin it.
-        val ownerSort: Sort[(HeadPeerNumber, BigInt)] = Sort.Prod(peerClass, keyClass)
+        // Ballot and Owner domains are enumerated: their colors are exactly the structurally-valid
+        // tuples (a flat `Sort.Class` carrier), not the full `Key × Key × Status × Version` /
+        // `Peer × Key` product — which over-approximates with self-links, non-Voted versions, and
+        // off-diagonal ownership. The marking-key order is the structural product's; SortCheck accepts
+        // the componentwise (Prod-sorted) arc inscriptions against the narrower class (its carrier ⊆
+        // the product), and `ColoredPlace.markingError` rejects any out-of-carrier color on firing.
+        given Order[Ballot] =
+            Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass))).order
+        given Order[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass).order
+        val ballotSort: Sort[Ballot] = enumerated("Ballot", validBallots(nHeadPeers, maxVersionMinor))
+        val ownerSort: Sort[(HeadPeerNumber, Key)] = enumerated("Owner", validOwners(nHeadPeers))
         // A committed obligation is (version, output): PayoutObligations holds one per candidate SEC.
         val payoutSort: Sort[(BigInt, TransactionOutput)] = Sort.Prod(versionClass, outputClass)
-
-        given Order[Ballot] = ballotSort.order
-        given Order[(HeadPeerNumber, BigInt)] = ownerSort.order
         given Order[(BigInt, TransactionOutput)] = payoutSort.order
 
         // ---- Variables ----
