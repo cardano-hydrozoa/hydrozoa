@@ -12,9 +12,8 @@ package hydrozoa.lib.petri.hlpn
   * composes `selector.candidates(net, tid).filter(net.isModeEnabled(tid, _))` itself and owns the
   * completeness — which is the selector's burden (see [[ModeSelector]]), not the net's.
   *
-  * Like [[HlNet]], this does not extend the framework's mode-less
-  * [[hydrozoa.lib.petri.net.Simulator]] — HLPN firing is mode-relative, and the chosen mode is part
-  * of the result.
+  * HLPN firing is mode-relative: [[fire]] returns the mode that fired as part of the result, so
+  * this is its own driver rather than a plain mode-less simulator.
   */
 final case class HlSimulator[PlaceId, TransitionId, C](
     net: HlNet[PlaceId, TransitionId, C],
