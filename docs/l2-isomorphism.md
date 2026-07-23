@@ -82,7 +82,7 @@ no clock, so at apply it receives the block-creation time. What Hydrozoa keeps i
 *sequencing*: a request is screened first, admitted second.
 
 ```
-user ──POST /head/tx──► RequestSequencer
+user ──POST /head/requests──► RequestSequencer
                                    │  sendScreenTx(l2Payload)            (stateless)
                                    ▼
                               L2Ledger screening ── fail ──► rejected, no RequestId
@@ -105,7 +105,7 @@ tx id). Screening cannot resolve inputs, check balance, or test the validity win
 state. It returns pass/fail with an error reason; Hydrozoa itself never inspects or compares head
 identities — the pin check lives entirely inside the ledger. Passing is what assigns the
 `RequestId`, so an unparseable or unauthenticated payload is dropped before it consumes a durable
-id or any peer traffic. On the wire, `POST /head/tx` returns the assigned `RequestId` on
+id or any peer traffic. On the wire, `POST /head/requests` returns the assigned `RequestId` on
 acceptance and the rejection reason otherwise (`docs/openapi.yaml`).
 
 **Submission** is the stateful apply path at block production: the validity interval against the
@@ -131,7 +131,7 @@ and void the signatures.
 The deposit path, in order (client steps marked):
 
 1. **Client:** build the deposit tx (`DepositTx.Build` puts `blake2b_256(l2Payload)` in its
-   metadata) and register both payloads with `POST /head/deposit`.
+   metadata) and register both payloads with `POST /head/requests`.
 2. **Deposit L1 screening** — Hydrozoa's stage, before the ledger sees the deposit
    (`multisig/ledger/l1/tx/DepositL1Screening.scala`, called by `RequestSequencer`).
    `screen(l1Payload, l2Payload, now)`:

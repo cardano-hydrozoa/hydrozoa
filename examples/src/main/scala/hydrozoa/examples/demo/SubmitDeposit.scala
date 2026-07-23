@@ -32,7 +32,7 @@ import scalus.uplc.builtin.ByteString
   * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
   * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload (its hash
   * pins the payload in the deposit tx metadata, docs/l2-isomorphism.md), registers the deposit with
-  * the head (`POST /head/deposit`), then signs the deposit tx and submits it to L1 via Blockfrost,
+  * the head (`POST /head/requests`), then signs the deposit tx and submits it to L1 via Blockfrost,
   * polling until the deposit utxo lands. The head absorbs it after maturity.
   *
   * Usage:

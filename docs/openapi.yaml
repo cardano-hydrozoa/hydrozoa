@@ -3,35 +3,46 @@ info:
   title: Hydrozoa node API
   version: 0.1.0
 paths:
-  /head/tx:
-    post:
-      description: Submit an L2 transaction (a JSON UserRequest whose L2 payload is
-        a native, self-authenticating Cardano transaction).
-      operationId: postHeadTx
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: string
-        required: true
+  /head/requests:
+    get:
+      description: Requests the head has assigned an id — opaque request id, author
+        peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
+        and ?peer_number=<n>.
+      operationId: getHeadRequests
+      parameters:
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: peer_number
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
       responses:
         '200':
           description: ''
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RequestAcceptedResponse'
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestSummaryView'
         default:
           description: ''
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /head/deposit:
     post:
-      description: Register an L1 deposit (a JSON UserRequest carrying the unsigned
-        deposit tx CBOR and the serialized L2 outputs the deposit spawns on absorption).
-      operationId: postHeadDeposit
+      description: 'Submit a request. A root field tags the type: `{ "deposit": {
+        "l1Payload", "l2Payload" } }` registers an L1 deposit (the unsigned deposit-tx
+        CBOR plus the serialized L2 outputs it spawns on absorption); `{ "transaction":
+        { "l2Payload" } }` submits an L2 transaction (a native, self-authenticating
+        Cardano tx). Returns the assigned request id.'
+      operationId: postHeadRequest
       requestBody:
         content:
           application/json:
@@ -62,39 +73,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HeadInfoResponse'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /head/requests:
-    get:
-      description: Requests the head has assigned an id — opaque request id, author
-        peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
-        and ?peer_number=<n>.
-      operationId: getHeadRequests
-      parameters:
-      - name: type
-        in: query
-        required: false
-        schema:
-          type: string
-      - name: peer_number
-        in: query
-        required: false
-        schema:
-          type: integer
-          format: int32
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/RequestSummaryView'
         default:
           description: ''
           content:

@@ -87,31 +87,21 @@ class HydrozoaRoutes(
 
     // ---- Endpoint definitions (the single source of truth for routes + schema) ----
 
-    private val submitEndpoint: ServerEndpoint[Any, IO] =
+    private val submitRequestEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("head" / "tx")
-            .name("postHeadTx")
+            .in("head" / "requests")
+            .name("postHeadRequest")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Submit an L2 transaction (a JSON UserRequest whose L2 payload is a native, " +
-                  "self-authenticating Cardano transaction)."
+              "Submit a request. A root field tags the type: " +
+                  "`{ \"deposit\": { \"l1Payload\", \"l2Payload\" } }` registers an L1 deposit " +
+                  "(the unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on " +
+                  "absorption); `{ \"transaction\": { \"l2Payload\" } }` submits an L2 transaction " +
+                  "(a native, self-authenticating Cardano tx). Returns the assigned request id."
             )
-            .serverLogic(body => acceptUserRequest("POST /head/tx", body))
-
-    private val registerDepositEndpoint: ServerEndpoint[Any, IO] =
-        endpoint.post
-            .in("head" / "deposit")
-            .name("postHeadDeposit")
-            .in(stringJsonBody)
-            .out(jsonBody[RequestAcceptedResponse])
-            .errorOut(errorOut)
-            .description(
-              "Register an L1 deposit (a JSON UserRequest carrying the unsigned deposit tx " +
-                  "CBOR and the serialized L2 outputs the deposit spawns on absorption)."
-            )
-            .serverLogic(body => acceptUserRequest("POST /head/deposit", body))
+            .serverLogic(body => acceptUserRequest("POST /head/requests", body))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -464,8 +454,7 @@ class HydrozoaRoutes(
     /** The core API endpoints, in the order they appear in the docs — always served. */
     private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
         List(
-          submitEndpoint,
-          registerDepositEndpoint,
+          submitRequestEndpoint,
           headInfoEndpoint,
           requestsEndpoint,
           requestDetailsEndpoint,

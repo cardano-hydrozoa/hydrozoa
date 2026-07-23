@@ -371,7 +371,7 @@ Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/car
 — the opening `l2-cardano-eutxo.json` outputs sit at the head peers' addresses), enter a
 destination (bech32, or a peer name like `head-1`) and a value. The tool builds the zero-fee
 native tx (with the CIP-67 output designations and the headId pin in the metadata), signs it with
-the peer wallet, and posts it to `POST /head/tx`. An example session — send 2 of head-0's
+the peer wallet, and posts it to `POST /head/requests`. An example session — send 2 of head-0's
 opening 5 ADA to head-1:
 
 ```
@@ -405,7 +405,7 @@ just deposit
 Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
 is head peer 0, the funded one), and enter the L2 outputs the deposit should spawn. The tool
 serializes the L2 payload (its hash rides in the deposit tx metadata), registers the deposit with
-`POST /head/deposit`, then signs the deposit tx and submits it to L1 via Blockfrost,
+`POST /head/requests`, then signs the deposit tx and submits it to L1 via Blockfrost,
 polling until the utxo lands. An example session — deposit 3 ADA from head-0's L1 funds to
 coil-0's L2 address:
 
