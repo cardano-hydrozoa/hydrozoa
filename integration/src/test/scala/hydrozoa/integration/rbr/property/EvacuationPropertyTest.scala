@@ -11,8 +11,8 @@ import scala.annotation.unused
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
-import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
 import hydrozoa.lib.classification.Histogram
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
@@ -289,41 +289,41 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
                 IO.pure(RBRPlaceId.values.toList.map(k => k -> hist(k)).toMap)
 
     /** Diagnostic helper: emit each ambient-bucket UTxO (input / address / value / datum) via
-      * Slf4j so the composition of [[AmbientPlaceId]] can be identified when the terminal
+      * Slf4j so the composition of [[Ambient]] can be identified when the terminal
       * cardinality shifts. Toggle by uncommenting the `logAmbientUtxos(...)` call site in
       * [[runClassifier]]. Not on the happy path so callers pay nothing when commented out.
       */
     @unused
     private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
-        val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
+        val ambient = utxos.filter(u => classifier.classify(u).contains(Ambient))
         val lines = ambient.zipWithIndex.map { case (u, idx) =>
             s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
         }.mkString("\n")
         Slf4jTracer.sink.traceWith(
           hydrozoa.lib.logging.LogEvent
               .From(Map.empty, "AmbientDiagnostic")
-              .info(s"AmbientPlaceId utxos (${ambient.size}):\n$lines")
+              .info(s"Ambient utxos (${ambient.size}):\n$lines")
         )
 
     /** Expected terminal cardinalities: init → settle-v1 → fallback → vote → tally → resolve →
       * evacuate on the happy path. `evacuationCount` is the first `PayoutsLeft(n)` observed
       * from any peer's RBA — exactly the size of the resolved treasury's evacuation map before
       * drain begins (see `RuleBasedActor.Evacuation.handle`).
-      *   - `EvacuationOutputPlaceId -> evacuationCount`: every L2 output was drained to L1 via
+      *   - `EvacuationOutput -> evacuationCount`: every L2 output was drained to L1 via
       *     the RBA's `EvacuationTx` loop; each output carries the `"evacuation"` inline-datum
       *     sentinel stamped by [[InitializationParametersGen.generatePeerContribution]], which
       *     survives the KZG membership hash and so appears on the L1 evacuation outputs.
-      *   - `PayoutObligationsPlaceId -> 0`: no in-flight payout obligations remain on the
+      *   - `PayoutObligations -> 0`: no in-flight payout obligations remain on the
       *     resolved treasury.
-      *   - `CollateralPlaceId -> 0`: the [[RBRClassifier]] identifies collateral by the
+      *   - `Collateral -> 0`: the [[RBRClassifier]] identifies collateral by the
       *     `"collateral"` datum sentinel, which only exists in the synthetic
       *     [[InitialDisputeUtxos]] fixture — the real tx builders draw collateral from plain
       *     Ada wallet UTxOs (no datum). Preserved collateral therefore lands in
-      *     [[AmbientPlaceId]] here. TODO: the right way to bucket collateral in an end-to-end
+      *     [[Ambient]] here. TODO: the right way to bucket collateral in an end-to-end
       *     scenario is to walk the tx graph and mark any output that is later consumed as a
       *     `collateral_input` of some downstream tx — i.e. classify by role in tx history
       *     rather than by content sentinel.
-      *   - `AmbientPlaceId -> nHeadPeers * 2 + nCoilPeers`: head peers keep two wallet-ADA
+      *   - `Ambient -> nHeadPeers * 2 + nCoilPeers`: head peers keep two wallet-ADA
       *     streams at their shelley address — an [[InitializationTx]] change output and a
       *     [[FallbackTx]] equity payout. Coil peers keep only the init-change stream (no
       *     fallback equity). Every RBR-side script tx that pays its fee from collateral
@@ -331,17 +331,15 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
       *     it (fee-subtracted) at the same address, so no utxo is destroyed.
       */
     private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
-        Map(
-          TreasuryRefPlaceId        -> 1,
-          DisputeRefPlaceId         -> 1,
-          RegimeRefPlaceId          -> 1,
-          SetupLadderRefPlaceId     -> 7,
-          ResolvedTreasuryPlaceId   -> 1,
-          UnresolvedTreasuryPlaceId -> 0,
-          VotedPlaceId              -> 0,
-          UnvotedPlaceId            -> 0,
-          CollateralPlaceId         -> 0,
-          EvacuationOutputPlaceId   -> evacuationCount,
-          PayoutObligationsPlaceId  -> 0,
-          AmbientPlaceId            -> (nHeadPeers * 2 + nCoilPeers),
+        // Non-zero observable buckets; the total map (below) fills every other place id with 0 so it
+        // lines up with `runClassifier`, which is keyed by every `RBRPlaceId.values`.
+        val nonZero = Map(
+          TreasuryScriptRef -> 1,
+          DisputeScriptRef  -> 1,
+          RegimeRef         -> 1,
+          SetupLadder       -> 7,
+          ResolvedTreasury  -> 1,
+          EvacuationOutput  -> evacuationCount,
+          Ambient           -> (nHeadPeers * 2 + nCoilPeers),
         )
+        RBRPlaceId.values.toList.map(k => k -> nonZero.getOrElse(k, 0)).toMap
