@@ -15,10 +15,12 @@ import spire.math.SafeLong
   * mode, however, makes the simulator incomplete for it: completeness is the selector's burden,
   * soundness the net's.
   *
-  * This is a *firing* search and need not be complete: [[HlSimulator.fire]] only needs it to
-  * propose *some* enabled candidate. Enumerating the *enabled set* is a different job — it must be
-  * complete by construction and must not lean on this selector (see the FIXME on
-  * [[HlSimulator.enabledModes]]).
+  * This is a *firing* search and may be incomplete: [[HlSimulator.fire]] only needs it to propose
+  * *some* enabled candidate. The framework offers no "enabled set" query — that would be a
+  * selector-relative result masquerading as truth (an arbitrary selector may propose nothing for a
+  * transition). A caller that wants the enabled modes composes
+  * `candidates(net, tid).filter(net.isModeEnabled(tid, _))` itself, and its completeness is *this
+  * selector's* burden.
   */
 trait ModeSelector[PlaceId, TransitionId, C] {
 

@@ -1,10 +1,16 @@
 package hydrozoa.lib.petri.hlpn
 
-/** An HLPN simulator: an [[HlNet]] paired with a [[ModeSelector]]. The net supplies the *rules*
+/** An HLPN firing driver: an [[HlNet]] paired with a [[ModeSelector]]. The net supplies the *rules*
   * (Concepts 23/24 via [[HlNet.fire]]); the selector supplies the *search* — which candidate modes
-  * to try. This mirrors ISO Concept 6/7's split: the enabling function `E` is evaluated over the
-  * selector's candidates, and firing selects the first enabled one (the selector's preference order
-  * is the selection policy of Concept 7, step 2).
+  * to try — and [[fire]] fires the first one the net accepts (the selection policy of Concept 7).
+  *
+  * It deliberately exposes *no* "enabled set" query. Any such query would be *selector-relative*:
+  * `selector.candidates(net, tid)` is a search strategy, free to be incomplete (a greedy `Collect`
+  * selector yields one batch; an arbitrary selector may propose nothing for a transition), so "the
+  * selector finds an enabled mode" is not "the transition is enabled". The truthful, selector-free
+  * primitive is [[HlNet.isModeEnabled]] on a *specific* mode. A caller that wants the enabled set
+  * composes `selector.candidates(net, tid).filter(net.isModeEnabled(tid, _))` itself and owns the
+  * completeness — which is the selector's burden (see [[ModeSelector]]), not the net's.
   *
   * Like [[HlNet]], this does not extend the framework's mode-less
   * [[hydrozoa.lib.petri.net.Simulator]] — HLPN firing is mode-relative, and the chosen mode is part
@@ -15,25 +21,8 @@ final case class HlSimulator[PlaceId, TransitionId, C](
     selector: ModeSelector[PlaceId, TransitionId, C]
 ) {
 
-    /** FIXME (bug): this MUST return the *complete* set of enabled modes, but it filters the firing
-      * [[selector]]'s candidates — so a greedy/incomplete selector silently under-reports. On a
-      * `Collect` arc it yields only the single max batch, not every enabled sub-batch. The enabled
-      * set has to be enumerated completely, independent of the firing selector; the consequences of
-      * the current behaviour are severe (conformance/MBT and reachability miss real moves).
-      */
-    def enabledModes(tid: TransitionId): LazyList[Binding] =
-        selector.candidates(net, tid).filter(net.isModeEnabled(tid, _))
-
-    /** Whether the selector finds any mode enabling `tid`. */
-    def isEnabled(tid: TransitionId): Boolean = enabledModes(tid).nonEmpty
-
-    /** Every transition with an enabled mode. FIXME: inherits the [[enabledModes]] completeness bug
-      * — under-reports whenever a transition's only enabled modes are ones the selector omits.
-      */
-    def enabledTransitions: Set[TransitionId] = net.transitionIds.filter(isEnabled)
-
-    /** Fire `tid` under the first enabled candidate, returning the advanced simulator and the mode
-      * that fired. Candidates that fail the net's own checks are skipped, not errors.
+    /** Fire `tid` under the first candidate the net accepts, returning the advanced simulator and
+      * the mode that fired. Candidates that fail the net's own checks are skipped, not errors.
       */
     def fire(
         tid: TransitionId

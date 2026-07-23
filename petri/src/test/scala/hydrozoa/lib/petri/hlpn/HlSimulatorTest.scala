@@ -52,6 +52,17 @@ class HlSimulatorTest extends AnyFunSuite:
     private def simulator(pending: MultiSet[String]): HlSimulator[String, String, String] =
         HlSimulator(net(pending), ModeSelector.enumerating)
 
+    // The core deliberately offers no "enabled set" query — it would be selector-relative (see
+    // HlSimulator). These helpers reconstruct it to exercise the *selectors*: the enabled modes a
+    // selector proposes, and the transitions it finds enabled.
+    extension [P, T, C](sim: HlSimulator[P, T, C])
+        private def enabledModes(tid: T): LazyList[Binding] =
+            sim.selector.candidates(sim.net, tid).filter(sim.net.isModeEnabled(tid, _))
+        private def enabledTransitions: Set[T] =
+            sim.net.transitionIds.filter(t =>
+                sim.selector.candidates(sim.net, t).exists(sim.net.isModeEnabled(t, _))
+            )
+
     test("the enumerating selector finds exactly the enabled modes") {
         val sim = simulator(ms("p0" -> 1, "p2" -> 1))
         val peers = sim.enabledModes("advance").flatMap(Binding.lookup(_, p)).toSet
