@@ -6,6 +6,7 @@ import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.petri.Positive
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder as SetupLadderScript
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{Key, Link}
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import scala.collection.immutable.SortedMap
@@ -135,7 +136,7 @@ object RBRHlNet {
         regimeRef: PlaceRef[RBRPlaceId, Unit],
         disputeScriptRef: PlaceRef[RBRPlaceId, Unit],
         treasuryScriptRef: PlaceRef[RBRPlaceId, Unit],
-        setupLadder: PlaceRef[RBRPlaceId, Unit],
+        setupLadder: PlaceRef[RBRPlaceId, BigInt],
         collateral: PlaceRef[RBRPlaceId, HeadPeerNumber],
         payoutObligations: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
         resolvedVersion: PlaceRef[RBRPlaceId, BigInt],
@@ -220,6 +221,14 @@ object RBRHlNet {
           NonEmptySet.of(BigInt(0), (1 to maxVersionMinor).map(BigInt(_))*),
           Sort.Discipline.Linear
         )
+        // The G2 setup-ladder rungs, one reference utxo per rung (`SetupLadder.rungCount`); rung i
+        // covers 2^i evacuations. Colored by rung index so the model holds one token per on-chain
+        // rung; Evacuation references one.
+        val setupRungClass = Sort.Class(
+          "SetupRung",
+          NonEmptySet.of(BigInt(0), (1 until SetupLadderScript.rungCount).map(BigInt(_))*),
+          Sort.Discipline.Unordered
+        )
         // A payout obligation is a real `TransactionOutput` (`EvacuationTx` drains
         // `evacuatedOutputs: List[TransactionOutput]`); its class carrier is the scenario's committed
         // outputs. Outputs are large opaque data, so the carrier is net-specific, not a symmetric
@@ -267,6 +276,7 @@ object RBRHlNet {
         val version = Var("version", versionClass)
         // the evacuated batch: all obligations of the resolved version, up to maxEvacuationsPerTx
         val batch = CollectVar("batch", payoutSort, EvacuationTx.Assumptions.maxEvacuationsPerTx)
+        val rung = Var("rung", setupRungClass) // the setup-ladder rung Evacuation references
         val versionOld = Var("versionOld", versionClass)
         val versionNew = Var("versionNew", versionClass)
         // Tally operands: the continuing box (1) and the removed box (2)
@@ -307,6 +317,9 @@ object RBRHlNet {
         val allPeers: MultiSet[HeadPeerNumber] = bagOf(peers.toSortedSet.toSeq.map(_ -> 1)*)
         val oneDot: MultiSet[Unit] = bagOf(() -> 1)
         val noDots: MultiSet[Unit] = bagOf[Unit]()
+        // One token per setup-ladder rung (indices 0..rungCount-1).
+        val setupRungs: MultiSet[BigInt] =
+            bagOf((0 until SetupLadderScript.rungCount).map(i => BigInt(i) -> 1)*)
 
         // FallbackTx seeds: the public box (key 0, already Voted at version 0) and one AwaitingVote
         // box per peer; the last box's link is the 0 sentinel.
@@ -339,7 +352,7 @@ object RBRHlNet {
                 regimeRef <- b.place(RegimeRef, RBRPlace(oneDot, Sort.Dot))
                 disputeScriptRef <- b.place(DisputeScriptRef, RBRPlace(oneDot, Sort.Dot))
                 treasuryScriptRef <- b.place(TreasuryScriptRef, RBRPlace(oneDot, Sort.Dot))
-                setupLadder <- b.place(SetupLadder, RBRPlace(oneDot, Sort.Dot))
+                setupLadder <- b.place(SetupLadder, RBRPlace(setupRungs, setupRungClass))
                 collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
                 payoutObligations <- b.place(PayoutObligations, RBRPlace(initialObligations, payoutSort))
                 resolvedVersion <- b.place(ResolvedVersion, RBRPlace(noVersions, versionClass))
@@ -552,7 +565,11 @@ object RBRHlNet {
         val evacuatedBatch = Inscription.Collect(batch, Tuple(Ref(version), Wildcard(outputClass)))
         def evacuation(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
             for {
-                t <- b.transition(RBRTransitionId.Evacuation, List(version, collateralPeer), Guard.True)
+                t <- b.transition(
+                  RBRTransitionId.Evacuation,
+                  List(version, collateralPeer, rung),
+                  Guard.True
+                )
                 // ValidityStartSlot / resolved-version read: binds `version` to the resolved SEC
                 _ <- b.read(places.resolvedVersion, t, one(Ref(version)))
                 // treasuryUtxo.spendAttached(Evacuate) / newTreasury.send: treasury stays Resolved
@@ -565,7 +582,8 @@ object RBRHlNet {
                 // config.referenceTreasury / regimeUtxo.referenceOutput / ReferenceOutput(setupRung)
                 _ <- b.read(places.treasuryScriptRef, t, dotToken)
                 _ <- b.read(places.regimeRef, t, dotToken)
-                _ <- b.read(places.setupLadder, t, dotToken)
+                // ReferenceOutput(setupRung): the rung authenticating this batch
+                _ <- b.read(places.setupLadder, t, one(Ref(rung)))
             } yield ()
 
         // ---- Deinit (mirrors DeinitTx.Build) ----

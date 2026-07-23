@@ -21,7 +21,7 @@ class ObservableMarkingTest extends AnyFunSuite:
             RegimeRef          -> 1,
             DisputeScriptRef   -> 1,
             TreasuryScriptRef  -> 1,
-            SetupLadder        -> 1,
+            SetupLadder        -> 7,
             EvacuationOutput   -> 0
           )
         )
