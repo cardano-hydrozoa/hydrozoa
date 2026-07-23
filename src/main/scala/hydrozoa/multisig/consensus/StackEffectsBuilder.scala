@@ -86,19 +86,24 @@ object StackEffectsBuilder {
         def partitionRefunds(bs: List[BlockResult]): List[RefundTx] =
             bs.flatMap(_.postDatedRefundTxs)
 
-        // Withdrawal-effect tracking for a partition: `provenance` is the partition's ordered payout
-        // provenance (one entry per obligation the builder consumed — `Some(requestId)` for a
-        // withdrawal, `None` for a finalization residual balance), and `slices` are the effect txs
-        // that discharged a contiguous `[offset, offset+count)` of it. Each distinct withdrawing
-        // request in a tx's slice contributes one `(requestId, l1TxId)` link; residuals contribute
-        // none. The offsets/counts come from the builder (off-tx `payoutOffset` / `payoutCount`),
-        // so this needs no re-derivation of the packing.
+        // Withdrawal-effect tracking for a partition: the withdrawals are the **prefix**
+        // `withdrawalRequestIds` of the partition's payout-obligation vector — positions `[0, N)`,
+        // one request id each — and any obligations at or beyond `N` are finalization residual
+        // balances, not withdrawals. `slices` are the effect txs, each discharging a contiguous
+        // `[offset, offset+count)`. Each distinct withdrawing request in a tx's in-prefix slice
+        // contributes one `(requestId, l1TxId)` link; residual positions contribute none. The
+        // offsets/counts come from the builder (off-tx `payoutOffset` / `payoutCount`), so this
+        // needs no re-derivation of the packing.
         def trackWithdrawals(
-            provenance: Vector[Option[RequestId]],
+            withdrawalRequestIds: Vector[RequestId],
             slices: List[(Int, Int, TransactionHash)]
         ): List[(RequestId, TransactionHash)] =
+            val n = withdrawalRequestIds.length
             slices.flatMap { (offset, count, l1TxId) =>
-                provenance.slice(offset, offset + count).flatten.distinct.map(r => (r, l1TxId))
+                val hi = math.min(offset + count, n)
+                if hi > offset then
+                    withdrawalRequestIds.slice(offset, hi).distinct.map(r => (r, l1TxId))
+                else Nil
             }
 
         // A treasury tx's directly-discharged slice (settlement / finalization absorbs the first
@@ -190,11 +195,14 @@ object StackEffectsBuilder {
                                       refunds = partitionRefunds(p.blocks.toList),
                                       sec = sec
                                     ): PartitionEffects[StandaloneEvacuationCommitment]
-                                    // The settlement drains the major block's withdrawals — all
-                                    // real requests (the settlement input is `major.payoutObligations`).
-                                    val prov = major.payoutRequestIds.toVector.map(Some(_))
+                                    // The settlement drains the major block's withdrawals — every
+                                    // obligation is a real request (the settlement input is
+                                    // `major.payoutObligations`), so the whole vector is the prefix.
                                     val withdrawalTracking =
-                                        trackWithdrawals(prov, settlementSlices(seq))
+                                        trackWithdrawals(
+                                          major.payoutRequestIds.toVector,
+                                          settlementSlices(seq)
+                                        )
                                     (
                                       pe :: effectsAcc,
                                       newTreasury,
@@ -231,12 +239,15 @@ object StackEffectsBuilder {
                               finalization = seq.finalizationTx,
                               rollouts = seq.rolloutTxs
                             ): PartitionEffects[StandaloneEvacuationCommitment]
-                            // Provenance aligns with the combined finalization input: the final
-                            // block's withdrawals (real requests) first, then the residual balances
-                            // (no request) — matching `payoutObligationsRemaining` above.
-                            val prov = fin.payoutRequestIds.toVector.map(Some(_)) ++
-                                Vector.fill(mapAfterFinal.outputs.size)(None)
-                            val withdrawalTracking = trackWithdrawals(prov, finalizationSlices(seq))
+                            // The final block's withdrawals are the prefix of the combined
+                            // finalization input (`fin.payoutObligations ++ residual`), so its
+                            // request ids `[0, N)` are exactly the withdrawal positions; the residual
+                            // balances after them are not withdrawals.
+                            val withdrawalTracking =
+                                trackWithdrawals(
+                                  fin.payoutRequestIds.toVector,
+                                  finalizationSlices(seq)
+                                )
                             (
                               pe :: effectsAcc,
                               tre,
