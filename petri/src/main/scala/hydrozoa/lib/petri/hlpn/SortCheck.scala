@@ -33,7 +33,9 @@ object SortCheck:
         }
         guardErrors ++ arcErrors
 
-    /** Each distinct leaf sort of `inscription` that is not the connected place's color domain. */
+    /** Each distinct leaf sort of `inscription` not compatible with the connected place's color
+      * domain (see [[domainCompatible]]).
+      */
     private def domainErrors[PlaceId, C](
         arcId: String,
         place: PlaceId,
@@ -44,8 +46,25 @@ object SortCheck:
             case None => List(SortError.MissingPlace(place.toString))
             case Some(p) =>
                 leafSorts(inscription).distinct
-                    .filter(_ != p.colorDomain)
+                    .filterNot(domainCompatible(_, p.colorDomain))
                     .map(s => SortError.ArcDomainMismatch(arcId, name(s), name(p.colorDomain)))
+
+    /** Whether an arc inscription of sort `leaf` may target a place of color domain `domain`.
+      *
+      * Exact equality is the usual case. The relaxation: an enumerated `Sort.Class` domain — whose
+      * carrier is a hand-listed sub-domain — accepts a structurally larger `leaf` (e.g. the `Prod` of
+      * a componentwise inscription) as long as every carrier color is a `leaf` color, i.e. the domain
+      * is a genuine sub-domain of what the arc produces. The arc may still produce a color outside the
+      * carrier, so exact domain membership is a marking invariant ([[ColoredPlace.markingError]]), not
+      * a static guarantee — SortCheck here is type compatibility, not domain containment.
+      */
+    private def domainCompatible(leaf: Sort[?], domain: Sort[?]): Boolean =
+        leaf == domain || (domain match
+            case cls: Sort.Class[?] =>
+                val leafAny = leaf.asInstanceOf[Sort[Any]]
+                cls.carrier.toSortedSet.forall(c => leafAny.contains(c))
+            case _ => false
+        )
 
     /** The sort of every weighted color in an inscription — both branches of a `Union`, not just
       * the root (whose sort is only the left branch's).

@@ -103,6 +103,27 @@ class SortCheckTest extends AnyFunSuite:
         })
     }
 
+    // The enumerated-sub-domain relaxation: a `Sort.Class` place domain whose carrier is a subset of
+    // the inscription's sort is accepted — exact membership is a marking invariant, not static. (The
+    // product-into-class case is exercised by the RBR model; here both sorts are String classes.)
+    test("an enumerated sub-domain accepts an inscription of a larger sort") {
+        val evenPeers = Sort.Class("EvenPeer", NonEmptySet.of("p0", "p2"), Sort.Discipline.Unordered)
+        val net = netWith(List(p), Guard.True, wp, placeDomain = evenPeers)
+        assert(!SortCheck.errors(net).exists {
+            case _: SortError.ArcDomainMismatch => true
+            case _                              => false
+        })
+    }
+
+    test("a sub-domain carrying a color outside the inscription's sort is still rejected") {
+        val weird = Sort.Class("Weird", NonEmptySet.of("p0", "pX"), Sort.Discipline.Unordered)
+        val net = netWith(List(p), Guard.True, wp, placeDomain = weird)
+        assert(SortCheck.errors(net).exists {
+            case _: SortError.ArcDomainMismatch => true
+            case _                              => false
+        })
+    }
+
     // (A) Peer and Vote are both `Sort.Class` over `String`, so `Eq`/`Lt` across them typecheck.
     test("a guard comparing operands of different sorts is rejected") {
         val g = Guard.Eq(ColorTerm.Ref(p), ColorTerm.Const("No", vote))
