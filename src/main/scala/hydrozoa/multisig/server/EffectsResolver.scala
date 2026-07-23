@@ -130,29 +130,33 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
     /** A deposit's effects: its post-dated refund (registration-block partition) and, once
       * absorbed, the settlement of its absorbing block's partition.
       */
+    // A deposit's related effects are just its always-present post-dated refund. The absorbing
+    // settlement (for an absorbed deposit) is NOT a related effect — it rides on the deposit's
+    // decision status instead (see [[depositSettlement]]).
     private def depositEffects(requestId: RequestId): IO[List[ResolvedEffect]] =
-        val refund: IO[List[ResolvedEffect]] =
-            reader.requestBlock(requestId).flatMap {
-                case None => IO.pure(Nil)
-                case Some(entry) =>
-                    partitionForBlock(entry.blockNum).map {
-                        case None => Nil
-                        case Some((_, pe)) =>
-                            depositRefundEffect(requestId, entry.blockNum, pe).toList
-                    }
-            }
-        // Only an absorbed deposit has an absorbing settlement; a rejected or still-undecided
-        // deposit contributes none (it is repaid by the always-present post-dated refund above).
-        val settlement: IO[List[ResolvedEffect]] =
-            reader.decision(requestId).flatMap {
-                case Some(DepositDecision.Absorbed(block)) =>
-                    partitionForBlock(block).map {
-                        case None                  => Nil
-                        case Some((blockNums, pe)) => settlementEffect(blockNums.head, pe).toList
-                    }
-                case _ => IO.pure(Nil)
-            }
-        (refund, settlement).mapN(_ ++ _)
+        reader.requestBlock(requestId).flatMap {
+            case None => IO.pure(Nil)
+            case Some(entry) =>
+                partitionForBlock(entry.blockNum).map {
+                    case None          => Nil
+                    case Some((_, pe)) => depositRefundEffect(requestId, entry.blockNum, pe).toList
+                }
+        }
+
+    /** The settlement that absorbed a deposit — present only once the deposit is `Absorbed` AND the
+      * absorbing (major) block's stack is hard-confirmed; absent for a rejected / undecided deposit
+      * or before hard-confirmation. Surfaced on the deposit's decision status, not its related
+      * effects.
+      */
+    def depositSettlement(requestId: RequestId): IO[Option[ResolvedEffect]] =
+        reader.decision(requestId).flatMap {
+            case Some(DepositDecision.Absorbed(block)) =>
+                partitionForBlock(block).map {
+                    case None                  => None
+                    case Some((blockNums, pe)) => settlementEffect(blockNums.head, pe)
+                }
+            case _ => IO.pure(None)
+        }
 
     /** Every effect a hard-confirmed stack carries, attributed per block. Empty when the stack is
       * not hard-confirmed.

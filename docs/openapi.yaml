@@ -661,9 +661,27 @@ components:
         receivedAt:
           type: string
         status:
-          $ref: '#/components/schemas/RequestStatusView'
-    RequestStatusView:
-      title: RequestStatusView
+          $ref: '#/components/schemas/Shape'
+        decisionStatus:
+          $ref: '#/components/schemas/Shape1'
+    RequestSummaryView:
+      title: RequestSummaryView
+      type: object
+      required:
+      - requestId
+      - peerNumber
+      - requestType
+      properties:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
+          type: integer
+          format: int32
+        requestType:
+          type: string
+    Shape:
+      title: Shape
       type: object
       required:
       - status
@@ -683,21 +701,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EffectRefView'
-    RequestSummaryView:
-      title: RequestSummaryView
+    Shape1:
+      title: Shape
       type: object
       required:
-      - requestId
-      - peerNumber
-      - requestType
+      - status
       properties:
-        requestId:
-          type: integer
-          format: int64
-        peerNumber:
+        status:
+          type: string
+        blockNumber:
           type: integer
           format: int32
-        requestType:
+        decision:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        settlementEffect:
           type: string
     TxInputView:
       title: TxInputView

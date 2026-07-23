@@ -7,11 +7,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
@@ -684,11 +684,15 @@ class HydrozoaRoutes(
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
         confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
 
-    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
-      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
-      * stack index — the hard-confirmation record.
+    /** This node's confirmation state for a block: whether it is soft- / hard-confirmed (the
+      * records exist), plus the `(soft, hard)` wall-clock moments derived from those records'
+      * arrival stamps — the soft-confirmation record, and, through the block → stack index, the
+      * hard-confirmation record. A moment is absent (though its rung still holds) when the stamp's
+      * generation predates the store's zero-time anchor.
       */
-    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
+    private def confirmationState(
+        num: BlockNumber
+    ): IO[(Boolean, Boolean, Option[Instant], Option[Instant])] =
         for {
             soft <- consensusReader.softConfirmation(num)
             stack <- consensusReader.stackOf(num)
@@ -698,7 +702,13 @@ class HydrozoaRoutes(
             }
             softAt <- soft.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
             hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
-        } yield (softAt, hardAt)
+        } yield (soft.isDefined, hard.isDefined, softAt, hardAt)
+
+    /** This node's `(soft, hard)` confirmation moments for a block (the time projection of
+      * [[confirmationState]]).
+      */
+    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
+        confirmationState(num).map((_, _, softAt, hardAt) => (softAt, hardAt))
 
     /** The request-details body for a request id, or a 404 when the head has assigned no such id.
       * The lifecycle status resolves through the request → block index and the block's confirmation
@@ -731,20 +741,59 @@ class HydrozoaRoutes(
                 for {
                     receivedAt <- consensusReader.wallClockOf(stamped.stamp)
                     processed <- consensusReader.requestBlock(id)
-                    confirmation <- processed match {
-                        case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
-                        case Some(entry) => confirmationTimes(entry.blockNum)
+                    conf <- processed match {
+                        case None =>
+                            IO.pure((false, false, Option.empty[Instant], Option.empty[Instant]))
+                        case Some(entry) => confirmationState(entry.blockNum)
                     }
-                    (softAt, hardAt) = confirmation
+                    (softC, hardC, softAt, hardAt) = conf
                     effects <- effectsResolver.relatedEffects(id)
-                    status = ApiDto.mkRequestStatusView(
+                    status = ApiDto.mkRequestStatus(
                       block = processed.map(e => (e.blockNum.convert, e.validity)),
+                      softConfirmed = softC,
+                      hardConfirmed = hardC,
                       softConfirmedAt = softAt,
                       hardConfirmedAt = hardAt,
                       relatedEffects = effects.map(ApiDto.mkEffectRefView)
                     )
-                } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
+                    decisionStatus <- depositDecisionStatus(id, stamped.payload, processed)
+                } yield Right(
+                  ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status, decisionStatus)
+                )
         }
+
+    /** A valid deposit request's decision status (undecided / local-decision / confirmed), or
+      * `None` for a transaction or a deposit already ruled invalid. The confirmation moments are of
+      * the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
+      */
+    private def depositDecisionStatus(
+        id: RequestId,
+        request: UserRequestWithId,
+        processed: Option[RequestBlockEntry]
+    ): IO[Option[DepositDecisionStatusView]] =
+        val isDeposit = ApiDto.requestTypeName(request) == "deposit"
+        val isInvalid = processed.exists(_.validity == RequestId.ValidityFlag.Invalid)
+        if !isDeposit || isInvalid then IO.pure(None)
+        else
+            for {
+                decision <- consensusReader.decision(id)
+                conf <- decision match {
+                    case None =>
+                        IO.pure((false, false, Option.empty[Instant], Option.empty[Instant]))
+                    case Some(d) => confirmationState(d.block)
+                }
+                (softC, hardC, softAt, hardAt) = conf
+                settlement <- effectsResolver.depositSettlement(id)
+            } yield Some(
+              ApiDto.mkDecisionStatus(
+                decided = decision.map(d => (d.block.convert, ApiDto.decisionName(d))),
+                softConfirmed = softC,
+                hardConfirmed = hardC,
+                softConfirmedAt = softAt,
+                hardConfirmedAt = hardAt,
+                settlementEffect = settlement.map(_.l1TxId.toHex)
+              )
+            )
 
     private def requestNotFound(id: RequestId): (StatusCode, ErrorResponse) =
         fail(StatusCode.NotFound, s"Request ${id.asI64} not found")
