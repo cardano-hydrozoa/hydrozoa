@@ -148,8 +148,8 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO.pure(None)
             def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
             def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
-                IO.pure(Some(instantOf(stamp)))
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
+                IO.pure(instantOf(stamp))
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
             def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)

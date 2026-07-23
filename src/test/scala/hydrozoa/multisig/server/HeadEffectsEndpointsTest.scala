@@ -153,7 +153,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                 )
             def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)
 
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
         mkMinorBrief1

@@ -192,9 +192,9 @@ object ApiDto {
         def blockNumber: Int
         def validity: String
 
-    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the block. The time is optional — a
-      * confirmation whose arrival-stamp generation predates the store's zero-time anchor has no
-      * derivable wall clock, though the rung itself still holds.
+    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the block. The time is optional because a
+      * hard-confirmed request that (exceptionally) has no soft-confirmation record still sits on
+      * the `HardConfirmed` rung, which inherits this field.
       */
     sealed trait SoftConfirmedStatus extends LocallyProcessedStatus:
         def softConfirmedAt: Option[String]
@@ -283,7 +283,9 @@ object ApiDto {
           summon[Encoder[Shape]].contramap(toShape)
         )
         given Schema[RequestStatusView] =
-            summon[Schema[Shape]].map(s => Some(fromShape(s)))(toShape)
+            summon[Schema[Shape]]
+                .map(s => Some(fromShape(s)))(toShape)
+                .name(Schema.SName("RequestStatusView"))
 
     /** A valid deposit's decision status, a ladder parallel to [[RequestStatusView]] but tracking
       * the absorb-or-reject decision: `UNDECIDED` → `LOCAL_DECISION` (deciding block + `ABSORBED` /
@@ -300,8 +302,8 @@ object ApiDto {
         def blockNumber: Int
         def decision: String
 
-    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the deciding block (time optional; see
-      * [[SoftConfirmedStatus]]).
+    /** `SOFT_CONFIRMED` and up: this peer soft-confirmed the deciding block (time optional for the
+      * same reason as [[SoftConfirmedStatus]]).
       */
     sealed trait DecisionSoftConfirmedStatus extends LocalDecisionStatus:
         def softConfirmedAt: Option[String]
@@ -380,7 +382,9 @@ object ApiDto {
           summon[Encoder[Shape]].contramap(toShape)
         )
         given Schema[DepositDecisionStatusView] =
-            summon[Schema[Shape]].map(s => Some(fromShape(s)))(toShape)
+            summon[Schema[Shape]]
+                .map(s => Some(fromShape(s)))(toShape)
+                .name(Schema.SName("DepositDecisionStatusView"))
 
     /** The request-details body: opaque id (echoed from the path), author peer, type, receive time
       * (when this peer received the request — a local event, so different peers report different
@@ -391,7 +395,7 @@ object ApiDto {
         requestId: Long,
         peerNumber: Int,
         requestType: String,
-        receivedAt: Option[String],
+        receivedAt: String,
         status: RequestStatusView,
         decisionStatus: Option[DepositDecisionStatusView]
     )
@@ -415,15 +419,12 @@ object ApiDto {
         case ValidityFlag.Invalid => "invalid"
 
     /** Assemble the request-status ladder from its resolved lifecycle stages: the processing block
-      * and verdict (absent while unprocessed), whether this peer has soft- / hard-confirmed (from
-      * the confirmation records, not the times — a hard-confirmed request with no derivable wall
-      * clock is still `HARD_CONFIRMED`), the node-local confirmation moments, and the L1 effects
+      * and verdict (absent while unprocessed), the node-local confirmation moments (each present
+      * iff this peer holds that confirmation record — `wallClockOf` is total), and the L1 effects
       * the request became (present once hard-confirmed).
       */
     def mkRequestStatus(
         block: Option[(Int, ValidityFlag)],
-        softConfirmed: Boolean,
-        hardConfirmed: Boolean,
         softConfirmedAt: Option[Instant],
         hardConfirmedAt: Option[Instant],
         relatedEffects: List[EffectRefView]
@@ -432,7 +433,7 @@ object ApiDto {
             case None => RequestStatusView.Unprocessed
             case Some((blockNumber, v)) =>
                 val validity = validityName(v)
-                if hardConfirmed then
+                if hardConfirmedAt.isDefined then
                     RequestStatusView.HardConfirmed(
                       blockNumber,
                       validity,
@@ -440,7 +441,7 @@ object ApiDto {
                       hardConfirmedAt.map(_.toString),
                       relatedEffects
                     )
-                else if softConfirmed then
+                else if softConfirmedAt.isDefined then
                     RequestStatusView.SoftConfirmed(
                       blockNumber,
                       validity,
@@ -460,8 +461,6 @@ object ApiDto {
       */
     def mkDecisionStatus(
         decided: Option[(Int, String)],
-        softConfirmed: Boolean,
-        hardConfirmed: Boolean,
         softConfirmedAt: Option[Instant],
         hardConfirmedAt: Option[Instant],
         settlementEffect: Option[String]
@@ -469,7 +468,7 @@ object ApiDto {
         decided match
             case None => DepositDecisionStatusView.Undecided
             case Some((blockNumber, decision)) =>
-                if hardConfirmed then
+                if hardConfirmedAt.isDefined then
                     DepositDecisionStatusView.HardConfirmed(
                       blockNumber,
                       decision,
@@ -477,7 +476,7 @@ object ApiDto {
                       hardConfirmedAt.map(_.toString),
                       settlementEffect
                     )
-                else if softConfirmed then
+                else if softConfirmedAt.isDefined then
                     DepositDecisionStatusView.SoftConfirmed(
                       blockNumber,
                       decision,
@@ -490,7 +489,7 @@ object ApiDto {
       */
     def mkRequestDetailsView(
         request: UserRequestWithId,
-        receivedAt: Option[Instant],
+        receivedAt: Instant,
         status: RequestStatusView,
         decisionStatus: Option[DepositDecisionStatusView]
     ): RequestDetailsView =
@@ -498,7 +497,7 @@ object ApiDto {
           requestId = request.requestId.asI64,
           peerNumber = request.requestId.peerNum.convert,
           requestType = requestTypeName(request),
-          receivedAt = receivedAt.map(_.toString),
+          receivedAt = receivedAt.toString,
           status = status,
           decisionStatus = decisionStatus
         )

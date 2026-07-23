@@ -523,6 +523,25 @@ components:
           format: int32
         blockType:
           type: string
+    DepositDecisionStatusView:
+      title: DepositDecisionStatusView
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        decision:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        settlementEffect:
+          type: string
     EffectRefView:
       title: EffectRefView
       type: object
@@ -648,6 +667,7 @@ components:
       - requestId
       - peerNumber
       - requestType
+      - receivedAt
       - status
       properties:
         requestId:
@@ -661,27 +681,11 @@ components:
         receivedAt:
           type: string
         status:
-          $ref: '#/components/schemas/Shape'
+          $ref: '#/components/schemas/RequestStatusView'
         decisionStatus:
-          $ref: '#/components/schemas/Shape1'
-    RequestSummaryView:
-      title: RequestSummaryView
-      type: object
-      required:
-      - requestId
-      - peerNumber
-      - requestType
-      properties:
-        requestId:
-          type: integer
-          format: int64
-        peerNumber:
-          type: integer
-          format: int32
-        requestType:
-          type: string
-    Shape:
-      title: Shape
+          $ref: '#/components/schemas/DepositDecisionStatusView'
+    RequestStatusView:
+      title: RequestStatusView
       type: object
       required:
       - status
@@ -701,24 +705,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EffectRefView'
-    Shape1:
-      title: Shape
+    RequestSummaryView:
+      title: RequestSummaryView
       type: object
       required:
-      - status
+      - requestId
+      - peerNumber
+      - requestType
       properties:
-        status:
-          type: string
-        blockNumber:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
           type: integer
           format: int32
-        decision:
-          type: string
-        softConfirmedAt:
-          type: string
-        hardConfirmedAt:
-          type: string
-        settlementEffect:
+        requestType:
           type: string
     TxInputView:
       title: TxInputView

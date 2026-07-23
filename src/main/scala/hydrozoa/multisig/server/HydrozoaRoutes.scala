@@ -684,15 +684,12 @@ class HydrozoaRoutes(
     private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
         confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
 
-    /** This node's confirmation state for a block: whether it is soft- / hard-confirmed (the
-      * records exist), plus the `(soft, hard)` wall-clock moments derived from those records'
-      * arrival stamps — the soft-confirmation record, and, through the block → stack index, the
-      * hard-confirmation record. A moment is absent (though its rung still holds) when the stamp's
-      * generation predates the store's zero-time anchor.
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
+      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
+      * stack index — the hard-confirmation record. Each moment is present exactly when this peer
+      * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
       */
-    private def confirmationState(
-        num: BlockNumber
-    ): IO[(Boolean, Boolean, Option[Instant], Option[Instant])] =
+    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
             soft <- consensusReader.softConfirmation(num)
             stack <- consensusReader.stackOf(num)
@@ -700,15 +697,9 @@ class HydrozoaRoutes(
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-            softAt <- soft.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
-            hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
-        } yield (soft.isDefined, hard.isDefined, softAt, hardAt)
-
-    /** This node's `(soft, hard)` confirmation moments for a block (the time projection of
-      * [[confirmationState]]).
-      */
-    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
-        confirmationState(num).map((_, _, softAt, hardAt) => (softAt, hardAt))
+            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
+            hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
+        } yield (softAt, hardAt)
 
     /** The request-details body for a request id, or a 404 when the head has assigned no such id.
       * The lifecycle status resolves through the request → block index and the block's confirmation
@@ -741,17 +732,14 @@ class HydrozoaRoutes(
                 for {
                     receivedAt <- consensusReader.wallClockOf(stamped.stamp)
                     processed <- consensusReader.requestBlock(id)
-                    conf <- processed match {
-                        case None =>
-                            IO.pure((false, false, Option.empty[Instant], Option.empty[Instant]))
-                        case Some(entry) => confirmationState(entry.blockNum)
+                    times <- processed match {
+                        case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                        case Some(entry) => confirmationTimes(entry.blockNum)
                     }
-                    (softC, hardC, softAt, hardAt) = conf
+                    (softAt, hardAt) = times
                     effects <- effectsResolver.relatedEffects(id)
                     status = ApiDto.mkRequestStatus(
                       block = processed.map(e => (e.blockNum.convert, e.validity)),
-                      softConfirmed = softC,
-                      hardConfirmed = hardC,
                       softConfirmedAt = softAt,
                       hardConfirmedAt = hardAt,
                       relatedEffects = effects.map(ApiDto.mkEffectRefView)
@@ -777,18 +765,15 @@ class HydrozoaRoutes(
         else
             for {
                 decision <- consensusReader.decision(id)
-                conf <- decision match {
-                    case None =>
-                        IO.pure((false, false, Option.empty[Instant], Option.empty[Instant]))
-                    case Some(d) => confirmationState(d.block)
+                times <- decision match {
+                    case None    => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                    case Some(d) => confirmationTimes(d.block)
                 }
-                (softC, hardC, softAt, hardAt) = conf
+                (softAt, hardAt) = times
                 settlement <- effectsResolver.depositSettlement(id)
             } yield Some(
               ApiDto.mkDecisionStatus(
                 decided = decision.map(d => (d.block.convert, ApiDto.decisionName(d))),
-                softConfirmed = softC,
-                hardConfirmed = hardC,
                 softConfirmedAt = softAt,
                 hardConfirmedAt = hardAt,
                 settlementEffect = settlement.map(_.l1TxId.toHex)

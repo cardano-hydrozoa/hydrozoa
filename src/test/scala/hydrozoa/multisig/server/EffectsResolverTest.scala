@@ -178,7 +178,7 @@ class EffectsResolverTest extends AnyFunSuite:
                 IO.pure(
                   Option.when(id == depositRequestId)(DepositDecision.Absorbed(BlockNumber(1)))
                 )
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)
 
     private val resolver = EffectsResolver(reader)
 

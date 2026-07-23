@@ -74,9 +74,9 @@ trait ConsensusStoreReader[F[_]]:
     def withdrawalEffects(id: RequestId): F[List[TransactionHash]]
 
     /** The wall-clock instant an arrival stamp was recorded at, via the store's per-generation
-      * zero-time anchor. `None` for a stamp whose generation predates the anchor.
+      * zero-time anchor (total — see [[Persistence.wallClockOf]]).
       */
-    def wallClockOf(stamp: ArrivalStamp): F[Option[Instant]]
+    def wallClockOf(stamp: ArrivalStamp): F[Instant]
 
 object ConsensusStoreReader:
 
@@ -153,7 +153,7 @@ object ConsensusStoreReader:
                   stop = (k: (Long, TransactionHash)) => k._1 != id.asI64
                 )((k, _) => k._2)
 
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
                 persistence.wallClockOf(stamp)
 
     /** A reader over no data — every lookup is empty. For wiring the routes on a node whose store
@@ -178,4 +178,4 @@ object ConsensusStoreReader:
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
             def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)

@@ -115,8 +115,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
             def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
             def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
-                IO.pure(Some(instantOf(stamp)))
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
+                IO.pure(instantOf(stamp))
 
     private def withRoutes(reader: ConsensusStoreReader[IO])(check: HttpApp[IO] => IO[Unit]): Unit =
         ActorSystem[IO]("HeadRequestsEndpointsTest")
