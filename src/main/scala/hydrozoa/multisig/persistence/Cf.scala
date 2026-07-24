@@ -101,6 +101,13 @@ object Cf:
     case object EffectStackIndex extends Cf:
         def name = "EffectStackIndex"
 
+    /** Deposit-request → absorbing-block reverse index: the deposit request's opaque id (packed
+      * i64) → the major `blockNum` that absorbed the deposit into the treasury. Written by JL in
+      * the same atomic bundle as that block.
+      */
+    case object DepositAbsorptionIndex extends Cf:
+        def name = "DepositAbsorptionIndex"
+
     /** Store-level metadata (schema version + arrival-stamp generation). */
     case object Meta extends Cf:
         def name = "Meta"
@@ -142,6 +149,7 @@ object Cf:
       Treasury,
       EvacuationMap,
       RequestBlockIndex,
+      DepositAbsorptionIndex,
       BlockStackIndex,
       EffectStackIndex,
       Meta

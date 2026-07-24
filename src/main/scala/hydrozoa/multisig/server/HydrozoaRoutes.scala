@@ -317,7 +317,8 @@ class HydrozoaRoutes(
             .description(
               "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
                   "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
-                  "time), or HARD_CONFIRMED (+ hard-confirmation time). Every time records a " +
+                  "time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects — " +
+                  "the l1TxIds the request became). Every time records a " +
                   "local event at this peer — when it received the request, and when it produced " +
                   "the soft/hard confirmation — so different peers report different times for the " +
                   "same request. This is by design."
@@ -735,10 +736,12 @@ class HydrozoaRoutes(
                         case Some(entry) => confirmationTimes(entry.blockNum)
                     }
                     (softAt, hardAt) = confirmation
+                    effects <- effectsResolver.relatedEffects(id)
                     status = ApiDto.mkRequestStatusView(
                       block = processed.map(e => (e.blockNum.convert, e.validity)),
                       softConfirmedAt = softAt,
-                      hardConfirmedAt = hardAt
+                      hardConfirmedAt = hardAt,
+                      relatedEffects = effects.map(ApiDto.mkEffectRefView)
                     )
                 } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
         }

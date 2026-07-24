@@ -668,7 +668,9 @@ final case class JointLedger(
       *     `L2CommandNumber[blockNum]` (recover reads the fast-anchor entry and calls
       *     `l2Ledger.restoreTo` to co-anchor the committed L2 state, §R2b);
       *   - one request → (block, validity) reverse-index row per event in this block →
-      *     `RequestBlockIndex[requestId]` (keyed by the opaque request id's packed i64).
+      *     `RequestBlockIndex[requestId]` (keyed by the opaque request id's packed i64);
+      *   - one deposit-request → block reverse-index row per deposit absorbed in this (major) block
+      *     → `DepositAbsorptionIndex[requestId]`.
       *
       * A head peer adds its own `Block` (leader) + `SoftAck` lanes on top
       * ([[persistOwnAckBundle]]); a coil peer persists exactly this subset
@@ -697,10 +699,16 @@ final case class JointLedger(
                 .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
             // to the block that processed it and the validity verdict it received.
-            brief.events.foldLeft(bundle) { case (batch, (requestId, validity)) =>
-                batch.put(StoreKey.RequestBlockIndex(requestId))(
-                  RequestBlockEntry(brief.blockNum, validity)
-                )
+            val withRequestBlocks = brief.events.foldLeft(bundle) {
+                case (batch, (requestId, validity)) =>
+                    batch.put(StoreKey.RequestBlockIndex(requestId))(
+                      RequestBlockEntry(brief.blockNum, validity)
+                    )
+            }
+            // One row per deposit absorbed in this (major) block: the deposit request's id maps to
+            // the block whose settlement absorbs it into the treasury.
+            brief.depositsAbsorbed.foldLeft(withRequestBlocks) { (batch, requestId) =>
+                batch.put(StoreKey.DepositAbsorptionIndex(requestId))(brief.blockNum)
             }
         }
 

@@ -61,6 +61,11 @@ trait ConsensusStoreReader[F[_]]:
       */
     def requestBlock(id: RequestId): F[Option[RequestBlockEntry]]
 
+    /** The major block that absorbed a deposit into the treasury — absent while the deposit is
+      * unabsorbed (or the request is not a deposit).
+      */
+    def absorptionBlock(id: RequestId): F[Option[BlockNumber]]
+
     /** The wall-clock instant an arrival stamp was recorded at, via the store's per-generation
       * zero-time anchor. `None` for a stamp whose generation predates the anchor.
       */
@@ -123,6 +128,9 @@ object ConsensusStoreReader:
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] =
                 persistence.get(StoreKey.RequestBlockIndex(id))
 
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] =
+                persistence.get(StoreKey.DepositAbsorptionIndex(id))
+
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 persistence.wallClockOf(stamp)
 
@@ -146,4 +154,5 @@ object ConsensusStoreReader:
                 IO.pure(Nil)
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
+            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)

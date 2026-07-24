@@ -21,7 +21,7 @@ import scalus.cardano.ledger.TransactionHash
   * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
   * append-only replay sequence, §3) is the **subset** of column families reached through
   * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
-  * The 14 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * The 15 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
   * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -33,9 +33,10 @@ import scalus.cardano.ledger.TransactionHash
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
-  *     request id (its packed i64). [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by
-  *     `blockNum`. [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's
-  *     `l1TxId`.
+  *     request id (its packed i64). [[StoreKey.DepositAbsorptionIndex]] —
+  *     `Cf.DepositAbsorptionIndex`, keyed by the deposit request's id (its packed i64).
+  *     [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by `blockNum`.
+  *     [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
@@ -143,6 +144,18 @@ object StoreKey:
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.EffectStackIndex
         def encode: Array[Byte] = l1TxId.bytes.toArray
+
+    /** Key for [[Cf.DepositAbsorptionIndex]] — the deposit-request → absorbing-block reverse index,
+      * keyed by the opaque [[RequestId]] via its packed i64 (`asI64`), holding the [[BlockNumber]]
+      * of the major block that absorbed the deposit into the treasury. Written by JL in the same
+      * atomic bundle as that block. (A deposit's *registration* block is [[RequestBlockIndex]];
+      * absorption happens later, in a different block, so it needs its own index.)
+      */
+    final case class DepositAbsorptionIndex(id: RequestId) extends StoreKey:
+        type Value = BlockNumber
+        given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
+        val cf: Cf = Cf.DepositAbsorptionIndex
+        def encode: Array[Byte] = JournalKey.longBytes(id.asI64)
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:
