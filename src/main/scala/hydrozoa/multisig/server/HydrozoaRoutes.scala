@@ -1,15 +1,24 @@
 package hydrozoa.multisig.server
 
 import cats.effect.IO
+import cats.syntax.traverse.*
 import hydrozoa.config.head.HeadConfig
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
 import hydrozoa.multisig.server.TapirJson.*
+import io.circe.Json
+import io.circe.syntax.*
+import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
 import scalus.cardano.address.Address
@@ -35,12 +44,18 @@ class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
     nodeStatus: IO[NodeStatus],
+    consensusReader: ConsensusStoreReader[IO],
     l2QueryReader: Option[EutxoL2LedgerReader[IO]],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
+
+    /** The block-0 header encoder and the brief codecs are `CardanoNetwork.Section`-dependent;
+      * `headConfig` satisfies the section.
+      */
+    private given CardanoNetwork.Section = headConfig
 
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
@@ -69,7 +84,8 @@ class HydrozoaRoutes(
 
     private val submitEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("api" / "l2" / "submit")
+            .in("head" / "tx")
+            .name("postHeadTx")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
@@ -77,23 +93,25 @@ class HydrozoaRoutes(
               "Submit an L2 transaction (a JSON UserRequest whose L2 payload is a native, " +
                   "self-authenticating Cardano transaction)."
             )
-            .serverLogic(body => acceptUserRequest("POST /api/l2/submit", body))
+            .serverLogic(body => acceptUserRequest("POST /head/tx", body))
 
     private val registerDepositEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("api" / "deposit" / "register")
+            .in("head" / "deposit")
+            .name("postHeadDeposit")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Register an L1 deposit (a JSON UserRequest whose L2 payload is a native, " +
-                  "self-authenticating Cardano transaction)."
+              "Register an L1 deposit (a JSON UserRequest carrying the unsigned deposit tx " +
+                  "CBOR and the serialized L2 outputs the deposit spawns on absorption)."
             )
-            .serverLogic(body => acceptUserRequest("POST /api/deposit/register", body))
+            .serverLogic(body => acceptUserRequest("POST /head/deposit", body))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
-            .in("api" / "head-info")
+            .in("head" / "info")
+            .name("getHeadInfo")
             .out(jsonBody[HeadInfoResponse])
             .errorOut(errorOut)
             .description("Head parameters plus the current node time.")
@@ -104,6 +122,124 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
+    /** `{block-number}` path segments decode to a validated [[BlockNumber]] — a malformed or
+      * negative number is a 400 at decode, never a throw in a handler.
+      */
+    private given Codec[String, BlockNumber, CodecFormat.TextPlain] =
+        Codec.int.mapDecode(i =>
+            if i >= 0 then DecodeResult.Value(BlockNumber(i))
+            else
+                DecodeResult.Error(
+                  i.toString,
+                  new IllegalArgumentException("negative block number")
+                )
+        )(_.convert)
+
+    /** `{request-id}` path segments decode to a validated [[RequestId]] from its opaque i64 form
+      * (`asI64`, bits 40-47 = author peer, bits 0-39 = request number). Out of `[0, 2^48)` — where
+      * `fromI64` would throw an out-of-range peer/number — is a 400 at decode, not a 500.
+      */
+    private given Codec[String, RequestId, CodecFormat.TextPlain] =
+        Codec.long.mapDecode(n =>
+            if n >= 0 && n < (1L << 48) then DecodeResult.Value(RequestId.fromI64(n))
+            else
+                DecodeResult.Error(
+                  n.toString,
+                  new IllegalArgumentException("request id out of range [0, 2^48)")
+                )
+        )(_.asI64)
+
+    private val blocksEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks")
+            .name("getHeadBlocks")
+            .out(jsonBody[List[BlockSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Every block of the head in block order — number, fast-cycle leader, and type. " +
+                  "Block 0 is the head's initial block (config, no leader)."
+            )
+            .serverLogic(_ =>
+                consensusReader.blockBriefs
+                    .map(briefs =>
+                        Right(
+                          ApiDto.mkInitialBlockSummaryView ::
+                              briefs.map(ApiDto.mkBlockSummaryView(_, headConfig.nHeadPeers))
+                        )
+                    )
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockDetailsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number"))
+            .name("getHeadBlock")
+            .out(jsonBody[BlockDetailsView])
+            .errorOut(errorOut)
+            .description(
+              "One block's type, leader, and confirmation status: PROPOSED, SOFT (+ " +
+                  "soft-confirmation time), or HARD (+ hard-confirmation time). Each confirmation " +
+                  "time records a local event at this peer — when it produced the soft/hard " +
+                  "confirmation — so different peers report different times for the same block. " +
+                  "This is by design."
+            )
+            .serverLogic(num =>
+                blockDetails(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockHeaderEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "header")
+            .name("getHeadBlockHeader")
+            .out(jsonBody[Json])
+            .errorOut(errorOut)
+            .description(
+              "The block's header content. The shape varies by block type (initial, minor, " +
+                  "major, final)."
+            )
+            .serverLogic(num =>
+                blockHeader(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val requestsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests")
+            .in(query[Option[String]]("type"))
+            .in(query[Option[Int]]("peer_number"))
+            .name("getHeadRequests")
+            .out(jsonBody[List[RequestSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Requests the head has assigned an id — opaque request id, author peer number, and " +
+                  "type (transaction or deposit). Filter with ?type=transaction|deposit and " +
+                  "?peer_number=<n>."
+            )
+            .serverLogic((typeFilter, peerFilter) =>
+                listRequests(typeFilter, peerFilter)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val requestDetailsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests" / path[RequestId]("request-id"))
+            .name("getHeadRequest")
+            .out(jsonBody[RequestDetailsView])
+            .errorOut(errorOut)
+            .description(
+              "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
+                  "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
+                  "time), or HARD_CONFIRMED (+ hard-confirmation time). Every time records a " +
+                  "local event at this peer — when it received the request, and when it produced " +
+                  "the soft/hard confirmation — so different peers report different times for the " +
+                  "same request. This is by design."
+            )
+            .serverLogic(id =>
+                requestDetails(id)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
     // The two EUTXO L2-query endpoints are defined apart from their handlers so their schema
     // (openapi-eutxo-l2.yaml) can be generated even on a node with no reader (a remote-ledger node),
     // and the routes are mounted only when the EUTXO reader is present. See [[l2QueryReader]].
@@ -111,7 +247,8 @@ class HydrozoaRoutes(
     private val l2UtxosDef
         : PublicEndpoint[String, (StatusCode, ErrorResponse), List[L2UtxoView], Any] =
         endpoint.get
-            .in("api" / "l2" / "utxos" / path[String]("address"))
+            .in("l2" / "cardano-eutxo" / "utxos" / path[String]("address"))
+            .name("getL2CardanoEutxoUtxos")
             .out(jsonBody[List[L2UtxoView]])
             .errorOut(errorOut)
             .description("Current L2 utxos controlled by a bech32 address (EUTXO ledger only).")
@@ -119,7 +256,8 @@ class HydrozoaRoutes(
     private val l2TransactionsDef
         : PublicEndpoint[Option[Int], (StatusCode, ErrorResponse), List[L2TxSummaryView], Any] =
         endpoint.get
-            .in("api" / "l2" / "transactions")
+            .in("l2" / "cardano-eutxo" / "transactions")
+            .name("getL2CardanoEutxoTransactions")
             .in(query[Option[Int]]("count"))
             .out(jsonBody[List[L2TxSummaryView]])
             .errorOut(errorOut)
@@ -157,6 +295,7 @@ class HydrozoaRoutes(
     private val healthEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("health")
+            .name("getHealth")
             .out(jsonBody[HealthResponse])
             .description("Liveness — always 200 while the process is serving HTTP.")
             .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
@@ -168,6 +307,7 @@ class HydrozoaRoutes(
     private val readyEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("ready")
+            .name("getReady")
             .out(statusCode.and(jsonBody[ReadinessResponse]))
             .description(
               "Readiness — 200 only while the head is Active (open on L1); 503 with the lifecycle " +
@@ -188,6 +328,7 @@ class HydrozoaRoutes(
             // absent, rather than tapir short-circuiting the missing-header case.
             .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
             .in("api" / "admin" / "finalize")
+            .name("postAdminFinalize")
             .out(jsonBody[FinalizeResponse])
             .errorOut(finalizeErrorOut)
             .description("Trigger head finalization (admin only).")
@@ -238,6 +379,11 @@ class HydrozoaRoutes(
           submitEndpoint,
           registerDepositEndpoint,
           headInfoEndpoint,
+          requestsEndpoint,
+          requestDetailsEndpoint,
+          blocksEndpoint,
+          blockDetailsEndpoint,
+          blockHeaderEndpoint,
           healthEndpoint,
           readyEndpoint,
           finalizeEndpoint
@@ -321,6 +467,125 @@ class HydrozoaRoutes(
                     .as(Left(fail(StatusCode.BadRequest, err.getMessage)))
             )
 
+    /** The block-details body for `num`: block 0 is synthesized from the head config; any other
+      * block resolves through its persisted brief, or a 404.
+      */
+    private def blockDetails(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockDetailsView]] =
+        if num == BlockNumber.zero then
+            blockConfirmation(num).map(confirmation =>
+                val summary = ApiDto.mkInitialBlockSummaryView
+                Right(
+                  BlockDetailsView(summary.number, summary.leader, summary.blockType, confirmation)
+                )
+            )
+        else
+            consensusReader.blockBrief(num).flatMap {
+                case None => IO.pure(Left(blockNotFound(num)))
+                case Some(brief) =>
+                    blockConfirmation(num).map(confirmation =>
+                        val summary = ApiDto.mkBlockSummaryView(brief, headConfig.nHeadPeers)
+                        Right(
+                          BlockDetailsView(
+                            summary.number,
+                            summary.leader,
+                            summary.blockType,
+                            confirmation
+                          )
+                        )
+                    )
+            }
+
+    /** The block's header as JSON: block 0's comes from the head config, the rest from their
+      * persisted briefs.
+      */
+    private def blockHeader(num: BlockNumber): IO[Either[(StatusCode, ErrorResponse), Json]] =
+        if num == BlockNumber.zero then
+            IO.pure(Right(headConfig.initialBlock.blockBrief.header.asJson))
+        else
+            consensusReader.blockBrief(num).map {
+                case None => Left(blockNotFound(num))
+                case Some(brief) =>
+                    Right(brief match {
+                        case b: BlockBrief.Minor => b.header.asJson
+                        case b: BlockBrief.Major => b.header.asJson
+                        case b: BlockBrief.Final => b.header.asJson
+                    })
+            }
+
+    /** Resolve a block's confirmation status from this node's records: the soft-confirmation
+      * moment, and — through the block → stack index — the hard-confirmation moment.
+      */
+    private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
+        confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
+
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
+      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
+      * stack index — the hard-confirmation record.
+      */
+    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
+        for {
+            soft <- consensusReader.softConfirmation(num)
+            stack <- consensusReader.stackOf(num)
+            hard <- stack match {
+                case None    => IO.pure(None)
+                case Some(s) => consensusReader.hardConfirmation(s)
+            }
+            softAt <- soft.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
+            hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
+        } yield (softAt, hardAt)
+
+    /** The request-details body for a request id, or a 404 when the head has assigned no such id.
+      * The lifecycle status resolves through the request → block index and the block's confirmation
+      * records.
+      */
+    /** The request listing, optionally narrowed to one author peer (`peer_number`) and one type
+      * (`transaction`/`deposit`). An unknown `type` value matches nothing (empty list); an
+      * out-of-range `peer_number` likewise yields an empty list, since no such author exists.
+      */
+    private def listRequests(
+        typeFilter: Option[String],
+        peerFilter: Option[Int]
+    ): IO[Either[(StatusCode, ErrorResponse), List[RequestSummaryView]]] =
+        val peers = peerFilter match
+            case None    => headConfig.headPeerNums.toList
+            case Some(p) => headConfig.headPeerNums.toList.filter(_.convert == p)
+        peers
+            .traverse(consensusReader.requestsOf)
+            .map { perPeer =>
+                val rows = perPeer.flatten.map(t => ApiDto.mkRequestSummaryView(t.payload))
+                Right(typeFilter.fold(rows)(t => rows.filter(_.requestType == t)))
+            }
+
+    private def requestDetails(
+        id: RequestId
+    ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
+        consensusReader.request(id).flatMap {
+            case None => IO.pure(Left(requestNotFound(id)))
+            case Some(stamped) =>
+                for {
+                    receivedAt <- consensusReader.wallClockOf(stamped.stamp)
+                    processed <- consensusReader.requestBlock(id)
+                    confirmation <- processed match {
+                        case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                        case Some(entry) => confirmationTimes(entry.blockNum)
+                    }
+                    (softAt, hardAt) = confirmation
+                    status = ApiDto.mkRequestStatusView(
+                      block = processed.map(e => (e.blockNum.convert, e.validity)),
+                      softConfirmedAt = softAt,
+                      hardConfirmedAt = hardAt
+                    )
+                } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
+        }
+
+    private def requestNotFound(id: RequestId): (StatusCode, ErrorResponse) =
+        fail(StatusCode.NotFound, s"Request ${id.asI64} not found")
+
+    private def blockNotFound(num: BlockNumber): (StatusCode, ErrorResponse) =
+        fail(StatusCode.NotFound, s"Block ${num.convert} not found")
+
     /** Parse a bech32 address, or a message describing why it is malformed. */
     private def parseAddress(bech32: String): Either[String, Address] =
         Try(Address.fromBech32(bech32)).toEither.left
@@ -336,6 +601,7 @@ object HydrozoaRoutes {
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
         nodeStatus: IO[NodeStatus],
+        consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
@@ -346,6 +612,7 @@ object HydrozoaRoutes {
             requestSequencer,
             blockWeaver,
             nodeStatus,
+            consensusReader,
             l2QueryReader,
             headConfig,
             serverConfig,

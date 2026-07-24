@@ -67,7 +67,10 @@ object BlockWeaverTestHelpers {
             userRequest = TransactionRequest(
               body = TransactionRequestBody(ByteString.empty)
             )
-        } yield UserRequestWithId(userRequest = userRequest, requestId = requestId)
+        } yield UserRequestWithId(
+          userRequest = userRequest,
+          requestId = requestId
+        )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
         for {

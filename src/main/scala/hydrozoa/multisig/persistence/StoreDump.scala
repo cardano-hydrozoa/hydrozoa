@@ -110,8 +110,9 @@ object StoreDump:
         s"  ${renderKey(cf, key)} -> ${value.length} bytes"
 
     /** Pretty-print a key. Journal CFs go through [[JournalKey.decode]]; spine-indexed metadata CFs
-      * decode as 4-byte big-endian `Int`; `Meta` decodes as UTF-8; singleton snapshot CFs show
-      * "(singleton)"; anything malformed falls back to a hex dump.
+      * decode as 4-byte big-endian `Int`; `RequestBlockIndex` decodes as the packed i64; `Meta`
+      * decodes as UTF-8; singleton snapshot CFs show "(singleton)"; anything malformed falls back
+      * to a hex dump.
       */
     private def renderKey(cf: Cf, key: Array[Byte]): String =
         cf match
@@ -120,11 +121,14 @@ object StoreDump:
                 try JournalKey.decode(cf, key).toString
                 catch case _: IllegalArgumentException => hex(key)
             case Cf.BlockResult | Cf.SoftConfirmation | Cf.RequestHighWater | Cf.L2CommandNumber |
-                Cf.EvacuationMap | Cf.UnsignedStack =>
+                Cf.EvacuationMap | Cf.UnsignedStack | Cf.BlockStackIndex =>
                 if key.length == 4 then s"$cf(${ByteBuffer.wrap(key).getInt})"
                 else hex(key)
             case Cf.HardConfirmation =>
                 if key.length == 4 then s"HardConfirmation(${ByteBuffer.wrap(key).getInt})"
+                else hex(key)
+            case Cf.RequestBlockIndex =>
+                if key.length == 8 then s"RequestBlockIndex(i64=${ByteBuffer.wrap(key).getLong})"
                 else hex(key)
             case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
                 if key.isEmpty then "(singleton)" else hex(key)

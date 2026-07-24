@@ -32,8 +32,8 @@ import scalus.uplc.builtin.ByteString
   * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
   * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload (its hash
   * pins the payload in the deposit tx metadata, docs/l2-isomorphism.md), registers the deposit with
-  * the head (`POST /api/deposit/register`), then signs the deposit tx and submits it to L1 via
-  * Blockfrost, polling until the deposit utxo lands. The head absorbs it after maturity.
+  * the head (`POST /head/deposit`), then signs the deposit tx and submits it to L1 via Blockfrost,
+  * polling until the deposit utxo lands. The head absorbs it after maturity.
   *
   * Usage:
   * {{{
@@ -161,7 +161,7 @@ object SubmitDeposit
                 _ <- awaitUtxo(backend, depositTx.depositProduced.utxoId)
                 _ <- IO.println(
                   "Deposit is on L1. The head absorbs it after maturity — watch " +
-                      s"GET $headUri/api/l2/utxos/{destination} for the spawned outputs."
+                      s"GET $headUri/l2/cardano-eutxo/utxos/{destination} for the spawned outputs."
                 )
             } yield ExitCode.Success
         }

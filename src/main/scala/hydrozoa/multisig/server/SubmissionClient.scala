@@ -53,8 +53,8 @@ object SubmissionClient:
 
     private def pathFor(request: UserRequest): Uri.Path =
         request match
-            case _: UserRequest.DepositRequest => Uri.Path.unsafeFromString("/api/deposit/register")
-            case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/api/l2/submit")
+            case _: UserRequest.DepositRequest     => Uri.Path.unsafeFromString("/head/deposit")
+            case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/head/tx")
 
     private def requestJson(request: UserRequest): Json =
         request.body match

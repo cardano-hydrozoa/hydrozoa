@@ -2,11 +2,15 @@ package hydrozoa.multisig.server
 
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import io.bullet.borer.Cbor
 import io.circe.Codec
 import io.circe.generic.semiauto.deriveCodec
+import java.time.Instant
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{DatumOption, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
@@ -88,6 +92,155 @@ object ApiDto {
         case L2TxKind.DepositRegistered => "depositRegistered"
         case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
         case L2TxKind.DepositRefunded   => "depositRefunded"
+
+    /** One row of the block listing: number, fast-cycle leader (absent for the initial block, which
+      * is config, not woven), and block type.
+      */
+    final case class BlockSummaryView(number: Int, leader: Option[Int], blockType: String)
+    given Codec[BlockSummaryView] = deriveCodec
+
+    /** A block's confirmation from this node's viewpoint: `PROPOSED`, `SOFT`, or `HARD`, with the
+      * confirmation moments (ISO-8601) where reached. Each time records a **local event at this
+      * peer** — when it produced the confirmation — so different peers report different times for
+      * the same block. This is by design.
+      */
+    final case class BlockConfirmationView(
+        status: String,
+        softConfirmedAt: Option[String],
+        hardConfirmedAt: Option[String]
+    )
+    given Codec[BlockConfirmationView] = deriveCodec
+
+    /** The block-details body: the listing row plus the confirmation status. */
+    final case class BlockDetailsView(
+        number: Int,
+        leader: Option[Int],
+        blockType: String,
+        confirmation: BlockConfirmationView
+    )
+    given Codec[BlockDetailsView] = deriveCodec
+
+    /** Map a brief to its listing row; `nHeadPeers` fixes the round-robin leader. */
+    def mkBlockSummaryView(brief: BlockBrief.Next, nHeadPeers: Int): BlockSummaryView =
+        BlockSummaryView(
+          number = brief.blockNum.convert,
+          leader = Some(brief.blockNum.convert % nHeadPeers),
+          blockType = blockTypeName(brief)
+        )
+
+    /** The synthesized listing row for the initial block (block 0 is config, not a spine entry).
+      */
+    def mkInitialBlockSummaryView: BlockSummaryView =
+        BlockSummaryView(number = 0, leader = None, blockType = "initial")
+
+    /** Assemble the confirmation view from the optional node-local confirmation moments. */
+    def mkBlockConfirmationView(
+        softConfirmedAt: Option[Instant],
+        hardConfirmedAt: Option[Instant]
+    ): BlockConfirmationView =
+        val status =
+            if hardConfirmedAt.isDefined then "HARD"
+            else if softConfirmedAt.isDefined then "SOFT"
+            else "PROPOSED"
+        BlockConfirmationView(
+          status = status,
+          softConfirmedAt = softConfirmedAt.map(_.toString),
+          hardConfirmedAt = hardConfirmedAt.map(_.toString)
+        )
+
+    private def blockTypeName(brief: BlockBrief.Next): String = brief match
+        case _: BlockBrief.Minor => "minor"
+        case _: BlockBrief.Major => "major"
+        case _: BlockBrief.Final => "final"
+
+    /** One row of the request listing: the opaque request id (the packed i64, the same value the
+      * submit response returns), the author peer number, and the request type.
+      */
+    final case class RequestSummaryView(requestId: Long, peerNumber: Int, requestType: String)
+    given Codec[RequestSummaryView] = deriveCodec
+
+    /** A request's lifecycle status from this node's viewpoint: `UNPROCESSED`, `LOCALLY_PROCESSED`,
+      * `SOFT_CONFIRMED`, or `HARD_CONFIRMED`, with the fields each stage adds. Each confirmation
+      * time records a **local event at this peer**, so different peers report different times for
+      * the same request. This is by design. `relatedEffects` is always absent for now (per-request
+      * effect tracking is a separate change).
+      */
+    final case class RequestStatusView(
+        status: String,
+        blockNumber: Option[Int],
+        validity: Option[String],
+        softConfirmedAt: Option[String],
+        hardConfirmedAt: Option[String],
+        relatedEffects: Option[List[Int]]
+    )
+    given Codec[RequestStatusView] = deriveCodec
+
+    /** The request-details body: opaque id (echoed from the path), author peer, type, receive time
+      * (when this peer received the request — a local event, so different peers report different
+      * times for the same request, by design), and the lifecycle status.
+      */
+    final case class RequestDetailsView(
+        requestId: Long,
+        peerNumber: Int,
+        requestType: String,
+        receivedAt: Option[String],
+        status: RequestStatusView
+    )
+    given Codec[RequestDetailsView] = deriveCodec
+
+    /** The request type discriminator, matching the submit-body field names. */
+    def requestTypeName(request: UserRequestWithId): String = request match
+        case _: UserRequestWithId.DepositRequest     => "deposit"
+        case _: UserRequestWithId.TransactionRequest => "transaction"
+
+    /** Map a request to its listing row. */
+    def mkRequestSummaryView(request: UserRequestWithId): RequestSummaryView =
+        RequestSummaryView(
+          requestId = request.requestId.asI64,
+          peerNumber = request.requestId.peerNum.convert,
+          requestType = requestTypeName(request)
+        )
+
+    private def validityName(validity: ValidityFlag): String = validity match
+        case ValidityFlag.Valid   => "valid"
+        case ValidityFlag.Invalid => "invalid"
+
+    /** Assemble the request-status view from its resolved lifecycle stages: the processing block
+      * and verdict (absent while unprocessed) and the node-local confirmation moments.
+      */
+    def mkRequestStatusView(
+        block: Option[(Int, ValidityFlag)],
+        softConfirmedAt: Option[Instant],
+        hardConfirmedAt: Option[Instant]
+    ): RequestStatusView =
+        val status = block match
+            case None => "UNPROCESSED"
+            case Some(_) =>
+                if hardConfirmedAt.isDefined then "HARD_CONFIRMED"
+                else if softConfirmedAt.isDefined then "SOFT_CONFIRMED"
+                else "LOCALLY_PROCESSED"
+        RequestStatusView(
+          status = status,
+          blockNumber = block.map(_._1),
+          validity = block.map((_, v) => validityName(v)),
+          softConfirmedAt = softConfirmedAt.map(_.toString),
+          hardConfirmedAt = hardConfirmedAt.map(_.toString),
+          relatedEffects = None
+        )
+
+    /** Map a request, its derived receive time, and its resolved status to the details body. */
+    def mkRequestDetailsView(
+        request: UserRequestWithId,
+        receivedAt: Option[Instant],
+        status: RequestStatusView
+    ): RequestDetailsView =
+        RequestDetailsView(
+          requestId = request.requestId.asI64,
+          peerNumber = request.requestId.peerNum.convert,
+          requestType = requestTypeName(request),
+          receivedAt = receivedAt.map(_.toString),
+          status = status
+        )
 
     /** A utxo reference, `{ transaction_id, index }` (CIP-0116). */
     final case class TxInputView(transaction_id: String, index: Int)

@@ -22,7 +22,7 @@ import hydrozoa.multisig.ledger.eutxol2.store.RocksDbL2Store
 import hydrozoa.multisig.ledger.l2.{EutxoL2LedgerReader, L2Ledger}
 import hydrozoa.multisig.ledger.remote.{RemoteL2Ledger, RemoteL2LedgerEventFormat}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
-import hydrozoa.multisig.persistence.{Cf, Persistence, PersistenceEventFormat}
+import hydrozoa.multisig.persistence.{Cf, ConsensusStoreReader, Persistence, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaServer}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, MrmTracers}
 import java.nio.file.Path
@@ -166,12 +166,23 @@ object Main
                       ownCoilNum,
                     )
             }
-        } yield (nodeConfig, system, nodeRun)
+            // Read-only consensus-store view behind the /head/blocks queries.
+            consensusReader = ConsensusStoreReader.fromPersistence(persistence)(using
+              nodeConfig.headConfig
+            )
+        } yield (nodeConfig, system, nodeRun, consensusReader)
 
-        resource.use { case (nodeConfig, system, nodeRun) =>
+        resource.use { case (nodeConfig, system, nodeRun, consensusReader) =>
             nodeRun match {
                 case NodeRun.HeadNode(mrm, l2QueryReader) =>
-                    runHeadNode(nodeConfig, system, mrm, l2QueryReader, httpExtraTracer)
+                    runHeadNode(
+                      nodeConfig,
+                      system,
+                      mrm,
+                      consensusReader,
+                      l2QueryReader,
+                      httpExtraTracer
+                    )
                 case NodeRun.CoilNode(mrm) =>
                     runCoilNode(system, mrm)
             }
@@ -179,10 +190,10 @@ object Main
     }
 
     /** Instantiate the head-agreed L2 ledger and, when it is the built-in EUTXO ledger, the
-      * read-only view the user-facing server exposes over the `GET /api/l2/...` endpoints. A node
-      * wired to a remote ledger has no such reader, so the server is handed `None` and mounts no
-      * L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence, separate from the
-      * consensus store.
+      * read-only view the user-facing server exposes over the `GET /l2/cardano-eutxo/...`
+      * endpoints. A node wired to a remote ledger has no such reader, so the server is handed
+      * `None` and mounts no L2-query endpoints. The EUTXO ledger owns its own RocksDB persistence,
+      * separate from the consensus store.
       */
     private def mkL2Ledger(
         nodeConfig: NodeConfig,
@@ -375,6 +386,7 @@ object Main
         nodeConfig: NodeConfig,
         system: ActorSystem[IO],
         mrm: HeadMultisigRegimeManager,
+        consensusReader: ConsensusStoreReader[IO],
         l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         httpExtraTracer: ContraTracer[IO, HydrozoaHttpEvent],
     ): IO[ExitCode] =
@@ -414,7 +426,8 @@ object Main
                           ),
                           connections.blockWeaver,
                           mrm.nodeStatus.get,
-                          // Some(reader) for a cardano-eutxo node (mounts GET /api/l2/...); None for
+                          consensusReader,
+                          // Some(reader) for a cardano-eutxo node (mounts GET /l2/cardano-eutxo/...); None for
                           // a remote-ledger node, which serves no L2-query endpoints.
                           l2QueryReader,
                           nodeConfig.headConfig,

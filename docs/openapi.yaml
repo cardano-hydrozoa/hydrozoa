@@ -3,11 +3,11 @@ info:
   title: Hydrozoa node API
   version: 0.1.0
 paths:
-  /api/l2/submit:
+  /head/tx:
     post:
       description: Submit an L2 transaction (a JSON UserRequest whose L2 payload is
         a native, self-authenticating Cardano transaction).
-      operationId: postApiL2Submit
+      operationId: postHeadTx
       requestBody:
         content:
           application/json:
@@ -27,11 +27,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/deposit/register:
+  /head/deposit:
     post:
-      description: Register an L1 deposit (a JSON UserRequest whose L2 payload is
-        a native, self-authenticating Cardano transaction).
-      operationId: postApiDepositRegister
+      description: Register an L1 deposit (a JSON UserRequest carrying the unsigned
+        deposit tx CBOR and the serialized L2 outputs the deposit spawns on absorption).
+      operationId: postHeadDeposit
       requestBody:
         content:
           application/json:
@@ -51,10 +51,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/head-info:
+  /head/info:
     get:
       description: Head parameters plus the current node time.
-      operationId: getApiHead-info
+      operationId: getHeadInfo
       responses:
         '200':
           description: ''
@@ -62,6 +62,140 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HeadInfoResponse'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/requests:
+    get:
+      description: Requests the head has assigned an id — opaque request id, author
+        peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
+        and ?peer_number=<n>.
+      operationId: getHeadRequests
+      parameters:
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: peer_number
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequestSummaryView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/requests/{request-id}:
+    get:
+      description: 'One request''s peer, type, receive time, and lifecycle status:
+        UNPROCESSED, LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation
+        time), or HARD_CONFIRMED (+ hard-confirmation time). Every time records a
+        local event at this peer — when it received the request, and when it produced
+        the soft/hard confirmation — so different peers report different times for
+        the same request. This is by design.'
+      operationId: getHeadRequest
+      parameters:
+      - name: request-id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestDetailsView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks:
+    get:
+      description: Every block of the head in block order — number, fast-cycle leader,
+        and type. Block 0 is the head's initial block (config, no leader).
+      operationId: getHeadBlocks
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BlockSummaryView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}:
+    get:
+      description: 'One block''s type, leader, and confirmation status: PROPOSED,
+        SOFT (+ soft-confirmation time), or HARD (+ hard-confirmation time). Each
+        confirmation time records a local event at this peer — when it produced the
+        soft/hard confirmation — so different peers report different times for the
+        same block. This is by design.'
+      operationId: getHeadBlock
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockDetailsView'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/header:
+    get:
+      description: The block's header content. The shape varies by block type (initial,
+        minor, major, final).
+      operationId: getHeadBlockHeader
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: {}
         default:
           description: ''
           content:
@@ -94,7 +228,7 @@ paths:
   /api/admin/finalize:
     post:
       description: Trigger head finalization (admin only).
-      operationId: postApiAdminFinalize
+      operationId: postAdminFinalize
       responses:
         '200':
           description: ''
@@ -118,6 +252,51 @@ paths:
       - httpAuth: []
 components:
   schemas:
+    BlockConfirmationView:
+      title: BlockConfirmationView
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+    BlockDetailsView:
+      title: BlockDetailsView
+      type: object
+      required:
+      - number
+      - blockType
+      - confirmation
+      properties:
+        number:
+          type: integer
+          format: int32
+        leader:
+          type: integer
+          format: int32
+        blockType:
+          type: string
+        confirmation:
+          $ref: '#/components/schemas/BlockConfirmationView'
+    BlockSummaryView:
+      title: BlockSummaryView
+      type: object
+      required:
+      - number
+      - blockType
+      properties:
+        number:
+          type: integer
+          format: int32
+        leader:
+          type: integer
+          format: int32
+        blockType:
+          type: string
     ErrorResponse:
       title: ErrorResponse
       type: object
@@ -198,6 +377,65 @@ components:
         requestId:
           type: integer
           format: int64
+    RequestDetailsView:
+      title: RequestDetailsView
+      type: object
+      required:
+      - requestId
+      - peerNumber
+      - requestType
+      - status
+      properties:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
+          type: integer
+          format: int32
+        requestType:
+          type: string
+        receivedAt:
+          type: string
+        status:
+          $ref: '#/components/schemas/RequestStatusView'
+    RequestStatusView:
+      title: RequestStatusView
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        validity:
+          type: string
+        softConfirmedAt:
+          type: string
+        hardConfirmedAt:
+          type: string
+        relatedEffects:
+          type: array
+          items:
+            type: integer
+            format: int32
+    RequestSummaryView:
+      title: RequestSummaryView
+      type: object
+      required:
+      - requestId
+      - peerNumber
+      - requestType
+      properties:
+        requestId:
+          type: integer
+          format: int64
+        peerNumber:
+          type: integer
+          format: int32
+        requestType:
+          type: string
     TxInputView:
       title: TxInputView
       type: object

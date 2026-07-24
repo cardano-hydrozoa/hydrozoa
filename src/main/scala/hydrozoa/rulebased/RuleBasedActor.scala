@@ -287,7 +287,7 @@ final case class RuleBasedActor(
               MissingState("no hard-confirmed stack on disk")
             )
             action <- Monad[IO].tailRecM[StackNumber, DisputeAction](latest) { stack =>
-                persistence.get(StoreKey.HardConfirmation(stack)).flatMap {
+                persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
                     case None =>
                         IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
                     case Some(_: StackEffects.HardConfirmed.Initial) =>
@@ -338,7 +338,7 @@ final case class RuleBasedActor(
               MissingState("no hard-confirmed stack on disk")
             )
             res <- Monad[IO].tailRecM[StackNumber, EvacuationInputs](latest) { stack =>
-                persistence.get(StoreKey.HardConfirmation(stack)).flatMap {
+                persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
                     case None =>
                         IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
                     case Some(i: StackEffects.HardConfirmed.Initial) =>

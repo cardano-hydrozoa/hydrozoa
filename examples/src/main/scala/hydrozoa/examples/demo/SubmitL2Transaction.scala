@@ -30,10 +30,10 @@ import scalus.uplc.builtin.ByteString
 /** Interactive demo target: submit a native L2 transaction to a running head.
   *
   * Select a peer (its key signs), pick one of the peer's L2 utxos (fetched from the head's
-  * `GET /api/l2/utxos/{address}`), enter a destination + value, and the tool builds the zero-fee
-  * native tx (destination output + change back to the sender, the CIP-67 all-L2 output designation
-  * and the headId pin in the metadata), signs it with the peer wallet, and posts it to
-  * `POST /api/l2/submit`.
+  * `GET /l2/cardano-eutxo/utxos/{address}`), enter a destination + value, and the tool builds the
+  * zero-fee native tx (destination output + change back to the sender, the CIP-67 all-L2 output
+  * designation and the headId pin in the metadata), signs it with the peer wallet, and posts it to
+  * `POST /head/tx`.
   *
   * Usage:
   * {{{
@@ -104,7 +104,7 @@ object SubmitL2Transaction
                       )
                     )
                 _ <- IO.println(
-                  s"Accepted: requestId=$requestId. Watch GET $headUri/api/l2/utxos/$ownBech32 " +
+                  s"Accepted: requestId=$requestId. Watch GET $headUri/l2/cardano-eutxo/utxos/$ownBech32 " +
                       "for the result."
                 )
             } yield ExitCode.Success
@@ -177,9 +177,9 @@ object SubmitL2Transaction
             .map(_.toString)
     }
 
-    /** Parse one `GET /api/l2/utxos/{address}` entry back into scalus types. Datum-bearing utxos
-      * are accepted for display but their datum is not reconstructed — the input reference is what
-      * the tx spends.
+    /** Parse one `GET /l2/cardano-eutxo/utxos/{address}` entry back into scalus types.
+      * Datum-bearing utxos are accepted for display but their datum is not reconstructed — the
+      * input reference is what the tx spends.
       */
     private def parseUtxoView(view: L2UtxoView): Either[String, (TransactionInput, Babbage)] =
         for {
