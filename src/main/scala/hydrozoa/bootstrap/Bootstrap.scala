@@ -4,8 +4,7 @@ import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
@@ -534,12 +533,7 @@ end Bootstrap
   *     --template config/template/peer-private.template.json --out nodes/head-0/private.json"
   * }}}
   */
-object GenerateKeyPair
-    extends CommandIOApp(
-      name = "keygen",
-      header = "Generate an Ed25519 key pair; optionally register it in a roster " +
-          "and write a private node config"
-    ):
+object GenerateKeyPair:
 
     /** The peer role a generated key pair is registered under. */
     enum Role:
@@ -584,7 +578,15 @@ object GenerateKeyPair
             .map(Path.of(_))
             .orNone
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `keygen` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "keygen",
+          header = "Generate an Ed25519 key pair; optionally register it in a roster " +
+              "and write a private node config"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (rosterOpt, roleOpt, wsAddressOpt, hubOpt, templateOpt, outOpt)
             .mapN(generateAndWrite)
 
@@ -810,11 +812,7 @@ end GenerateKeyPair
   * "recover the head's funds" reading held only for the single-peer demo, where finalization
   * returns everything to peer 0's own address and this tool then sweeps it.
   */
-object Migrate
-    extends CommandIOApp(
-      name = "migrate",
-      header = "Send all UTXOs at the peer's wallet address to a destination address"
-    ):
+object Migrate:
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.Migrate"))
@@ -825,7 +823,14 @@ object Migrate
         Opts.argument[String]("peer-private.json").map(Path.of(_))
     private val destArg: Opts[String] = Opts.argument[String]("bech32-destination")
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `migrate` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "migrate",
+          header = "Send all UTXOs at the peer's wallet address to a destination address"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (headArg, privateArg, destArg).mapN(migrateAllFunds)
 
     private def migrateAllFunds(
@@ -991,11 +996,7 @@ end Migrate
   * against [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every
   * node's startup.
   */
-object BuildHeadConfig
-    extends CommandIOApp(
-      name = "build-head-config",
-      header = "Build the shared head-config.json artifact every node loads"
-    ):
+object BuildHeadConfig:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
@@ -1014,7 +1015,14 @@ object BuildHeadConfig
             .map(Path.of(_))
             .withDefault(Path.of("head-config.json"))
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `build-head-config` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "build-head-config",
+          header = "Build the shared head-config.json artifact every node loads"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (bootstrapDirArg, blockfrostKeyOpt, outOpt).mapN(buildHeadConfig)
 
     private def buildHeadConfig(
@@ -1098,11 +1106,7 @@ end BuildHeadConfig
   *   sbt "runMain hydrozoa.bootstrap.InitBootstrapFiles <roster.json> [--out-dir .]"
   * }}}
   */
-object InitBootstrapFiles
-    extends CommandIOApp(
-      name = "init-bootstrap-files",
-      header = "Write defaults.json and an l2-cardano-eutxo.json template from a roster"
-    ):
+object InitBootstrapFiles:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.InitBootstrapFiles")
 
@@ -1126,7 +1130,14 @@ object InitBootstrapFiles
             case other     => Validated.invalidNel(s"unknown network: $other")
         }.withDefault(CardanoNetwork.Preview)
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `init-bootstrap-files` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "init-bootstrap-files",
+          header = "Write defaults.json and an l2-cardano-eutxo.json template from a roster"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (rosterArg, outDirOpt, coilQuorumOpt, cardanoNetworkOpt).mapN(init)
 
     private def init(
@@ -1202,11 +1213,7 @@ end InitBootstrapFiles
   *   sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress [--bootstrap-dir config/demo/bootstrap]"
   * }}}
   */
-object PrintHeadZeroAddress
-    extends CommandIOApp(
-      name = "head-zero-address",
-      header = "Print head peer 0's L1 funding address"
-    ):
+object PrintHeadZeroAddress:
 
     private val bootstrapDirOpt: Opts[Path] =
         Opts.option[String](
@@ -1216,7 +1223,12 @@ object PrintHeadZeroAddress
         ).map(Path.of(_))
             .withDefault(Path.of("config/demo/bootstrap"))
 
-    override def main: Opts[IO[ExitCode]] = bootstrapDirOpt.map(printHeadZeroAddress)
+    /** The `head-zero-address` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "head-zero-address",
+          header = "Print head peer 0's L1 funding address"
+        )(bootstrapDirOpt.map(printHeadZeroAddress))
 
     private def printHeadZeroAddress(dir: Path): IO[ExitCode] =
         for {

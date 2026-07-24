@@ -1,4 +1,4 @@
-package hydrozoa.examples.demo
+package hydrozoa.app.cli
 
 import cats.effect.IO
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId

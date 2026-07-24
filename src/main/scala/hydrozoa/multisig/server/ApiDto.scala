@@ -149,6 +149,12 @@ object ApiDto {
     final case class HealthResponse(status: String)
     given Codec[HealthResponse] = deriveCodec
 
+    /** `{ "version": ..., "gitCommit": ..., "buildTime": ... }` — the build identity baked in at
+      * compile time ([[hydrozoa.BuildInfo]]), served from `GET /version`.
+      */
+    final case class VersionResponse(version: String, gitCommit: String, buildTime: String)
+    given Codec[VersionResponse] = deriveCodec
+
     /** `{ "status": "<lifecycle>" }` — the readiness diagnostic body for `GET /ready`. The verdict
       * itself is the HTTP status (200 vs 503); this is only for diagnostics.
       */

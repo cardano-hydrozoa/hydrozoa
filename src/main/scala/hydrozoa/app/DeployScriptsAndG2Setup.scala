@@ -3,8 +3,7 @@ package hydrozoa.app
 import cats.data.NonEmptyList
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos.given
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
@@ -49,11 +48,7 @@ import scalus.uplc.builtin.ByteString
   * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
   * `mainnet…`).
   */
-object DeployScriptsAndG2Setup
-    extends CommandIOApp(
-      name = "deploy-scripts-and-g2-setup",
-      header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"
-    ):
+object DeployScriptsAndG2Setup:
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(
@@ -89,7 +84,14 @@ object DeployScriptsAndG2Setup
             .map(Path.of(_))
             .withDefault(Path.of("script-refs.json"))
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `deploy-scripts-and-g2-setup` subcommand. */
+    val command: Command[IO[ExitCode]] =
+        Command(
+          name = "deploy-scripts-and-g2-setup",
+          header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (walletOpt, blockfrostKeyOpt, ladderRefsOpt, outOpt).mapN(deployScriptsAndG2Setup)
 
     private def deployScriptsAndG2Setup(
