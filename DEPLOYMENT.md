@@ -74,7 +74,8 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
     `type` field — `{ "type": "deposit", … }` or `{ "type": "transaction", … }`);
   - **queries** — `GET /head/blocks[/{n}[/body]]`, `GET /head/requests[/{id}]` (lifecycle status per
     request), `GET /head/effects/{l1TxId}` (L1 effect by tx id);
-  - **observability** — `GET /health` (liveness), `GET /ready` (readiness);
+  - **observability** — `GET /health` (liveness), `GET /ready` (readiness), `GET /version` (the
+    baked version, git commit, and build time);
   - **admin** — `POST /api/admin/finalize` (basic-auth);
   - **L2 EUTXO queries** (EUTXO ledger only — a remote-ledger node serves neither):
     `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
@@ -98,8 +99,9 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ## 2. Building
 
-Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 21+ if not using
-Nix.
+Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using
+Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`). Don't want a JDK at all? Use the
+Docker image below — it covers every command.
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
@@ -108,12 +110,23 @@ just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
 
-Docker image (used by the composition in §4):
+Every deployment and runtime command is a subcommand of one packaged CLI, `hydrozoa` (`hydrozoa
+--help` lists them). Build it once — it launches without sbt startup overhead and with clean output
+(no sbt log prefixes, no Blockfrost debug flood, no JVM native-access warnings):
+
+```bash
+just stage             # -> target/universal/stage/bin/hydrozoa
+# the `just` recipes below (keygen-fleet, build-head-config, submit-deposit, …) invoke it directly
+```
+
+Docker image (used by the composition in §4, and the only thing non-Nix users need — its entrypoint
+is the same `hydrozoa` CLI, so `docker run … <subcommand>` runs any command):
 
 ```bash
 sbt docker:publishLocal
 # -> cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT
-#    base eclipse-temurin:21-jre-jammy, EXPOSE 8080
+#    base eclipse-temurin:25-jre, EXPOSE 8080
+#    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
 ```
 
 There is no publish/deploy CI — GitHub Actions runs checks only.
@@ -141,12 +154,14 @@ EUTXO node may omit it.
 
 ### Generating a head's configuration
 
-All commands run inside `nix develop`. The walkthrough uses the docker topology: **2 head peers,
-4 coil peers, coil quorum 2**. The pipeline turns operator-authored files into the two runtime
-files each node needs:
+All commands run inside `nix develop` (after a one-time `just stage`; see §2). Without Nix, replace
+each `just <recipe>`/`hydrozoa <subcommand>` below with `docker run --rm -v "$PWD/config:/config" -w
+/config … cardano-hydrozoa/hydrozoa <subcommand> …` — the image entrypoint is the same CLI. The
+walkthrough uses the docker topology: **2 head peers, 4 coil peers, coil quorum 2**. The pipeline
+turns operator-authored files into the two runtime files each node needs:
 
 ```
-   keygen-fleet (one sbt run)                      the bootstrap directory (operator-authored)
+   keygen-fleet (keygen per peer, then init-bootstrap-files)   the bootstrap directory (operator-authored)
    ├─ bootstrap/roster.json ──────────┐  peer topology (head/coil vkeys, ws addresses, hubs)
    ├─ bootstrap/defaults.json ────────┤  network + head params + per-peer equity  (editable)
    ├─ bootstrap/l2-cardano-eutxo.json ┤  opening L2 outputs (one per head peer, editable)
@@ -179,14 +194,14 @@ files each node needs:
 
 The template is read at generation time — regenerating means fresh keys, so re-funding.
 
-**Step 2 — Generate keys, roster, and defaults in one run:**
+**Step 2 — Generate keys, roster, and defaults:**
 
 ```bash
 just keygen-fleet 2 4 2            # HEADS COILS QUORUM, → config/demo/
 # or: just keygen-fleet 2 4 2 mydir           # custom output dir
 ```
 
-One sbt invocation: keygen once per peer, then the bootstrap files. Output layout:
+Runs `hydrozoa keygen` once per peer, then `hydrozoa init-bootstrap-files`. Output layout:
 
 ```
 config/demo/
@@ -408,7 +423,7 @@ Verify with `curl http://localhost:8080/l2/cardano-eutxo/utxos/<address>` for bo
 ### Deposit into the head
 
 ```bash
-just deposit
+just submit-deposit
 ```
 
 Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
