@@ -8,9 +8,8 @@ import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.l1.token.CIP67
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.ledger.{AuxiliaryData, Coin, Metadatum, TransactionHash, TransactionInput, Utxo, Value, Word64}
-import scalus.cardano.txbuilder.TransactionBuilder
 import scalus.cardano.txbuilder.TransactionBuilderStep.{Fee, ModifyAuxiliaryData, Send, Spend}
-import scalus.cardano.txbuilder.PubKeyWitness
+import scalus.cardano.txbuilder.{PubKeyWitness, TransactionBuilder}
 import scalus.uplc.builtin.Builtins.blake2b_256
 import scalus.uplc.builtin.ByteString
 

@@ -12,10 +12,7 @@ import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadCon
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.{
-  MultiPeerHeadHarness,
-  Plugin
-}
+import hydrozoa.integration.harness.{MultiPeerHeadHarness, Plugin}
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
@@ -98,35 +95,35 @@ case class Stage4Suite(
     // into each MRM.
     override def sutResource(state: ModelState): Resource[IO, Stage4Sut] =
         val multiNodeConfig = state.params.multiNodeConfig
-        val peers           = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
-        val coilConfigs     = state.params.coilNodeConfigs
-        val startEpochMs    = state.currentModelTime.getEpochSecond * 1000L
-        val coilNums        = coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
+        val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
+        val coilConfigs = state.params.coilNodeConfigs
+        val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
+        val coilNums = coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
 
         for
             // Captures (writer arms over Refs)
-            perPeer   <- Resource.eval(Stage4Plugins.perPeerCaptures(peers))
-            perCoil   <- Resource.eval(Stage4Plugins.perCoilCaptures(coilNums))
+            perPeer <- Resource.eval(Stage4Plugins.perPeerCaptures(peers))
+            perCoil <- Resource.eval(Stage4Plugins.perCoilCaptures(coilNums))
             landedTxs <- Resource.eval(Stage4Plugins.effectsLandedCapture)
 
             // Target Deferreds — armed in beforeFinalize to gate the signal predicates below.
             fastSettlementTarget <- Resource.eval(IO.deferred[Set[RequestId]])
-            slowCoverageTarget   <- Resource.eval(IO.deferred[Set[Int]])
-            effectsLandedTarget  <- Resource.eval(IO.deferred[List[BlockExpectation]])
+            slowCoverageTarget <- Resource.eval(IO.deferred[Set[Int]])
+            effectsLandedTarget <- Resource.eval(IO.deferred[List[BlockExpectation]])
 
             // Signals (predicate arms over Deferred[T])
-            fastSettlementSignal  <- Resource.eval(
-                                       Stage4Plugins
-                                           .fastSettlementSignal(perPeer, fastSettlementTarget)
-                                     )
-            slowCoverageSignal    <- Resource.eval(
-                                       Stage4Plugins
-                                           .slowCoverageSignal(perPeer, slowCoverageTarget)
-                                     )
-            effectsLandedSignal   <- Resource.eval(
-                                       Stage4Plugins
-                                           .effectsLandedSignal(landedTxs, effectsLandedTarget)
-                                     )
+            fastSettlementSignal <- Resource.eval(
+              Stage4Plugins
+                  .fastSettlementSignal(perPeer, fastSettlementTarget)
+            )
+            slowCoverageSignal <- Resource.eval(
+              Stage4Plugins
+                  .slowCoverageSignal(perPeer, slowCoverageTarget)
+            )
+            effectsLandedSignal <- Resource.eval(
+              Stage4Plugins
+                  .effectsLandedSignal(landedTxs, effectsLandedTarget)
+            )
             fallbackEnteredSignal <- Resource.eval(Stage4Plugins.fallbackEnteredSignal)
 
             // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
@@ -135,29 +132,29 @@ case class Stage4Suite(
             // Hooks.handle is unused now — each head peer's SubmissionClient is built by the
             // harness against its in-process HydrozoaRoutes and exposed on Peer[H].submissionClient.
             hooks = MultiPeerHeadHarness.Hooks[Unit](
-                      tracer = Plugin.tracerOf(
-                        perPeer,
-                        perCoil,
-                        landedTxs,
-                        fastSettlementSignal,
-                        slowCoverageSignal,
-                        effectsLandedSignal,
-                        fallbackEnteredSignal,
-                      ),
-                      handle = (_, _) => IO.unit,
-                    )
+              tracer = Plugin.tracerOf(
+                perPeer,
+                perCoil,
+                landedTxs,
+                fastSettlementSignal,
+                slowCoverageSignal,
+                effectsLandedSignal,
+                fallbackEnteredSignal,
+              ),
+              handle = (_, _) => IO.unit,
+            )
             harness <- MultiPeerHeadHarness.resource(
-                           MultiPeerHeadHarness.Inputs(
-                             config = MultiPeerHeadHarness
-                                 .Config(label, backendMode, transportMode),
-                             multiNodeConfig = multiNodeConfig,
-                             coilNodeConfigs = coilConfigs,
-                             preinitPeerUtxosL1 = state.preinitPeerUtxosL1,
-                             takeoffTime = state.takeoffTime,
-                             startEpochMs = startEpochMs,
-                           ),
-                           hooks,
-                       )
+              MultiPeerHeadHarness.Inputs(
+                config = MultiPeerHeadHarness
+                    .Config(label, backendMode, transportMode),
+                multiNodeConfig = multiNodeConfig,
+                coilNodeConfigs = coilConfigs,
+                preinitPeerUtxosL1 = state.preinitPeerUtxosL1,
+                takeoffTime = state.takeoffTime,
+                startEpochMs = startEpochMs,
+              ),
+              hooks,
+            )
         yield Stage4Sut(
           static = Stage4SutStatic(
             system = harness.system,
@@ -182,7 +179,6 @@ case class Stage4Suite(
           ),
         )
 
-
     override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
         // Race the happy-path drain against the fallback-entered signal. If any peer's CL
         // successfully submits a `FallbackToRuleBased`, abandon the analysis and fail with
@@ -199,35 +195,33 @@ case class Stage4Suite(
             // One-time coverage check: if all IDs already landed before we armed the target,
             // fire the signal ourselves (no new brief will arrive to trigger the predicate).
             allBriefs <- sut.mutable.perPeer.state.values.toList
-                             .traverse(_.blockBriefs.get)
-                             .map(_.flatten)
-            seen       = allBriefs
-                             .flatMap(br =>
-                                 br.requests.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRejected
-                             )
-                             .toSet
+                .traverse(_.blockBriefs.get)
+                .map(_.flatten)
+            seen = allBriefs
+                .flatMap(br => br.requests.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRejected)
+                .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
-                     sut.mutable.fastSettlementSignal.complete(())
-                 )
+              sut.mutable.fastSettlementSignal.complete(())
+            )
             _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.await)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
             blockNums <- sut.mutable.perPeer.state.values.toList
-                             .traverse(_.blockBriefs.get)
-                             .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
+                .traverse(_.blockBriefs.get)
+                .map(_.flatten.map(b => b.blockNum: Int).toSet)
             _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
             // One-time coverage check across ALL peers — matching the predicate condition so a
             // spurious signal fire can't race ahead of any peer's stacks update.
             allPeersStacks <- sut.mutable.perPeer.state.values.toList.traverse(_.stacks.get)
-            allCovered      = blockNums.isEmpty ||
-                                  allPeersStacks.forall { peerStacks =>
-                                      blockNums.forall { bn =>
-                                          peerStacks.exists { s =>
-                                              (s.brief.firstBlockNum: Int) <= bn &&
-                                              bn <= (s.brief.lastBlockNum: Int)
-                                          }
-                                      }
-                                  }
+            allCovered = blockNums.isEmpty ||
+                allPeersStacks.forall { peerStacks =>
+                    blockNums.forall { bn =>
+                        peerStacks.exists { s =>
+                            (s.brief.firstBlockNum: Int) <= bn &&
+                            bn <= (s.brief.lastBlockNum: Int)
+                        }
+                    }
+                }
             _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()))
             _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.await)
             // Arm the effects-landed drain: now that the slow cycle has reached agreement on
@@ -235,19 +229,19 @@ case class Stage4Suite(
             // wait for the TxSubmitting predicate to observe enough hashes to satisfy them. Gap
             // between slow signal and this one = the StackComposer rate-limit delay.
             canonicalStacksForTarget <- sut.mutable.perPeer.state.toList
-                                            .traverse { case (p, c) => c.stacks.get.map(p -> _) }
-                                            .map { byPeer =>
-                                                val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
-                                                sorted.headOption.map(_._2).getOrElse(Vector.empty)
-                                            }
+                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
+                .map { byPeer =>
+                    val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
+                    sorted.headOption.map(_._2).getOrElse(Vector.empty)
+                }
             expectations = EffectsLanded.expectations(canonicalStacksForTarget)
             _ <- sut.mutable.effectsLandedTarget.complete(expectations)
             // One-time check: if every relevant expectation is already satisfied by the hashes
             // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
             landedNow <- sut.mutable.landedTxs.state.get
             _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
-                     sut.mutable.effectsLandedSignal.complete(())
-                 )
+              sut.mutable.effectsLandedSignal.complete(())
+            )
             _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.await)
             errors <- sut.mutable.sutErrors.get
             // Snapshot every capture-written Ref ONCE here, after all drain signals have fired,
@@ -257,28 +251,28 @@ case class Stage4Suite(
             // derived from inconsistent snapshots. Freezing once removes that window by
             // construction.
             briefsByPeer <- sut.mutable.perPeer.state.toList
-                                .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
-                                .map(_.toMap)
+                .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
+                .map(_.toMap)
             stacksByPeer <- sut.mutable.perPeer.state.toList
-                                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
-                                .map(_.toMap)
+                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
+                .map(_.toMap)
             coilStacksByCoil <- sut.mutable.perCoil.state.toList
-                                    .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
-                                    .map(_.toMap)
+                .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
+                .map(_.toMap)
             submittedIds <- sut.mutable.submittedRequestIds.get
             sortedPeers = stacksByPeer.keys.toSeq.sortBy(p => p: Int)
             // propEffectsLanded must check exactly what effectsLandedSignal confirmed landed, so it
             // uses the stacks frozen when effectsLandedTarget was armed (above), not the post-signal
             // snapshot — which could include a trailing stack whose txs have not landed yet.
             analysisProp <- analyzeBlockBriefs(
-                              lastState,
-                              sut,
-                              briefsByPeer,
-                              stacksByPeer,
-                              coilStacksByCoil,
-                              submittedIds,
-                              canonicalStacksForTarget,
-                            )
+              lastState,
+              sut,
+              briefsByPeer,
+              stacksByPeer,
+              coilStacksByCoil,
+              submittedIds,
+              canonicalStacksForTarget,
+            )
             persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
             props = analysisProp && persistenceProp
         yield
@@ -354,7 +348,6 @@ case class Stage4Suite(
             )
 
             targetBlockNums <- sut.mutable.slowCoverageTarget.get
-
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
@@ -593,8 +586,8 @@ case class Stage4Suite(
       *
       * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go into
       * `depositsAbsorbed` / `depositsRejected` on the SUT side, but a rejected deposit registration
-      * ends up in `requests` via `JointLedger.invalidateRequest` and would otherwise inflate the SUT total
-      * relative to the model.
+      * ends up in `requests` via `JointLedger.invalidateRequest` and would otherwise inflate the
+      * SUT total relative to the model.
       */
     private def propValidRatio(
         lastState: ModelState,
@@ -651,128 +644,130 @@ case class Stage4Suite(
       * the suite's `log` tracer so emit lines for free.
       */
     private object PrettyPrinters:
-      def traceBlockTable(
-        canonicalBriefs: Vector[BlockBrief.Intermediate],
-        sortedPeers: Seq[HeadPeerNumber],
-        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
-        nPeers: Int,
-        submittedIds: Vector[RequestId],
-        lastState: ModelState,
-    ): IO[Unit] = {
-        val colWidth = 72
-        val divider = s"+${"-" * (colWidth + 2)}+"
-        val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+        def traceBlockTable(
+            canonicalBriefs: Vector[BlockBrief.Intermediate],
+            sortedPeers: Seq[HeadPeerNumber],
+            briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+            nPeers: Int,
+            submittedIds: Vector[RequestId],
+            lastState: ModelState,
+        ): IO[Unit] = {
+            val colWidth = 72
+            val divider = s"+${"-" * (colWidth + 2)}+"
+            val header = s"| ${"Block".padTo(colWidth, ' ')} |"
 
-        val rows = canonicalBriefs.map { brief =>
-            val blockType = brief match {
-                case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
+            val rows = canonicalBriefs.map { brief =>
+                val blockType = brief match {
+                    case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
+                }
+                val vMaj = brief.blockVersion.major.convert
+                val vMin = brief.blockVersion.minor.convert
+                val leader = (brief.blockNum: Int) % nPeers
+                val evs = brief.requests.map { case (reqId, flag) =>
+                    val f = if flag == ValidityFlag.Valid then "V" else "I"
+                    s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
+                }
+                val abs = brief.depositsAbsorbed.map(r =>
+                    s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
+                )
+                val ref = brief.depositsRejected.map(r =>
+                    s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
+                )
+                val events = (evs ++ abs ++ ref).mkString(" ")
+                val label =
+                    s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
+                s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
             }
-            val vMaj = brief.blockVersion.major.convert
-            val vMin = brief.blockVersion.minor.convert
-            val leader = (brief.blockNum: Int) % nPeers
-            val evs = brief.requests.map { case (reqId, flag) =>
-                val f = if flag == ValidityFlag.Valid then "V" else "I"
-                s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
-            }
-            val abs = brief.depositsAbsorbed.map(r =>
-                s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
-            )
-            val ref = brief.depositsRejected.map(r =>
-                s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
-            )
-            val events = (evs ++ abs ++ ref).mkString(" ")
-            val label =
-                s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
+
+            // SUT processing order — each block contributes its absorbed deposits, then its events.
+            val sutOrder: Vector[RequestId] =
+                canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.requests.map(_._1)).toVector
+            val commonPrefixLen =
+                submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+
+            val depositIds = lastState.registeredDeposits.keySet
+            val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
+            val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
+            val modelTotal = l2TxReqIds.size
+            val sutL2Events =
+                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) =>
+                    depositIds.contains(r)
+                }
+            val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+            val sutTotal = sutL2Events.size
+
+            val peersLine =
+                s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+            val prefixLine =
+                s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+            val ratioLine =
+                s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+            val legend =
+                "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+
+            val text = (divider :: header :: divider :: rows.toList ++
+                (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
+                .mkString("\n", "\n", "")
+            log.info(text)
         }
 
-        // SUT processing order — each block contributes its absorbed deposits, then its events.
-        val sutOrder: Vector[RequestId] =
-            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.requests.map(_._1)).toVector
-        val commonPrefixLen =
-            submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+        /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on
+          * the canonical peer, showing the stack number, covered block range, partition spine
+          * (Min/Maj/Fin kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
+          * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`.
+          * Followed by a per-peer stack-count line for cross-peer convergence at a glance.
+          */
+        def traceStackTable(
+            canonicalStacks: Vector[Stack.HardConfirmed],
+            sortedPeers: Seq[HeadPeerNumber],
+            stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+            nPeers: Int,
+        ): IO[Unit] = {
+            val colWidth = 72
+            val divider = s"+${"-" * (colWidth + 2)}+"
+            val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
 
-        val depositIds = lastState.registeredDeposits.keySet
-        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
-        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
-        val modelTotal = l2TxReqIds.size
-        val sutL2Events =
-            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
-        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
-        val sutTotal = sutL2Events.size
-
-        val peersLine =
-            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
-        val prefixLine =
-            s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
-        val ratioLine =
-            s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
-        val legend =
-            "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-
-        val text = (divider :: header :: divider :: rows.toList ++
-            (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
-            .mkString("\n", "\n", "")
-        log.info(text)
-    }
-
-      /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on
-        * the canonical peer, showing the stack number, covered block range, partition spine
-        * (Min/Maj/Fin kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
-        * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`.
-        * Followed by a per-peer stack-count line for cross-peer convergence at a glance.
-        */
-      def traceStackTable(
-        canonicalStacks: Vector[Stack.HardConfirmed],
-        sortedPeers: Seq[HeadPeerNumber],
-        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
-        nPeers: Int,
-    ): IO[Unit] = {
-        val colWidth = 72
-        val divider = s"+${"-" * (colWidth + 2)}+"
-        val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
-
-        val rows = canonicalStacks.map { stack =>
-            val brief = stack.brief
-            val sNum = brief.stackNum: Int
-            val first = brief.firstBlockNum: Int
-            val last = brief.lastBlockNum: Int
-            val nBlks = last - first + 1
-            // Slow-consensus leadership schedule is round-robin by stack number, mirroring
-            // fast-consensus block-number round-robin.
-            val leader = sNum % nPeers
-            val label = stack.effects match {
-                case _: StackEffects.HardConfirmed.Initial =>
-                    s"#$sNum Init lead=p$leader | init+fallback"
-                case r: StackEffects.HardConfirmed.Regular =>
-                    val blkLabel = if nBlks == 1 then "blk" else "blks"
-                    val parts = r.partitions.toList.map {
-                        case _: PartitionEffects.Minor[?] => "Min"
-                        case _: PartitionEffects.Major[?] => "Maj"
-                        case _: PartitionEffects.Final    => "Fin"
-                    }
-                    val unlockStr = PartitionEffects.unlock(r.partitions) match {
-                        case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
-                        case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
-                        case None                                          => "sole"
-                    }
-                    s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
-                        s"[${parts.mkString(",")}] u=$unlockStr"
+            val rows = canonicalStacks.map { stack =>
+                val brief = stack.brief
+                val sNum = brief.stackNum: Int
+                val first = brief.firstBlockNum: Int
+                val last = brief.lastBlockNum: Int
+                val nBlks = last - first + 1
+                // Slow-consensus leadership schedule is round-robin by stack number, mirroring
+                // fast-consensus block-number round-robin.
+                val leader = sNum % nPeers
+                val label = stack.effects match {
+                    case _: StackEffects.HardConfirmed.Initial =>
+                        s"#$sNum Init lead=p$leader | init+fallback"
+                    case r: StackEffects.HardConfirmed.Regular =>
+                        val blkLabel = if nBlks == 1 then "blk" else "blks"
+                        val parts = r.partitions.toList.map {
+                            case _: PartitionEffects.Minor[?] => "Min"
+                            case _: PartitionEffects.Major[?] => "Maj"
+                            case _: PartitionEffects.Final    => "Fin"
+                        }
+                        val unlockStr = PartitionEffects.unlock(r.partitions) match {
+                            case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
+                            case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
+                            case None                                          => "sole"
+                        }
+                        s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
+                            s"[${parts.mkString(",")}] u=$unlockStr"
+                }
+                s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
             }
-            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
+
+            val peersLine =
+                s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
+            val legend =
+                "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
+                    "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
+
+            val text = (divider :: header :: divider :: rows.toList ++
+                (divider :: peersLine :: legend :: Nil))
+                .mkString("\n", "\n", "")
+            log.info(text)
         }
-
-        val peersLine =
-            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
-        val legend =
-            "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
-                "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
-
-        val text = (divider :: header :: divider :: rows.toList ++
-            (divider :: peersLine :: legend :: Nil))
-            .mkString("\n", "\n", "")
-        log.info(text)
-    }
 
 // ===================================
 // Initial state generator (canonical location; Runner delegates here for @main)
@@ -832,10 +827,14 @@ object Stage4Suite:
           generateInitialBlock = (bootstrap, funding) =>
               generateInitialBlock(
                 genHeadConfigBootstrap = ReaderT
-                    .pure[Gen, TestPeers, (
-                        hydrozoa.config.head.HeadConfig.Bootstrap,
-                        hydrozoa.bootstrap.InitializationFunding
-                    )]((bootstrap, funding)),
+                    .pure[
+                      Gen,
+                      TestPeers,
+                      (
+                          hydrozoa.config.head.HeadConfig.Bootstrap,
+                          hydrozoa.bootstrap.InitializationFunding
+                      )
+                    ]((bootstrap, funding)),
                 generateBlockCreationEndTime = generateHeadStartTime
               )
         )

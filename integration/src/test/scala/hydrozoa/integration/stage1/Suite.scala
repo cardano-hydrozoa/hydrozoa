@@ -182,10 +182,10 @@ case class Suite(
                     mixSplitTx <- mkMixSplitTx(cardanoNetwork, backend, aliceAddress)
                     mixSplitTxSigned = testPeers.walletFor(Alice).signTx(mixSplitTx)
                     _ <- run(
-                           log.trace(
-                             s"mixSplitTxSigned = ${HexUtil.encodeHexString(mixSplitTxSigned.toCbor)}"
-                           )
-                         )
+                      log.trace(
+                        s"mixSplitTxSigned = ${HexUtil.encodeHexString(mixSplitTxSigned.toCbor)}"
+                      )
+                    )
                     ret <- run(backend.submitTx(RawTx(mixSplitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
@@ -193,15 +193,15 @@ case class Suite(
                     _ <- run(IO.sleep(5.seconds))
 
                     splitUpUtxos <- run(
-                                      backend
-                                          .utxosAt(aliceAddress)
-                                          .flatMap(_.fold(IO.raiseError, IO.pure))
-                                    )
+                      backend
+                          .utxosAt(aliceAddress)
+                          .flatMap(_.fold(IO.raiseError, IO.pure))
+                    )
                 } yield Stage1Env(
-                    startTime = startTime,
-                    cardanoNetwork = cardanoNetwork,
-                    genesisUtxo = _ => Map(Alice -> splitUpUtxos),
-                    testPeers = testPeers
+                  startTime = startTime,
+                  cardanoNetwork = cardanoNetwork,
+                  genesisUtxo = _ => Map(Alice -> splitUpUtxos),
+                  testPeers = testPeers
                 )
 
             case SuiteCardano.Public(seedPhrase, cardanoNetwork, blockfrostKey) =>
@@ -214,17 +214,17 @@ case class Suite(
                 )
                 for {
                     _ <- run(
-                           log.info(
-                             s"Splitting up utxos at Alice's address ${aliceAddress.toBech32.get}"
-                           )
-                         )
+                      log.info(
+                        s"Splitting up utxos at Alice's address ${aliceAddress.toBech32.get}"
+                      )
+                    )
                     mixSplitTx <- mkMixSplitTx(cardanoNetwork, backend, aliceAddress)
                     splitTxSigned = testPeers.walletFor(Alice).signTx(mixSplitTx)
                     _ <- run(
-                           log.trace(
-                             s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}"
-                           )
-                         )
+                      log.trace(
+                        s"splitTxSigned = ${HexUtil.encodeHexString(splitTxSigned.toCbor)}"
+                      )
+                    )
                     ret <- run(backend.submitTx(RawTx(splitTxSigned)))
                     _ <- run(log.trace(s"submission response: $ret"))
 
@@ -233,15 +233,15 @@ case class Suite(
 
                     startTime <- run(IO.realTimeInstant)
                     splitUpUtxos <- run(
-                                      backend
-                                          .utxosAt(aliceAddress)
-                                          .flatMap(_.fold(IO.raiseError, IO.pure))
-                                    )
+                      backend
+                          .utxosAt(aliceAddress)
+                          .flatMap(_.fold(IO.raiseError, IO.pure))
+                    )
                 } yield Stage1Env(
-                    startTime = startTime,
-                    cardanoNetwork = cardanoNetwork,
-                    genesisUtxo = _ => Map(Alice -> splitUpUtxos),
-                    testPeers = testPeers
+                  startTime = startTime,
+                  cardanoNetwork = cardanoNetwork,
+                  genesisUtxo = _ => Map(Alice -> splitUpUtxos),
+                  testPeers = testPeers
                 )
         }
     }
@@ -255,48 +255,48 @@ case class Suite(
         for {
             peerUtxos <- run(backend.utxosAt(address).flatMap(_.fold(IO.raiseError, IO.pure)))
             outputValues <- {
-                                val totalValue = Value.combine(peerUtxos.map((_, o) => o.value))
-                                val gen = CappedValueGen.generateCappedValue(cardanoNetwork)
-                                pick(
-                                  Gen.tailRecM((totalValue, List.empty: List[Value]))((rest, acc) =>
-                                      gen(rest, Some(20_000_000L), Some(1000_000_000), None).map(
-                                        next =>
-                                            if next == rest
-                                            then Right(acc :+ next)
-                                            else Left((rest - next, acc :+ next))
-                                      )
-                                  )
-                                )
-                            }
-            tx <- run(
-                    IO.fromEither(
-                      (for {
-                          unbalanced <- TransactionBuilder
-                              .build(
-                                cardanoNetwork.cardanoInfo.network,
-                                peerUtxos.map { case (utxoId, output) =>
-                                    Spend(Utxo(utxoId, output))
-                                }.toList ++ outputValues.map(value =>
-                                    Send(
-                                      TransactionOutput.Babbage(address = address, value = value)
-                                    )
-                                )
-                              )
-                          balanced <- unbalanced.balanceContext(
-                            diffHandler = Change.changeOutputDiffHandler(
-                              _, _,
-                              protocolParams = cardanoNetwork.cardanoProtocolParams,
-                              changeOutputIdx = 0
-                            ),
-                            protocolParams = cardanoNetwork.cardanoProtocolParams,
-                            evaluator = PlutusScriptEvaluator(
-                              cardanoNetwork.cardanoInfo,
-                              EvaluatorMode.EvaluateAndComputeCost
-                            )
-                          )
-                      } yield balanced.transaction).left.map(err => RuntimeException(err.toString))
-                    )
+                val totalValue = Value.combine(peerUtxos.map((_, o) => o.value))
+                val gen = CappedValueGen.generateCappedValue(cardanoNetwork)
+                pick(
+                  Gen.tailRecM((totalValue, List.empty: List[Value]))((rest, acc) =>
+                      gen(rest, Some(20_000_000L), Some(1000_000_000), None).map(next =>
+                          if next == rest
+                          then Right(acc :+ next)
+                          else Left((rest - next, acc :+ next))
+                      )
                   )
+                )
+            }
+            tx <- run(
+              IO.fromEither(
+                (for {
+                    unbalanced <- TransactionBuilder
+                        .build(
+                          cardanoNetwork.cardanoInfo.network,
+                          peerUtxos.map { case (utxoId, output) =>
+                              Spend(Utxo(utxoId, output))
+                          }.toList ++ outputValues.map(value =>
+                              Send(
+                                TransactionOutput.Babbage(address = address, value = value)
+                              )
+                          )
+                        )
+                    balanced <- unbalanced.balanceContext(
+                      diffHandler = Change.changeOutputDiffHandler(
+                        _,
+                        _,
+                        protocolParams = cardanoNetwork.cardanoProtocolParams,
+                        changeOutputIdx = 0
+                      ),
+                      protocolParams = cardanoNetwork.cardanoProtocolParams,
+                      evaluator = PlutusScriptEvaluator(
+                        cardanoNetwork.cardanoInfo,
+                        EvaluatorMode.EvaluateAndComputeCost
+                      )
+                    )
+                } yield balanced.transaction).left.map(err => RuntimeException(err.toString))
+              )
+            )
         } yield tx
     }
 
@@ -316,11 +316,11 @@ case class Suite(
             // For real-blockchain modes: anchor all block times 1 minute in the future so the SUT
             // can sleep until that moment and be perfectly synchronized with the model clock.
             takeoffTime <- suiteCardano match {
-                               case _: SuiteCardano.Mock =>
-                                   pick(Gen.const(None: Option[java.time.Instant]))
-                               case _ =>
-                                   run(IO.realTimeInstant.map(t => Some(t.plusSeconds(60))))
-                           }
+                case _: SuiteCardano.Mock =>
+                    pick(Gen.const(None: Option[java.time.Instant]))
+                case _ =>
+                    run(IO.realTimeInstant.map(t => Some(t.plusSeconds(60))))
+            }
 
             _ <- run(log.debug(s"takeoff time: $takeoffTime"))
 
@@ -354,19 +354,23 @@ case class Suite(
               generateInitialBlock = (bootstrap, funding) =>
                   hydrozoa.config.head.initialization.generateInitialBlock(
                     genHeadConfigBootstrap = ReaderT
-                        .pure[Gen, TestPeers, (
-                            hydrozoa.config.head.HeadConfig.Bootstrap,
-                            hydrozoa.bootstrap.InitializationFunding
-                        )]((bootstrap, funding)),
+                        .pure[
+                          Gen,
+                          TestPeers,
+                          (
+                              hydrozoa.config.head.HeadConfig.Bootstrap,
+                              hydrozoa.bootstrap.InitializationFunding
+                          )
+                        ]((bootstrap, funding)),
                     generateBlockCreationEndTime = generateHeadStartTime
                   )
             )
 
             config <- pick(
-                        MultiNodeConfig.generateWith(testPeers)(
-                          generateHeadConfig = generateHeadConfig
-                        )
-                      )
+              MultiNodeConfig.generateWith(testPeers)(
+                generateHeadConfig = generateHeadConfig
+              )
+            )
 
             _ <- run(log.debug(s"total contingency: ${config.headConfig.fallbackContingency}"))
             _ <- run(log.debug(s"l2 utxos: ${config.headConfig.initialEvacuationMap.size}"))
@@ -377,15 +381,15 @@ case class Suite(
             _ <- run(log.debug(s"peerL1GenesisUtxos: ${peerL1GenesisUtxos}"))
 
             _ <- pick(
-                   generateNodeOperationMultisigConfig(
-                     config.headConfig.maxCardanoLiaisonPollingPeriod
-                   )
-                 )
+              generateNodeOperationMultisigConfig(
+                config.headConfig.maxCardanoLiaisonPollingPeriod
+              )
+            )
             _ <- pick(
-                   generateNodeOperationEvacuationConfig(
-                     testPeers.walletFor(Alice)
-                   )
-                 )
+              generateNodeOperationEvacuationConfig(
+                testPeers.walletFor(Alice)
+              )
+            )
         } yield Model
             .State(
               multiNodeConfig = config,
@@ -495,98 +499,102 @@ case class Suite(
             // system was not terminated in the [[beforeFinalize]] action.
             // In-memory persistence — released when the Resource is finalized.
             persistenceBackend <- InMemoryBackendStore.open(persistenceTracer)
-            sut <- Resource.eval(for {
-                cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
-                fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
-                    Slf4jTracer.sink.contramap(FastConsensusActorEventFormat.humanFormat(headPeerNum))
-                clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
-                    Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
-                // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
-                // need a handle.
-                persistence <- {
-                    given CardanoNetwork.Section = nodeConfig
-                    Persistence.fromBackend(persistenceBackend, persistenceTracer)
-                }
-                // Weaver stub — emits leader_started for tracing
-                blockWeaver <- system.actorOf(
-                  new BlockWeaverMock(
-                    fcaTracer,
-                    headPeerNum,
-                    nodeConfig.headPeers.nHeadPeers: Int
-                  )
-                )
-                // No HMRM in stage1 — provide a stub actor that swallows any HandoffToRuleBased
-                // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
-                // path only), so the ref is a required-but-inert construction parameter.
-                mrmSelfStub <- system.actorOf(
-                  new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased] {
-                      override def receive
-                          : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased] =
-                          _ => IO.unit
+            sut <- Resource.eval(
+              for {
+                  cardanoBackend <- mkCardanoBackend(cardanoBackendConfig)
+                  fcaTracer: ContraTracer[IO, FastConsensusActorEvent] =
+                      Slf4jTracer.sink.contramap(
+                        FastConsensusActorEventFormat.humanFormat(headPeerNum)
+                      )
+                  clTracer: ContraTracer[IO, CardanoLiaisonEvent] =
+                      Slf4jTracer.sink.contramap(CardanoLiaisonEventFormat.humanFormat(headPeerNum))
+                  // In-memory persistence for the SUT — stage1 doesn't assert on it, but the actors
+                  // need a handle.
+                  persistence <- {
+                      given CardanoNetwork.Section = nodeConfig
+                      Persistence.fromBackend(persistenceBackend, persistenceTracer)
                   }
-                )
-                // Cardano liaison
-                cardanoLiaison <- system.actorOf(
-                  CardanoLiaison(
-                    nodeConfig,
-                    cardanoBackend,
-                    CardanoLiaison.Connections(blockWeaver),
-                    clTracer,
-                    persistence,
-                    mrmSelf = mrmSelfStub,
-                    // Stage1 runs no user-facing HTTP server, so the readiness status has
-                    // no reader.
-                    advanceNodeStatus = _ => IO.unit,
+                  // Weaver stub — emits leader_started for tracing
+                  blockWeaver <- system.actorOf(
+                    new BlockWeaverMock(
+                      fcaTracer,
+                      headPeerNum,
+                      nodeConfig.headPeers.nHeadPeers: Int
+                    )
                   )
-                )
-                // Request sequencer stub
-                requestSequencerStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
-                    override def receive: Receive[IO, RequestSequencer.Request] = _ => IO.pure(())
-                })
-                // Agent actor
-                jointLedgerD <- IO.deferred[JointLedger.Handle]
-                consensusActorD <- IO.deferred[FastConsensusActor.Handle]
-                agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
-                // StackComposer stub — stage1 does not exercise slow consensus.
-                stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
-                    override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
-                })
-                jointLedgerConnections = JointLedger.Connections(
-                  fastConsensusActor = agent,
-                  stackComposer = stackComposerStub,
-                  headPeerLiaisons = List(),
-                )
-                l2Ledger <- EutxoL2Ledger(nodeConfig)
-                jointLedger <- system.actorOf(
-                  JointLedger(
-                    nodeConfig,
-                    jointLedgerConnections,
-                    l2Ledger,
-                    Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(headPeerNum)),
-                    persistence
+                  // No HMRM in stage1 — provide a stub actor that swallows any HandoffToRuleBased
+                  // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
+                  // path only), so the ref is a required-but-inert construction parameter.
+                  mrmSelfStub <- system.actorOf(
+                    new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased] {
+                        override def receive
+                            : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased] =
+                            _ => IO.unit
+                    }
                   )
-                )
-                _ <- jointLedgerD.complete(jointLedger)
-                // Consensus actor
-                consensusConnections = FastConsensusActor.Connections(
-                  blockWeaver = blockWeaver,
-                  cardanoLiaison = cardanoLiaison,
-                  requestSequencer = Some(requestSequencerStub),
-                  headPeerLiaisons = List.empty,
-                  stackComposer = stackComposerStub,
-                )
-                consensusActor <- system.actorOf(
-                  FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
-                )
-                _ <- consensusActorD.complete(consensusActor)
-            } yield Stage1Sut(
-              headAddress = multiNodeConfig.headConfig.headMultisigAddress,
-              system = system,
-              cardanoBackend = cardanoBackend,
-              agent = agent,
-              log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
-              runId = runId,
-            ))
+                  // Cardano liaison
+                  cardanoLiaison <- system.actorOf(
+                    CardanoLiaison(
+                      nodeConfig,
+                      cardanoBackend,
+                      CardanoLiaison.Connections(blockWeaver),
+                      clTracer,
+                      persistence,
+                      mrmSelf = mrmSelfStub,
+                      // Stage1 runs no user-facing HTTP server, so the readiness status has
+                      // no reader.
+                      advanceNodeStatus = _ => IO.unit,
+                    )
+                  )
+                  // Request sequencer stub
+                  requestSequencerStub <- system.actorOf(new Actor[IO, RequestSequencer.Request] {
+                      override def receive: Receive[IO, RequestSequencer.Request] = _ => IO.pure(())
+                  })
+                  // Agent actor
+                  jointLedgerD <- IO.deferred[JointLedger.Handle]
+                  consensusActorD <- IO.deferred[FastConsensusActor.Handle]
+                  agent <- system.actorOf(AgentActor(jointLedgerD, consensusActorD, cardanoLiaison))
+                  // StackComposer stub — stage1 does not exercise slow consensus.
+                  stackComposerStub <- system.actorOf(new Actor[IO, StackComposer.Request] {
+                      override def receive: Receive[IO, StackComposer.Request] = _ => IO.pure(())
+                  })
+                  jointLedgerConnections = JointLedger.Connections(
+                    fastConsensusActor = agent,
+                    stackComposer = stackComposerStub,
+                    headPeerLiaisons = List(),
+                  )
+                  l2Ledger <- EutxoL2Ledger(nodeConfig)
+                  jointLedger <- system.actorOf(
+                    JointLedger(
+                      nodeConfig,
+                      jointLedgerConnections,
+                      l2Ledger,
+                      Slf4jTracer.sink.contramap(JointLedgerEventFormat.humanFormat(headPeerNum)),
+                      persistence
+                    )
+                  )
+                  _ <- jointLedgerD.complete(jointLedger)
+                  // Consensus actor
+                  consensusConnections = FastConsensusActor.Connections(
+                    blockWeaver = blockWeaver,
+                    cardanoLiaison = cardanoLiaison,
+                    requestSequencer = Some(requestSequencerStub),
+                    headPeerLiaisons = List.empty,
+                    stackComposer = stackComposerStub,
+                  )
+                  consensusActor <- system.actorOf(
+                    FastConsensusActor(nodeConfig, consensusConnections, fcaTracer, persistence)
+                  )
+                  _ <- consensusActorD.complete(consensusActor)
+              } yield Stage1Sut(
+                headAddress = multiNodeConfig.headConfig.headMultisigAddress,
+                system = system,
+                cardanoBackend = cardanoBackend,
+                agent = agent,
+                log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage1.Sut")),
+                runId = runId,
+              )
+            )
         } yield sut
     }
 

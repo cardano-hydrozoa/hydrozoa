@@ -21,8 +21,8 @@ import scalus.cardano.ledger.TransactionHash
   */
 private[stage4] object Stage4Plugins {
 
-    /** Capture briefs (`JL.BriefProduced`) and hard-confirmed stacks (`SCA.StackHardConfirmed`)
-      * per head peer.
+    /** Capture briefs (`JL.BriefProduced`) and hard-confirmed stacks (`SCA.StackHardConfirmed`) per
+      * head peer.
       */
     def perPeerCaptures(
         peers: Seq[HeadPeerNumber]
@@ -68,8 +68,8 @@ private[stage4] object Stage4Plugins {
             }
         }
 
-    /** Capture L1 tx hashes from `CardanoLiaisonEvent.TxSubmitting` across head and coil sides.
-      * All head peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
+    /** Capture L1 tx hashes from `CardanoLiaisonEvent.TxSubmitting` across head and coil sides. All
+      * head peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
       */
     def effectsLandedCapture: IO[Capture[Ref[IO, Set[TransactionHash]]]] =
         Ref[IO].of(Set.empty[TransactionHash]).map { ref =>
@@ -104,7 +104,7 @@ private[stage4] object Stage4Plugins {
                   CommonChildEvent.JointLedger(JointLedgerEvent.BriefProduced(_)),
                 ) =>
                 target.tryGet.flatMap {
-                    case None            => IO.pure(None)
+                    case None => IO.pure(None)
                     case Some(submitted) =>
                         perPeer.state(p).blockBriefs.get.map { briefs =>
                             val seen = briefs
@@ -120,9 +120,9 @@ private[stage4] object Stage4Plugins {
             case _ => IO.pure(None)
         }
 
-    /** Slow-cycle coverage signal: armed externally with the block-number set that must be
-      * covered; fires once every head peer's hard-confirmed stacks span every block num. No coil
-      * arm — followers participate only via the head set (see [[propCoilParticipation]]).
+    /** Slow-cycle coverage signal: armed externally with the block-number set that must be covered;
+      * fires once every head peer's hard-confirmed stacks span every block num. No coil arm —
+      * followers participate only via the head set (see [[propCoilParticipation]]).
       */
     def slowCoverageSignal(
         perPeer: Capture[Map[HeadPeerNumber, PerPeerCaptures]],
@@ -136,7 +136,7 @@ private[stage4] object Stage4Plugins {
                   ),
                 ) =>
                 target.tryGet.flatMap {
-                    case None             => IO.pure(None)
+                    case None => IO.pure(None)
                     case Some(targetNums) =>
                         perPeer.state.values.toList.traverse(_.stacks.get).map { allPeersStacks =>
                             val allCovered = targetNums.isEmpty ||
@@ -171,7 +171,7 @@ private[stage4] object Stage4Plugins {
                   CommonChildEvent.CardanoLiaison(CardanoLiaisonEvent.TxSubmitting(_)),
                 ) =>
                 target.tryGet.flatMap {
-                    case None       => IO.pure(None)
+                    case None => IO.pure(None)
                     case Some(exps) =>
                         landed.state.get.map { l =>
                             Option.when(EffectsLanded.isComplete(l, exps))(())

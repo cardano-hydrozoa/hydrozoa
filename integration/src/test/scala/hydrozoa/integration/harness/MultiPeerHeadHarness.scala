@@ -21,9 +21,9 @@ import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, CardanoBackendMock, FirewalledCardanoBackendEvent, MockState, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.*
+import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
@@ -46,13 +46,13 @@ import scalus.cardano.ledger.rules.{Context, UtxoEnv}
 import scalus.cardano.ledger.{CardanoInfo, CertState, Utxos}
 import test.{GenWithTestPeers, TestPeerName, TestPeers, given}
 
-/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared
-  * mock L1.
- *
+/** Scaffold for a multi-peer head (+ optional coil followers) [[Resource]] backed by a shared mock
+  * L1.
+  *
   * Test-side concerns (capture observers, signal `Deferred`s, custom per-peer handle types like
   * stage4's `Stage4PeerHandle`) are injected via [[Hooks]] — the harness threads test-provided
-  * tracers into each MRM and runs a test-provided `(num, connections) => IO[H]` finalizer once
-  * each peer's connections are available.
+  * tracers into each MRM and runs a test-provided `(num, connections) => IO[H]` finalizer once each
+  * peer's connections are available.
   */
 object MultiPeerHeadHarness:
 
@@ -63,13 +63,13 @@ object MultiPeerHeadHarness:
     /** Wall-clock alignment for the head's initial-block end-time.
       *
       *   - `useTestControl = true`: return `None`. The head-config generator falls back to the
-      *     deterministic Jan-1-2026 + 100-day random anchor (see [[generateHeadStartTime]]),
-      *     which is stable across TestControl seeds; reading `IO.realTimeInstant` there would
-      *     defeat reproducibility.
+      *     deterministic Jan-1-2026 + 100-day random anchor (see [[generateHeadStartTime]]), which
+      *     is stable across TestControl seeds; reading `IO.realTimeInstant` there would defeat
+      *     reproducibility.
       *   - `useTestControl = false`: return `Some(now + offset)`, materialised via
       *     [[IO.realTimeInstant]] so no wall-clock read happens at property-construction time.
-      *     `offset` gives the scenario room to spawn actors before the initial block's
-      *     validity window opens; each test tunes it against its actor-spawn budget.
+      *     `offset` gives the scenario room to spawn actors before the initial block's validity
+      *     window opens; each test tunes it against its actor-spawn budget.
       */
     def mkTakeoffTime(
         useTestControl: Boolean,
@@ -78,11 +78,11 @@ object MultiPeerHeadHarness:
         if useTestControl then IO.pure(None)
         else IO.realTimeInstant.map(t => Some(t.plusSeconds(offset.toSeconds)))
 
-    /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime`
-      * is `Some`, quantize it to the peer's slot config. When `None`, generate a random
-      * Jan-1-2026 + 100-day offset — deterministic per ScalaCheck seed, safe under TestControl.
-      * Feed to `hydrozoa.config.head.initialization.generateInitialBlock`'s
-      * `generateBlockCreationEndTime` parameter.
+    /** Head initial-block-end-time generator anchored on [[mkTakeoffTime]]. When `takeoffTime` is
+      * `Some`, quantize it to the peer's slot config. When `None`, generate a random Jan-1-2026 +
+      * 100-day offset — deterministic per ScalaCheck seed, safe under TestControl. Feed to
+      * `hydrozoa.config.head.initialization.generateInitialBlock`'s `generateBlockCreationEndTime`
+      * parameter.
       */
     def generateHeadStartTime(
         takeoffTime: Option[Instant]
@@ -90,9 +90,9 @@ object MultiPeerHeadHarness:
         ReaderT { (tp: TestPeers) =>
             takeoffTime match {
                 case Some(t) => Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                case None    =>
+                case None =>
                     val anchorTime = 1767225600L // Jan 1 2026 00:00:00 UTC
-                    val range      = 86_400 * 100L // 100 days in seconds
+                    val range = 86_400 * 100L // 100 days in seconds
                     for offset <- Gen.choose(0L, range)
                     yield BlockCreationEndTime(
                       java.time.Instant
@@ -102,9 +102,9 @@ object MultiPeerHeadHarness:
             }
         }
 
-    /** Static fast [[TxTiming]] so `Action.FallbackToRuleBased` fires within a wall-clock
-      * scenario budget (settlement/fallback windows are seconds, not hours). Shared by the
-      * dispute-flow tests via [[mkResource]]'s default.
+    /** Static fast [[TxTiming]] so `Action.FallbackToRuleBased` fires within a wall-clock scenario
+      * budget (settlement/fallback windows are seconds, not hours). Shared by the dispute-flow
+      * tests via [[mkResource]]'s default.
       */
     val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
         Gen.const(
@@ -181,13 +181,13 @@ object MultiPeerHeadHarness:
         extension (self: DropRule)
             def ||(other: DropRule): DropRule = etx => self(etx) || other(etx)
             def &&(other: DropRule): DropRule = etx => self(etx) && other(etx)
-            def unary_! : DropRule            = etx => !self(etx)
+            def unary_! : DropRule = etx => !self(etx)
 
             /** Lift into the backend's effectful gate. Rules are pure, so this never suspends. */
             def toGate: EnrichedTx[?] => IO[Boolean] = etx => IO.pure(self(etx))
 
-    /** Shared slf4j sink for a peer's [[FirewalledCardanoBackend]] — logs each drop (warn) and
-      * pass (info) tagged with the peer. Compose extra capture tracers onto it with `|+|`.
+    /** Shared slf4j sink for a peer's [[FirewalledCardanoBackend]] — logs each drop (warn) and pass
+      * (info) tagged with the peer. Compose extra capture tracers onto it with `|+|`.
       */
     def firewallSlf4jSink(peerId: PeerId): ContraTracer[IO, FirewalledCardanoBackendEvent] =
         val peerLabel = peerId match
@@ -256,8 +256,8 @@ object MultiPeerHeadHarness:
         // Under TestControl the harness jumps virtual time to `startEpochMs` before any actor
         // exists (see PreSystem.testControlPresleep). Anchor to the head's configured initial block
         // end-time so the model clock is coherent with the head config.
-        val startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime
-            .convert.instant.toEpochMilli
+        val startEpochMs =
+            multiNodeConfig.headConfig.initialBlock.blockBrief.endTime.convert.instant.toEpochMilli
         val coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(testPeers.coilWallets)
         resource[Option[RequestSequencer.Handle]](
           Inputs(
@@ -324,10 +324,14 @@ object MultiPeerHeadHarness:
                       generateInitialBlock = (bootstrap, funding) =>
                           generateInitialBlock(
                             genHeadConfigBootstrap = ReaderT
-                                .pure[Gen, TestPeers, (
-                                    HeadConfig.Bootstrap,
-                                    hydrozoa.bootstrap.InitializationFunding
-                                )]((bootstrap, funding)),
+                                .pure[
+                                  Gen,
+                                  TestPeers,
+                                  (
+                                      HeadConfig.Bootstrap,
+                                      hydrozoa.bootstrap.InitializationFunding
+                                  )
+                                ]((bootstrap, funding)),
                             generateBlockCreationEndTime = generateHeadStartTime(takeoffTime),
                           ),
                     ),
@@ -372,14 +376,14 @@ object MultiPeerHeadHarness:
         case Head(peerNum: HeadPeerNumber, event: HeadRegimeManagerEvent)
         case Coil(coilNum: CoilPeerNumber, event: CoilRegimeManagerEvent)
 
-    /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to Head/Coil-specific tracers
-     * and gets contramapped with the regime managers' tracers. `peerHandle` / `coilHandle` run once each MRM's
-      * `connectionsDeferred` resolves.
+    /** Test-side wiring injected into each MRM. The [[Event]]-typed projects down to
+      * Head/Coil-specific tracers and gets contramapped with the regime managers' tracers.
+      * `peerHandle` / `coilHandle` run once each MRM's `connectionsDeferred` resolves.
       */
     /** Test-side wiring — one `PeerId`-keyed hook per concern. Callers that only need a head-side
       * handle can use `H = Option[HeadHandle]` and return `None` from the coil branch; likewise
-      * `wrapBackend` can pattern-match on `PeerId.Head` / `PeerId.Coil` when the wrap differs
-      * (e.g. only head peers get firewalled).
+      * `wrapBackend` can pattern-match on `PeerId.Head` / `PeerId.Coil` when the wrap differs (e.g.
+      * only head peers get firewalled).
       */
     case class Hooks[H](
         tracer: ContraTracer[IO, Event],
@@ -419,8 +423,8 @@ object MultiPeerHeadHarness:
         sutErrors: Ref[IO, List[String]],
     )
 
-    /** Build a fully-wired multi-peer head + coil followers. The returned resource owns
-      * everything; release cancels the CL tick fibers and the error drainer.
+    /** Build a fully-wired multi-peer head + coil followers. The returned resource owns everything;
+      * release cancels the CL tick fibers and the error drainer.
       */
     def resource[H](
         inputs: Inputs,
@@ -434,55 +438,55 @@ object MultiPeerHeadHarness:
         for
             // Handle websocket "take off" timing alignment
             _ <- Resource.eval(
-                     PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
-                 )
+              PreSystem.align(transportMode.useTestControl, startEpochMs, takeoffTime, log)
+            )
 
-            system                     <- ActorSystem[IO](label)
-            backendAndSnapshot         <- Resource.eval(
-                                              CardanoBackend.mkMock(
-                                                preinitPeerUtxosL1,
-                                                multiNodeConfig.headConfig.scriptReferenceUtxos,
-                                                multiNodeConfig.headConfig.cardanoInfo,
-                                              )
-                                          )
+            system <- ActorSystem[IO](label)
+            backendAndSnapshot <- Resource.eval(
+              CardanoBackend.mkMock(
+                preinitPeerUtxosL1,
+                multiNodeConfig.headConfig.scriptReferenceUtxos,
+                multiNodeConfig.headConfig.cardanoInfo,
+              )
+            )
             (cardanoBackend, l1Snapshot) = backendAndSnapshot
             transports <- Transport.setup(
-                              transportMode,
-                              multiNodeConfig,
-                              peers,
-                              coilNodeConfigs,
-                          )
+              transportMode,
+              multiNodeConfig,
+              peers,
+              coilNodeConfigs,
+            )
             peerMrms <- peers.toList
-                            .traverse(peerNum =>
-                                Mrm
-                                    .buildPeer(
-                                      peerNum,
-                                      system,
-                                      hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
-                                      multiNodeConfig,
-                                      backendMode,
-                                      transports.headNetworks(peerNum),
-                                      hooks.tracer.contramap(Event.Head(peerNum, _)),
-                                    )
-                                    .map(peerNum -> _)
-                            )
-                            .map(_.toMap)
+                .traverse(peerNum =>
+                    Mrm
+                        .buildPeer(
+                          peerNum,
+                          system,
+                          hooks.wrapBackend(PeerId.Head(peerNum), cardanoBackend),
+                          multiNodeConfig,
+                          backendMode,
+                          transports.headNetworks(peerNum),
+                          hooks.tracer.contramap(Event.Head(peerNum, _)),
+                        )
+                        .map(peerNum -> _)
+                )
+                .map(_.toMap)
             coilMrms <- coilNodeConfigs
-                            .traverse { coilConfig =>
-                                val coilNum = Transport.coilNumOf(coilConfig)
-                                Mrm
-                                    .buildCoil(
-                                      coilConfig,
-                                      coilNum,
-                                      system,
-                                      hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
-                                      multiNodeConfig,
-                                      transports.coilUplinks(coilNum),
-                                      hooks.tracer.contramap(Event.Coil(coilNum, _)),
-                                    )
-                                    .map(coilNum -> _)
-                            }
-                            .map(_.toMap)
+                .traverse { coilConfig =>
+                    val coilNum = Transport.coilNumOf(coilConfig)
+                    Mrm
+                        .buildCoil(
+                          coilConfig,
+                          coilNum,
+                          system,
+                          hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
+                          multiNodeConfig,
+                          transports.coilUplinks(coilNum),
+                          hooks.tracer.contramap(Event.Coil(coilNum, _)),
+                        )
+                        .map(coilNum -> _)
+                }
+                .map(_.toMap)
             // WS Phase 2 — bind NodeWsServers and start mesh + coil dialers. Acquired *after*
             // peerMrms/coilMrms so its finalizer (server stop + dialer cancel) runs *before*
             // the MRMs stop their actors and close RocksDB. Otherwise an inbound WS frame can
@@ -490,63 +494,62 @@ object MultiPeerHeadHarness:
             // were freed → use-after-free SIGSEGV in `FailIfCfHasTs`. Direct mode: no-op.
             _ <- transports.bringUpNetwork
             peerConnections <- Resource.eval(
-                                   peerMrms.toList
-                                       .traverse { case (peerNum, peerMrm) =>
-                                           peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
-                                       }
-                                       .map(_.toMap)
-                               )
+              peerMrms.toList
+                  .traverse { case (peerNum, peerMrm) =>
+                      peerMrm.mrm.connectionsDeferred.get.map(peerNum -> _)
+                  }
+                  .map(_.toMap)
+            )
             coilConnections <- Resource.eval(
-                                   coilMrms.toList
-                                       .traverse { case (coilNum, coilMrm) =>
-                                           coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
-                                       }
-                                       .map(_.toMap)
-                               )
+              coilMrms.toList
+                  .traverse { case (coilNum, coilMrm) =>
+                      coilMrm.mrm.connectionsDeferred.get.map(coilNum -> _)
+                  }
+                  .map(_.toMap)
+            )
             sutErrors <- Resource.eval(Ref[IO].of(List.empty[String]))
-            _         <- ErrorDrainer.start(system, sutErrors)
+            _ <- ErrorDrainer.start(system, sutErrors)
             _ <- Ticks.startForHeads(
-                     peerConnections,
-                     peerNum =>
-                         multiNodeConfig
-                             .nodeConfigs(peerNum)
-                             .nodeOperationMultisigConfig
-                             .cardanoLiaisonPollingPeriod,
-                 )
+              peerConnections,
+              peerNum =>
+                  multiNodeConfig
+                      .nodeConfigs(peerNum)
+                      .nodeOperationMultisigConfig
+                      .cardanoLiaisonPollingPeriod,
+            )
             _ <- Ticks.startForCoils(
-                     coilConnections,
-                     coilNum =>
-                         coilMrms(coilNum).config.nodeOperationMultisigConfig
-                             .cardanoLiaisonPollingPeriod,
-                 )
+              coilConnections,
+              coilNum =>
+                  coilMrms(coilNum).config.nodeOperationMultisigConfig.cardanoLiaisonPollingPeriod,
+            )
             peerEntries <- Resource.eval(
-                               peerConnections.toList.traverse { case (peerNum, conns) =>
-                                   for
-                                       submissionClient <- Http.mkPeerSubmissionClient(
-                                                               peerNum,
-                                                               conns,
-                                                               multiNodeConfig,
-                                                           )
-                                       h <- hooks.handle(PeerId.Head(peerNum), conns)
-                                   yield peerNum -> Peer(
-                                     connections = conns,
-                                     backendStore = peerMrms(peerNum).backendStore,
-                                     submissionClient = submissionClient,
-                                     handle = h,
-                                   )
-                               }
-                           )
+              peerConnections.toList.traverse { case (peerNum, conns) =>
+                  for
+                      submissionClient <- Http.mkPeerSubmissionClient(
+                        peerNum,
+                        conns,
+                        multiNodeConfig,
+                      )
+                      h <- hooks.handle(PeerId.Head(peerNum), conns)
+                  yield peerNum -> Peer(
+                    connections = conns,
+                    backendStore = peerMrms(peerNum).backendStore,
+                    submissionClient = submissionClient,
+                    handle = h,
+                  )
+              }
+            )
             coilEntries <- Resource.eval(
-                               coilConnections.toList.traverse { case (coilNum, conns) =>
-                                   hooks.handle(PeerId.Coil(coilNum), conns).map { h =>
-                                       coilNum -> Coil(
-                                         connections = conns,
-                                         backendStore = coilMrms(coilNum).backendStore,
-                                         handle = h,
-                                       )
-                                   }
-                               }
-                           )
+              coilConnections.toList.traverse { case (coilNum, conns) =>
+                  hooks.handle(PeerId.Coil(coilNum), conns).map { h =>
+                      coilNum -> Coil(
+                        connections = conns,
+                        backendStore = coilMrms(coilNum).backendStore,
+                        handle = h,
+                      )
+                  }
+              }
+            )
         yield Harness(
           transportMode = transportMode,
           multiNodeConfig = multiNodeConfig,
@@ -582,15 +585,15 @@ object MultiPeerHeadHarness:
         private def testControlPresleep(useTC: Boolean, startEpochMs: Long): IO[Unit] =
             IO.whenA(useTC)(IO.sleep(FiniteDuration(startEpochMs, TimeUnit.MILLISECONDS)))
 
-        /** Under WS (real-clock) runs, wait until the wall clock reaches `takeoffTime` so the
-          * model clock and the SUT wall clock coincide at command 1. Abort if setup overran the
-          * budget. Same shape as stage 1. No-op when `takeoffTime` is `None` (TestControl runs).
+        /** Under WS (real-clock) runs, wait until the wall clock reaches `takeoffTime` so the model
+          * clock and the SUT wall clock coincide at command 1. Abort if setup overran the budget.
+          * Same shape as stage 1. No-op when `takeoffTime` is `None` (TestControl runs).
           */
         private def websocketTakeoff(
             takeoffTime: Option[Instant],
             log: ContraTracer[IO, Slf4jMsg],
         ): IO[Unit] = takeoffTime match
-            case None    => IO.unit
+            case None => IO.unit
             case Some(t) =>
                 IO.realTimeInstant.flatMap { now =>
                     if now.isAfter(t) then
@@ -602,9 +605,9 @@ object MultiPeerHeadHarness:
                         )
                     else
                         val sleepMs = t.toEpochMilli - now.toEpochMilli
-                        val tickMs  = 5_000L
-                        val ticks   = sleepMs / tickMs
-                        val remMs   = sleepMs % tickMs
+                        val tickMs = 5_000L
+                        val ticks = sleepMs / tickMs
+                        val remMs = sleepMs % tickMs
                         log.info(s"WS mode: sleeping ${sleepMs / 1000}s until takeoff") >>
                             (0L until ticks).toList.traverse_ { i =>
                                 IO.sleep(tickMs.millis) >>
@@ -690,15 +693,15 @@ object MultiPeerHeadHarness:
                 case Mode.Direct    => true
                 case Mode.WebSocket => false
 
-        /** Transport-layer state needed to build Regime Managers. Produced by
-          * exactly one of [[setupDirect]] / [[setupWebSocket]]; the consumer doesn't need to know
-          * which mode it's in.
+        /** Transport-layer state needed to build Regime Managers. Produced by exactly one of
+          * [[setupDirect]] / [[setupWebSocket]]; the consumer doesn't need to know which mode it's
+          * in.
           *
           * `bringUpNetwork` is a second-phase resource the caller must acquire *after* the MRMs
           * (and their RocksDB backends) are built. Under WS it binds sockets and starts dialers;
-         *  under Direct it is a no-op. Acquiring it last makes its finalizer run *before* the MRM
-          * finalizers stop their actors and close RocksDB — so no inbound WS message can cause a use-after-free
-         * segfault.
+          * under Direct it is a no-op. Acquiring it last makes its finalizer run *before* the MRM
+          * finalizers stop their actors and close RocksDB — so no inbound WS message can cause a
+          * use-after-free segfault.
           */
         case class Setup(
             headNetworks: Map[HeadPeerNumber, HeadNetwork],
@@ -714,7 +717,7 @@ object MultiPeerHeadHarness:
             hubTransport: Option[HubTransport],
         )
 
-        type ContextArg  = ActorContext[IO, HeadMultisigRegimeManager.Request, Any]
+        type ContextArg = ActorContext[IO, HeadMultisigRegimeManager.Request, Any]
         type ContextFn[T] = ContextArg => T
 
         def setup(
@@ -758,32 +761,32 @@ object MultiPeerHeadHarness:
                             .eval(InProcessHubCoilTransport.emptyRegistry)
                             .map(Some(_))
                 headNetworks <- peers.toList
-                                    .traverse(peerNum =>
-                                        directHeadNetwork(
-                                          peerNum,
-                                          multiNodeConfig,
-                                          inProcessRegistry,
-                                          hubCoilRegistry,
-                                        ).map(peerNum -> _)
-                                    )
-                                    .map(_.toMap)
+                    .traverse(peerNum =>
+                        directHeadNetwork(
+                          peerNum,
+                          multiNodeConfig,
+                          inProcessRegistry,
+                          hubCoilRegistry,
+                        ).map(peerNum -> _)
+                    )
+                    .map(_.toMap)
                 coilUplinks <- coilNodeConfigs
-                                   .traverse { coilConfig =>
-                                       val coilNum = coilNumOf(coilConfig)
-                                       val registry = hubCoilRegistry.getOrElse(
-                                         throw new IllegalStateException(
-                                           "coilNodeConfigs is non-empty but " +
-                                               "hubCoilRegistry was not allocated"
-                                         )
-                                       )
-                                       Resource
-                                           .eval(InProcessHubCoilTransport.Coil
-                                               .create(coilNum, registry))
-                                           .map(t =>
-                                               coilNum -> ((_: ContextArg) => t: CoilTransport)
-                                           )
-                                   }
-                                   .map(_.toMap)
+                    .traverse { coilConfig =>
+                        val coilNum = coilNumOf(coilConfig)
+                        val registry = hubCoilRegistry.getOrElse(
+                          throw new IllegalStateException(
+                            "coilNodeConfigs is non-empty but " +
+                                "hubCoilRegistry was not allocated"
+                          )
+                        )
+                        Resource
+                            .eval(
+                              InProcessHubCoilTransport.Coil
+                                  .create(coilNum, registry)
+                            )
+                            .map(t => coilNum -> ((_: ContextArg) => t: CoilTransport))
+                    }
+                    .map(_.toMap)
             yield Setup(headNetworks, coilUplinks, Resource.unit)
 
         /** WebSocket (real-clock) bring-up: split into a creation phase (this method) and a
@@ -792,9 +795,8 @@ object MultiPeerHeadHarness:
           * `CoilPeerWsTransport` — handles the MRMs need. The bring-up phase, acquired by the
           * harness *after* the MRMs are built, binds every peer's `NodeWsServer` on port 0
           * (OS-assigned ephemeral), then builds the `HeadPeerId -> Uri` map from the bound ports
-          * and starts every mesh + coil dialer. Acquiring bring-up last guarantees its
-          * finalizers (server stop + dialer cancel) run before the MRMs stop their actors and
-          * close RocksDB.
+          * and starts every mesh + coil dialer. Acquiring bring-up last guarantees its finalizers
+          * (server stop + dialer cancel) run before the MRMs stop their actors and close RocksDB.
           */
         private def setupWebSocket(
             multiNodeConfig: MultiNodeConfig,
@@ -805,41 +807,41 @@ object MultiPeerHeadHarness:
             for
                 wsClient <- Resource.eval(JdkWSClient.simple[IO])
                 headParts <- peers.toList
-                                 .traverse(peerNum =>
-                                     wsHeadParts(peerNum, multiNodeConfig, peers)
-                                         .map(peerNum -> _)
-                                 )
-                                 .map(_.toMap)
+                    .traverse(peerNum =>
+                        wsHeadParts(peerNum, multiNodeConfig, peers)
+                            .map(peerNum -> _)
+                    )
+                    .map(_.toMap)
                 coilTransports <- coilNodeConfigs
-                                      .traverse { coilConfig =>
-                                          val coilNum = coilNumOf(coilConfig)
-                                          val cpwtTracer = Slf4jTracer.sink.contramap(
-                                            CoilPeerWsTransportEventFormat.humanFormat(coilNum)
-                                          )
-                                          Resource
-                                              .eval(
-                                                CoilPeerWsTransport.create(coilNum, cpwtTracer)
-                                              )
-                                              .map(coilNum -> _)
-                                      }
-                                      .map(_.toMap)
+                    .traverse { coilConfig =>
+                        val coilNum = coilNumOf(coilConfig)
+                        val cpwtTracer = Slf4jTracer.sink.contramap(
+                          CoilPeerWsTransportEventFormat.humanFormat(coilNum)
+                        )
+                        Resource
+                            .eval(
+                              CoilPeerWsTransport.create(coilNum, cpwtTracer)
+                            )
+                            .map(coilNum -> _)
+                    }
+                    .map(_.toMap)
                 headNetworks = headParts.view.mapValues(_.network).toMap
-                coilUplinks  = coilTransports.view
-                                   .mapValues(t => (_: ContextArg) => t: CoilTransport)
-                                   .toMap
+                coilUplinks = coilTransports.view
+                    .mapValues(t => (_: ContextArg) => t: CoilTransport)
+                    .toMap
                 bringUp = wsBringUpNetwork(
-                              multiNodeConfig,
-                              peers,
-                              coilNodeConfigs,
-                              wsClient,
-                              headParts,
-                              coilTransports,
-                          )
+                  multiNodeConfig,
+                  peers,
+                  coilNodeConfigs,
+                  wsClient,
+                  headParts,
+                  coilTransports,
+                )
             yield Setup(headNetworks, coilUplinks, bringUp)
 
         /** Per-peer parts produced in WS Phase 1: the transport bundle exposed to the MRM, the
-          * concrete mesh transport needed by Phase 2's dialer starter, and the route builders
-          * Phase 2 binds into a `NodeWsServer`.
+          * concrete mesh transport needed by Phase 2's dialer starter, and the route builders Phase
+          * 2 binds into a `NodeWsServer`.
           */
         private case class WsHeadParts(
             network: HeadNetwork,
@@ -848,10 +850,9 @@ object MultiPeerHeadHarness:
             nwsTracer: ContraTracer[IO, NodeWsServerEvent],
         )
 
-        /** WS Phase 2: bind each peer's `NodeWsServer`, derive its `Uri`, then start every mesh
-          * and coil dialer. Returned as a `Resource` so the harness can acquire it *after* the
-          * MRMs and ensure LIFO release: dialers + servers stop, then actors stop, then
-          * RocksDB closes.
+        /** WS Phase 2: bind each peer's `NodeWsServer`, derive its `Uri`, then start every mesh and
+          * coil dialer. Returned as a `Resource` so the harness can acquire it *after* the MRMs and
+          * ensure LIFO release: dialers + servers stop, then actors stop, then RocksDB closes.
           */
         private def wsBringUpNetwork(
             multiNodeConfig: MultiNodeConfig,
@@ -864,42 +865,42 @@ object MultiPeerHeadHarness:
             val bindHost = host"127.0.0.1"
             for
                 boundPorts <- peers.toList
-                                  .traverse { peerNum =>
-                                      val parts = headParts(peerNum)
-                                      NodeWsServer
-                                          .resource(
-                                            bindHost,
-                                            Port.fromInt(0).get,
-                                            parts.routes,
-                                            parts.nwsTracer,
-                                          )
-                                          .map(server => peerNum -> server.address.getPort)
-                                  }
-                                  .map(_.toMap)
+                    .traverse { peerNum =>
+                        val parts = headParts(peerNum)
+                        NodeWsServer
+                            .resource(
+                              bindHost,
+                              Port.fromInt(0).get,
+                              parts.routes,
+                              parts.nwsTracer,
+                            )
+                            .map(server => peerNum -> server.address.getPort)
+                    }
+                    .map(_.toMap)
                 peerHeadUris = peers.map { p =>
-                                   headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
-                                     s"ws://127.0.0.1:${boundPorts(p)}/head"
-                                   )
-                               }.toMap
+                    headPeerId(multiNodeConfig, p) -> Uri.unsafeFromString(
+                      s"ws://127.0.0.1:${boundPorts(p)}/head"
+                    )
+                }.toMap
                 _ <- peers.toList.traverse_ { peerNum =>
-                         val ownId = headPeerId(multiNodeConfig, peerNum)
-                         headParts(peerNum).wsPeerTransport
-                             .startDialers(wsClient, peerHeadUris - ownId)
-                     }
+                    val ownId = headPeerId(multiNodeConfig, peerNum)
+                    headParts(peerNum).wsPeerTransport
+                        .startDialers(wsClient, peerHeadUris - ownId)
+                }
                 _ <- coilNodeConfigs.traverse_ { coilConfig =>
-                         val coilNum = coilNumOf(coilConfig)
-                         val hubNum = coilConfig
-                             .coilPeerHub(coilNum)
-                             .getOrElse(
-                               throw new IllegalStateException(
-                                 s"no hub configured for coil peer $coilNum"
-                               )
-                             )
-                         val hubUri = Uri.unsafeFromString(
-                           s"ws://127.0.0.1:${boundPorts(hubNum)}/hub"
-                         )
-                         coilTransports(coilNum).startDialer(wsClient, hubUri)
-                     }
+                    val coilNum = coilNumOf(coilConfig)
+                    val hubNum = coilConfig
+                        .coilPeerHub(coilNum)
+                        .getOrElse(
+                          throw new IllegalStateException(
+                            s"no hub configured for coil peer $coilNum"
+                          )
+                        )
+                    val hubUri = Uri.unsafeFromString(
+                      s"ws://127.0.0.1:${boundPorts(hubNum)}/hub"
+                    )
+                    coilTransports(coilNum).startDialer(wsClient, hubUri)
+                }
             yield ()
 
         private def directHeadNetwork(
@@ -909,11 +910,11 @@ object MultiPeerHeadHarness:
             hubCoilRegistry: Option[InProcessHubCoilTransport.Registry],
         ): Resource[IO, HeadNetwork] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
-            val hubbedCoils   = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
+            val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             for
                 peerT <- Resource.eval(
-                             InProcessPeerTransport.create(ownHeadPeerId, inProcessRegistry)
-                         )
+                  InProcessPeerTransport.create(ownHeadPeerId, inProcessRegistry)
+                )
                 hubT <-
                     if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubTransport]](None)
                     else
@@ -933,9 +934,8 @@ object MultiPeerHeadHarness:
                                     .map(h => Some(h: HubTransport))
             yield HeadNetwork(peerT, hubT)
 
-        /** WS Phase 1: allocate the concrete `WsPeerTransport` (+ optional `HubWsTransport`)
-          * and the route builders that Phase 2 binds into a `NodeWsServer`. No bind, no dialer
-          * start.
+        /** WS Phase 1: allocate the concrete `WsPeerTransport` (+ optional `HubWsTransport`) and
+          * the route builders that Phase 2 binds into a `NodeWsServer`. No bind, no dialer start.
           */
         private def wsHeadParts(
             peerNum: HeadPeerNumber,
@@ -943,7 +943,7 @@ object MultiPeerHeadHarness:
             peers: Seq[HeadPeerNumber],
         )(using CardanoNetwork.Section): Resource[IO, WsHeadParts] =
             val ownHeadPeerId = headPeerId(multiNodeConfig, peerNum)
-            val hubbedCoils   = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
+            val hubbedCoils = multiNodeConfig.headConfig.hubbedCoilPeerNums(peerNum)
             val remoteIds: List[HeadPeerId] =
                 peers.filterNot(_ == peerNum).map(headPeerId(multiNodeConfig, _)).toList
             val ptTracer =
@@ -954,19 +954,18 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(HubWsTransportEventFormat.humanFormat(peerNum))
             for
                 peerT <- Resource.eval(
-                             WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
-                         )
+                  WsPeerTransport.create(ownHeadPeerId, remoteIds, ptTracer)
+                )
                 hubTConcrete: Option[HubWsTransport] <-
-                    if hubbedCoils.isEmpty then
-                        Resource.pure[IO, Option[HubWsTransport]](None)
+                    if hubbedCoils.isEmpty then Resource.pure[IO, Option[HubWsTransport]](None)
                     else
                         Resource
                             .eval(HubWsTransport.create(hubbedCoils, hubTracer))
                             .map(Some(_))
                 meshRoute = (wsb: WebSocketBuilder2[IO]) => peerT.routes(wsb)
                 hubRoutes = hubTConcrete.toList.map(h =>
-                                (wsb: WebSocketBuilder2[IO]) => h.routes(wsb)
-                            )
+                    (wsb: WebSocketBuilder2[IO]) => h.routes(wsb)
+                )
             yield WsHeadParts(
               network = HeadNetwork(peerT, hubTConcrete.map(h => h: HubTransport)),
               wsPeerTransport = peerT,
@@ -1004,14 +1003,12 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(
                   HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
                 )
-            val mrmTracer         = slf4jMrm |+| callerTracer
+            val mrmTracer = slf4jMrm |+| callerTracer
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             val peerFactory: Resource[IO, Transport.ContextFn[PeerTransport]] =
                 Resource.pure((_: Transport.ContextArg) => network.peerTransport)
             val hubFactory: Option[Resource[IO, Transport.ContextFn[HubTransport]]] =
-                network.hubTransport.map(h =>
-                    Resource.pure((_: Transport.ContextArg) => h)
-                )
+                network.hubTransport.map(h => Resource.pure((_: Transport.ContextArg) => h))
             StorageBackend
                 .openPerPeer(
                   peerNum,
@@ -1026,19 +1023,19 @@ object MultiPeerHeadHarness:
                 .flatMap { backendStore =>
                     for
                         persistence <- Resource.eval {
-                                           given CardanoNetwork.Section = nodeConfig
-                                           Persistence.fromBackend(backendStore, persistenceTracer)
-                                       }
+                            given CardanoNetwork.Section = nodeConfig
+                            Persistence.fromBackend(backendStore, persistenceTracer)
+                        }
                         l2Ledger <- Resource.eval(EutxoL2Ledger(nodeConfig))
                         mrm <- HeadMultisigRegimeManager.resource(
-                                   nodeConfig,
-                                   cardanoBackend,
-                                   l2Ledger,
-                                   persistence,
-                                   mrmTracer,
-                                   peerFactory,
-                                   hubFactory,
-                               )
+                          nodeConfig,
+                          cardanoBackend,
+                          l2Ledger,
+                          persistence,
+                          mrmTracer,
+                          peerFactory,
+                          hubFactory,
+                        )
                         _ <- Resource.eval(system.actorOf(mrm, s"hmrm-$peerNum"))
                     yield Peer(mrm, backendStore)
                 }
@@ -1061,25 +1058,25 @@ object MultiPeerHeadHarness:
                 Slf4jTracer.sink.contramap(
                   CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
                 )
-            val mrmTracer         = slf4jMrm |+| callerTracer
+            val mrmTracer = slf4jMrm |+| callerTracer
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             val uplinkFactory: Resource[IO, Transport.ContextFn[CoilTransport]] =
                 Resource.pure(uplink)
             InMemoryBackendStore.open(persistenceTracer).flatMap { backendStore =>
                 for
                     persistence <- Resource.eval {
-                                       given CardanoNetwork.Section = coilConfig
-                                       Persistence.fromBackend(backendStore, persistenceTracer)
-                                   }
+                        given CardanoNetwork.Section = coilConfig
+                        Persistence.fromBackend(backendStore, persistenceTracer)
+                    }
                     l2Ledger <- Resource.eval(EutxoL2Ledger(coilConfig))
                     mrm <- CoilMultisigRegimeManager.resource(
-                               coilConfig,
-                               cardanoBackend,
-                               l2Ledger,
-                               persistence,
-                               mrmTracer,
-                               uplinkFactory,
-                           )
+                      coilConfig,
+                      cardanoBackend,
+                      l2Ledger,
+                      persistence,
+                      mrmTracer,
+                      uplinkFactory,
+                    )
                     _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))
                 yield Coil(mrm, backendStore, coilConfig)
             }
@@ -1089,8 +1086,8 @@ object MultiPeerHeadHarness:
     // ===================================
 
     object Http:
-        /** Placeholder authority for the in-process HTTP client. `Client.fromHttpApp` dispatches
-          * by path against the wrapped `HttpApp`, so the authority never hits a socket.
+        /** Placeholder authority for the in-process HTTP client. `Client.fromHttpApp` dispatches by
+          * path against the wrapped `HttpApp`, so the authority never hits a socket.
           */
         private val InProcBaseUri: Uri = uri"http://harness"
 
@@ -1146,13 +1143,11 @@ object MultiPeerHeadHarness:
             sutErrors: Ref[IO, List[String]],
         ): Resource[IO, Unit] =
             startedFiber(
-              system.eventStream.take
-                  .flatMap {
-                      case e: ActorError if e.cause != ActorError.NoCause =>
-                          sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
-                      case _ => IO.unit
-                  }
-                  .foreverM
+              system.eventStream.take.flatMap {
+                  case e: ActorError if e.cause != ActorError.NoCause =>
+                      sutErrors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                  case _ => IO.unit
+              }.foreverM
             )
 
     // ===================================
