@@ -68,7 +68,7 @@ object SubmitL2Transaction
                 _ <- IO.println(s"\nPeer $peerName, L2 address: $ownBech32")
 
                 views <- client.expect[List[L2UtxoView]](
-                  headUri / "api" / "l2" / "utxos" / ownBech32
+                  headUri / "l2" / "cardano-eutxo" / "utxos" / ownBech32
                 )
                 utxos <- IO.fromEither(
                   views

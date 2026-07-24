@@ -9,7 +9,7 @@ import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
 import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import io.bullet.borer.Cbor
 import io.circe.syntax.*
-import io.circe.{Decoder, DecodingFailure, Encoder, Json}
+import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
 import scalus.uplc.builtin.ByteString
@@ -64,19 +64,18 @@ object JsonCodecs {
 
     case class UserRequestDecoder() extends Decoder[UserRequest] {
 
-        // The request is internally tagged: a `type` field (`deposit` / `transaction`) selects the
-        // kind, and the body fields (`l1Payload` deposits only, `l2Payload` all) sit alongside it.
-        // Authentication is not done here: the L2 payload is a native, self-authenticating tx, and
-        // the ledger's stateless screening verifies its signatures before a RequestId is assigned.
+        // The request is externally tagged: its body sits under a `deposit` or `transaction` wrapper
+        // key. Authentication is not done here: the L2 payload is a native, self-authenticating tx,
+        // and the ledger's stateless screening verifies its signatures before a RequestId is assigned.
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
-            c.downField("type").as[String].flatMap {
-                case "deposit" =>
-                    c.as[DepositRequestBody].map(UserRequest.DepositRequest(_))
-                case "transaction" =>
-                    c.as[TransactionRequestBody].map(UserRequest.TransactionRequest(_))
-                case other =>
-                    Left(DecodingFailure(s"unknown request type: $other", c.history))
-            }
+            c.downField("deposit")
+                .as[DepositRequestBody]
+                .map(UserRequest.DepositRequest(_))
+                .orElse(
+                  c.downField("transaction")
+                      .as[TransactionRequestBody]
+                      .map(UserRequest.TransactionRequest(_))
+                )
     }
 
     given Decoder[UserRequest] = UserRequestDecoder()

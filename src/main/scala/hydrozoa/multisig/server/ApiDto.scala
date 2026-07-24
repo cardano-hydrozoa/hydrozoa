@@ -3,7 +3,7 @@ package hydrozoa.multisig.server
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.given
 import hydrozoa.multisig.NodeStatus
-import hydrozoa.multisig.consensus.UserRequestWithId
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockHeader}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -14,11 +14,12 @@ import io.circe.derivation.{Configuration as CirceConfig, ConfiguredCodec}
 import io.circe.generic.semiauto.deriveCodec
 import io.circe.{Codec, Decoder, Encoder}
 import java.time.Instant
+import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger.{DatumOption, TransactionInput, TransactionOutput, Value}
 import scalus.uplc.builtin.ByteString
-import sttp.tapir.Schema
 import sttp.tapir.generic.Configuration as TapirConfig
+import sttp.tapir.{Schema, SchemaType, Validator}
 
 /** Flat data-transfer objects for the HTTP API responses.
   *
@@ -44,8 +45,8 @@ object ApiDto {
       *
       * A discriminator value derives from a variant's constructor name, but the OpenAPI schema name
       * derives from it too — so sums that share a status vocabulary (`SOFT_CONFIRMED`, ...) give
-      * their variants a sum-specific prefix (`RequestSoftConfirmed`) for a unique schema name, and
-      * the transform strips the prefix so the `type` value stays the shared word. See
+      * their variants a sum-specific prefix (`RequestSoftConfirmedView`) for a unique schema name,
+      * and the transform strips the prefix so the `type` value stays the shared word. See
       * [[statusTag]].
       */
     private def circeTag(discriminatorValue: String => String): CirceConfig =
@@ -59,11 +60,90 @@ object ApiDto {
                 sname => discriminatorValue(sname.fullName.split('.').last)
             )
 
-    /** The name transform for a status ladder: strip the sum-specific `prefix`, then
-      * screaming-snake (`BlockSoftConfirmed` with prefix `Block` -> `SOFT_CONFIRMED`).
+    /** The name transform for a status ladder: strip the sum-specific `prefix` and the `View`
+      * suffix, then screaming-snake (`BlockSoftConfirmedView` with prefix `Block` ->
+      * `SOFT_CONFIRMED`).
       */
     private def statusTag(prefix: String): String => String =
-        name => screamingSnake(name.stripPrefix(prefix))
+        name => screamingSnake(name.stripPrefix(prefix).stripSuffix("View"))
+
+    /** The name transform for a kind sum tagged by lowercase kind (`DepositView` -> `deposit`). */
+    private def kindTag: String => String =
+        name => name.stripSuffix("View").toLowerCase
+
+    /** A closed-vocabulary string field rendered as an OpenAPI `enum`: [[enumCodec]] maps to/from
+      * the wire label, [[enumSchema]] gives `type: string` + `enum: [...]`. Modeled as typed API
+      * enums so the enum propagates automatically wherever the field appears — including inside the
+      * discriminated status sums, where a per-field validator could not reach.
+      */
+    private def enumCodec[T](all: List[T])(label: T => String): Codec[T] =
+        Codec.from(
+          Decoder.decodeString.emap(s =>
+              all.find(t => label(t) == s).toRight(s"unexpected value: $s")
+          ),
+          Encoder.encodeString.contramap(label)
+        )
+    private def enumSchema[T](all: List[T])(label: T => String): Schema[T] =
+        Schema[T](SchemaType.SString()).validate(Validator.enumeration(all, t => Some(label(t))))
+
+    /** A request's validity verdict in a block. */
+    enum ValidityView(val label: String):
+        case Valid extends ValidityView("valid")
+        case Invalid extends ValidityView("invalid")
+    object ValidityView:
+        given Codec[ValidityView] = enumCodec(values.toList)(_.label)
+        given Schema[ValidityView] = enumSchema(values.toList)(_.label)
+
+    /** A deposit's absorb-or-reject decision. */
+    enum DecisionView(val label: String):
+        case Absorbed extends DecisionView("ABSORBED")
+        case Rejected extends DecisionView("REJECTED")
+    object DecisionView:
+        given Codec[DecisionView] = enumCodec(values.toList)(_.label)
+        given Schema[DecisionView] = enumSchema(values.toList)(_.label)
+
+    /** An L1 effect's kind. */
+    enum EffectKindView(val label: String):
+        case Initialization extends EffectKindView("initialization")
+        case Settlement extends EffectKindView("settlement")
+        case Fallback extends EffectKindView("fallback")
+        case Rollout extends EffectKindView("rollout")
+        case Finalization extends EffectKindView("finalization")
+        case Refund extends EffectKindView("refund")
+        case Sec extends EffectKindView("sec")
+    object EffectKindView:
+        given Codec[EffectKindView] = enumCodec(values.toList)(_.label)
+        given Schema[EffectKindView] = enumSchema(values.toList)(_.label)
+
+    /** A block's type. */
+    enum BlockTypeView(val label: String):
+        case Initial extends BlockTypeView("initial")
+        case Minor extends BlockTypeView("minor")
+        case Major extends BlockTypeView("major")
+        case Final extends BlockTypeView("final")
+    object BlockTypeView:
+        given Codec[BlockTypeView] = enumCodec(values.toList)(_.label)
+        given Schema[BlockTypeView] = enumSchema(values.toList)(_.label)
+
+    /** A recent-transaction feed entry's kind. */
+    enum L2TxKindView(val label: String):
+        case Transaction extends L2TxKindView("transaction")
+        case DepositRegistered extends L2TxKindView("depositRegistered")
+        case DepositAbsorbed extends L2TxKindView("depositAbsorbed")
+        case DepositRejected extends L2TxKindView("depositRejected")
+    object L2TxKindView:
+        given Codec[L2TxKindView] = enumCodec(values.toList)(_.label)
+        given Schema[L2TxKindView] = enumSchema(values.toList)(_.label)
+
+    /** The node's readiness lifecycle status. */
+    enum NodeStatusView(val label: String):
+        case Initializing extends NodeStatusView("initializing")
+        case Active extends NodeStatusView("active")
+        case Finalized extends NodeStatusView("finalized")
+        case HandedOffToRuleBased extends NodeStatusView("handed-off-to-rule-based")
+    object NodeStatusView:
+        given Codec[NodeStatusView] = enumCodec(values.toList)(_.label)
+        given Schema[NodeStatusView] = enumSchema(values.toList)(_.label)
 
     /** `{ "status": "ok" }` — the liveness body. */
     final case class HealthResponse(status: String)
@@ -72,18 +152,18 @@ object ApiDto {
     /** `{ "status": "<lifecycle>" }` — the readiness diagnostic body for `GET /ready`. The verdict
       * itself is the HTTP status (200 vs 503); this is only for diagnostics.
       */
-    final case class ReadinessResponse(status: String)
+    final case class ReadinessResponse(status: NodeStatusView)
     given Codec[ReadinessResponse] = deriveCodec
 
-    /** Map the node lifecycle status to its readiness body (kebab-case label). */
+    /** Map the node lifecycle status to its readiness body. */
     def mkReadinessResponse(status: NodeStatus): ReadinessResponse =
-        ReadinessResponse(nodeStatusLabel(status))
+        ReadinessResponse(nodeStatusView(status))
 
-    private def nodeStatusLabel(status: NodeStatus): String = status match
-        case NodeStatus.Initializing         => "initializing"
-        case NodeStatus.Active               => "active"
-        case NodeStatus.Finalized            => "finalized"
-        case NodeStatus.HandedOffToRuleBased => "handed-off-to-rule-based"
+    private def nodeStatusView(status: NodeStatus): NodeStatusView = status match
+        case NodeStatus.Initializing         => NodeStatusView.Initializing
+        case NodeStatus.Active               => NodeStatusView.Active
+        case NodeStatus.Finalized            => NodeStatusView.Finalized
+        case NodeStatus.HandedOffToRuleBased => NodeStatusView.HandedOffToRuleBased
 
     /** `{ "status": "success", "message": ... }` — the finalize-trigger body. */
     final case class FinalizeResponse(status: String, message: String)
@@ -97,6 +177,47 @@ object ApiDto {
     /** Map an accepted write request's id to its i64 response body. */
     def mkRequestAcceptedResponse(id: RequestId): RequestAcceptedResponse =
         RequestAcceptedResponse(id.asI64)
+
+    /** A deposit submission: the unsigned deposit-tx CBOR (`l1Payload`) and the serialized L2
+      * outputs it spawns on absorption (`l2Payload`), both lowercase hex.
+      */
+    final case class SubmitDepositView(l1Payload: String, l2Payload: String)
+    given Codec[SubmitDepositView] = deriveCodec
+
+    /** An L2-transaction submission: the native, self-authenticating Cardano tx (`l2Payload`, hex).
+      */
+    final case class SubmitTransactionView(l2Payload: String)
+    given Codec[SubmitTransactionView] = deriveCodec
+
+    /** The submit-request body for `POST /head/requests`, **externally tagged**: exactly one of
+      * `deposit` / `transaction` is present, and its wrapper key selects the kind.
+      */
+    final case class SubmitRequestView(
+        deposit: Option[SubmitDepositView],
+        transaction: Option[SubmitTransactionView]
+    )
+    given Codec[SubmitRequestView] = deriveCodec
+
+    /** Decode a submit body into a domain `UserRequest` (hex payloads to bytes), or a client-facing
+      * error message when the tagging or the hex is malformed.
+      */
+    def toUserRequest(view: SubmitRequestView): Either[String, UserRequest] =
+        def hex(field: String, value: String): Either[String, ByteString] =
+            Try(ByteString.fromHex(value)).toEither.left.map(_ => s"$field must be lowercase hex")
+        (view.deposit, view.transaction) match
+            case (Some(d), None) =>
+                for {
+                    l1 <- hex("l1Payload", d.l1Payload)
+                    l2 <- hex("l2Payload", d.l2Payload)
+                } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2))
+            case (None, Some(t)) =>
+                hex("l2Payload", t.l2Payload).map(l2 =>
+                    UserRequest.TransactionRequest(UserRequestBody.TransactionRequestBody(l2))
+                )
+            case (None, None) =>
+                Left("request body must set `deposit` or `transaction`")
+            case (Some(_), Some(_)) =>
+                Left("request body must set exactly one of `deposit` / `transaction`")
 
     /** `{ "error": ... }` — the error body used across the API. */
     final case class ErrorResponse(error: String)
@@ -114,7 +235,7 @@ object ApiDto {
     final case class L2TxSummaryView(
         requestId: RequestIdView,
         blockNumber: Int,
-        kind: String
+        kind: L2TxKindView
     )
     given Codec[RequestIdView] = deriveCodec
     given Codec[L2TxSummaryView] = deriveCodec
@@ -124,19 +245,19 @@ object ApiDto {
         L2TxSummaryView(
           requestId = mkRequestIdView(summary.requestId),
           blockNumber = summary.blockNumber.convert,
-          kind = kindName(summary.kind)
+          kind = kindView(summary.kind)
         )
 
-    private def kindName(kind: L2TxKind): String = kind match
-        case L2TxKind.Transaction       => "transaction"
-        case L2TxKind.DepositRegistered => "depositRegistered"
-        case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
-        case L2TxKind.DepositRejected   => "depositRejected"
+    private def kindView(kind: L2TxKind): L2TxKindView = kind match
+        case L2TxKind.Transaction       => L2TxKindView.Transaction
+        case L2TxKind.DepositRegistered => L2TxKindView.DepositRegistered
+        case L2TxKind.DepositAbsorbed   => L2TxKindView.DepositAbsorbed
+        case L2TxKind.DepositRejected   => L2TxKindView.DepositRejected
 
     /** One row of the block listing: number, fast-cycle leader (absent for the initial block, which
       * is config, not woven), and block type.
       */
-    final case class BlockSummaryView(number: Int, leader: Option[Int], blockType: String)
+    final case class BlockSummaryView(number: Int, leader: Option[Int], blockType: BlockTypeView)
     given Codec[BlockSummaryView] = deriveCodec
 
     /** A block's confirmation from this node's viewpoint, `type`-tagged: `PROPOSED` (woven, not yet
@@ -150,9 +271,10 @@ object ApiDto {
         private given CirceConfig = circeTag(statusTag("Block"))
         private given TapirConfig = tapirTag(statusTag("Block"))
 
-        case object BlockProposed extends BlockConfirmationView
-        final case class BlockSoftConfirmed(softConfirmedAt: String) extends BlockConfirmationView
-        final case class BlockHardConfirmed(
+        case object BlockProposedView extends BlockConfirmationView
+        final case class BlockSoftConfirmedView(softConfirmedAt: String)
+            extends BlockConfirmationView
+        final case class BlockHardConfirmedView(
             softConfirmedAt: Option[String],
             hardConfirmedAt: String
         ) extends BlockConfirmationView
@@ -168,10 +290,10 @@ object ApiDto {
     object BlockHeaderView:
         // Tag with the lowercase block type (`minor` / `major` / `final` / `initial`), matching
         // `BlockDetailsView.blockType`; shadows the screaming-snake status tagging.
-        private given CirceConfig = circeTag(_.toLowerCase)
-        private given TapirConfig = tapirTag(_.toLowerCase)
+        private given CirceConfig = circeTag(kindTag)
+        private given TapirConfig = tapirTag(kindTag)
 
-        final case class Initial(
+        final case class InitialView(
             number: Int,
             versionMajor: Int,
             versionMinor: Int,
@@ -181,7 +303,7 @@ object ApiDto {
             forcedMajorBlockWakeupTime: String,
             depositDecisionWakeupTime: Option[String]
         ) extends BlockHeaderView
-        final case class Minor(
+        final case class MinorView(
             number: Int,
             versionMajor: Int,
             versionMinor: Int,
@@ -191,7 +313,7 @@ object ApiDto {
             forcedMajorBlockWakeupTime: String,
             depositDecisionWakeupTime: Option[String]
         ) extends BlockHeaderView
-        final case class Major(
+        final case class MajorView(
             number: Int,
             versionMajor: Int,
             versionMinor: Int,
@@ -201,7 +323,7 @@ object ApiDto {
             forcedMajorBlockWakeupTime: String,
             depositDecisionWakeupTime: Option[String]
         ) extends BlockHeaderView
-        final case class Final(
+        final case class FinalView(
             number: Int,
             versionMajor: Int,
             versionMinor: Int,
@@ -218,7 +340,7 @@ object ApiDto {
     final case class BlockDetailsView(
         number: Int,
         leader: Option[Int],
-        blockType: String,
+        blockType: BlockTypeView,
         stackId: Option[Int],
         confirmation: BlockConfirmationView,
         header: Option[BlockHeaderView]
@@ -228,7 +350,7 @@ object ApiDto {
     /** One of a block's transactions: the opaque request id woven into the block and the validity
       * verdict it received there.
       */
-    final case class BlockRequestView(requestId: Long, validity: String)
+    final case class BlockRequestView(requestId: Long, validity: ValidityView)
     given Codec[BlockRequestView] = deriveCodec
 
     /** The block-body body — the block's content: its transactions (the requests woven into it,
@@ -237,7 +359,7 @@ object ApiDto {
       */
     final case class BlockBodyView(
         number: Int,
-        blockType: String,
+        blockType: BlockTypeView,
         transactions: List[BlockRequestView],
         depositsAbsorbed: List[Long],
         depositsRejected: List[Long]
@@ -248,28 +370,28 @@ object ApiDto {
     def mkBlockBodyView(brief: BlockBrief.Next): BlockBodyView =
         BlockBodyView(
           number = brief.blockNum.convert,
-          blockType = blockTypeName(brief),
-          transactions = brief.requests.map((id, v) => BlockRequestView(id.asI64, validityName(v))),
+          blockType = blockTypeView(brief),
+          transactions = brief.requests.map((id, v) => BlockRequestView(id.asI64, validityView(v))),
           depositsAbsorbed = brief.depositsAbsorbed.map(_.asI64),
           depositsRejected = brief.depositsRejected.map(_.asI64)
         )
 
     /** The initial block (block 0) has no woven content. */
     def mkInitialBlockBodyView: BlockBodyView =
-        BlockBodyView(number = 0, blockType = "initial", transactions = Nil, Nil, Nil)
+        BlockBodyView(number = 0, blockType = BlockTypeView.Initial, transactions = Nil, Nil, Nil)
 
     /** Map a brief to its listing row; `nHeadPeers` fixes the round-robin leader. */
     def mkBlockSummaryView(brief: BlockBrief.Next, nHeadPeers: Int): BlockSummaryView =
         BlockSummaryView(
           number = brief.blockNum.convert,
           leader = Some(brief.blockNum.convert % nHeadPeers),
-          blockType = blockTypeName(brief)
+          blockType = blockTypeView(brief)
         )
 
     /** The synthesized listing row for the initial block (block 0 is config, not a spine entry).
       */
     def mkInitialBlockSummaryView: BlockSummaryView =
-        BlockSummaryView(number = 0, leader = None, blockType = "initial")
+        BlockSummaryView(number = 0, leader = None, blockType = BlockTypeView.Initial)
 
     /** Assemble the confirmation rung from the node-local confirmation moments (present iff their
       * record is held — `wallClockOf` is total).
@@ -280,14 +402,14 @@ object ApiDto {
     ): BlockConfirmationView =
         (softConfirmedAt, hardConfirmedAt) match
             case (soft, Some(hard)) =>
-                BlockConfirmationView.BlockHardConfirmed(soft.map(_.toString), hard.toString)
-            case (Some(soft), None) => BlockConfirmationView.BlockSoftConfirmed(soft.toString)
-            case (None, None)       => BlockConfirmationView.BlockProposed
+                BlockConfirmationView.BlockHardConfirmedView(soft.map(_.toString), hard.toString)
+            case (Some(soft), None) => BlockConfirmationView.BlockSoftConfirmedView(soft.toString)
+            case (None, None)       => BlockConfirmationView.BlockProposedView
 
-    private def blockTypeName(brief: BlockBrief.Next): String = brief match
-        case _: BlockBrief.Minor => "minor"
-        case _: BlockBrief.Major => "major"
-        case _: BlockBrief.Final => "final"
+    private def blockTypeView(brief: BlockBrief.Next): BlockTypeView = brief match
+        case _: BlockBrief.Minor => BlockTypeView.Minor
+        case _: BlockBrief.Major => BlockTypeView.Major
+        case _: BlockBrief.Final => BlockTypeView.Final
 
     /** Map a block header to its `type`-tagged view, rendering the quantized timing as ISO-8601. */
     def mkBlockHeaderView(header: BlockHeader): BlockHeaderView =
@@ -298,7 +420,7 @@ object ApiDto {
         val endTime = header.endTime.instant.toString
         header match
             case h: BlockHeader.Initial =>
-                BlockHeaderView.Initial(
+                BlockHeaderView.InitialView(
                   number,
                   versionMajor,
                   versionMinor,
@@ -309,7 +431,7 @@ object ApiDto {
                   h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
                 )
             case h: BlockHeader.Minor =>
-                BlockHeaderView.Minor(
+                BlockHeaderView.MinorView(
                   number,
                   versionMajor,
                   versionMinor,
@@ -320,7 +442,7 @@ object ApiDto {
                   h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
                 )
             case h: BlockHeader.Major =>
-                BlockHeaderView.Major(
+                BlockHeaderView.MajorView(
                   number,
                   versionMajor,
                   versionMinor,
@@ -331,24 +453,32 @@ object ApiDto {
                   h.mDepositDecisionWakeupTime.map(_.convert.instant.toString)
                 )
             case _: BlockHeader.Final =>
-                BlockHeaderView.Final(number, versionMajor, versionMinor, startTime, endTime)
+                BlockHeaderView.FinalView(number, versionMajor, versionMinor, startTime, endTime)
 
     /** One row of the request listing: the opaque request id (the packed i64, the same value the
       * submit response returns), the author peer number, and the request type.
       */
     final case class RequestSummaryView(requestId: Long, peerNumber: Int, requestType: String)
     given Codec[RequestSummaryView] = deriveCodec
+    // `requestType` is the closed set `deposit` / `transaction`; validate it so the schema renders an
+    // OpenAPI enum, matching the submit / request-details `type` discriminator vocabulary.
+    given Schema[RequestSummaryView] =
+        Schema
+            .derived[RequestSummaryView]
+            .modify(_.requestType)(
+              _.validate(Validator.enumeration(List("deposit", "transaction"), s => Some(s)))
+            )
 
     /** One L1 effect a request became: its `l1TxId` (hex — the same value the `/head/effects/{id}`
       * and block-effects queries use) and its kind (`settlement`, `finalization`, `sec`, `refund`).
       */
-    final case class EffectRefView(l1TxId: String, kind: String)
+    final case class EffectRefView(l1TxId: String, kind: EffectKindView)
     given Codec[EffectRefView] = deriveCodec
     given Schema[EffectRefView] = Schema.derived
 
     /** Map a resolved effect to its request-facing reference. */
     def mkEffectRefView(effect: ResolvedEffect): EffectRefView =
-        EffectRefView(effect.l1TxId.toHex, effectKindName(effect.kind))
+        EffectRefView(effect.l1TxId.toHex, effectKindView(effect.kind))
 
     /** A request's lifecycle status from this node's viewpoint, `type`-tagged, where each rung adds
       * the fields of the one below plus its own: `UNPROCESSED` -> `PROPOSED` (block, verdict) ->
@@ -364,17 +494,17 @@ object ApiDto {
         private given CirceConfig = circeTag(statusTag("Request"))
         private given TapirConfig = tapirTag(statusTag("Request"))
 
-        case object RequestUnprocessed extends RequestStatusView
-        final case class RequestProposed(blockNumber: Int, validity: String)
+        case object RequestUnprocessedView extends RequestStatusView
+        final case class RequestProposedView(blockNumber: Int, validity: ValidityView)
             extends RequestStatusView
-        final case class RequestSoftConfirmed(
+        final case class RequestSoftConfirmedView(
             blockNumber: Int,
-            validity: String,
+            validity: ValidityView,
             softConfirmedAt: String
         ) extends RequestStatusView
-        final case class RequestHardConfirmed(
+        final case class RequestHardConfirmedView(
             blockNumber: Int,
-            validity: String,
+            validity: ValidityView,
             softConfirmedAt: Option[String],
             hardConfirmedAt: String,
             relatedEffects: List[EffectRefView]
@@ -393,17 +523,17 @@ object ApiDto {
         private given CirceConfig = circeTag(statusTag("Absorption"))
         private given TapirConfig = tapirTag(statusTag("Absorption"))
 
-        case object AbsorptionUnprocessed extends AbsorptionDecisionStatusView
-        final case class AbsorptionProposed(blockNumber: Int, decision: String)
+        case object AbsorptionUnprocessedView extends AbsorptionDecisionStatusView
+        final case class AbsorptionProposedView(blockNumber: Int, decision: DecisionView)
             extends AbsorptionDecisionStatusView
-        final case class AbsorptionSoftConfirmed(
+        final case class AbsorptionSoftConfirmedView(
             blockNumber: Int,
-            decision: String,
+            decision: DecisionView,
             softConfirmedAt: String
         ) extends AbsorptionDecisionStatusView
-        final case class AbsorptionHardConfirmed(
+        final case class AbsorptionHardConfirmedView(
             blockNumber: Int,
-            decision: String,
+            decision: DecisionView,
             softConfirmedAt: Option[String],
             hardConfirmedAt: String,
             settlementEffect: Option[String]
@@ -420,16 +550,16 @@ object ApiDto {
     object RequestDetailsView:
         // Request-kind sums tag with the lowercase kind (`transaction` / `deposit`), shadowing the
         // screaming-snake status tagging in the enclosing scope.
-        private given CirceConfig = circeTag(_.toLowerCase)
-        private given TapirConfig = tapirTag(_.toLowerCase)
+        private given CirceConfig = circeTag(kindTag)
+        private given TapirConfig = tapirTag(kindTag)
 
-        final case class Transaction(
+        final case class TransactionView(
             requestId: Long,
             peerNumber: Int,
             receivedAt: String,
             status: RequestStatusView
         ) extends RequestDetailsView
-        final case class Deposit(
+        final case class DepositView(
             requestId: Long,
             peerNumber: Int,
             receivedAt: String,
@@ -452,9 +582,9 @@ object ApiDto {
           requestType = requestTypeName(request)
         )
 
-    private def validityName(validity: ValidityFlag): String = validity match
-        case ValidityFlag.Valid   => "valid"
-        case ValidityFlag.Invalid => "invalid"
+    private def validityView(validity: ValidityFlag): ValidityView = validity match
+        case ValidityFlag.Valid   => ValidityView.Valid
+        case ValidityFlag.Invalid => ValidityView.Invalid
 
     /** Assemble the request-status ladder from its resolved lifecycle stages: the processing block
       * and verdict (absent while unprocessed), the node-local confirmation moments (each present
@@ -468,12 +598,12 @@ object ApiDto {
         relatedEffects: List[EffectRefView]
     ): RequestStatusView =
         block match
-            case None => RequestStatusView.RequestUnprocessed
+            case None => RequestStatusView.RequestUnprocessedView
             case Some((blockNumber, v)) =>
-                val validity = validityName(v)
+                val validity = validityView(v)
                 hardConfirmedAt match
                     case Some(hard) =>
-                        RequestStatusView.RequestHardConfirmed(
+                        RequestStatusView.RequestHardConfirmedView(
                           blockNumber,
                           validity,
                           softConfirmedAt.map(_.toString),
@@ -483,18 +613,18 @@ object ApiDto {
                     case None =>
                         softConfirmedAt match
                             case Some(soft) =>
-                                RequestStatusView.RequestSoftConfirmed(
+                                RequestStatusView.RequestSoftConfirmedView(
                                   blockNumber,
                                   validity,
                                   soft.toString
                                 )
                             case None =>
-                                RequestStatusView.RequestProposed(blockNumber, validity)
+                                RequestStatusView.RequestProposedView(blockNumber, validity)
 
     /** The `ABSORBED` / `REJECTED` label of a deposit decision. */
-    def decisionName(decision: DepositDecision): String = decision match
-        case _: DepositDecision.Absorbed => "ABSORBED"
-        case _: DepositDecision.Rejected => "REJECTED"
+    def decisionView(decision: DepositDecision): DecisionView = decision match
+        case _: DepositDecision.Absorbed => DecisionView.Absorbed
+        case _: DepositDecision.Rejected => DecisionView.Rejected
 
     /** Assemble the deposit absorption-decision ladder: unprocessed (no decision row yet), else the
       * deciding block + `ABSORBED`/`REJECTED`, promoted by the deciding block's node-local
@@ -502,17 +632,17 @@ object ApiDto {
       * rides on the hard-confirmed rung.
       */
     def mkAbsorptionDecisionStatus(
-        decided: Option[(Int, String)],
+        decided: Option[(Int, DecisionView)],
         softConfirmedAt: Option[Instant],
         hardConfirmedAt: Option[Instant],
         settlementEffect: Option[String]
     ): AbsorptionDecisionStatusView =
         decided match
-            case None => AbsorptionDecisionStatusView.AbsorptionUnprocessed
+            case None => AbsorptionDecisionStatusView.AbsorptionUnprocessedView
             case Some((blockNumber, decision)) =>
                 hardConfirmedAt match
                     case Some(hard) =>
-                        AbsorptionDecisionStatusView.AbsorptionHardConfirmed(
+                        AbsorptionDecisionStatusView.AbsorptionHardConfirmedView(
                           blockNumber,
                           decision,
                           softConfirmedAt.map(_.toString),
@@ -522,13 +652,13 @@ object ApiDto {
                     case None =>
                         softConfirmedAt match
                             case Some(soft) =>
-                                AbsorptionDecisionStatusView.AbsorptionSoftConfirmed(
+                                AbsorptionDecisionStatusView.AbsorptionSoftConfirmedView(
                                   blockNumber,
                                   decision,
                                   soft.toString
                                 )
                             case None =>
-                                AbsorptionDecisionStatusView.AbsorptionProposed(
+                                AbsorptionDecisionStatusView.AbsorptionProposedView(
                                   blockNumber,
                                   decision
                                 )
@@ -546,24 +676,29 @@ object ApiDto {
         val peerNumber = request.requestId.peerNum.convert
         request match
             case _: UserRequestWithId.DepositRequest =>
-                RequestDetailsView.Deposit(
+                RequestDetailsView.DepositView(
                   requestId,
                   peerNumber,
                   receivedAt.toString,
                   status,
                   absorptionDecisionStatus.getOrElse(
-                    AbsorptionDecisionStatusView.AbsorptionUnprocessed
+                    AbsorptionDecisionStatusView.AbsorptionUnprocessedView
                   )
                 )
             case _: UserRequestWithId.TransactionRequest =>
-                RequestDetailsView.Transaction(requestId, peerNumber, receivedAt.toString, status)
+                RequestDetailsView.TransactionView(
+                  requestId,
+                  peerNumber,
+                  receivedAt.toString,
+                  status
+                )
 
     /** A block's L1 effects as `l1TxId`s, grouped by kind — the fields present depend on the block
       * type (INITIAL: initialization + fallback; MINOR: sec? + refunds; MAJOR: settlement +
       * fallback + rollouts + refunds; FINAL: finalization + rollouts). Absent kinds are omitted.
       */
     final case class BlockEffectsView(
-        blockType: String,
+        blockType: BlockTypeView,
         initialization: Option[String],
         settlement: Option[String],
         finalization: Option[String],
@@ -581,7 +716,7 @@ object ApiDto {
       */
     final case class EffectView(
         l1TxId: String,
-        kind: String,
+        kind: EffectKindView,
         blockNumber: Int,
         txCbor: Option[String],
         secOnchainSerialized: Option[String],
@@ -590,18 +725,21 @@ object ApiDto {
     )
     given Codec[EffectView] = deriveCodec
 
-    /** The effect-kind discriminator string (matches the sub-resource path segments). */
-    def effectKindName(kind: EffectKind): String = kind match
-        case EffectKind.Initialization => "initialization"
-        case EffectKind.Settlement     => "settlement"
-        case EffectKind.Fallback       => "fallback"
-        case EffectKind.Rollout        => "rollout"
-        case EffectKind.Finalization   => "finalization"
-        case EffectKind.Refund         => "refund"
-        case EffectKind.Sec            => "sec"
+    /** The effect-kind label (matches the sub-resource path segments). */
+    def effectKindView(kind: EffectKind): EffectKindView = kind match
+        case EffectKind.Initialization => EffectKindView.Initialization
+        case EffectKind.Settlement     => EffectKindView.Settlement
+        case EffectKind.Fallback       => EffectKindView.Fallback
+        case EffectKind.Rollout        => EffectKindView.Rollout
+        case EffectKind.Finalization   => EffectKindView.Finalization
+        case EffectKind.Refund         => EffectKindView.Refund
+        case EffectKind.Sec            => EffectKindView.Sec
 
     /** Group a block's resolved effects into the by-kind listing. */
-    def mkBlockEffectsView(blockType: String, effects: List[ResolvedEffect]): BlockEffectsView =
+    def mkBlockEffectsView(
+        blockType: BlockTypeView,
+        effects: List[ResolvedEffect]
+    ): BlockEffectsView =
         def firstIdOf(k: EffectKind): Option[String] =
             effects.collectFirst { case e if e.kind == k => e.l1TxId.toHex }
         def idsOf(k: EffectKind): List[String] =
@@ -624,7 +762,7 @@ object ApiDto {
         case tx: ResolvedEffect.Tx =>
             EffectView(
               l1TxId = tx.l1TxId.toHex,
-              kind = effectKindName(tx.kind),
+              kind = effectKindView(tx.kind),
               blockNumber = tx.blockNumber.convert,
               txCbor = Some(ByteString.fromArray(tx.tx.toCbor).toHex),
               secOnchainSerialized = None,
@@ -639,7 +777,7 @@ object ApiDto {
             val headerBytes: Array[Byte] = sec.commitment.commitment.header
             EffectView(
               l1TxId = sec.l1TxId.toHex,
-              kind = "sec",
+              kind = EffectKindView.Sec,
               blockNumber = sec.blockNumber.convert,
               txCbor = None,
               secOnchainSerialized = Some(ByteString.fromArray(headerBytes).toHex),

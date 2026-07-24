@@ -5,6 +5,8 @@ info:
 paths:
   /head/requests:
     get:
+      tags:
+      - Requests
       description: Requests the head has assigned an id — opaque request id, author
         peer number, and type (transaction or deposit). Filter with ?type=transaction|deposit
         and ?peer_number=<n>.
@@ -29,7 +31,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/RequestSummaryView'
+                  $ref: '#/components/schemas/RequestSummary'
         default:
           description: ''
           content:
@@ -37,17 +39,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
-      description: 'Submit a request. A root field tags the type: `{ "deposit": {
-        "l1Payload", "l2Payload" } }` registers an L1 deposit (the unsigned deposit-tx
-        CBOR plus the serialized L2 outputs it spawns on absorption); `{ "transaction":
-        { "l2Payload" } }` submits an L2 transaction (a native, self-authenticating
-        Cardano tx). Returns the assigned request id.'
+      tags:
+      - Requests
+      description: 'Submit a request. A wrapper key tags the type — set exactly one:
+        `{ "deposit": { "l1Payload", "l2Payload" } }` registers an L1 deposit (the
+        unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on absorption);
+        `{ "transaction": { "l2Payload" } }` submits an L2 transaction (a native,
+        self-authenticating Cardano tx). Payloads are lowercase hex. Returns the assigned
+        request id.'
       operationId: postHeadRequest
       requestBody:
         content:
           application/json:
             schema:
-              type: string
+              $ref: '#/components/schemas/SubmitRequest'
         required: true
       responses:
         '200':
@@ -81,6 +86,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/requests/{request-id}:
     get:
+      tags:
+      - Requests
       description: 'One request''s peer, type, receive time, and lifecycle status:
         UNPROCESSED, PROPOSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation
         time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects
@@ -102,7 +109,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RequestDetailsView'
+                $ref: '#/components/schemas/RequestDetails'
         default:
           description: ''
           content:
@@ -111,6 +118,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks:
     get:
+      tags:
+      - Blocks
       description: Every block of the head in block order — number, fast-cycle leader,
         and type. Block 0 is the head's initial block (config, no leader).
       operationId: getHeadBlocks
@@ -122,7 +131,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/BlockSummaryView'
+                  $ref: '#/components/schemas/BlockSummary'
         default:
           description: ''
           content:
@@ -131,11 +140,13 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}:
     get:
-      description: 'One block''s type, leader, and confirmation status: PROPOSED,
-        SOFT (+ soft-confirmation time), or HARD (+ hard-confirmation time). Each
-        confirmation time records a local event at this peer — when it produced the
-        soft/hard confirmation — so different peers report different times for the
-        same block. This is by design.'
+      tags:
+      - Blocks
+      description: 'One block''s type, leader, hard-confirming stack, full header,
+        and confirmation status: PROPOSED, SOFT_CONFIRMED (+ soft-confirmation time),
+        or HARD_CONFIRMED (+ hard-confirmation time). Each confirmation time records
+        a local event at this peer — when it produced the soft/hard confirmation —
+        so different peers report different times for the same block. This is by design.'
       operationId: getHeadBlock
       parameters:
       - name: block-number
@@ -150,7 +161,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BlockDetailsView'
+                $ref: '#/components/schemas/BlockDetails'
         default:
           description: ''
           content:
@@ -159,6 +170,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/body:
     get:
+      tags:
+      - Blocks
       description: 'The block''s content: its transactions (the request ids woven
         into the block, each with its validity verdict) and its deposit decisions
         (the request ids absorbed into the treasury and those rejected). 404 if the
@@ -177,7 +190,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BlockBodyView'
+                $ref: '#/components/schemas/BlockBody'
         default:
           description: ''
           content:
@@ -186,6 +199,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects:
     get:
+      tags:
+      - Blocks
       description: A block's L1 effects as l1TxIds, grouped by kind (initialization,
         settlement, fallback, sec, rollouts, refunds, finalization) per block type.
         Empty until the block is hard-confirmed.
@@ -203,7 +218,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BlockEffectsView'
+                $ref: '#/components/schemas/BlockEffects'
         default:
           description: ''
           content:
@@ -212,6 +227,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/effects/{l1TxId}:
     get:
+      tags:
+      - Effects
       description: Any effect by its l1TxId (real tx id, or an SEC's synthetic hash).
       operationId: getHeadEffect
       parameters:
@@ -226,7 +243,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -235,6 +252,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects/rollouts/{number}:
     get:
+      tags:
+      - Blocks
       description: One rollout of the block's rollout chain by index, or 404 if absent.
       operationId: getHeadBlockRollout
       parameters:
@@ -256,7 +275,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -288,6 +307,8 @@ paths:
                 $ref: '#/components/schemas/ReadinessResponse'
   /api/admin/finalize:
     post:
+      tags:
+      - Governance
       description: Trigger head finalization (admin only).
       operationId: postAdminFinalize
       responses:
@@ -313,6 +334,8 @@ paths:
       - httpAuth: []
   /head/blocks/{block-number}/effects/initialization:
     get:
+      tags:
+      - Blocks
       description: The block's initialization effect in full, or 404 if it has none.
       operationId: getHeadBlockEffect_initialization
       parameters:
@@ -328,7 +351,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -337,6 +360,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects/settlement:
     get:
+      tags:
+      - Blocks
       description: The block's settlement effect in full, or 404 if it has none.
       operationId: getHeadBlockEffect_settlement
       parameters:
@@ -352,7 +377,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -361,6 +386,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects/fallback:
     get:
+      tags:
+      - Blocks
       description: The block's fallback effect in full, or 404 if it has none.
       operationId: getHeadBlockEffect_fallback
       parameters:
@@ -376,7 +403,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -385,6 +412,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects/sec:
     get:
+      tags:
+      - Blocks
       description: The block's sec effect in full, or 404 if it has none.
       operationId: getHeadBlockEffect_sec
       parameters:
@@ -400,7 +429,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -409,6 +438,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /head/blocks/{block-number}/effects/finalization:
     get:
+      tags:
+      - Blocks
       description: The block's finalization effect in full, or 404 if it has none.
       operationId: getHeadBlockEffect_finalization
       parameters:
@@ -424,7 +455,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EffectView'
+                $ref: '#/components/schemas/Effect'
         default:
           description: ''
           content:
@@ -433,8 +464,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
-    AbsorptionDecisionStatusView:
-      title: AbsorptionDecisionStatusView
+    AbsorptionDecisionStatus:
+      title: AbsorptionDecisionStatus
       oneOf:
       - $ref: '#/components/schemas/AbsorptionHardConfirmed'
       - $ref: '#/components/schemas/AbsorptionProposed'
@@ -461,6 +492,9 @@ components:
           format: int32
         decision:
           type: string
+          enum:
+          - ABSORBED
+          - REJECTED
         softConfirmedAt:
           type: string
         hardConfirmedAt:
@@ -483,6 +517,9 @@ components:
           format: int32
         decision:
           type: string
+          enum:
+          - ABSORBED
+          - REJECTED
         type:
           type: string
           const: PROPOSED
@@ -500,6 +537,9 @@ components:
           format: int32
         decision:
           type: string
+          enum:
+          - ABSORBED
+          - REJECTED
         softConfirmedAt:
           type: string
         type:
@@ -514,8 +554,8 @@ components:
         type:
           type: string
           const: UNPROCESSED
-    BlockBodyView:
-      title: BlockBodyView
+    BlockBody:
+      title: BlockBody
       type: object
       required:
       - number
@@ -526,10 +566,15 @@ components:
           format: int32
         blockType:
           type: string
+          enum:
+          - initial
+          - minor
+          - major
+          - final
         transactions:
           type: array
           items:
-            $ref: '#/components/schemas/BlockRequestView'
+            $ref: '#/components/schemas/BlockRequest'
         depositsAbsorbed:
           type: array
           items:
@@ -540,8 +585,8 @@ components:
           items:
             type: integer
             format: int64
-    BlockConfirmationView:
-      title: BlockConfirmationView
+    BlockConfirmation:
+      title: BlockConfirmation
       oneOf:
       - $ref: '#/components/schemas/BlockHardConfirmed'
       - $ref: '#/components/schemas/BlockProposed'
@@ -552,8 +597,8 @@ components:
           HARD_CONFIRMED: '#/components/schemas/BlockHardConfirmed'
           PROPOSED: '#/components/schemas/BlockProposed'
           SOFT_CONFIRMED: '#/components/schemas/BlockSoftConfirmed'
-    BlockDetailsView:
-      title: BlockDetailsView
+    BlockDetails:
+      title: BlockDetails
       type: object
       required:
       - number
@@ -568,21 +613,31 @@ components:
           format: int32
         blockType:
           type: string
+          enum:
+          - initial
+          - minor
+          - major
+          - final
         stackId:
           type: integer
           format: int32
         confirmation:
-          $ref: '#/components/schemas/BlockConfirmationView'
+          $ref: '#/components/schemas/BlockConfirmation'
         header:
-          $ref: '#/components/schemas/BlockHeaderView'
-    BlockEffectsView:
-      title: BlockEffectsView
+          $ref: '#/components/schemas/BlockHeader'
+    BlockEffects:
+      title: BlockEffects
       type: object
       required:
       - blockType
       properties:
         blockType:
           type: string
+          enum:
+          - initial
+          - minor
+          - major
+          - final
         initialization:
           type: string
         settlement:
@@ -615,8 +670,8 @@ components:
         type:
           type: string
           const: HARD_CONFIRMED
-    BlockHeaderView:
-      title: BlockHeaderView
+    BlockHeader:
+      title: BlockHeader
       oneOf:
       - $ref: '#/components/schemas/Final'
       - $ref: '#/components/schemas/Initial'
@@ -638,8 +693,8 @@ components:
         type:
           type: string
           const: PROPOSED
-    BlockRequestView:
-      title: BlockRequestView
+    BlockRequest:
+      title: BlockRequest
       type: object
       required:
       - requestId
@@ -650,6 +705,9 @@ components:
           format: int64
         validity:
           type: string
+          enum:
+          - valid
+          - invalid
     BlockSoftConfirmed:
       title: BlockSoftConfirmed
       type: object
@@ -662,8 +720,8 @@ components:
         type:
           type: string
           const: SOFT_CONFIRMED
-    BlockSummaryView:
-      title: BlockSummaryView
+    BlockSummary:
+      title: BlockSummary
       type: object
       required:
       - number
@@ -677,6 +735,11 @@ components:
           format: int32
         blockType:
           type: string
+          enum:
+          - initial
+          - minor
+          - major
+          - final
     Deposit:
       title: Deposit
       type: object
@@ -697,25 +760,14 @@ components:
         receivedAt:
           type: string
         status:
-          $ref: '#/components/schemas/RequestStatusView'
+          $ref: '#/components/schemas/RequestStatus'
         absorptionDecisionStatus:
-          $ref: '#/components/schemas/AbsorptionDecisionStatusView'
+          $ref: '#/components/schemas/AbsorptionDecisionStatus'
         type:
           type: string
           const: deposit
-    EffectRefView:
-      title: EffectRefView
-      type: object
-      required:
-      - l1TxId
-      - kind
-      properties:
-        l1TxId:
-          type: string
-        kind:
-          type: string
-    EffectView:
-      title: EffectView
+    Effect:
+      title: Effect
       type: object
       required:
       - l1TxId
@@ -726,6 +778,14 @@ components:
           type: string
         kind:
           type: string
+          enum:
+          - initialization
+          - settlement
+          - fallback
+          - rollout
+          - finalization
+          - refund
+          - sec
         blockNumber:
           type: integer
           format: int32
@@ -741,6 +801,25 @@ components:
           type: array
           items:
             type: string
+    EffectRef:
+      title: EffectRef
+      type: object
+      required:
+      - l1TxId
+      - kind
+      properties:
+        l1TxId:
+          type: string
+        kind:
+          type: string
+          enum:
+          - initialization
+          - settlement
+          - fallback
+          - rollout
+          - finalization
+          - refund
+          - sec
     ErrorResponse:
       title: ErrorResponse
       type: object
@@ -806,7 +885,7 @@ components:
         headAddress:
           type: string
         multisigRegimeUtxo:
-          $ref: '#/components/schemas/TxInputView'
+          $ref: '#/components/schemas/TxInput'
         treasuryBeaconToken:
           type: string
         submissionDurationSeconds:
@@ -944,6 +1023,11 @@ components:
       properties:
         status:
           type: string
+          enum:
+          - initializing
+          - active
+          - finalized
+          - handed-off-to-rule-based
     RequestAcceptedResponse:
       title: RequestAcceptedResponse
       type: object
@@ -953,8 +1037,8 @@ components:
         requestId:
           type: integer
           format: int64
-    RequestDetailsView:
-      title: RequestDetailsView
+    RequestDetails:
+      title: RequestDetails
       oneOf:
       - $ref: '#/components/schemas/Deposit'
       - $ref: '#/components/schemas/Transaction'
@@ -977,6 +1061,9 @@ components:
           format: int32
         validity:
           type: string
+          enum:
+          - valid
+          - invalid
         softConfirmedAt:
           type: string
         hardConfirmedAt:
@@ -984,7 +1071,7 @@ components:
         relatedEffects:
           type: array
           items:
-            $ref: '#/components/schemas/EffectRefView'
+            $ref: '#/components/schemas/EffectRef'
         type:
           type: string
           const: HARD_CONFIRMED
@@ -1001,6 +1088,9 @@ components:
           format: int32
         validity:
           type: string
+          enum:
+          - valid
+          - invalid
         type:
           type: string
           const: PROPOSED
@@ -1018,13 +1108,16 @@ components:
           format: int32
         validity:
           type: string
+          enum:
+          - valid
+          - invalid
         softConfirmedAt:
           type: string
         type:
           type: string
           const: SOFT_CONFIRMED
-    RequestStatusView:
-      title: RequestStatusView
+    RequestStatus:
+      title: RequestStatus
       oneOf:
       - $ref: '#/components/schemas/RequestHardConfirmed'
       - $ref: '#/components/schemas/RequestProposed'
@@ -1037,8 +1130,8 @@ components:
           PROPOSED: '#/components/schemas/RequestProposed'
           SOFT_CONFIRMED: '#/components/schemas/RequestSoftConfirmed'
           UNPROCESSED: '#/components/schemas/RequestUnprocessed'
-    RequestSummaryView:
-      title: RequestSummaryView
+    RequestSummary:
+      title: RequestSummary
       type: object
       required:
       - requestId
@@ -1053,6 +1146,9 @@ components:
           format: int32
         requestType:
           type: string
+          enum:
+          - deposit
+          - transaction
     RequestUnprocessed:
       title: RequestUnprocessed
       type: object
@@ -1062,6 +1158,33 @@ components:
         type:
           type: string
           const: UNPROCESSED
+    SubmitDeposit:
+      title: SubmitDeposit
+      type: object
+      required:
+      - l1Payload
+      - l2Payload
+      properties:
+        l1Payload:
+          type: string
+        l2Payload:
+          type: string
+    SubmitRequest:
+      title: SubmitRequest
+      type: object
+      properties:
+        deposit:
+          $ref: '#/components/schemas/SubmitDeposit'
+        transaction:
+          $ref: '#/components/schemas/SubmitTransaction'
+    SubmitTransaction:
+      title: SubmitTransaction
+      type: object
+      required:
+      - l2Payload
+      properties:
+        l2Payload:
+          type: string
     Transaction:
       title: Transaction
       type: object
@@ -1081,12 +1204,12 @@ components:
         receivedAt:
           type: string
         status:
-          $ref: '#/components/schemas/RequestStatusView'
+          $ref: '#/components/schemas/RequestStatus'
         type:
           type: string
           const: transaction
-    TxInputView:
-      title: TxInputView
+    TxInput:
+      title: TxInput
       type: object
       required:
       - transaction_id

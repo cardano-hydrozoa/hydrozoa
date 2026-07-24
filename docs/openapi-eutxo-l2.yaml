@@ -21,7 +21,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/L2UtxoView'
+                  $ref: '#/components/schemas/L2Utxo'
         default:
           description: ''
           content:
@@ -47,7 +47,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/L2TxSummaryView'
+                  $ref: '#/components/schemas/L2TxSummary'
         default:
           description: ''
           content:
@@ -56,8 +56,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 components:
   schemas:
-    DatumView:
-      title: DatumView
+    Datum:
+      title: Datum
       type: object
       properties:
         inline:
@@ -72,8 +72,8 @@ components:
       properties:
         error:
           type: string
-    L2OutputView:
-      title: L2OutputView
+    L2Output:
+      title: L2Output
       type: object
       required:
       - address
@@ -82,11 +82,11 @@ components:
         address:
           type: string
         value:
-          $ref: '#/components/schemas/ValueView'
+          $ref: '#/components/schemas/Value'
         datum:
-          $ref: '#/components/schemas/DatumView'
-    L2TxSummaryView:
-      title: L2TxSummaryView
+          $ref: '#/components/schemas/Datum'
+    L2TxSummary:
+      title: L2TxSummary
       type: object
       required:
       - requestId
@@ -94,23 +94,28 @@ components:
       - kind
       properties:
         requestId:
-          $ref: '#/components/schemas/RequestIdView'
+          $ref: '#/components/schemas/RequestId'
         blockNumber:
           type: integer
           format: int32
         kind:
           type: string
-    L2UtxoView:
-      title: L2UtxoView
+          enum:
+          - transaction
+          - depositRegistered
+          - depositAbsorbed
+          - depositRejected
+    L2Utxo:
+      title: L2Utxo
       type: object
       required:
       - input
       - output
       properties:
         input:
-          $ref: '#/components/schemas/TxInputView'
+          $ref: '#/components/schemas/TxInput'
         output:
-          $ref: '#/components/schemas/L2OutputView'
+          $ref: '#/components/schemas/L2Output'
     Map_Map_String_String:
       title: Map_Map_String_String
       type: object
@@ -121,8 +126,8 @@ components:
       type: object
       additionalProperties:
         type: string
-    RequestIdView:
-      title: RequestIdView
+    RequestId:
+      title: RequestId
       type: object
       required:
       - headPeerNumber
@@ -134,8 +139,8 @@ components:
         requestNumber:
           type: integer
           format: int64
-    TxInputView:
-      title: TxInputView
+    TxInput:
+      title: TxInput
       type: object
       required:
       - transaction_id
@@ -146,8 +151,8 @@ components:
         index:
           type: integer
           format: int32
-    ValueView:
-      title: ValueView
+    Value:
+      title: Value
       type: object
       required:
       - coin
