@@ -37,7 +37,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
           blockNumber = BlockNumber(n),
           blockCreationEndTime = BigInt(n),
           absorbedDeposits = Nil,
-          refundedDeposits = Nil
+          rejectedDeposits = Nil
         )
 
     private final case class Run(

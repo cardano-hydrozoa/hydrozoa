@@ -14,14 +14,15 @@ final case class L2TxSummary(
 )
 
 /** What an [[L2TxSummary]] records: an applied L2 transaction, or a step in a deposit's lifecycle.
+  * TODO: rename - it or it may be gone when we revise utxo ledger API
   */
 enum L2TxKind:
-    case Transaction, DepositRegistered, DepositAbsorbed, DepositRefunded
+    case Transaction, DepositRegistered, DepositAbsorbed, DepositRejected
 
 object L2TxSummary:
     /** Expand one logged real command into its summaries, in the order they appear to a reader. A
       * transaction or a deposit registration is a single summary; a deposit-decisions command is
-      * one summary per absorbed deposit followed by one per refunded deposit (so a no-op decisions
+      * one summary per absorbed deposit followed by one per rejected deposit (so a no-op decisions
       * command with empty lists yields none).
       */
     def fromCommand(command: L2LedgerCommand.Real): Vector[L2TxSummary] = command match
@@ -32,5 +33,5 @@ object L2TxSummary:
         case c: L2LedgerCommand.ApplyDepositDecisions =>
             c.absorbedDeposits.toVector
                 .map(id => L2TxSummary(id, c.blockNumber, L2TxKind.DepositAbsorbed))
-                ++ c.refundedDeposits.toVector
-                    .map(id => L2TxSummary(id, c.blockNumber, L2TxKind.DepositRefunded))
+                ++ c.rejectedDeposits.toVector
+                    .map(id => L2TxSummary(id, c.blockNumber, L2TxKind.DepositRejected))

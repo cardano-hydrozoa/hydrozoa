@@ -68,11 +68,12 @@ trait Persistence[F[_]]:
       */
     def zeroTimes: F[Map[Int, Long]]
 
-    /** Convert an arrival stamp to the wall-clock instant it was recorded at, using this
-      * generation's [[zeroTimes]] anchor (`wall = zeroTime[generation] + monotonicNanos`). `None`
-      * if the generation has no anchor (an entry written before anchors existed).
+    /** Convert an arrival stamp to the wall-clock instant it was recorded at, using its
+      * generation's [[zeroTimes]] anchor (`wall = zeroTime[generation] + monotonicNanos`). Total:
+      * every generation is anchored at open before any of its stamps can exist, and anchors are
+      * never pruned, so a stamp produced by a running node always has its anchor.
       */
-    def wallClockOf(stamp: ArrivalStamp): F[Option[Instant]]
+    def wallClockOf(stamp: ArrivalStamp): F[Instant]
 
 object Persistence:
     /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
@@ -159,11 +160,14 @@ object Persistence:
 
             def zeroTimes: IO[Map[Int, Long]] = IO.pure(anchors)
 
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
+                // Every generation is anchored at open, so `stamp.generation` is present for any
+                // real stamp; fall back to this generation's anchor for the unreachable
+                // (legacy / synthetic) case rather than reintroduce a partial result.
                 IO.pure(
-                  anchors
-                      .get(stamp.generation)
-                      .map(zero => epochNanosToInstant(zero + stamp.monotonicNanos))
+                  epochNanosToInstant(
+                    anchors.getOrElse(stamp.generation, anchors(generation)) + stamp.monotonicNanos
+                  )
                 )
 
             def get(key: StoreKey): IO[Option[key.Value]] =

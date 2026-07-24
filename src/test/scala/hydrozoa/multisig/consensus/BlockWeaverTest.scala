@@ -96,8 +96,8 @@ object BlockWeaverTestHelpers {
               endTime = BlockCreationEndTime(now + 1.second)
             ),
             BlockBody.Final(
-              events = List.empty,
-              depositsRefunded = List.empty
+              requests = List.empty,
+              depositsRejected = List.empty
             )
           )
         )
@@ -124,8 +124,8 @@ object BlockWeaverTestHelpers {
                 mDepositDecisionWakeupTime = None
               ),
               BlockBody.Minor(
-                events = List.empty,
-                depositsRefunded = List.empty
+                requests = List.empty,
+                depositsRejected = List.empty
               )
             )
         })

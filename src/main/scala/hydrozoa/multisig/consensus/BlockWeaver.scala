@@ -417,7 +417,7 @@ object BlockWeaver {
                 } yield newState
 
                 private def extractAndSendRequestsFromMempool: IO[Mempool.Extraction.Result] = {
-                    val requestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val requestIds: List[RequestId] = reproducingBlockBrief.requests.map(_._1)
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)
                     import newExtractionResult.*
                     for {
@@ -586,7 +586,7 @@ object BlockWeaver {
                 private def extractAndSendRequestsFromMempool(
                     mempool: Mempool
                 ): IO[Mempool.Extraction.Result] = {
-                    val allRequestIds: List[RequestId] = reproducingBlockBrief.events.map(_._1)
+                    val allRequestIds: List[RequestId] = reproducingBlockBrief.requests.map(_._1)
                     val requestIds =
                         allRequestIds.dropWhile(_ != incompleteExtraction.awaitingRequestId)
                     val newExtractionResult = mempool.extractRequestsWhile(requestIds)

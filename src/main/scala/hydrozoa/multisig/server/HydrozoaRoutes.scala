@@ -7,11 +7,11 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
-import hydrozoa.multisig.persistence.ConsensusStoreReader
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
 import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
@@ -87,31 +87,21 @@ class HydrozoaRoutes(
 
     // ---- Endpoint definitions (the single source of truth for routes + schema) ----
 
-    private val submitEndpoint: ServerEndpoint[Any, IO] =
+    private val submitRequestEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("head" / "tx")
-            .name("postHeadTx")
+            .in("head" / "requests")
+            .name("postHeadRequest")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Submit an L2 transaction (a JSON UserRequest whose L2 payload is a native, " +
-                  "self-authenticating Cardano transaction)."
+              "Submit a request. A root field tags the type: " +
+                  "`{ \"deposit\": { \"l1Payload\", \"l2Payload\" } }` registers an L1 deposit " +
+                  "(the unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on " +
+                  "absorption); `{ \"transaction\": { \"l2Payload\" } }` submits an L2 transaction " +
+                  "(a native, self-authenticating Cardano tx). Returns the assigned request id."
             )
-            .serverLogic(body => acceptUserRequest("POST /head/tx", body))
-
-    private val registerDepositEndpoint: ServerEndpoint[Any, IO] =
-        endpoint.post
-            .in("head" / "deposit")
-            .name("postHeadDeposit")
-            .in(stringJsonBody)
-            .out(jsonBody[RequestAcceptedResponse])
-            .errorOut(errorOut)
-            .description(
-              "Register an L1 deposit (a JSON UserRequest carrying the unsigned deposit tx " +
-                  "CBOR and the serialized L2 outputs the deposit spawns on absorption)."
-            )
-            .serverLogic(body => acceptUserRequest("POST /head/deposit", body))
+            .serverLogic(body => acceptUserRequest("POST /head/requests", body))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -464,8 +454,7 @@ class HydrozoaRoutes(
     /** The core API endpoints, in the order they appear in the docs — always served. */
     private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
         List(
-          submitEndpoint,
-          registerDepositEndpoint,
+          submitRequestEndpoint,
           headInfoEndpoint,
           requestsEndpoint,
           requestDetailsEndpoint,
@@ -686,7 +675,8 @@ class HydrozoaRoutes(
 
     /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
       * from the records' arrival stamps: the soft-confirmation record, and — through the block →
-      * stack index — the hard-confirmation record.
+      * stack index — the hard-confirmation record. Each moment is present exactly when this peer
+      * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
       */
     private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
         for {
@@ -696,8 +686,8 @@ class HydrozoaRoutes(
                 case None    => IO.pure(None)
                 case Some(s) => consensusReader.hardConfirmation(s)
             }
-            softAt <- soft.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
-            hardAt <- hard.flatTraverse(t => consensusReader.wallClockOf(t.stamp))
+            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
+            hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
         } yield (softAt, hardAt)
 
     /** The request-details body for a request id, or a 404 when the head has assigned no such id.
@@ -731,20 +721,53 @@ class HydrozoaRoutes(
                 for {
                     receivedAt <- consensusReader.wallClockOf(stamped.stamp)
                     processed <- consensusReader.requestBlock(id)
-                    confirmation <- processed match {
+                    times <- processed match {
                         case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
                         case Some(entry) => confirmationTimes(entry.blockNum)
                     }
-                    (softAt, hardAt) = confirmation
+                    (softAt, hardAt) = times
                     effects <- effectsResolver.relatedEffects(id)
-                    status = ApiDto.mkRequestStatusView(
+                    status = ApiDto.mkRequestStatus(
                       block = processed.map(e => (e.blockNum.convert, e.validity)),
                       softConfirmedAt = softAt,
                       hardConfirmedAt = hardAt,
                       relatedEffects = effects.map(ApiDto.mkEffectRefView)
                     )
-                } yield Right(ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status))
+                    decisionStatus <- depositDecisionStatus(id, stamped.payload, processed)
+                } yield Right(
+                  ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status, decisionStatus)
+                )
         }
+
+    /** A valid deposit request's decision status (undecided / local-decision / confirmed), or
+      * `None` for a transaction or a deposit already ruled invalid. The confirmation moments are of
+      * the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
+      */
+    private def depositDecisionStatus(
+        id: RequestId,
+        request: UserRequestWithId,
+        processed: Option[RequestBlockEntry]
+    ): IO[Option[DepositDecisionStatusView]] =
+        val isDeposit = ApiDto.requestTypeName(request) == "deposit"
+        val isInvalid = processed.exists(_.validity == RequestId.ValidityFlag.Invalid)
+        if !isDeposit || isInvalid then IO.pure(None)
+        else
+            for {
+                decision <- consensusReader.decision(id)
+                times <- decision match {
+                    case None    => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                    case Some(d) => confirmationTimes(d.block)
+                }
+                (softAt, hardAt) = times
+                settlement <- effectsResolver.depositSettlement(id)
+            } yield Some(
+              ApiDto.mkDecisionStatus(
+                decided = decision.map(d => (d.block.convert, ApiDto.decisionName(d))),
+                softConfirmedAt = softAt,
+                hardConfirmedAt = hardAt,
+                settlementEffect = settlement.map(_.l1TxId.toHex)
+              )
+            )
 
     private def requestNotFound(id: RequestId): (StatusCode, ErrorResponse) =
         fail(StatusCode.NotFound, s"Request ${id.asI64} not found")

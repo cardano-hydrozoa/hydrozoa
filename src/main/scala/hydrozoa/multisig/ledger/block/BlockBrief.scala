@@ -74,11 +74,11 @@ object BlockBrief {
         override transparent inline def startTime: BlockCreationStartTime = header.startTime
         override transparent inline def endTime: BlockCreationEndTime = header.endTime
 
-        override transparent inline def events: List[(RequestId, ValidityFlag)] = body.events
+        override transparent inline def requests: List[(RequestId, ValidityFlag)] = body.requests
         override transparent inline def depositsAbsorbed: List[RequestId] =
             body.depositsAbsorbed
-        override transparent inline def depositsRefunded: List[RequestId] =
-            body.depositsRefunded
+        override transparent inline def depositsRejected: List[RequestId] =
+            body.depositsRejected
     }
 
     object Section {

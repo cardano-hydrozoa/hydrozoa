@@ -33,7 +33,7 @@ import scalus.uplc.builtin.ByteString
   * `GET /l2/cardano-eutxo/utxos/{address}`), enter a destination + value, and the tool builds the
   * zero-fee native tx (destination output + change back to the sender, the CIP-67 all-L2 output
   * designation and the headId pin in the metadata), signs it with the peer wallet, and posts it to
-  * `POST /head/tx`.
+  * `POST /head/requests`.
   *
   * Usage:
   * {{{

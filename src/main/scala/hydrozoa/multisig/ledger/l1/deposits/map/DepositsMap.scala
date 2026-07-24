@@ -104,7 +104,7 @@ final case class DepositsMap private[map] (
                         )
                     val isExistent = pollResults.utxos.contains(entry.depositUtxo.toUtxo.input)
                     // A deposit whose absorption window closes before the settlement tx's
-                    // validity ends can never be safely absorbed, so it must be refunded even
+                    // validity ends can never be safely absorbed, so it must be rejected even
                     // if it has not matured yet — `isExpired` takes precedence over `isImmature`.
                     val compartment =
                         if isExpired then Expired
@@ -184,7 +184,7 @@ object DepositsMap {
         val surviving: DepositsMap = unabsorbed.concat(immature)
         val decisions = Decisions(
           absorbed = absorbed.unzip,
-          refunded = DepositsMap(notInPollResults.treeMap ++ expired.treeMap).unzip,
+          rejected = DepositsMap(notInPollResults.treeMap ++ expired.treeMap).unzip,
           mNextAbsorptionStartTime = surviving.treeMap.keys.minOption
         )
 
@@ -202,7 +202,7 @@ object DepositsMap {
 
     final case class Decisions private[map] (
         absorbed: Unzip,
-        refunded: Unzip,
+        rejected: Unzip,
         mNextAbsorptionStartTime: Option[DepositAbsorptionStartTime]
     )
 

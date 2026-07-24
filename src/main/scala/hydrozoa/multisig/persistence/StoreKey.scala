@@ -33,12 +33,11 @@ import scalus.cardano.ledger.TransactionHash
   *     [[StoreKey.L2CommandNumber]] — `Cf.L2CommandNumber`, keyed by `blockNum`.
   *     [[StoreKey.UnsignedStack]] — `Cf.UnsignedStack`, keyed by `stackNum`.
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
-  *     request id (its packed i64). [[StoreKey.DepositAbsorptionIndex]] —
-  *     `Cf.DepositAbsorptionIndex`, keyed by the deposit request's id (its packed i64).
-  *     [[StoreKey.WithdrawalEffectIndex]] — `Cf.WithdrawalEffectIndex`, keyed by
-  *     `(requestId i64, l1TxId)` (many effects per request). [[StoreKey.BlockStackIndex]] —
-  *     `Cf.BlockStackIndex`, keyed by `blockNum`. [[StoreKey.EffectStackIndex]] —
-  *     `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
+  *     request id (its packed i64). [[StoreKey.DepositDecisionIndex]] — `Cf.DepositDecisionIndex`,
+  *     keyed by the deposit request's id (its packed i64). [[StoreKey.WithdrawalEffectIndex]] —
+  *     `Cf.WithdrawalEffectIndex`, keyed by `(requestId i64, l1TxId)` (many effects per request).
+  *     [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by `blockNum`.
+  *     [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
@@ -147,16 +146,17 @@ object StoreKey:
         val cf: Cf = Cf.EffectStackIndex
         def encode: Array[Byte] = l1TxId.bytes.toArray
 
-    /** Key for [[Cf.DepositAbsorptionIndex]] — the deposit-request → absorbing-block reverse index,
-      * keyed by the opaque [[RequestId]] via its packed i64 (`asI64`), holding the [[BlockNumber]]
-      * of the major block that absorbed the deposit into the treasury. Written by JL in the same
-      * atomic bundle as that block. (A deposit's *registration* block is [[RequestBlockIndex]];
-      * absorption happens later, in a different block, so it needs its own index.)
+    /** Key for [[Cf.DepositDecisionIndex]] — the deposit-request → decision reverse index, keyed by
+      * the opaque [[RequestId]] via its packed i64 (`asI64`), holding the [[DepositDecision]]
+      * (absorbed / rejected) and the block that decided it. Absence of a row means the deposit is
+      * still undecided. Written by JL in the same atomic bundle as the deciding block. (A deposit's
+      * *registration* block is [[RequestBlockIndex]]; the decision happens later, in a different
+      * block, so it needs its own index.)
       */
-    final case class DepositAbsorptionIndex(id: RequestId) extends StoreKey:
-        type Value = BlockNumber
+    final case class DepositDecisionIndex(id: RequestId) extends StoreKey:
+        type Value = DepositDecision
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
-        val cf: Cf = Cf.DepositAbsorptionIndex
+        val cf: Cf = Cf.DepositDecisionIndex
         def encode: Array[Byte] = JournalKey.longBytes(id.asI64)
 
     /** Key for [[Cf.WithdrawalEffectIndex]] — the withdrawal-request → effect reverse index. Both

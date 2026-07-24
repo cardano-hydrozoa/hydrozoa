@@ -43,20 +43,20 @@ class L2QueryEndpointsTest extends AnyFunSuite:
             .pureApply(Gen.Parameters.default, Seed(0L))
     private val nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-    /** A refunded-deposit decision at `blockNum` — a real command that logs (so it shows up in
+    /** A rejected-deposit decision at `blockNum` — a real command that logs (so it shows up in
       * `/l2/cardano-eutxo/transactions`) without needing a constructed deposit/tx payload:
-      * `refundedDeposits` are only removed from the pending set, which tolerates ids that were
+      * `rejectedDeposits` are only removed from the pending set, which tolerates ids that were
       * never registered.
       */
-    private def refundDecision(
+    private def rejectDecision(
         blockNum: Int,
-        refunded: RequestId
+        rejected: RequestId
     ): L2LedgerCommand.ApplyDepositDecisions =
         L2LedgerCommand.ApplyDepositDecisions(
           blockNumber = BlockNumber(blockNum),
           blockCreationEndTime = BigInt(blockNum),
           absorbedDeposits = Nil,
-          refundedDeposits = List(refunded)
+          rejectedDeposits = List(rejected)
         )
 
     /** Build the routes against a seeded ledger + stub actors, then run `check` with the HTTP app
@@ -70,10 +70,10 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 for {
                     store <- InMemoryL2Store.create
                     ledger <- EutxoL2Ledger(nodeConfig, store)
-                    // Seed a small transaction log: three refunded-deposit decisions, blocks 1..3.
+                    // Seed a small transaction log: three rejected-deposit decisions, blocks 1..3.
                     _ <- List(1, 2, 3).traverse_ { n =>
                         ledger
-                            .sendApplyDepositDecisions(refundDecision(n, RequestId(0, n.toLong)))
+                            .sendApplyDepositDecisions(rejectDecision(n, RequestId(0, n.toLong)))
                             .value
                             .flatMap(IO.fromEither)
                     }
@@ -233,7 +233,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 blockNums = entries.flatMap(_.hcursor.downField("blockNumber").as[Int].toOption)
                 _ <- IO(assert(blockNums == Vector(3, 2, 1), s"block order was $blockNums"))
                 kinds = entries.flatMap(_.hcursor.downField("kind").as[String].toOption)
-                _ <- IO(assert(kinds.forall(_ == "depositRefunded"), s"kinds were $kinds"))
+                _ <- IO(assert(kinds.forall(_ == "depositRejected"), s"kinds were $kinds"))
                 // requestId is the object shape {headPeerNumber, requestNumber} (the HTTP default).
                 _ <- IO(
                   assert(

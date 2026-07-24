@@ -38,7 +38,7 @@ object JointLedgerEvent:
     final case class TransactionApplicationStarted(requestId: RequestId) extends JointLedgerEvent
     final case class TransactionApplicationCompleted(requestId: RequestId, blockNum: BlockNumber)
         extends JointLedgerEvent
-    final case class RequestRejected(
+    final case class RequestInvalidated(
         requestId: RequestId,
         blockNum: BlockNumber,
         reason: String
@@ -67,7 +67,7 @@ object JointLedgerEvent:
         competingFallbackTxTime: FallbackTxStartTime,
         events: List[(RequestId, ValidityFlag)],
         decisionsAbsorbed: List[RequestId],
-        decisionsRefunded: List[RequestId]
+        decisionsRejected: List[RequestId]
     ) extends JointLedgerEvent
 
     final case class BlockBriefBuilt(brief: BlockBrief.Intermediate) extends JointLedgerEvent
