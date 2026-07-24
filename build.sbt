@@ -58,6 +58,22 @@ lazy val cardanoOnchain: Project = (project in file("cardano-onchain"))
       addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full),
     )
 
+// Standalone petri net framework
+lazy val petri: Project = (project in file("petri"))
+    .settings(
+      name := "hydrozoa-petri",
+      organization := "org.cardano-hydrozoa",
+      version := "0.1.0-SNAPSHOT",
+      libraryDependencies ++= Seq(
+        "org.typelevel" %% "cats-core" % "2.13.0",
+        "org.typelevel" %% "spire" % "0.18.0",
+        "org.scalatest" %% "scalatest" % "3.2.19" % Test,
+        "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
+        "org.typelevel" %% "discipline-scalatest" % "2.3.0" % Test,
+        "org.typelevel" %% "spire-laws" % "0.18.0" % Test
+      )
+    )
+
 // Main application
 lazy val core: Project = (project in file("."))
     .dependsOn(cardanoOnchain)
@@ -156,7 +172,7 @@ lazy val examples: Project = (project in file("examples"))
 
 // Integration tests
 lazy val integration: Project = (project in file("integration"))
-    .dependsOn(core % "compile->compile;test->test")
+    .dependsOn(core % "compile->compile;test->test", petri)
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,

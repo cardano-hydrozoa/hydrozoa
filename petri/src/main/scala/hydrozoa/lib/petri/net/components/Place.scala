@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.net.components
 
-import hydrozoa.lib.number.{NonNegativeInt, PositiveInt}
 import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTokens
+import spire.math.Natural
 
 /** A "Place" defines the following properties in the following ontological order:
   *   - [[Place.Topology]]: any restrictions on what or how many arcs can connect to this place.
@@ -13,8 +13,8 @@ import hydrozoa.lib.petri.net.components.Place.Semantics.Bounded.Error.TooManyTo
   *   - [[Place.Presentation]]: how to render this place for a specific visualizer
   *
   * Note that the _type_ of [[Place.Syntax#PlaceMarking]] _also_ gives semantics the place -- using
-  * a `NonNegativeInt` means that the place cannot be constructed with negative tokens _ever_. This
-  * is _not_ the same as having a place with `PlaceMarking = Int` and then setting the
+  * a `Natural` means that the place cannot be constructed with negative tokens _ever_. This is
+  * _not_ the same as having a place with `PlaceMarking = Int` and then setting the
   * [[Place.Semantics]] to check for a non-negative number -- one is a compile-time check, one is a
   * run-time check. Prefer compile time when possible.
   */
@@ -24,10 +24,9 @@ object Place {
         val id: PlaceId
     }
 
-    // Stub. Component-side acceptance predicates (e.g. "acceptArc") are deferred until the
-    // builder (IndexedStateT stack) is designed. Type-level arc-type compatibility is enforced
-    // by MapNet's `A` type bound at compile time. Net-wide structural validation (dangling
-    // arcs, multiplicity) lives in net.Topology.
+    // Stub. Component-side acceptance predicates (e.g. "acceptArc") are deferred. Type-level
+    // arc↔place color compatibility is enforced by the net builder; net-wide structural validation
+    // (dangling arcs) lives in net.Topology.
     trait Topology
 
     /** Otherwise known as a "marking"
@@ -49,11 +48,13 @@ object Place {
 
     object Syntax {
 
-        /** Type alias for the common case of token-counting places, where [[PlaceMarking]] is fixed
-          * to [[NonNegativeInt]]. Used as the type bound for arcs and semantics that require token
-          * arithmetic.
+        /** Refinement alias pinning the marking type — used as the place bound of simulators. */
+        type Marked[Self <: Syntax[Self], M] = Syntax[Self] { type PlaceMarking = M }
+
+        /** The common case of token-counting places: [[PlaceMarking]] fixed to the unbounded
+          * [[Natural]] (ISO markings are ℕ-valued, Concept 8).
           */
-        type WithTokens[Self <: Syntax[Self]] = Syntax[Self] { type PlaceMarking = NonNegativeInt }
+        type WithTokens[Self <: Syntax[Self]] = Marked[Self, Natural]
 
         /** Mixin for places that carry a target terminal marking. Parametric over [[PlaceMarking]]
           * so it applies equally to token-counting places, colored nets, or any other marking type.
@@ -84,19 +85,18 @@ object Place {
         trait Bounded[Self <: Place.Syntax.WithTokens[Self] & Semantics[Self]]
             extends Semantics[Self] {
             self: Self =>
-            val bound: PositiveInt
+            val bound: Natural
 
             override def markingError: Option[Place.Semantics.MarkingError] =
-                Option.when(marking.toInt > bound.toInt)(TooManyTokens(marking, bound))
+                Option.when(marking > bound)(TooManyTokens(marking, bound))
         }
 
         object Bounded {
             object Error {
-                case class TooManyTokens(tokens: NonNegativeInt, bound: PositiveInt)
-                    extends MarkingError {
+                case class TooManyTokens(tokens: Natural, bound: Natural) extends MarkingError {
                     override def getMessage: String =
                         "Failed constructing place: too many tokens. " +
-                            s"Max: $bound. Received: ${tokens.convert}"
+                            s"Max: $bound. Received: $tokens"
                 }
             }
         }
@@ -105,7 +105,7 @@ object Place {
     trait Presentation {
         val label: String
         val position: (Int, Int)
-        val radius: PositiveInt
+        val radius: Natural
     }
 
 }

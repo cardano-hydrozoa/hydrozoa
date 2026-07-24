@@ -1,7 +1,7 @@
 package hydrozoa.lib.petri.net.components
 
-import hydrozoa.lib.number.NonNegativeInt
 import scala.concurrent.duration.FiniteDuration
+import spire.math.Natural
 
 object Transition {
     sealed trait Error extends Throwable
@@ -51,8 +51,8 @@ object Transition {
             /** I _believe_ this controls the relative priority of transitions when selecting among
               * all enabled transitions for auto-firing. I'm not certain of the precise semantics.
               */
-            def priority: NonNegativeInt
-            def withPriority(p: NonNegativeInt): Self
+            def priority: Natural
+            def withPriority(p: Natural): Self
         }
     }
 
@@ -71,8 +71,8 @@ object Transition {
       */
     trait Presentation {
         val label: String
-        val width: NonNegativeInt
-        val height: NonNegativeInt
+        val width: Natural
+        val height: Natural
         val position: (Int, Int)
         val delay: FiniteDuration
     }
