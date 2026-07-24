@@ -52,6 +52,18 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/SubmitRequest'
+            examples:
+              transaction:
+                summary: Submit an L2 transaction
+                value:
+                  l2Payload: 84a400d9010281825820…
+                  type: transaction
+              deposit:
+                summary: Register an L1 deposit
+                value:
+                  l1Payload: 84a400d9010281825820…
+                  l2Payload: a1024568656164…
+                  type: deposit
         required: true
       responses:
         '200':
