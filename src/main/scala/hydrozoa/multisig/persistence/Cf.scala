@@ -94,6 +94,13 @@ object Cf:
     case object BlockStackIndex extends Cf:
         def name = "BlockStackIndex"
 
+    /** Effect → stack reverse index: `l1TxId` → the stack whose `HardConfirmation` carries that
+      * effect. Written by SCA in the same atomic batch as the stack's `HardConfirmation`. Backs
+      * `GET /head/effects/<l1TxId>`.
+      */
+    case object EffectStackIndex extends Cf:
+        def name = "EffectStackIndex"
+
     /** Store-level metadata (schema version + arrival-stamp generation). */
     case object Meta extends Cf:
         def name = "Meta"
@@ -136,6 +143,7 @@ object Cf:
       EvacuationMap,
       RequestBlockIndex,
       BlockStackIndex,
+      EffectStackIndex,
       Meta
     )
 

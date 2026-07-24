@@ -14,7 +14,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWi
 import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import io.circe.Json
@@ -26,6 +26,7 @@ import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.TransactionHash
 
 /** The `/head/blocks` queries through the HTTP layer, against a stubbed [[ConsensusStoreReader]]:
   * the listing (block 0 synthesized from config + the spine briefs), the details' confirmation
@@ -145,6 +146,8 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO.pure(Nil)
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =
                 IO.pure(None)
+            def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
+            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)

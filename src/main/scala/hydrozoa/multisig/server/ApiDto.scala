@@ -242,6 +242,95 @@ object ApiDto {
           status = status
         )
 
+    /** A block's L1 effects as `l1TxId`s, grouped by kind — the fields present depend on the block
+      * type (INITIAL: initialization + fallback; MINOR: sec? + refunds; MAJOR: settlement +
+      * fallback + rollouts + refunds; FINAL: finalization + rollouts). Absent kinds are omitted.
+      */
+    final case class BlockEffectsView(
+        blockType: String,
+        initialization: Option[String],
+        settlement: Option[String],
+        finalization: Option[String],
+        fallback: Option[String],
+        sec: Option[String],
+        rollouts: List[String],
+        refunds: List[String]
+    )
+    given Codec[BlockEffectsView] = deriveCodec
+
+    /** One L1 effect in full. Every effect has an `l1TxId`, `kind`, and `blockNumber`. A real tx
+      * effect carries its `txCbor` (hex); a standalone evacuation commitment (kind `sec`) carries
+      * its serialized on-chain bytes (whose hash is the synthetic `l1TxId`) and the hard-ack
+      * signatures split into `headSignatures` then `coilSignatures`.
+      */
+    final case class EffectView(
+        l1TxId: String,
+        kind: String,
+        blockNumber: Int,
+        txCbor: Option[String],
+        secOnchainSerialized: Option[String],
+        headSignatures: Option[List[String]],
+        coilSignatures: Option[List[String]]
+    )
+    given Codec[EffectView] = deriveCodec
+
+    /** The effect-kind discriminator string (matches the sub-resource path segments). */
+    def effectKindName(kind: EffectKind): String = kind match
+        case EffectKind.Initialization => "initialization"
+        case EffectKind.Settlement     => "settlement"
+        case EffectKind.Fallback       => "fallback"
+        case EffectKind.Rollout        => "rollout"
+        case EffectKind.Finalization   => "finalization"
+        case EffectKind.Refund         => "refund"
+        case EffectKind.Sec            => "sec"
+
+    /** Group a block's resolved effects into the by-kind listing. */
+    def mkBlockEffectsView(blockType: String, effects: List[ResolvedEffect]): BlockEffectsView =
+        def firstIdOf(k: EffectKind): Option[String] =
+            effects.collectFirst { case e if e.kind == k => e.l1TxId.toHex }
+        def idsOf(k: EffectKind): List[String] =
+            effects.collect { case e if e.kind == k => e.l1TxId.toHex }
+        BlockEffectsView(
+          blockType = blockType,
+          initialization = firstIdOf(EffectKind.Initialization),
+          settlement = firstIdOf(EffectKind.Settlement),
+          finalization = firstIdOf(EffectKind.Finalization),
+          fallback = firstIdOf(EffectKind.Fallback),
+          sec = firstIdOf(EffectKind.Sec),
+          rollouts = idsOf(EffectKind.Rollout),
+          refunds = idsOf(EffectKind.Refund)
+        )
+
+    /** Map a resolved effect to its full view; `nHeadPeers` splits an SEC's hard-ack signatures
+      * into head (first `nHeadPeers`) then coil.
+      */
+    def mkEffectView(effect: ResolvedEffect, nHeadPeers: Int): EffectView = effect match
+        case tx: ResolvedEffect.Tx =>
+            EffectView(
+              l1TxId = tx.l1TxId.toHex,
+              kind = effectKindName(tx.kind),
+              blockNumber = tx.blockNumber.convert,
+              txCbor = Some(ByteString.fromArray(tx.tx.toCbor).toHex),
+              secOnchainSerialized = None,
+              headSignatures = None,
+              coilSignatures = None
+            )
+        case sec: ResolvedEffect.Sec =>
+            val sigsHex = sec.commitment.headerMultiSigned.map { sig =>
+                val bytes: Array[Byte] = sig
+                ByteString.fromArray(bytes).toHex
+            }
+            val headerBytes: Array[Byte] = sec.commitment.commitment.header
+            EffectView(
+              l1TxId = sec.l1TxId.toHex,
+              kind = "sec",
+              blockNumber = sec.blockNumber.convert,
+              txCbor = None,
+              secOnchainSerialized = Some(ByteString.fromArray(headerBytes).toHex),
+              headSignatures = Some(sigsHex.take(nHeadPeers)),
+              coilSignatures = Some(sigsHex.drop(nHeadPeers))
+            )
+
     /** A utxo reference, `{ transaction_id, index }` (CIP-0116). */
     final case class TxInputView(transaction_id: String, index: Int)
 
