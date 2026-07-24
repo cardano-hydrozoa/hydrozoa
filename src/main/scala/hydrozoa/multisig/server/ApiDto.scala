@@ -714,21 +714,21 @@ object ApiDto {
         private given TapirConfig = tapirTag(blockEffectsTag)
 
         final case class BlockEffectsInitialView(
-            initialization: Option[String],
-            fallback: Option[String]
+            initialization: String,
+            fallback: String
         ) extends BlockEffectsView
         final case class BlockEffectsMinorView(
             sec: Option[String],
             refunds: List[String]
         ) extends BlockEffectsView
         final case class BlockEffectsMajorView(
-            settlement: Option[String],
-            fallback: Option[String],
+            settlement: String,
+            fallback: String,
             rollouts: List[String],
             refunds: List[String]
         ) extends BlockEffectsView
         final case class BlockEffectsFinalView(
-            finalization: Option[String],
+            finalization: String,
             rollouts: List[String]
         ) extends BlockEffectsView
         given Codec[BlockEffectsView] = ConfiguredCodec.derived
@@ -798,11 +798,17 @@ object ApiDto {
             effects.collectFirst { case e if e.kind == k => e.l1TxId.toHex }
         def idsOf(k: EffectKind): List[String] =
             effects.collect { case e if e.kind == k => e.l1TxId.toHex }
+        // A hard-confirmed block of a given type always carries its type's required effects (these
+        // views are only built for hard-confirmed blocks); a missing one is an invariant violation.
+        def requireId(k: EffectKind): String =
+            firstIdOf(k).getOrElse(
+              throw new IllegalStateException(s"$blockType block missing its $k effect")
+            )
         blockType match
             case BlockTypeView.Initial =>
                 BlockEffectsView.BlockEffectsInitialView(
-                  firstIdOf(EffectKind.Initialization),
-                  firstIdOf(EffectKind.Fallback)
+                  requireId(EffectKind.Initialization),
+                  requireId(EffectKind.Fallback)
                 )
             case BlockTypeView.Minor =>
                 BlockEffectsView.BlockEffectsMinorView(
@@ -811,14 +817,14 @@ object ApiDto {
                 )
             case BlockTypeView.Major =>
                 BlockEffectsView.BlockEffectsMajorView(
-                  firstIdOf(EffectKind.Settlement),
-                  firstIdOf(EffectKind.Fallback),
+                  requireId(EffectKind.Settlement),
+                  requireId(EffectKind.Fallback),
                   idsOf(EffectKind.Rollout),
                   idsOf(EffectKind.Refund)
                 )
             case BlockTypeView.Final =>
                 BlockEffectsView.BlockEffectsFinalView(
-                  firstIdOf(EffectKind.Finalization),
+                  requireId(EffectKind.Finalization),
                   idsOf(EffectKind.Rollout)
                 )
 

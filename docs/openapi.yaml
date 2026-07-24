@@ -643,6 +643,7 @@ components:
       title: BlockEffectsFinal
       type: object
       required:
+      - finalization
       - type
       properties:
         finalization:
@@ -658,6 +659,8 @@ components:
       title: BlockEffectsInitial
       type: object
       required:
+      - initialization
+      - fallback
       - type
       properties:
         initialization:
@@ -671,6 +674,8 @@ components:
       title: BlockEffectsMajor
       type: object
       required:
+      - settlement
+      - fallback
       - type
       properties:
         settlement:
