@@ -69,7 +69,8 @@ class HydrozoaRoutes(
 
     private val submitEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("api" / "l2" / "submit")
+            .in("head" / "tx")
+            .name("postHeadTx")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
@@ -77,23 +78,25 @@ class HydrozoaRoutes(
               "Submit an L2 transaction (a JSON UserRequest whose L2 payload is a native, " +
                   "self-authenticating Cardano transaction)."
             )
-            .serverLogic(body => acceptUserRequest("POST /api/l2/submit", body))
+            .serverLogic(body => acceptUserRequest("POST /head/tx", body))
 
     private val registerDepositEndpoint: ServerEndpoint[Any, IO] =
         endpoint.post
-            .in("api" / "deposit" / "register")
+            .in("head" / "deposit")
+            .name("postHeadDeposit")
             .in(stringJsonBody)
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Register an L1 deposit (a JSON UserRequest whose L2 payload is a native, " +
-                  "self-authenticating Cardano transaction)."
+              "Register an L1 deposit (a JSON UserRequest carrying the unsigned deposit tx " +
+                  "CBOR and the serialized L2 outputs the deposit spawns on absorption)."
             )
-            .serverLogic(body => acceptUserRequest("POST /api/deposit/register", body))
+            .serverLogic(body => acceptUserRequest("POST /head/deposit", body))
 
     private val headInfoEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
-            .in("api" / "head-info")
+            .in("head" / "info")
+            .name("getHeadInfo")
             .out(jsonBody[HeadInfoResponse])
             .errorOut(errorOut)
             .description("Head parameters plus the current node time.")
@@ -111,7 +114,8 @@ class HydrozoaRoutes(
     private val l2UtxosDef
         : PublicEndpoint[String, (StatusCode, ErrorResponse), List[L2UtxoView], Any] =
         endpoint.get
-            .in("api" / "l2" / "utxos" / path[String]("address"))
+            .in("l2" / "cardano-eutxo" / "utxos" / path[String]("address"))
+            .name("getL2CardanoEutxoUtxos")
             .out(jsonBody[List[L2UtxoView]])
             .errorOut(errorOut)
             .description("Current L2 utxos controlled by a bech32 address (EUTXO ledger only).")
@@ -119,7 +123,8 @@ class HydrozoaRoutes(
     private val l2TransactionsDef
         : PublicEndpoint[Option[Int], (StatusCode, ErrorResponse), List[L2TxSummaryView], Any] =
         endpoint.get
-            .in("api" / "l2" / "transactions")
+            .in("l2" / "cardano-eutxo" / "transactions")
+            .name("getL2CardanoEutxoTransactions")
             .in(query[Option[Int]]("count"))
             .out(jsonBody[List[L2TxSummaryView]])
             .errorOut(errorOut)
@@ -157,6 +162,7 @@ class HydrozoaRoutes(
     private val healthEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("health")
+            .name("getHealth")
             .out(jsonBody[HealthResponse])
             .description("Liveness — always 200 while the process is serving HTTP.")
             .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
@@ -168,6 +174,7 @@ class HydrozoaRoutes(
     private val readyEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("ready")
+            .name("getReady")
             .out(statusCode.and(jsonBody[ReadinessResponse]))
             .description(
               "Readiness — 200 only while the head is Active (open on L1); 503 with the lifecycle " +
@@ -188,6 +195,7 @@ class HydrozoaRoutes(
             // absent, rather than tapir short-circuiting the missing-header case.
             .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
             .in("api" / "admin" / "finalize")
+            .name("postAdminFinalize")
             .out(jsonBody[FinalizeResponse])
             .errorOut(finalizeErrorOut)
             .description("Trigger head finalization (admin only).")

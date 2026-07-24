@@ -1,10 +1,10 @@
-# L2 query endpoints: /api/l2/utxos and /api/l2/transactions
+# L2 query endpoints: /l2/cardano-eutxo/utxos and /l2/cardano-eutxo/transactions
 
 The user-facing HTTP server (`multisig/server/HydrozoaServer.scala`) exposes two read-only `GET`
 endpoints for inspecting the L2 ledger's current state and recent activity. They are the
-read counterpart to the existing write path (`POST /api/l2/submit`, `POST /api/deposit/register`).
+read counterpart to the existing write path (`POST /head/tx`, `POST /head/deposit`).
 
-| | `GET /api/l2/utxos/{address}` | `GET /api/l2/transactions` |
+| | `GET /l2/cardano-eutxo/utxos/{address}` | `GET /l2/cardano-eutxo/transactions` |
 |---|---|---|
 | Answers | what does this address control on L2 now? | what happened on L2 recently? |
 | Shape | array of CIP-0116 utxos | array of transaction summaries, newest first |
@@ -20,13 +20,13 @@ box and exposes no query channel, so it has no such reader: the server is handed
 only this narrow reader lets the HTTP layer read L2 state without being able to issue ledger
 commands.
 
-## GET /api/l2/utxos/{address}
+## GET /l2/cardano-eutxo/utxos/{address}
 
 The current L2 utxos controlled by a bech32 `address`, serialized with the repo's CIP-0116
 codecs. A malformed address is a `400`; an unknown-but-well-formed address is `200 []`.
 
 ```bash
-curl http://localhost:8080/api/l2/utxos/addr_test1vryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana6q4a064h
+curl http://localhost:8080/l2/cardano-eutxo/utxos/addr_test1vryvgass5dsrf2kxl3vgfz76uhp83kv5lagzcp29tcana6q4a064h
 ```
 ```json
 [
@@ -47,13 +47,13 @@ curl http://localhost:8080/api/l2/utxos/addr_test1vryvgass5dsrf2kxl3vgfz76uhp83k
 `datum` is `null` when the output has none; otherwise it is an object with `inline` (the datum's
 CBOR hex) or `hash` (a datum-hash reference), whichever applies — the two kinds are kept distinct.
 
-## GET /api/l2/transactions
+## GET /l2/cardano-eutxo/transactions
 
 The most recent applied L2 transactions, newest first, as lightweight summaries. `?count=N`
 bounds the number of **summaries** returned (default 50); a non-integer `count` is a `400`.
 
 ```bash
-curl "http://localhost:8080/api/l2/transactions?count=10"
+curl "http://localhost:8080/l2/cardano-eutxo/transactions?count=10"
 ```
 ```json
 [

@@ -69,8 +69,8 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
   (`peer-<label>/rocksdb`) and the EUTXO ledger store
   (`peer-<label>/l2-rocksdb`). Default data dir `.hydrozoa-data` relative to
   cwd; give each node its own.
-- **L2 query API** (head peers only, EUTXO only): `GET /api/l2/utxos/{address}` and
-  `GET /api/l2/transactions` are served only when the node runs the EUTXO ledger; a remote-ledger
+- **L2 query API** (head peers only, EUTXO only): `GET /l2/cardano-eutxo/utxos/{address}` and
+  `GET /l2/cardano-eutxo/transactions` are served only when the node runs the EUTXO ledger; a remote-ledger
   node serves neither.
 
 ### Network matrix
@@ -367,11 +367,11 @@ code changes.
 just submit-l2-tx        # or: just submit-l2-tx config/demo http://localhost:8081
 ```
 
-Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /api/l2/utxos/{address}`
+Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/cardano-eutxo/utxos/{address}`
 — the opening `l2-cardano-eutxo.json` outputs sit at the head peers' addresses), enter a
 destination (bech32, or a peer name like `head-1`) and a value. The tool builds the zero-fee
 native tx (with the CIP-67 output designations and the headId pin in the metadata), signs it with
-the peer wallet, and posts it to `POST /api/l2/submit`. An example session — send 2 of head-0's
+the peer wallet, and posts it to `POST /head/tx`. An example session — send 2 of head-0's
 opening 5 ADA to head-1:
 
 ```
@@ -390,10 +390,10 @@ Enter 1..1: 1
 Destination (bech32 address, or a peer name like head-1): head-1
 Value to send (whole ADA, available 5.000000 ADA): 2
 Built + signed L2 tx 8de4...
-Accepted: requestId=... . Watch GET http://localhost:8080/api/l2/utxos/... for the result.
+Accepted: requestId=... . Watch GET http://localhost:8080/l2/cardano-eutxo/utxos/... for the result.
 ```
 
-Verify with `curl http://localhost:8080/api/l2/utxos/<address>` for both peers — head-1 gains a
+Verify with `curl http://localhost:8080/l2/cardano-eutxo/utxos/<address>` for both peers — head-1 gains a
 2-ADA utxo, head-0 keeps 3 ADA change.
 
 ### Deposit into the head
@@ -405,7 +405,7 @@ just deposit
 Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
 is head peer 0, the funded one), and enter the L2 outputs the deposit should spawn. The tool
 serializes the L2 payload (its hash rides in the deposit tx metadata), registers the deposit with
-`POST /api/deposit/register`, then signs the deposit tx and submits it to L1 via Blockfrost,
+`POST /head/deposit`, then signs the deposit tx and submits it to L1 via Blockfrost,
 polling until the utxo lands. An example session — deposit 3 ADA from head-0's L1 funds to
 coil-0's L2 address:
 
@@ -426,11 +426,11 @@ Add another output? [y/N]: n
 Built deposit TransactionInput(...#0) (3.000000 ADA to L2, accept-by ...)
 Registered with the head: requestId=...
 Submitted deposit tx ... to L1; waiting for the utxo…
-Deposit is on L1. The head absorbs it after maturity — watch GET .../api/l2/utxos/{destination}
+Deposit is on L1. The head absorbs it after maturity — watch GET .../l2/cardano-eutxo/utxos/{destination}
 ```
 
 The head absorbs the deposit after maturity (a few minutes with the demo timing) — then
-`curl http://localhost:8080/api/l2/utxos/<coil-0 address>` shows the spawned 3-ADA output.
+`curl http://localhost:8080/l2/cardano-eutxo/utxos/<coil-0 address>` shows the spawned 3-ADA output.
 
 ### Querying the head
 
@@ -438,12 +438,12 @@ Any head peer answers (`:8080` for head-0, `:8081` for head-1):
 
 ```bash
 curl http://localhost:8080/ready                               # 200 once the head is up and active
-curl "http://localhost:8080/api/l2/transactions?count=10"      # recent applied L2 activity, newest first
-curl "http://localhost:8080/api/l2/utxos/<bech32-address>"     # current L2 utxos at an address
+curl "http://localhost:8080/l2/cardano-eutxo/transactions?count=10"      # recent applied L2 activity, newest first
+curl "http://localhost:8080/l2/cardano-eutxo/utxos/<bech32-address>"     # current L2 utxos at an address
 ```
 
-`/api/l2/transactions` covers plain L2 transactions plus deposit registrations, absorptions, and
-refunds (the `kind` field tells them apart); `/api/l2/utxos` returns the utxos as CIP-0116 JSON.
+`/l2/cardano-eutxo/transactions` covers plain L2 transactions plus deposit registrations, absorptions, and
+refunds (the `kind` field tells them apart); `/l2/cardano-eutxo/utxos` returns the utxos as CIP-0116 JSON.
 Both are the quickest way to watch a submitted tx or deposit land.
 
 ### Teardown / recovery of funds

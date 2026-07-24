@@ -3,10 +3,10 @@ info:
   title: Hydrozoa EUTXO L2 ledger API
   version: 0.1.0
 paths:
-  /api/l2/utxos/{address}:
+  /l2/cardano-eutxo/utxos/{address}:
     get:
       description: Current L2 utxos controlled by a bech32 address (EUTXO ledger only).
-      operationId: getApiL2UtxosAddress
+      operationId: getL2CardanoEutxoUtxos
       parameters:
       - name: address
         in: path
@@ -28,10 +28,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-  /api/l2/transactions:
+  /l2/cardano-eutxo/transactions:
     get:
       description: Recent applied L2 transactions, newest first (EUTXO ledger only).
-      operationId: getApiL2Transactions
+      operationId: getL2CardanoEutxoTransactions
       parameters:
       - name: count
         in: query
