@@ -331,12 +331,65 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
+    private val transactionDetailExample: RequestDetailsView =
+        RequestDetailsView.TransactionView(
+          requestId = 5L,
+          peerNumber = 0,
+          receivedAt = "2026-01-01T00:00:00Z",
+          status = RequestStatusView.RequestHardConfirmedView(
+            blockNumber = 12,
+            validity = ValidityView.Valid,
+            softConfirmedAt = Some("2026-01-01T00:00:03Z"),
+            hardConfirmedAt = "2026-01-01T00:02:00Z",
+            relatedEffects = List(EffectRefView("9f8e7d6c5b4a…", EffectKindView.Settlement))
+          )
+        )
+
+    private val depositDetailExample: RequestDetailsView =
+        RequestDetailsView.DepositView(
+          requestId = 1099511627782L,
+          peerNumber = 1,
+          receivedAt = "2026-01-01T00:00:00Z",
+          status = RequestStatusView.RequestHardConfirmedView(
+            blockNumber = 8,
+            validity = ValidityView.Valid,
+            softConfirmedAt = Some("2026-01-01T00:00:04Z"),
+            hardConfirmedAt = "2026-01-01T00:03:00Z",
+            relatedEffects = List(EffectRefView("1a2b3c4d5e6f…", EffectKindView.Refund))
+          ),
+          absorptionDecisionStatus = AbsorptionDecisionStatusView.AbsorptionHardConfirmedView(
+            blockNumber = 10,
+            decision = DecisionView.Absorbed,
+            softConfirmedAt = Some("2026-01-01T00:01:00Z"),
+            hardConfirmedAt = "2026-01-01T00:04:00Z",
+            settlementEffect = Some("4d5e6f7a8b9c…")
+          )
+        )
+
     private val requestDetailsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "requests" / path[RequestId]("request-id"))
             .name("getHeadRequest")
             .tag("Requests")
-            .out(jsonBody[RequestDetailsView])
+            .out(
+              // Explicit examples so Swagger UI renders each variant *with* its `type` discriminator
+              // (its auto-generated examples drop it); the codec also surfaces `type` on the nested
+              // `status` / `absorptionDecisionStatus` sums.
+              jsonBody[RequestDetailsView].examples(
+                List(
+                  EndpointIO.Example.of(
+                    transactionDetailExample,
+                    name = Some("transaction"),
+                    summary = Some("A transaction request's details")
+                  ),
+                  EndpointIO.Example.of(
+                    depositDetailExample,
+                    name = Some("deposit"),
+                    summary = Some("A deposit request's details")
+                  )
+                )
+              )
+            )
             .errorOut(errorOut)
             .description(
               "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
