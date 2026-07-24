@@ -1,14 +1,14 @@
 package hydrozoa.integration.rbr.model.petri.hlpn
 
 import java.nio.file.{Files, Path}
-import org.scalatest.funsuite.AnyFunSuite
+import org.scalacheck.{Prop, Properties}
 
 /** Renders the RBR net as DOT — the whole net to `target/rbr-net.dot` and one diagram per
   * transition under `target/rbr-net/` (see `just graphviz`) — and sanity-checks the output.
   */
-class RBRHlNetDotTest extends AnyFunSuite:
+object RBRHlNetDotTest extends Properties("RBRHlNetDot"):
 
-    test("RBRHlNetDot renders the RBR net, whole and per transition") {
+    val _ = property("RBRHlNetDot renders the RBR net, whole and per transition") = {
         val net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
 
         // whole net (dense) — one file
@@ -24,12 +24,26 @@ class RBRHlNetDotTest extends AnyFunSuite:
             val _ = Files.writeString(dir.resolve(s"$tid.dot"), dot)
         }
 
-        // one valid digraph per transition, each naming its own transition
-        val _ = assert(perTransition.map(_._1).toSet == net.transitionsMap.keySet)
-        val _ = assert(perTransition.forall((tid, dot) => dot.startsWith("digraph") && dot.contains(tid.toString)))
-        // the ISO 15909-3 enrichments render on their transitions: Evacuation's batch (collection),
-        // Deinit's inhibitor (§A.4 circle head), and read arcs (§A.5 plain undirected segment)
-        val _ = assert(perTransition.exists((tid, dot) => tid.toString == "Evacuation" && dot.contains("batch")))
-        val _ = assert(perTransition.exists((tid, dot) => tid.toString == "Deinit" && dot.contains("arrowhead=odot")))
-        assert(perTransition.exists((_, dot) => dot.contains("dir=none")))
+        Prop.all(
+          // one valid digraph per transition, each naming its own transition
+          Prop.propBoolean(perTransition.map(_._1).toSet == net.transitionsMap.keySet),
+          Prop.propBoolean(
+            perTransition.forall((tid, dot) =>
+                dot.startsWith("digraph") && dot.contains(tid.toString)
+            )
+          ),
+          // the ISO 15909-3 enrichments render on their transitions: Evacuation's batch (collection),
+          // Deinit's inhibitor (§A.4 circle head), and read arcs (§A.5 plain undirected segment)
+          Prop.propBoolean(
+            perTransition.exists((tid, dot) =>
+                tid.toString == "Evacuation" && dot.contains("batch")
+            )
+          ),
+          Prop.propBoolean(
+            perTransition.exists((tid, dot) =>
+                tid.toString == "Deinit" && dot.contains("arrowhead=odot")
+            )
+          ),
+          Prop.propBoolean(perTransition.exists((_, dot) => dot.contains("dir=none")))
+        )
     }
