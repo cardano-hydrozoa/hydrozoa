@@ -228,7 +228,7 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                     withRoutes(stubReader(brief, soft, hard)) { app =>
                         get(app, "/head/blocks/1").map { (status, body) =>
                             val _ = assert(status == Status.Ok)
-                            val c = body.hcursor.downField("confirmation")
+                            val c = body.hcursor.downField("status")
                             out = (
                               c.get[String]("type").toOption.get,
                               c.get[String]("softConfirmedAt").toOption,

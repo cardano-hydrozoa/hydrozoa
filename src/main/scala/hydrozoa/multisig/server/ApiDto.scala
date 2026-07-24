@@ -181,43 +181,38 @@ object ApiDto {
     /** A deposit submission: the unsigned deposit-tx CBOR (`l1Payload`) and the serialized L2
       * outputs it spawns on absorption (`l2Payload`), both lowercase hex.
       */
-    final case class SubmitDepositView(l1Payload: String, l2Payload: String)
-    given Codec[SubmitDepositView] = deriveCodec
+    sealed trait SubmitRequestView
+    object SubmitRequestView:
+        // Internal tagging: a `type` field (`deposit` / `transaction`) selects the kind, with the
+        // payloads (`l1Payload` deposits only, `l2Payload` all) alongside it. The transform strips
+        // the `Submit` prefix and `View` suffix so the `type` value is the bare kind.
+        private val submitTag: String => String =
+            name => name.stripPrefix("Submit").stripSuffix("View").toLowerCase
+        private given CirceConfig = circeTag(submitTag)
+        private given TapirConfig = tapirTag(submitTag)
 
-    /** An L2-transaction submission: the native, self-authenticating Cardano tx (`l2Payload`, hex).
-      */
-    final case class SubmitTransactionView(l2Payload: String)
-    given Codec[SubmitTransactionView] = deriveCodec
-
-    /** The submit-request body for `POST /head/requests`, **externally tagged**: exactly one of
-      * `deposit` / `transaction` is present, and its wrapper key selects the kind.
-      */
-    final case class SubmitRequestView(
-        deposit: Option[SubmitDepositView],
-        transaction: Option[SubmitTransactionView]
-    )
-    given Codec[SubmitRequestView] = deriveCodec
+        final case class SubmitDepositView(l1Payload: String, l2Payload: String)
+            extends SubmitRequestView
+        final case class SubmitTransactionView(l2Payload: String) extends SubmitRequestView
+        given Codec[SubmitRequestView] = ConfiguredCodec.derived
+        given Schema[SubmitRequestView] = Schema.derived
 
     /** Decode a submit body into a domain `UserRequest` (hex payloads to bytes), or a client-facing
-      * error message when the tagging or the hex is malformed.
+      * error message when a payload is not lowercase hex.
       */
     def toUserRequest(view: SubmitRequestView): Either[String, UserRequest] =
         def hex(field: String, value: String): Either[String, ByteString] =
             Try(ByteString.fromHex(value)).toEither.left.map(_ => s"$field must be lowercase hex")
-        (view.deposit, view.transaction) match
-            case (Some(d), None) =>
+        view match
+            case SubmitRequestView.SubmitDepositView(l1Payload, l2Payload) =>
                 for {
-                    l1 <- hex("l1Payload", d.l1Payload)
-                    l2 <- hex("l2Payload", d.l2Payload)
+                    l1 <- hex("l1Payload", l1Payload)
+                    l2 <- hex("l2Payload", l2Payload)
                 } yield UserRequest.DepositRequest(UserRequestBody.DepositRequestBody(l1, l2))
-            case (None, Some(t)) =>
-                hex("l2Payload", t.l2Payload).map(l2 =>
+            case SubmitRequestView.SubmitTransactionView(l2Payload) =>
+                hex("l2Payload", l2Payload).map(l2 =>
                     UserRequest.TransactionRequest(UserRequestBody.TransactionRequestBody(l2))
                 )
-            case (None, None) =>
-                Left("request body must set `deposit` or `transaction`")
-            case (Some(_), Some(_)) =>
-                Left("request body must set exactly one of `deposit` / `transaction`")
 
     /** `{ "error": ... }` — the error body used across the API. */
     final case class ErrorResponse(error: String)
@@ -260,11 +255,21 @@ object ApiDto {
     final case class BlockSummaryView(number: Int, leader: Option[Int], blockType: BlockTypeView)
     given Codec[BlockSummaryView] = deriveCodec
 
-    /** A block's confirmation from this node's viewpoint, `type`-tagged: `PROPOSED` (woven, not yet
-      * soft-confirmed) -> `SOFT_CONFIRMED` (+ soft time) -> `HARD_CONFIRMED` (+ hard time; soft
-      * time optional, since a block may be hard-confirmed with no local soft-confirmation record).
-      * Each time records a **local event at this peer**, so different peers report different times
-      * for the same block. This is by design.
+    /** The soft-confirmation rung of the [[BlockConfirmationView]] ladder: this peer's local
+      * soft-confirmation moment (if held).
+      */
+    trait BlockSoftConfirmedRung:
+        def softConfirmedAt: Option[String]
+
+    /** The hard-confirmation rung — the one above, adding this peer's hard-confirmation moment. */
+    trait BlockHardConfirmedRung extends BlockSoftConfirmedRung:
+        def hardConfirmedAt: String
+
+    /** A block's confirmation status from this node's viewpoint, `type`-tagged and laddered:
+      * `PROPOSED` (woven, not yet soft-confirmed) -> `SOFT_CONFIRMED` (+ soft time) ->
+      * `HARD_CONFIRMED` (+ hard time; soft time optional, since a block may be hard-confirmed with
+      * no local soft-confirmation record). Each time records a **local event at this peer**, so
+      * different peers report different times for the same block. This is by design.
       */
     sealed trait BlockConfirmationView
     object BlockConfirmationView:
@@ -272,12 +277,14 @@ object ApiDto {
         private given TapirConfig = tapirTag(statusTag("Block"))
 
         case object BlockProposedView extends BlockConfirmationView
-        final case class BlockSoftConfirmedView(softConfirmedAt: String)
-            extends BlockConfirmationView
+        final case class BlockSoftConfirmedView(softConfirmedAt: Option[String])
+            extends BlockConfirmationView,
+              BlockSoftConfirmedRung
         final case class BlockHardConfirmedView(
             softConfirmedAt: Option[String],
             hardConfirmedAt: String
-        ) extends BlockConfirmationView
+        ) extends BlockConfirmationView,
+              BlockHardConfirmedRung
         given Codec[BlockConfirmationView] = ConfiguredCodec.derived
         given Schema[BlockConfirmationView] = Schema.derived
 
@@ -342,7 +349,7 @@ object ApiDto {
         leader: Option[Int],
         blockType: BlockTypeView,
         stackId: Option[Int],
-        confirmation: BlockConfirmationView,
+        status: BlockConfirmationView,
         header: Option[BlockHeaderView]
     )
     given Codec[BlockDetailsView] = deriveCodec
@@ -403,8 +410,9 @@ object ApiDto {
         (softConfirmedAt, hardConfirmedAt) match
             case (soft, Some(hard)) =>
                 BlockConfirmationView.BlockHardConfirmedView(soft.map(_.toString), hard.toString)
-            case (Some(soft), None) => BlockConfirmationView.BlockSoftConfirmedView(soft.toString)
-            case (None, None)       => BlockConfirmationView.BlockProposedView
+            case (Some(soft), None) =>
+                BlockConfirmationView.BlockSoftConfirmedView(Some(soft.toString))
+            case (None, None) => BlockConfirmationView.BlockProposedView
 
     private def blockTypeView(brief: BlockBrief.Next): BlockTypeView = brief match
         case _: BlockBrief.Minor => BlockTypeView.Minor
@@ -693,21 +701,38 @@ object ApiDto {
                   status
                 )
 
-    /** A block's L1 effects as `l1TxId`s, grouped by kind — the fields present depend on the block
-      * type (INITIAL: initialization + fallback; MINOR: sec? + refunds; MAJOR: settlement +
-      * fallback + rollouts + refunds; FINAL: finalization + rollouts). Absent kinds are omitted.
+    /** A block's L1 effects as `l1TxId`s, `type`-tagged by block type — each variant carries only
+      * the effect kinds that block type produces: `initial` (initialization + fallback), `minor`
+      * (an optional sec + refunds), `major` (settlement + fallback + rollouts + refunds), `final`
+      * (finalization + rollouts).
       */
-    final case class BlockEffectsView(
-        blockType: BlockTypeView,
-        initialization: Option[String],
-        settlement: Option[String],
-        finalization: Option[String],
-        fallback: Option[String],
-        sec: Option[String],
-        rollouts: List[String],
-        refunds: List[String]
-    )
-    given Codec[BlockEffectsView] = deriveCodec
+    sealed trait BlockEffectsView
+    object BlockEffectsView:
+        private val blockEffectsTag: String => String =
+            name => name.stripPrefix("BlockEffects").stripSuffix("View").toLowerCase
+        private given CirceConfig = circeTag(blockEffectsTag)
+        private given TapirConfig = tapirTag(blockEffectsTag)
+
+        final case class BlockEffectsInitialView(
+            initialization: Option[String],
+            fallback: Option[String]
+        ) extends BlockEffectsView
+        final case class BlockEffectsMinorView(
+            sec: Option[String],
+            refunds: List[String]
+        ) extends BlockEffectsView
+        final case class BlockEffectsMajorView(
+            settlement: Option[String],
+            fallback: Option[String],
+            rollouts: List[String],
+            refunds: List[String]
+        ) extends BlockEffectsView
+        final case class BlockEffectsFinalView(
+            finalization: Option[String],
+            rollouts: List[String]
+        ) extends BlockEffectsView
+        given Codec[BlockEffectsView] = ConfiguredCodec.derived
+        given Schema[BlockEffectsView] = Schema.derived
 
     /** An L1 effect in full, `type`-tagged by kind — the `GET /head/effects/{l1TxId}` response. Its
       * `l1TxId` is the queried path, so it is not echoed. Each real-tx kind carries its `txCbor`
@@ -764,7 +789,7 @@ object ApiDto {
         case EffectKind.Refund         => EffectKindView.Refund
         case EffectKind.Sec            => EffectKindView.Sec
 
-    /** Group a block's resolved effects into the by-kind listing. */
+    /** Group a block's resolved effects into the per-block-type listing. */
     def mkBlockEffectsView(
         blockType: BlockTypeView,
         effects: List[ResolvedEffect]
@@ -773,16 +798,29 @@ object ApiDto {
             effects.collectFirst { case e if e.kind == k => e.l1TxId.toHex }
         def idsOf(k: EffectKind): List[String] =
             effects.collect { case e if e.kind == k => e.l1TxId.toHex }
-        BlockEffectsView(
-          blockType = blockType,
-          initialization = firstIdOf(EffectKind.Initialization),
-          settlement = firstIdOf(EffectKind.Settlement),
-          finalization = firstIdOf(EffectKind.Finalization),
-          fallback = firstIdOf(EffectKind.Fallback),
-          sec = firstIdOf(EffectKind.Sec),
-          rollouts = idsOf(EffectKind.Rollout),
-          refunds = idsOf(EffectKind.Refund)
-        )
+        blockType match
+            case BlockTypeView.Initial =>
+                BlockEffectsView.BlockEffectsInitialView(
+                  firstIdOf(EffectKind.Initialization),
+                  firstIdOf(EffectKind.Fallback)
+                )
+            case BlockTypeView.Minor =>
+                BlockEffectsView.BlockEffectsMinorView(
+                  firstIdOf(EffectKind.Sec),
+                  idsOf(EffectKind.Refund)
+                )
+            case BlockTypeView.Major =>
+                BlockEffectsView.BlockEffectsMajorView(
+                  firstIdOf(EffectKind.Settlement),
+                  firstIdOf(EffectKind.Fallback),
+                  idsOf(EffectKind.Rollout),
+                  idsOf(EffectKind.Refund)
+                )
+            case BlockTypeView.Final =>
+                BlockEffectsView.BlockEffectsFinalView(
+                  firstIdOf(EffectKind.Finalization),
+                  idsOf(EffectKind.Rollout)
+                )
 
     /** Map any resolved effect to the `type`-tagged by-id view (no `l1TxId` — it is the queried
       * path); `nHeadPeers` splits an SEC's hard-ack signatures into head (first `nHeadPeers`) then

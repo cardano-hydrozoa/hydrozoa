@@ -84,12 +84,12 @@ class HydrozoaRoutes(
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Submit a request. A wrapper key tags the type — set exactly one: " +
-                  "`{ \"deposit\": { \"l1Payload\", \"l2Payload\" } }` registers an L1 deposit " +
+              "Submit a request. A `type` field tags the kind: " +
+                  "`{ \"type\": \"deposit\", \"l1Payload\", \"l2Payload\" }` registers an L1 deposit " +
                   "(the unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on " +
-                  "absorption); `{ \"transaction\": { \"l2Payload\" } }` submits an L2 transaction " +
-                  "(a native, self-authenticating Cardano tx). Payloads are lowercase hex. Returns " +
-                  "the assigned request id."
+                  "absorption); `{ \"type\": \"transaction\", \"l2Payload\" }` submits an L2 " +
+                  "transaction (a native, self-authenticating Cardano tx). Payloads are lowercase " +
+                  "hex. Returns the assigned request id."
             )
             .serverLogic(body => acceptUserRequest("POST /head/requests", body))
 

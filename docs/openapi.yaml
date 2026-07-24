@@ -41,12 +41,11 @@ paths:
     post:
       tags:
       - Requests
-      description: 'Submit a request. A wrapper key tags the type — set exactly one:
-        `{ "deposit": { "l1Payload", "l2Payload" } }` registers an L1 deposit (the
-        unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on absorption);
-        `{ "transaction": { "l2Payload" } }` submits an L2 transaction (a native,
-        self-authenticating Cardano tx). Payloads are lowercase hex. Returns the assigned
-        request id.'
+      description: 'Submit a request. A `type` field tags the kind: `{ "type": "deposit",
+        "l1Payload", "l2Payload" }` registers an L1 deposit (the unsigned deposit-tx
+        CBOR plus the serialized L2 outputs it spawns on absorption); `{ "type": "transaction",
+        "l2Payload" }` submits an L2 transaction (a native, self-authenticating Cardano
+        tx). Payloads are lowercase hex. Returns the assigned request id.'
       operationId: postHeadRequest
       requestBody:
         content:
@@ -604,7 +603,7 @@ components:
       required:
       - number
       - blockType
-      - confirmation
+      - status
       properties:
         number:
           type: integer
@@ -622,32 +621,61 @@ components:
         stackId:
           type: integer
           format: int32
-        confirmation:
+        status:
           $ref: '#/components/schemas/BlockConfirmation'
         header:
           $ref: '#/components/schemas/BlockHeader'
     BlockEffects:
       title: BlockEffects
+      oneOf:
+      - $ref: '#/components/schemas/BlockEffectsFinal'
+      - $ref: '#/components/schemas/BlockEffectsInitial'
+      - $ref: '#/components/schemas/BlockEffectsMajor'
+      - $ref: '#/components/schemas/BlockEffectsMinor'
+      discriminator:
+        propertyName: type
+        mapping:
+          final: '#/components/schemas/BlockEffectsFinal'
+          initial: '#/components/schemas/BlockEffectsInitial'
+          major: '#/components/schemas/BlockEffectsMajor'
+          minor: '#/components/schemas/BlockEffectsMinor'
+    BlockEffectsFinal:
+      title: BlockEffectsFinal
       type: object
       required:
-      - blockType
+      - type
       properties:
-        blockType:
-          type: string
-          enum:
-          - initial
-          - minor
-          - major
-          - final
-        initialization:
-          type: string
-        settlement:
-          type: string
         finalization:
+          type: string
+        rollouts:
+          type: array
+          items:
+            type: string
+        type:
+          type: string
+          const: final
+    BlockEffectsInitial:
+      title: BlockEffectsInitial
+      type: object
+      required:
+      - type
+      properties:
+        initialization:
           type: string
         fallback:
           type: string
-        sec:
+        type:
+          type: string
+          const: initial
+    BlockEffectsMajor:
+      title: BlockEffectsMajor
+      type: object
+      required:
+      - type
+      properties:
+        settlement:
+          type: string
+        fallback:
           type: string
         rollouts:
           type: array
@@ -657,6 +685,24 @@ components:
           type: array
           items:
             type: string
+        type:
+          type: string
+          const: major
+    BlockEffectsMinor:
+      title: BlockEffectsMinor
+      type: object
+      required:
+      - type
+      properties:
+        sec:
+          type: string
+        refunds:
+          type: array
+          items:
+            type: string
+        type:
+          type: string
+          const: minor
     BlockHardConfirmed:
       title: BlockHardConfirmed
       type: object
@@ -713,7 +759,6 @@ components:
       title: BlockSoftConfirmed
       type: object
       required:
-      - softConfirmedAt
       - type
       properties:
         softConfirmedAt:
@@ -1293,27 +1338,37 @@ components:
       required:
       - l1Payload
       - l2Payload
+      - type
       properties:
         l1Payload:
           type: string
         l2Payload:
           type: string
+        type:
+          type: string
+          const: deposit
     SubmitRequest:
       title: SubmitRequest
-      type: object
-      properties:
-        deposit:
-          $ref: '#/components/schemas/SubmitDeposit'
-        transaction:
-          $ref: '#/components/schemas/SubmitTransaction'
+      oneOf:
+      - $ref: '#/components/schemas/SubmitDeposit'
+      - $ref: '#/components/schemas/SubmitTransaction'
+      discriminator:
+        propertyName: type
+        mapping:
+          deposit: '#/components/schemas/SubmitDeposit'
+          transaction: '#/components/schemas/SubmitTransaction'
     SubmitTransaction:
       title: SubmitTransaction
       type: object
       required:
       - l2Payload
+      - type
       properties:
         l2Payload:
           type: string
+        type:
+          type: string
+          const: transaction
     Transaction:
       title: Transaction
       type: object

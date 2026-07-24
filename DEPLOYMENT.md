@@ -71,7 +71,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
   cwd; give each node its own.
 - **User HTTP API** (head peers only, port 8080). One REST surface:
   - **submit** — `POST /head/requests` (deposits and L2 transactions, distinguished by the body's
-    wrapper key — `{ "deposit": {…} }` or `{ "transaction": {…} }`);
+    `type` field — `{ "type": "deposit", … }` or `{ "type": "transaction", … }`);
   - **queries** — `GET /head/blocks[/{n}[/body]]`, `GET /head/requests[/{id}]` (lifecycle status per
     request), `GET /head/effects/{l1TxId}` (L1 effect by tx id);
   - **observability** — `GET /health` (liveness), `GET /ready` (readiness);

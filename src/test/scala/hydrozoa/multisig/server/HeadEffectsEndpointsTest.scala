@@ -195,11 +195,10 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             get(app, "/head/blocks/1/effects").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
                 val c = body.hcursor
-                val _ = assert(c.get[String]("blockType") == Right("minor"))
+                // A minor block's effects carry only its (optional) SEC and refunds.
+                val _ = assert(c.get[String]("type") == Right("minor"))
                 val _ = assert(c.get[String]("sec") == Right(secId.toHex))
                 val _ = assert(c.get[List[String]]("refunds") == Right(Nil))
-                val _ = assert(c.get[List[String]]("rollouts") == Right(Nil))
-                val _ = assert(c.downField("settlement").focus.forall(_.isNull))
                 ()
             }
         }
