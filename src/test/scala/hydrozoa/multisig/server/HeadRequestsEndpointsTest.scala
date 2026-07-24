@@ -14,7 +14,7 @@ import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWi
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockNumber}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.stack.{StackEffects, StackNumber}
+import hydrozoa.multisig.ledger.stack.{StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
 import io.circe.Json
 import java.time.Instant
@@ -24,6 +24,7 @@ import org.http4s.{HttpApp, Method, Request, Status, Uri}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.TransactionHash
 import scalus.uplc.builtin.ByteString
 
 /** The `/head/requests` queries through the HTTP layer against a stubbed [[ConsensusStoreReader]]:
@@ -109,6 +110,8 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                 IO.pure(
                   processed.filter(_ => id == RequestId(peer0, RequestNumber(0)))
                 )
+            def stackBrief(num: StackNumber): IO[Option[StackBrief]] = IO.pure(None)
+            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
                 IO.pure(Some(instantOf(stamp)))
 

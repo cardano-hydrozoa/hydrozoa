@@ -6,11 +6,17 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 
 /** Sanity tests for [[StoreKey]] — every key knows its CF, encodes to the expected width, and
   * (where comparable) sorts the way the design assumes (big-endian numeric for spine-indexed CFs).
   */
 class StoreKeyTest extends AnyFunSuite:
+
+    /** A 32-byte hash for the effect-index key tests. */
+    private val sampleHash: TransactionHash =
+        TransactionHash.fromByteString(ByteString.fromArray(Array.tabulate(32)(_.toByte)))
 
     test("every StoreKey type maps to its expected Cf") {
         val cases: List[(StoreKey, Cf)] = List(
@@ -30,6 +36,7 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
               Cf.RequestBlockIndex,
           StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
+          StoreKey.EffectStackIndex(sampleHash) -> Cf.EffectStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -50,6 +57,11 @@ class StoreKeyTest extends AnyFunSuite:
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")
         }
+    }
+
+    test("EffectStackIndex keys encode as the 32 raw l1TxId bytes") {
+        val k = StoreKey.EffectStackIndex(sampleHash)
+        assert(java.util.Arrays.equals(k.encode, Array.tabulate(32)(_.toByte)))
     }
 
     test("RequestBlockIndex keys encode as the packed-i64 RequestId, author-prefix-ordered") {

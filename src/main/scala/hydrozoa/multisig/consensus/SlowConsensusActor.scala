@@ -13,7 +13,7 @@ import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
+import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
 import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 
 /** Slow-consensus actor.
@@ -388,9 +388,14 @@ final case class SlowConsensusActor(
     ): IO[Unit] = for {
         stamp <- persistence.arrivalStamp
         blockRange = ((brief.firstBlockNum: Int) to (brief.lastBlockNum: Int)).toList
-        batch = blockRange.foldLeft(
+        withBlockIndex = blockRange.foldLeft(
           WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(Timestamped(stamp, signed))
         )((b, n) => b.put(StoreKey.BlockStackIndex(BlockNumber(n)))(stackNum))
+        // One effect → stack reverse-index row per effect (each l1TxId, incl. the SEC synthetic
+        // ids), so GET /head/effects/<l1TxId> resolves to this stack in one lookup.
+        batch = EffectIds
+            .allL1TxIds(signed)
+            .foldLeft(withBlockIndex)((b, id) => b.put(StoreKey.EffectStackIndex(id))(stackNum))
         _ <- persistence.write(batch)
     } yield ()
 
