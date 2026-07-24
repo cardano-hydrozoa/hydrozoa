@@ -29,8 +29,8 @@ import scalus.uplc.builtin.ByteString
 
 /** The `/head/requests` queries through the HTTP layer against a stubbed [[ConsensusStoreReader]]:
   * the listing (with its `?type=` / `?peer_number=` filters), keyed by the opaque request id, and
-  * the request-details lifecycle ladder (UNPROCESSED → LOCALLY_PROCESSED → SOFT_CONFIRMED →
-  * HARD_CONFIRMED), plus the 404 / 400 edges.
+  * the request-details lifecycle ladder (UNPROCESSED → PROPOSED → SOFT_CONFIRMED → HARD_CONFIRMED),
+  * plus the 404 / 400 edges.
   */
 class HeadRequestsEndpointsTest extends AnyFunSuite:
 
@@ -209,7 +209,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
                     val _ = assert(status == Status.Ok)
                     val s = body.hcursor.downField("status")
                     out = (
-                      s.get[String]("status").toOption.get,
+                      s.get[String]("type").toOption.get,
                       s.get[Int]("blockNumber").toOption,
                       s.get[String]("hardConfirmedAt").toOption
                     )
@@ -223,7 +223,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
         val _ = assert(statusOf(stubReader(base)) == ("UNPROCESSED", None, None))
         val _ = assert(
           statusOf(stubReader(base, processed = Some(entry))) ==
-              ("LOCALLY_PROCESSED", Some(3), None)
+              ("PROPOSED", Some(3), None)
         )
         val _ = assert(
           statusOf(
@@ -247,7 +247,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
         val base = Map(peer0 -> List(depositRequest(peer0, 0)))
         val valid = RequestBlockEntry(BlockNumber(3), ValidityFlag.Valid)
 
-        // (decisionStatus.status, blockNumber, decision), or None when the field is absent.
+        // (absorptionDecisionStatus.type, blockNumber, decision), or None when the field is absent.
         def decisionOf(
             reader: ConsensusStoreReader[IO]
         ): Option[(String, Option[Int], Option[String])] =
@@ -255,9 +255,9 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
             withRoutes(reader) { app =>
                 get(app, s"/head/requests/${depositId.asI64}").map { (status, body) =>
                     val _ = assert(status == Status.Ok)
-                    val d = body.hcursor.downField("decisionStatus")
+                    val d = body.hcursor.downField("absorptionDecisionStatus")
                     out = d
-                        .get[String]("status")
+                        .get[String]("type")
                         .toOption
                         .map(s =>
                             (
@@ -275,11 +275,11 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
           decisionOf(stubReader(Map(peer0 -> List(txRequest(peer0, 0))), processed = Some(valid)))
               == None
         )
-        // A valid deposit with no decision row yet is UNDECIDED.
+        // A valid deposit with no decision row yet is UNPROCESSED.
         val _ = assert(
-          decisionOf(stubReader(base, processed = Some(valid))) == Some(("UNDECIDED", None, None))
+          decisionOf(stubReader(base, processed = Some(valid))) == Some(("UNPROCESSED", None, None))
         )
-        // A decided-but-unconfirmed deposit reports LOCAL_DECISION with its block and outcome.
+        // A decided-but-unconfirmed deposit reports PROPOSED with its block and outcome.
         val _ = assert(
           decisionOf(
             stubReader(
@@ -287,7 +287,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
               processed = Some(valid),
               decisionRow = Some(DepositDecision.Absorbed(BlockNumber(3)))
             )
-          ) == Some(("LOCAL_DECISION", Some(3), Some("ABSORBED")))
+          ) == Some(("PROPOSED", Some(3), Some("ABSORBED")))
         )
         assert(
           decisionOf(
@@ -296,7 +296,7 @@ class HeadRequestsEndpointsTest extends AnyFunSuite:
               processed = Some(valid),
               decisionRow = Some(DepositDecision.Rejected(BlockNumber(3)))
             )
-          ) == Some(("LOCAL_DECISION", Some(3), Some("REJECTED")))
+          ) == Some(("PROPOSED", Some(3), Some("REJECTED")))
         )
     }
 

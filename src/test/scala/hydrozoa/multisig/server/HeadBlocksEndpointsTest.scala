@@ -215,7 +215,9 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             .unsafeRunSync()
     }
 
-    test("GET /head/blocks/1 walks the confirmation ladder: PROPOSED, SOFT, HARD") {
+    test(
+      "GET /head/blocks/1 walks the confirmation ladder: PROPOSED, SOFT_CONFIRMED, HARD_CONFIRMED"
+    ) {
         mkMinorBrief1
             .flatMap { brief =>
                 def statusOf(
@@ -226,9 +228,9 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                     withRoutes(stubReader(brief, soft, hard)) { app =>
                         get(app, "/head/blocks/1").map { (status, body) =>
                             val _ = assert(status == Status.Ok)
-                            val c = body.hcursor.downField("confirmation")
+                            val c = body.hcursor.downField("status")
                             out = (
-                              c.get[String]("status").toOption.get,
+                              c.get[String]("type").toOption.get,
                               c.get[String]("softConfirmedAt").toOption,
                               c.get[String]("hardConfirmedAt").toOption
                             )
@@ -238,29 +240,33 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO {
                     val _ = assert(statusOf(soft = false, hard = false) == ("PROPOSED", None, None))
                     val _ = assert(
-                      statusOf(soft = true, hard = false) == ("SOFT", Some(softAt.toString), None)
+                      statusOf(soft = true, hard = false) ==
+                          ("SOFT_CONFIRMED", Some(softAt.toString), None)
                     )
                     assert(
                       statusOf(soft = true, hard = true) ==
-                          ("HARD", Some(softAt.toString), Some(hardAt.toString))
+                          ("HARD_CONFIRMED", Some(softAt.toString), Some(hardAt.toString))
                     )
                 }
             }
             .unsafeRunSync()
     }
 
-    test("GET /head/blocks/0 and /head/blocks/0/header serve the config-derived initial block") {
+    test("GET /head/blocks/0 and /head/blocks/0/body serve the config-derived initial block") {
         mkMinorBrief1
             .flatMap(brief =>
                 IO(withRoutes(stubReader(brief, soft = false, hard = false)) { app =>
                     for {
                         details <- get(app, "/head/blocks/0")
-                        header <- get(app, "/head/blocks/0/header")
+                        body <- get(app, "/head/blocks/0/body")
                     } yield {
                         val _ = assert(details._1 == Status.Ok)
                         val _ =
                             assert(details._2.hcursor.get[String]("blockType") == Right("initial"))
-                        val _ = assert(header._1 == Status.Ok)
+                        val _ = assert(body._1 == Status.Ok)
+                        val bc = body._2.hcursor
+                        val _ = assert(bc.get[String]("blockType") == Right("initial"))
+                        val _ = assert(bc.get[List[Json]]("transactions") == Right(Nil))
                         ()
                     }
                 })
@@ -268,17 +274,41 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
             .unsafeRunSync()
     }
 
-    test("GET /head/blocks/1/header returns the brief's header content") {
+    test("GET /head/blocks/1/body returns the block's content") {
         mkMinorBrief1
             .flatMap(brief =>
                 IO(withRoutes(stubReader(brief, soft = false, hard = false)) { app =>
-                    get(app, "/head/blocks/1/header").map { (status, body) =>
+                    get(app, "/head/blocks/1/body").map { (status, body) =>
                         val _ = assert(status == Status.Ok)
-                        val _ = assert(body.hcursor.downField("blockNum").succeeded)
+                        val c = body.hcursor
+                        val _ = assert(c.get[String]("blockType") == Right("minor"))
+                        val _ = assert(c.downField("transactions").succeeded)
+                        val _ = assert(c.downField("depositsAbsorbed").succeeded)
+                        val _ = assert(c.downField("depositsRejected").succeeded)
                         ()
                     }
                 })
             )
+            .unsafeRunSync()
+    }
+
+    test("GET /head/blocks/1 includes stackId once hard-confirmed, absent before") {
+        mkMinorBrief1
+            .flatMap { brief =>
+                def stackIdOf(hard: Boolean): Option[Int] =
+                    var out: Option[Int] = None
+                    withRoutes(stubReader(brief, soft = true, hard = hard)) { app =>
+                        get(app, "/head/blocks/1").map { (status, body) =>
+                            val _ = assert(status == Status.Ok)
+                            out = body.hcursor.get[Int]("stackId").toOption
+                        }
+                    }
+                    out
+                IO {
+                    val _ = assert(stackIdOf(hard = false).isEmpty)
+                    assert(stackIdOf(hard = true) == Some(1))
+                }
+            }
             .unsafeRunSync()
     }
 
@@ -288,13 +318,13 @@ class HeadBlocksEndpointsTest extends AnyFunSuite:
                 IO(withRoutes(stubReader(brief, soft = false, hard = false)) { app =>
                     for {
                         missing <- get(app, "/head/blocks/99")
-                        missingHeader <- get(app, "/head/blocks/99/header")
+                        missingBody <- get(app, "/head/blocks/99/body")
                         malformed <- app.run(
                           Request[IO](Method.GET, Uri.unsafeFromString("/head/blocks/oops"))
                         )
                     } yield {
                         val _ = assert(missing._1 == Status.NotFound)
-                        val _ = assert(missingHeader._1 == Status.NotFound)
+                        val _ = assert(missingBody._1 == Status.NotFound)
                         val _ = assert(malformed.status.code < 500)
                         ()
                     }

@@ -35,9 +35,10 @@ object SubmissionClient:
 
     /** http4s-based impl: posts the request body (no header, no signature envelope — auth is the
       * native tx's own witnesses, verified at the ledger's screening) to the single submission
-      * endpoint and expects a [[RequestAccepted]] JSON response. The body's root tag ("deposit" /
-      * "transaction") selects the type (see [[requestJson]]). `client` can be a real http4s
-      * `Client[IO]` or an in-memory `Client.fromHttpApp` — the harness uses the latter.
+      * endpoint and expects a [[RequestAccepted]] JSON response. The body is internally tagged — a
+      * `type` field (`deposit` / `transaction`) selects the kind, with the payloads alongside it
+      * (see [[requestJson]]). `client` can be a real http4s `Client[IO]` or an in-memory
+      * `Client.fromHttpApp` — the harness uses the latter.
       */
     def http(
         client: Client[IO],
@@ -53,6 +54,7 @@ object SubmissionClient:
                 client.expect[RequestAccepted](req).map(_.requestId)
 
     private def requestJson(request: UserRequest): Json =
-        request.body match
-            case b: UserRequestBody.DepositRequestBody     => Json.obj("deposit" -> b.asJson)
-            case b: UserRequestBody.TransactionRequestBody => Json.obj("transaction" -> b.asJson)
+        val (tag, body) = request.body match
+            case b: UserRequestBody.DepositRequestBody     => ("deposit", b.asJson)
+            case b: UserRequestBody.TransactionRequestBody => ("transaction", b.asJson)
+        Json.obj("type" -> Json.fromString(tag)).deepMerge(body)
