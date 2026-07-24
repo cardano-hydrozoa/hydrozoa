@@ -32,7 +32,7 @@ object Main
     /** The `version` subcommand: print the version, git revision, and build time baked in at
       * compile time (see [[BuildInfo]]).
       */
-    private val versionCommand: Command[IO[ExitCode]] =
+    private lazy val versionCommand: Command[IO[ExitCode]] =
         Command(
           name = "version",
           header = "Print the version, git commit, and build time"

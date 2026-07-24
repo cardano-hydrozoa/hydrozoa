@@ -42,7 +42,7 @@ import scalus.uplc.builtin.ByteString
 object SubmitL2Transaction:
 
     /** The `submit-l2-tx` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "submit-l2-tx",
           header = "Interactively build, sign, and submit an L2 transaction to a running head"

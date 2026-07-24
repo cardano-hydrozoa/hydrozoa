@@ -85,7 +85,7 @@ object DeployScriptsAndG2Setup:
             .withDefault(Path.of("script-refs.json"))
 
     /** The `deploy-scripts-and-g2-setup` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "deploy-scripts-and-g2-setup",
           header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"

@@ -48,7 +48,7 @@ object SubmitDeposit:
     private val acceptByMargin = 3.minutes
 
     /** The `submit-deposit` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "submit-deposit",
           header = "Interactively build, register, and submit a deposit into a running head"

@@ -579,7 +579,7 @@ object GenerateKeyPair:
             .orNone
 
     /** The `keygen` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "keygen",
           header = "Generate an Ed25519 key pair; optionally register it in a roster " +
@@ -824,7 +824,7 @@ object Migrate:
     private val destArg: Opts[String] = Opts.argument[String]("bech32-destination")
 
     /** The `migrate` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "migrate",
           header = "Send all UTXOs at the peer's wallet address to a destination address"
@@ -1016,7 +1016,7 @@ object BuildHeadConfig:
             .withDefault(Path.of("head-config.json"))
 
     /** The `build-head-config` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "build-head-config",
           header = "Build the shared head-config.json artifact every node loads"
@@ -1131,7 +1131,7 @@ object InitBootstrapFiles:
         }.withDefault(CardanoNetwork.Preview)
 
     /** The `init-bootstrap-files` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "init-bootstrap-files",
           header = "Write defaults.json and an l2-cardano-eutxo.json template from a roster"
@@ -1224,7 +1224,7 @@ object PrintHeadZeroAddress:
             .withDefault(Path.of("config/demo/bootstrap"))
 
     /** The `head-zero-address` subcommand. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "head-zero-address",
           header = "Print head peer 0's L1 funding address"

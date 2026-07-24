@@ -54,7 +54,7 @@ object Serve {
         Opts.argument[String]("peer-private.json").map(Path.of(_))
 
     /** The `serve` subcommand: run a head node from a generated config. */
-    val command: Command[IO[ExitCode]] =
+    lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "serve",
           header = "Run a Hydrozoa head node from a generated config"
