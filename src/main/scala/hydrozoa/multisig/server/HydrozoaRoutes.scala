@@ -3,7 +3,6 @@ package hydrozoa.multisig.server
 import cats.effect.IO
 import cats.syntax.traverse.*
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
@@ -14,10 +13,7 @@ import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
 import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
 import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
-import hydrozoa.multisig.server.JsonCodecs.UserRequestDecoder
 import hydrozoa.multisig.server.TapirJson.*
-import io.circe.Json
-import io.circe.syntax.*
 import java.time.Instant
 import org.http4s.HttpRoutes
 import scala.util.Try
@@ -54,19 +50,11 @@ class HydrozoaRoutes(
 ) {
     import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
 
-    /** The block-0 header encoder and the brief codecs are `CardanoNetwork.Section`-dependent;
-      * `headConfig` satisfies the section.
-      */
-    private given CardanoNetwork.Section = headConfig
-
     /** Decomposes hard-confirmed stacks' effects onto blocks for the effect queries. */
     private val effectsResolver: EffectsResolver = EffectsResolver(consensusReader)
 
     /** How many recent L2 transactions to return when `?count=` is omitted. */
     private val defaultRecentTxCount = 50
-
-    /** The decoder for user requests (deposit registrations and L2 transactions). */
-    private val userRequestDecoder: UserRequestDecoder = UserRequestDecoder()
 
     /** The shared error output: an HTTP status plus an `{ error }` body. */
     private val errorOut: EndpointOutput[(StatusCode, ErrorResponse)] =
@@ -91,15 +79,17 @@ class HydrozoaRoutes(
         endpoint.post
             .in("head" / "requests")
             .name("postHeadRequest")
-            .in(stringJsonBody)
+            .tag("Requests")
+            .in(jsonBody[SubmitRequestView])
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
-              "Submit a request. A root field tags the type: " +
-                  "`{ \"deposit\": { \"l1Payload\", \"l2Payload\" } }` registers an L1 deposit " +
+              "Submit a request. A `type` field tags the kind: " +
+                  "`{ \"type\": \"deposit\", \"l1Payload\", \"l2Payload\" }` registers an L1 deposit " +
                   "(the unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on " +
-                  "absorption); `{ \"transaction\": { \"l2Payload\" } }` submits an L2 transaction " +
-                  "(a native, self-authenticating Cardano tx). Returns the assigned request id."
+                  "absorption); `{ \"type\": \"transaction\", \"l2Payload\" }` submits an L2 " +
+                  "transaction (a native, self-authenticating Cardano tx). Payloads are lowercase " +
+                  "hex. Returns the assigned request id."
             )
             .serverLogic(body => acceptUserRequest("POST /head/requests", body))
 
@@ -159,6 +149,7 @@ class HydrozoaRoutes(
         endpoint.get
             .in("head" / "blocks")
             .name("getHeadBlocks")
+            .tag("Blocks")
             .out(jsonBody[List[BlockSummaryView]])
             .errorOut(errorOut)
             .description(
@@ -180,32 +171,35 @@ class HydrozoaRoutes(
         endpoint.get
             .in("head" / "blocks" / path[BlockNumber]("block-number"))
             .name("getHeadBlock")
+            .tag("Blocks")
             .out(jsonBody[BlockDetailsView])
             .errorOut(errorOut)
             .description(
-              "One block's type, leader, and confirmation status: PROPOSED, SOFT (+ " +
-                  "soft-confirmation time), or HARD (+ hard-confirmation time). Each confirmation " +
-                  "time records a local event at this peer — when it produced the soft/hard " +
-                  "confirmation — so different peers report different times for the same block. " +
-                  "This is by design."
+              "One block's type, leader, hard-confirming stack, full header, and confirmation " +
+                  "status: PROPOSED, SOFT_CONFIRMED (+ soft-confirmation time), or HARD_CONFIRMED " +
+                  "(+ hard-confirmation time). Each confirmation time records a local event at this " +
+                  "peer — when it produced the soft/hard confirmation — so different peers report " +
+                  "different times for the same block. This is by design."
             )
             .serverLogic(num =>
                 blockDetails(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
-    private val blockHeaderEndpoint: ServerEndpoint[Any, IO] =
+    private val blockBodyEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
-            .in("head" / "blocks" / path[BlockNumber]("block-number") / "header")
-            .name("getHeadBlockHeader")
-            .out(jsonBody[Json])
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "body")
+            .name("getHeadBlockBody")
+            .tag("Blocks")
+            .out(jsonBody[BlockBodyView])
             .errorOut(errorOut)
             .description(
-              "The block's header content. The shape varies by block type (initial, minor, " +
-                  "major, final)."
+              "The block's content: its transactions (the request ids woven into the block, each " +
+                  "with its validity verdict) and its deposit decisions (the request ids absorbed " +
+                  "into the treasury and those rejected). 404 if the block does not exist."
             )
             .serverLogic(num =>
-                blockHeader(num)
+                blockBody(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -213,6 +207,7 @@ class HydrozoaRoutes(
         endpoint.get
             .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects")
             .name("getHeadBlockEffects")
+            .tag("Blocks")
             .out(jsonBody[BlockEffectsView])
             .errorOut(errorOut)
             .description(
@@ -225,21 +220,39 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
-    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per fixed kind — the effect in full, or a
-      * 404 when this block carries no effect of that kind.
+    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per real-tx kind — the effect in full
+      * (with its l1TxId; the kind is the path, so it is not discriminated), or a 404 when this
+      * block carries no effect of that kind.
       */
-    private def blockEffectKindEndpoint(
+    private def blockTxEffectEndpoint(
         segment: String,
         kind: EffectKind
     ): ServerEndpoint[Any, IO] =
         endpoint.get
             .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / segment)
             .name(s"getHeadBlockEffect_$segment")
-            .out(jsonBody[EffectView])
+            .tag("Blocks")
+            .out(jsonBody[TxEffectView])
             .errorOut(errorOut)
             .description(s"The block's $segment effect in full, or 404 if it has none.")
             .serverLogic(num =>
-                blockEffectOfKind(num, kind)
+                blockTxEffectOfKind(num, kind)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** `GET /head/blocks/<n>/effects/sec` — the block's SEC in full, or a 404. */
+    private val blockSecEffectEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "sec")
+            .name("getHeadBlockEffect_sec")
+            .tag("Blocks")
+            .out(jsonBody[SecEffectView])
+            .errorOut(errorOut)
+            .description(
+              "The block's SEC (standalone evacuation commitment), or 404 if it has none."
+            )
+            .serverLogic(num =>
+                blockSecEffect(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -250,7 +263,8 @@ class HydrozoaRoutes(
                   path[Int]("number")
             )
             .name("getHeadBlockRollout")
-            .out(jsonBody[EffectView])
+            .tag("Blocks")
+            .out(jsonBody[TxEffectView])
             .errorOut(errorOut)
             .description("One rollout of the block's rollout chain by index, or 404 if absent.")
             .serverLogic((num, i) =>
@@ -262,6 +276,7 @@ class HydrozoaRoutes(
         endpoint.get
             .in("head" / "effects" / path[TransactionHash]("l1TxId"))
             .name("getHeadEffect")
+            .tag("Effects")
             .out(jsonBody[EffectView])
             .errorOut(errorOut)
             .description("Any effect by its l1TxId (real tx id, or an SEC's synthetic hash).")
@@ -276,9 +291,8 @@ class HydrozoaRoutes(
           "initialization" -> EffectKind.Initialization,
           "settlement" -> EffectKind.Settlement,
           "fallback" -> EffectKind.Fallback,
-          "sec" -> EffectKind.Sec,
           "finalization" -> EffectKind.Finalization
-        ).map(blockEffectKindEndpoint)
+        ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
 
     private val requestsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -286,6 +300,7 @@ class HydrozoaRoutes(
             .in(query[Option[String]]("type"))
             .in(query[Option[Int]]("peer_number"))
             .name("getHeadRequests")
+            .tag("Requests")
             .out(jsonBody[List[RequestSummaryView]])
             .errorOut(errorOut)
             .description(
@@ -302,11 +317,12 @@ class HydrozoaRoutes(
         endpoint.get
             .in("head" / "requests" / path[RequestId]("request-id"))
             .name("getHeadRequest")
+            .tag("Requests")
             .out(jsonBody[RequestDetailsView])
             .errorOut(errorOut)
             .description(
               "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
-                  "LOCALLY_PROCESSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
+                  "PROPOSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
                   "time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects — " +
                   "the l1TxIds the request became). Every time records a " +
                   "local event at this peer — when it received the request, and when it produced " +
@@ -407,6 +423,7 @@ class HydrozoaRoutes(
             .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
             .in("api" / "admin" / "finalize")
             .name("postAdminFinalize")
+            .tag("Governance")
             .out(jsonBody[FinalizeResponse])
             .errorOut(finalizeErrorOut)
             .description("Trigger head finalization (admin only).")
@@ -460,7 +477,7 @@ class HydrozoaRoutes(
           requestDetailsEndpoint,
           blocksEndpoint,
           blockDetailsEndpoint,
-          blockHeaderEndpoint,
+          blockBodyEndpoint,
           blockEffectsEndpoint,
           effectByIdEndpoint,
           blockRolloutEndpoint,
@@ -469,13 +486,17 @@ class HydrozoaRoutes(
           finalizeEndpoint
         ) ++ blockEffectKindEndpoints
 
-    /** Don't auto-document a body/param decode-failure response: our JSON bodies are raw strings
-      * whose codec never fails, so tapir's default would advertise an unreachable `text/plain` 400
-      * that contradicts the real JSON `ErrorResponse`. The genuine errors are on each endpoint's
-      * declared error output.
+    /** OpenAPI doc options:
+      *   - drop the `View` suffix from every DTO's component-schema name (the Scala types keep it
+      *     as a domain-vs-DTO convention; the spec reads cleaner without it);
+      *   - don't auto-document a body/param decode-failure response — tapir's default advertises a
+      *     `text/plain` 400 that contradicts each endpoint's declared JSON `ErrorResponse`.
       */
     private val docsOptions: OpenAPIDocsOptions =
-        OpenAPIDocsOptions.default.copy(defaultDecodeFailureOutput = _ => None)
+        OpenAPIDocsOptions.default.copy(
+          defaultDecodeFailureOutput = _ => None,
+          schemaName = sname => OpenAPIDocsOptions.default.schemaName(sname).stripSuffix("View")
+        )
 
     /** Swagger UI (served at `/docs`) + the raw OpenAPI document for the core API. */
     private val coreDocsEndpoints: List[ServerEndpoint[Any, IO]] =
@@ -512,23 +533,14 @@ class HydrozoaRoutes(
       */
     private def acceptUserRequest(
         path: String,
-        bodyText: String
+        body: SubmitRequestView
     ): IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
         val handled =
             for {
-                _ <- tracer.traceWith(RequestBody(path, bodyText))
-                json <- io.circe.parser.parse(bodyText) match {
-                    case Left(parseError) =>
-                        tracer.traceWith(JsonParseError(path, parseError)) *>
-                            IO.raiseError(parseError)
-                    case Right(json) => IO.pure(json)
-                }
-                userRequest <- userRequestDecoder.decodeJson(json) match {
-                    case Left(decodeError) =>
-                        tracer.traceWith(JsonDecodeError(path, decodeError)) *>
-                            tracer.traceWith(
-                              JsonDecodeErrorHistory(path, decodeError.history.toString)
-                            ) *> IO.raiseError(decodeError)
+                userRequest <- ApiDto.toUserRequest(body) match {
+                    case Left(message) =>
+                        val error = new RuntimeException(message)
+                        tracer.traceWith(JsonDecodeError(path, error)) *> IO.raiseError(error)
                     case Right(request) => IO.pure(request)
                 }
                 _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
@@ -554,58 +566,69 @@ class HydrozoaRoutes(
         num: BlockNumber
     ): IO[Either[(StatusCode, ErrorResponse), BlockDetailsView]] =
         if num == BlockNumber.zero then
-            blockConfirmation(num).map(confirmation =>
+            for {
+                confirmation <- blockConfirmation(num)
+                stack <- consensusReader.stackOf(num)
+            } yield {
                 val summary = ApiDto.mkInitialBlockSummaryView
                 Right(
-                  BlockDetailsView(summary.number, summary.leader, summary.blockType, confirmation)
+                  BlockDetailsView(
+                    summary.number,
+                    summary.leader,
+                    summary.blockType,
+                    stack.map(_.convert),
+                    confirmation,
+                    header = None
+                  )
                 )
-            )
+            }
         else
             consensusReader.blockBrief(num).flatMap {
                 case None => IO.pure(Left(blockNotFound(num)))
                 case Some(brief) =>
-                    blockConfirmation(num).map(confirmation =>
+                    for {
+                        confirmation <- blockConfirmation(num)
+                        stack <- consensusReader.stackOf(num)
+                    } yield {
                         val summary = ApiDto.mkBlockSummaryView(brief, headConfig.nHeadPeers)
                         Right(
                           BlockDetailsView(
                             summary.number,
                             summary.leader,
                             summary.blockType,
-                            confirmation
+                            stack.map(_.convert),
+                            confirmation,
+                            header = Some(ApiDto.mkBlockHeaderView(brief.header))
                           )
                         )
-                    )
+                    }
             }
 
-    /** The block's header as JSON: block 0's comes from the head config, the rest from their
-      * persisted briefs.
+    /** The block's content: block 0 (config) has none; the rest read their transactions and deposit
+      * decisions from their persisted briefs.
       */
-    private def blockHeader(num: BlockNumber): IO[Either[(StatusCode, ErrorResponse), Json]] =
-        if num == BlockNumber.zero then
-            IO.pure(Right(headConfig.initialBlock.blockBrief.header.asJson))
+    private def blockBody(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockBodyView]] =
+        if num == BlockNumber.zero then IO.pure(Right(ApiDto.mkInitialBlockBodyView))
         else
             consensusReader.blockBrief(num).map {
-                case None => Left(blockNotFound(num))
-                case Some(brief) =>
-                    Right(brief match {
-                        case b: BlockBrief.Minor => b.header.asJson
-                        case b: BlockBrief.Major => b.header.asJson
-                        case b: BlockBrief.Final => b.header.asJson
-                    })
+                case None        => Left(blockNotFound(num))
+                case Some(brief) => Right(ApiDto.mkBlockBodyView(brief))
             }
 
     /** The block's type — `initial` for block 0 (config), else read from its brief. `None` if a
       * non-zero block does not exist.
       */
-    private def blockTypeOf(num: BlockNumber): IO[Option[String]] =
-        if num == BlockNumber.zero then IO.pure(Some("initial"))
+    private def blockTypeOf(num: BlockNumber): IO[Option[ApiDto.BlockTypeView]] =
+        if num == BlockNumber.zero then IO.pure(Some(ApiDto.BlockTypeView.Initial))
         else
             consensusReader
                 .blockBrief(num)
                 .map(_.map {
-                    case _: BlockBrief.Minor => "minor"
-                    case _: BlockBrief.Major => "major"
-                    case _: BlockBrief.Final => "final"
+                    case _: BlockBrief.Minor => ApiDto.BlockTypeView.Minor
+                    case _: BlockBrief.Major => ApiDto.BlockTypeView.Major
+                    case _: BlockBrief.Final => ApiDto.BlockTypeView.Final
                 })
 
     /** The block-effects listing (l1TxIds grouped by kind), or a 404 when the block does not exist.
@@ -622,27 +645,40 @@ class HydrozoaRoutes(
                 }
         }
 
-    /** One kind of the block's effects in full, or a 404 (block missing, or no effect of that kind
-      * on this block).
+    /** One real-tx kind of the block's effects in full, or a 404 (block missing, or no effect of
+      * that kind on this block).
       */
-    private def blockEffectOfKind(
+    private def blockTxEffectOfKind(
         num: BlockNumber,
         kind: EffectKind
-    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
         effectsResolver.blockEffects(num).map {
             case None => Left(blockNotFound(num))
             case Some(effects) =>
-                effects.find(_.kind == kind) match
-                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                effects.collectFirst { case e: ResolvedEffect.Tx if e.kind == kind => e } match
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
                     case None =>
                         Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
+        }
+
+    /** The block's SEC in full, or a 404 (block missing, or no SEC on this block). */
+    private def blockSecEffect(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), SecEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst { case e: ResolvedEffect.Sec => e } match
+                    case Some(e) => Right(ApiDto.mkSecEffectView(e, headConfig.nHeadPeers))
+                    case None =>
+                        Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no sec effect"))
         }
 
     /** One rollout of the block's rollout chain by index, or a 404. */
     private def blockRollout(
         num: BlockNumber,
         index: Int
-    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
         effectsResolver.blockEffects(num).map {
             case None => Left(blockNotFound(num))
             case Some(effects) =>
@@ -651,7 +687,7 @@ class HydrozoaRoutes(
                         if e.kind == EffectKind.Rollout && e.rolloutIndex.contains(index) =>
                         e
                 } match
-                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
                     case None =>
                         Left(
                           fail(StatusCode.NotFound, s"Block ${num.convert} has no rollout $index")
@@ -733,21 +769,27 @@ class HydrozoaRoutes(
                       hardConfirmedAt = hardAt,
                       relatedEffects = effects.map(ApiDto.mkEffectRefView)
                     )
-                    decisionStatus <- depositDecisionStatus(id, stamped.payload, processed)
+                    absorptionDecisionStatus <-
+                        depositAbsorptionDecisionStatus(id, stamped.payload, processed)
                 } yield Right(
-                  ApiDto.mkRequestDetailsView(stamped.payload, receivedAt, status, decisionStatus)
+                  ApiDto.mkRequestDetailsView(
+                    stamped.payload,
+                    receivedAt,
+                    status,
+                    absorptionDecisionStatus
+                  )
                 )
         }
 
-    /** A valid deposit request's decision status (undecided / local-decision / confirmed), or
-      * `None` for a transaction or a deposit already ruled invalid. The confirmation moments are of
-      * the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
+    /** A valid deposit request's absorption-decision status (unprocessed / proposed / confirmed),
+      * or `None` for a transaction or a deposit already ruled invalid. The confirmation moments are
+      * of the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
       */
-    private def depositDecisionStatus(
+    private def depositAbsorptionDecisionStatus(
         id: RequestId,
         request: UserRequestWithId,
         processed: Option[RequestBlockEntry]
-    ): IO[Option[DepositDecisionStatusView]] =
+    ): IO[Option[AbsorptionDecisionStatusView]] =
         val isDeposit = ApiDto.requestTypeName(request) == "deposit"
         val isInvalid = processed.exists(_.validity == RequestId.ValidityFlag.Invalid)
         if !isDeposit || isInvalid then IO.pure(None)
@@ -761,8 +803,8 @@ class HydrozoaRoutes(
                 (softAt, hardAt) = times
                 settlement <- effectsResolver.depositSettlement(id)
             } yield Some(
-              ApiDto.mkDecisionStatus(
-                decided = decision.map(d => (d.block.convert, ApiDto.decisionName(d))),
+              ApiDto.mkAbsorptionDecisionStatus(
+                decided = decision.map(d => (d.block.convert, ApiDto.decisionView(d))),
                 softConfirmedAt = softAt,
                 hardConfirmedAt = hardAt,
                 settlementEffect = settlement.map(_.l1TxId.toHex)
