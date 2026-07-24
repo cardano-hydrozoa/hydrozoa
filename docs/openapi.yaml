@@ -121,6 +121,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RequestDetails'
+              examples:
+                transaction:
+                  summary: A transaction request's details
+                  value:
+                    requestId: 5
+                    peerNumber: 0
+                    receivedAt: '2026-01-01T00:00:00Z'
+                    status:
+                      blockNumber: 12
+                      validity: valid
+                      softConfirmedAt: '2026-01-01T00:00:03Z'
+                      hardConfirmedAt: '2026-01-01T00:02:00Z'
+                      relatedEffects:
+                      - l1TxId: 9f8e7d6c5b4a…
+                        kind: settlement
+                      type: HARD_CONFIRMED
+                    type: transaction
+                deposit:
+                  summary: A deposit request's details
+                  value:
+                    requestId: 1099511627782
+                    peerNumber: 1
+                    receivedAt: '2026-01-01T00:00:00Z'
+                    status:
+                      blockNumber: 8
+                      validity: valid
+                      softConfirmedAt: '2026-01-01T00:00:04Z'
+                      hardConfirmedAt: '2026-01-01T00:03:00Z'
+                      relatedEffects:
+                      - l1TxId: 1a2b3c4d5e6f…
+                        kind: refund
+                      type: HARD_CONFIRMED
+                    absorptionDecisionStatus:
+                      blockNumber: 10
+                      decision: ABSORBED
+                      softConfirmedAt: '2026-01-01T00:01:00Z'
+                      hardConfirmedAt: '2026-01-01T00:04:00Z'
+                      settlementEffect: 4d5e6f7a8b9c…
+                      type: HARD_CONFIRMED
+                    type: deposit
         default:
           description: ''
           content:
