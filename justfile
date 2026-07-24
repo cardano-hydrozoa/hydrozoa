@@ -151,6 +151,25 @@ migrate ADDRESS:
   trap 'just notify "migrate"' EXIT
   sbt "runMain hydrozoa.bootstrap.Migrate {{ADDRESS}}"
 
+# Render the RBR HLPN net to an SVG and open it in a browser. Runs the DOT visualizer test
+# (writes target/rbr-net.dot), renders it with graphviz, then opens it via $BROWSER (else xdg-open).
+graphviz:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  trap 'just notify "graphviz"' EXIT
+  sbt "integration/testOnly hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNetDotTest"
+  # one SVG per transition, gathered into a single scrollable index page
+  for f in target/rbr-net/*.dot; do dot -Tsvg "$f" -o "${f%.dot}.svg"; done
+  {
+    echo "<html><body style='font-family:monospace'><h1>RBR net — per transition</h1>"
+    for f in target/rbr-net/*.svg; do
+      echo "<h3>$(basename "${f%.svg}")</h3><img src='$(basename "$f")'>"
+    done
+    echo "</body></html>"
+  } > target/rbr-net/index.html
+  echo "wrote target/rbr-net/index.html"
+  "${BROWSER:-xdg-open}" target/rbr-net/index.html
+
 integration-fast:
   #!/usr/bin/env bash
   trap 'just notify "integration-fast"' EXIT
