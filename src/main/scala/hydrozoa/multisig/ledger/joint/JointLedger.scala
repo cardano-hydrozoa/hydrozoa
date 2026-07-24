@@ -33,7 +33,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
-import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -666,7 +666,9 @@ final case class JointLedger(
       *     §5.3);
       *   - the L2 ledger's command number reached after this block's L2 commits →
       *     `L2CommandNumber[blockNum]` (recover reads the fast-anchor entry and calls
-      *     `l2Ledger.restoreTo` to co-anchor the committed L2 state, §R2b).
+      *     `l2Ledger.restoreTo` to co-anchor the committed L2 state, §R2b);
+      *   - one request → (block, validity) reverse-index row per event in this block →
+      *     `RequestBlockIndex[requestId]` (keyed by the opaque request id's packed i64).
       *
       * A head peer adds its own `Block` (leader) + `SoftAck` lanes on top
       * ([[persistOwnAckBundle]]); a coil peer persists exactly this subset
@@ -687,11 +689,20 @@ final case class JointLedger(
             // message-at-a-time driver), so its command number now reflects this block; record it
             // so recover can co-anchor the L2 ledger to the fast anchor via restoreTo.
             commandNumber <- l2Ledger.currentCommandNumber
-        } yield WriteBatch.start
-            .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
-            .put(StoreKey.DepositMap)(deposits)
-            .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
-            .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
+        } yield {
+            val bundle = WriteBatch.start
+                .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
+                .put(StoreKey.DepositMap)(deposits)
+                .put(StoreKey.RequestHighWater(brief.blockNum))(highWater)
+                .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
+            // One reverse-index row per event, in the same atomic bundle: the request's id maps
+            // to the block that processed it and the validity verdict it received.
+            brief.events.foldLeft(bundle) { case (batch, (requestId, validity)) =>
+                batch.put(StoreKey.RequestBlockIndex(requestId))(
+                  RequestBlockEntry(brief.blockNum, validity)
+                )
+            }
+        }
 
     /** A head peer's per-block write (CR4 write-before-send): the shared [[snapshotBundleBatch]]
       * plus its own `BlockBrief` → `Block` lane (**leader only** — the BlockLane author for this

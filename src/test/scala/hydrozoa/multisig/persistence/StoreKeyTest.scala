@@ -3,6 +3,7 @@ package hydrozoa.multisig.persistence
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -26,6 +27,9 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
           StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
+          StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
+              Cf.RequestBlockIndex,
+          StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -40,11 +44,23 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.HardConfirmation(StackNumber(123)),
           StoreKey.EvacuationMap(BlockNumber(42)),
           StoreKey.RequestHighWater(BlockNumber(5)),
-          StoreKey.L2CommandNumber(BlockNumber(11))
+          StoreKey.L2CommandNumber(BlockNumber(11)),
+          StoreKey.BlockStackIndex(BlockNumber(3))
         )
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")
         }
+    }
+
+    test("RequestBlockIndex keys encode as the packed-i64 RequestId, author-prefix-ordered") {
+        def key(peer: Int, num: Long) =
+            StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(peer), RequestNumber(num))).encode
+        val _ = assert(key(1, 7).length == 8, s"encoded to ${key(1, 7).length} bytes, expected 8")
+        // Same author: lex order == request-number order (the low bits of the i64).
+        val _ = assert(java.util.Arrays.compareUnsigned(key(1, 1), key(1, 2)) < 0)
+        // Different authors: the author sits in the high bits, so each author's rows stay
+        // contiguous. (1L << 40) - 1 is RequestNumber's maximum — the 40-bit low half.
+        assert(java.util.Arrays.compareUnsigned(key(0, (1L << 40) - 1), key(1, 0)) < 0)
     }
 
     test("singleton snapshot keys all encode to the same empty key") {

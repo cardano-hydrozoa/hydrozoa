@@ -81,6 +81,19 @@ object Cf:
     case object EvacuationMap extends Cf:
         def name = "EvacuationMap"
 
+    /** Request → block reverse index, keyed by the opaque request id (its packed i64) → the block
+      * that locally processed the request plus its validity verdict. Written by JL in the same
+      * atomic bundle as the block.
+      */
+    case object RequestBlockIndex extends Cf:
+        def name = "RequestBlockIndex"
+
+    /** Block → stack reverse index: `blockNum` → the stack that hard-confirmed the block. Written
+      * by SCA in the same atomic batch as the stack's `HardConfirmation`.
+      */
+    case object BlockStackIndex extends Cf:
+        def name = "BlockStackIndex"
+
     /** Store-level metadata (schema version + arrival-stamp generation). */
     case object Meta extends Cf:
         def name = "Meta"
@@ -121,6 +134,8 @@ object Cf:
       DepositMap,
       Treasury,
       EvacuationMap,
+      RequestBlockIndex,
+      BlockStackIndex,
       Meta
     )
 

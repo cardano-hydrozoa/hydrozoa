@@ -150,6 +150,55 @@ class PersistenceTest extends AnyFunSuite:
         )
     }
 
+    test("wallClockOf converts a fresh arrival stamp to about now") {
+        withTypedStore { p =>
+            for
+                before <- IO.realTimeInstant
+                stamp <- p.arrivalStamp
+                wall <- p.wallClockOf(stamp)
+                after <- IO.realTimeInstant
+            yield assert(
+              wall.exists(w =>
+                  !w.isBefore(before.minusSeconds(5)) && !w.isAfter(after.plusSeconds(5))
+              ),
+              s"wallClockOf($stamp) = $wall, expected within [$before, $after]"
+            )
+        }
+    }
+
+    test(
+      "the zero-time anchor persists across re-open, so an old-generation stamp still converts"
+    ) {
+        val tempDir = newTempDir()
+        val tracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
+        try
+            val program = for
+                // First open bumps to a fresh generation and anchors it; take a stamp + conversion.
+                firstOpen <- RocksDbBackendStore
+                    .open(tempDir, testCfs, tracer)
+                    .use(backend =>
+                        Persistence
+                            .fromBackend(backend, tracer)
+                            .flatMap(p => p.arrivalStamp.flatMap(s => p.wallClockOf(s).map(s -> _)))
+                    )
+                (oldStamp, firstWall) = firstOpen
+                // Re-opening bumps to the next generation with its own anchor (each open is a new
+                // generation — a recovery is always a fresh instance). The previous generation's
+                // anchor persists, so its stamp still converts to the same wall clock through the
+                // new instance's per-generation lookup.
+                secondWall <- RocksDbBackendStore
+                    .open(tempDir, testCfs, tracer)
+                    .use(backend =>
+                        Persistence.fromBackend(backend, tracer).flatMap(_.wallClockOf(oldStamp))
+                    )
+            yield assert(
+              firstWall.isDefined && secondWall == firstWall,
+              s"old-generation stamp converted to $firstWall before re-open, $secondWall after"
+            )
+            program.unsafeRunSync()
+        finally recursivelyDelete(tempDir)
+    }
+
     // ---- helpers ----
 
     private def withTypedStore(prog: Persistence[IO] => IO[Assertion]): Assertion =

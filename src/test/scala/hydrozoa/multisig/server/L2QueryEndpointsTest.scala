@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -91,6 +92,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       requestSequencerStub,
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
+                      ConsensusStoreReader.empty,
                       Some(ledger),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
@@ -123,6 +125,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       requestSequencerStub,
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
+                      ConsensusStoreReader.empty,
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

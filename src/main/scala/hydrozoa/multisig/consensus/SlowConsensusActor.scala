@@ -12,8 +12,9 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.HardAck
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackEffects, StackNumber}
-import hydrozoa.multisig.persistence.{Persistence, StoreKey, WriteBatch}
+import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.stack.{PartitionEffects, Stack, StackBrief, StackEffects, StackNumber}
+import hydrozoa.multisig.persistence.{Persistence, StoreKey, Timestamped, WriteBatch}
 
 /** Slow-consensus actor.
   *
@@ -362,7 +363,7 @@ final case class SlowConsensusActor(
         evac = ackAggregator.collectSecSignatures(restricted, secSigners)
         signed <- ackAggregator.attachWitnesses(restricted.unsigned, wmap, evac)
         hardConfirmed = Stack.HardConfirmed(restricted.unsigned.brief, signed)
-        _ <- persistHardConfirmation(stackNum, signed)
+        _ <- persistHardConfirmation(stackNum, restricted.unsigned.brief, signed)
         _ <- conn.cardanoLiaison ! hardConfirmed
         _ <- conn.stackComposer ! hardConfirmed
         _ <- stateRef.update(_.dropCell(stackNum))
@@ -371,8 +372,10 @@ final case class SlowConsensusActor(
 
     /** Persist the full multisigned `HardConfirmation` record for the just-confirmed stack — the §6
       * SCA contract write, and the **R10 evacuation floor** the rule-based regime later reads on
-      * handover (§5.7 / §10 Q6). Issued before the downstream signal so a crash mid- confirmation
-      * can be recovered from disk on next boot.
+      * handover (§5.7 / §10 Q6) — plus one `BlockStackIndex` row per block in the stack's range
+      * (each block maps to the stack that hard-confirmed it), in one atomic batch. The confirmation
+      * value carries this node's local hard-confirmation moment. Issued before the downstream
+      * signal so a crash mid-confirmation can be recovered from disk on next boot.
       *
       * Hard-ack pruning (per §3.3 / §6) is not yet wired here — the typed `WriteBatch` shape for it
       * spans peer-multiplexed satellite keys and is deferred until ack-prune semantics land. The
@@ -380,11 +383,16 @@ final case class SlowConsensusActor(
       */
     private def persistHardConfirmation(
         stackNum: StackNumber,
+        brief: StackBrief,
         signed: StackEffects.HardConfirmed
-    ): IO[Unit] =
-        persistence.write(
-          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(signed)
-        )
+    ): IO[Unit] = for {
+        stamp <- persistence.arrivalStamp
+        blockRange = ((brief.firstBlockNum: Int) to (brief.lastBlockNum: Int)).toList
+        batch = blockRange.foldLeft(
+          WriteBatch.start.put(StoreKey.HardConfirmation(stackNum))(Timestamped(stamp, signed))
+        )((b, n) => b.put(StoreKey.BlockStackIndex(BlockNumber(n)))(stackNum))
+        _ <- persistence.write(batch)
+    } yield ()
 
     /** Choose the witness set for a saturated cell, treating each round independently. Returns the
       * cell restricted to the chosen per-round signers, the union of all signers (whose vkeys the
