@@ -38,6 +38,11 @@ object FinalizationTx {
     export FinalizationTxOps.Error
 
     sealed trait WithPayouts extends FinalizationTx {
+
+        /** How many payout obligations the finalization tx discharges directly — the front
+          * `[0, payoutCount)` of its ordered payout-obligation vector (the merged first rollout's
+          * slice, or all payouts when they fit).
+          */
         def payoutCount: Int
     }
 

@@ -21,7 +21,7 @@ import scalus.cardano.ledger.TransactionHash
   * is keyed by one. A *journal* (the recovery concept: an arrival-stamped, index-ordered
   * append-only replay sequence, §3) is the **subset** of column families reached through
   * [[JournalKey]], which **extends** `StoreKey` (the 6 of those are documented there, not here).
-  * The 15 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
+  * The 16 non-journal CFs — snapshots and key-ordered / `max(key)` reconstruction reads, unstamped
   * and never arrival-merged — are the cases declared in the companion below:
   *
   *   - Spine-indexed metadata CFs (one entry per block / stack): [[StoreKey.BlockResult]] —
@@ -35,8 +35,10 @@ import scalus.cardano.ledger.TransactionHash
   *   - Reverse-index CFs: [[StoreKey.RequestBlockIndex]] — `Cf.RequestBlockIndex`, keyed by the
   *     request id (its packed i64). [[StoreKey.DepositAbsorptionIndex]] —
   *     `Cf.DepositAbsorptionIndex`, keyed by the deposit request's id (its packed i64).
-  *     [[StoreKey.BlockStackIndex]] — `Cf.BlockStackIndex`, keyed by `blockNum`.
-  *     [[StoreKey.EffectStackIndex]] — `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
+  *     [[StoreKey.WithdrawalEffectIndex]] — `Cf.WithdrawalEffectIndex`, keyed by
+  *     `(requestId i64, l1TxId)` (many effects per request). [[StoreKey.BlockStackIndex]] —
+  *     `Cf.BlockStackIndex`, keyed by `blockNum`. [[StoreKey.EffectStackIndex]] —
+  *     `Cf.EffectStackIndex`, keyed by the effect's `l1TxId`.
   *   - Singleton snapshot CFs (one entry total): [[StoreKey.DepositMap]], [[StoreKey.Treasury]],
   *     [[StoreKey.CoilStampMark]] (a hub's per-coil-peer stamped marks, one keyed blob).
   *   - Store-level metadata: [[StoreKey.Meta]] — `Cf.Meta`, name-keyed.
@@ -156,6 +158,17 @@ object StoreKey:
         given codec: StoreCodec[Value] = StoreCodec.fromCirce[Value]
         val cf: Cf = Cf.DepositAbsorptionIndex
         def encode: Array[Byte] = JournalKey.longBytes(id.asI64)
+
+    /** Key for [[Cf.WithdrawalEffectIndex]] — the withdrawal-request → effect reverse index. Both
+      * ids live in the key (`[requestId i64 : 8][l1TxId : 32]`, empty value), so one withdrawing
+      * request maps to many paying effects: a prefix scan by the packed-i64 request id yields every
+      * `l1TxId` (the trailing 32 bytes). Written by SC at stack close.
+      */
+    final case class WithdrawalEffectIndex(id: RequestId, l1TxId: TransactionHash) extends StoreKey:
+        type Value = Array[Byte]
+        given codec: StoreCodec[Value] = StoreCodec.passthrough
+        val cf: Cf = Cf.WithdrawalEffectIndex
+        def encode: Array[Byte] = JournalKey.longBytes(id.asI64) ++ l1TxId.bytes.toArray
 
     /** Key for [[Cf.DepositMap]] — the single blob holding JL's deposits map at `softAcked`. */
     case object DepositMap extends StoreKey:

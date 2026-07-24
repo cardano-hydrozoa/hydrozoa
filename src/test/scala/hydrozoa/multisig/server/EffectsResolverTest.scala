@@ -149,7 +149,13 @@ class EffectsResolverTest extends AnyFunSuite:
                     )
                   )
                 )
-            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] = IO.pure(None)
+            def effectStack(l1TxId: TransactionHash): IO[Option[StackNumber]] =
+                IO.pure(Option.when(l1TxId == secId)(StackNumber(1)))
+            // The transaction's withdrawal is paid by an effect in stack 1 — here, reusing the SEC
+            // id so it resolves via the same fixture; it coincides with the tx's carrier, exercising
+            // the union + dedup. (Positive settlement/rollout payers are stage-suite-covered.)
+            def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] =
+                IO.pure(if id == txRequestId then List(secId) else Nil)
             def requestsOf(peer: HeadPeerNumber): IO[List[Timestamped[UserRequestWithId]]] =
                 IO.pure(Nil)
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] =

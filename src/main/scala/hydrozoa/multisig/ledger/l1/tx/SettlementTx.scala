@@ -47,6 +47,11 @@ object SettlementTx {
     export SettlementTxOps.Error
 
     sealed trait WithPayouts extends SettlementTx {
+
+        /** How many payout obligations the settlement tx discharges directly — the front
+          * `[0, payoutCount)` of its ordered payout-obligation vector (the merged first rollout's
+          * slice, or all payouts when they fit).
+          */
         def payoutCount: Int
     }
 

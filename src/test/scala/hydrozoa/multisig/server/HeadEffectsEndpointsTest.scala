@@ -152,6 +152,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                   )
                 )
             def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
             def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
 
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =

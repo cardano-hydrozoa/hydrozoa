@@ -134,6 +134,11 @@ object StoreDump:
                 if key.length == 8 then
                     s"DepositAbsorptionIndex(i64=${ByteBuffer.wrap(key).getLong})"
                 else hex(key)
+            case Cf.WithdrawalEffectIndex =>
+                if key.length == 40 then
+                    s"WithdrawalEffectIndex(i64=${ByteBuffer.wrap(key, 0, 8).getLong}, " +
+                        s"l1TxId=${hex(key.drop(8))})"
+                else hex(key)
             case Cf.EffectStackIndex =>
                 s"EffectStackIndex(${hex(key)})"
             case Cf.DepositMap | Cf.Treasury | Cf.CoilStampMark =>
