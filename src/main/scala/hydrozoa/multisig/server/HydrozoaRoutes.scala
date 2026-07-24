@@ -80,7 +80,25 @@ class HydrozoaRoutes(
             .in("head" / "requests")
             .name("postHeadRequest")
             .tag("Requests")
-            .in(jsonBody[SubmitRequestView])
+            .in(
+              // Explicit examples so Swagger UI shows a copy-pasteable body *including* the `type`
+              // discriminator — its auto-generated examples omit the discriminator property, which
+              // for this (internally-tagged) input would produce a 400.
+              jsonBody[SubmitRequestView].examples(
+                List(
+                  EndpointIO.Example.of(
+                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…"),
+                    name = Some("transaction"),
+                    summary = Some("Submit an L2 transaction")
+                  ),
+                  EndpointIO.Example.of(
+                    SubmitRequestView.SubmitDepositView("84a400d9010281825820…", "a1024568656164…"),
+                    name = Some("deposit"),
+                    summary = Some("Register an L1 deposit")
+                  )
+                )
+              )
+            )
             .out(jsonBody[RequestAcceptedResponse])
             .errorOut(errorOut)
             .description(
