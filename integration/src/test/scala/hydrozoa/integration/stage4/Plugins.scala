@@ -109,9 +109,9 @@ private[stage4] object Stage4Plugins {
                         perPeer.state(p).blockBriefs.get.map { briefs =>
                             val seen = briefs
                                 .flatMap(br =>
-                                    br.events.map(_._1) ++
+                                    br.requests.map(_._1) ++
                                         br.depositsAbsorbed ++
-                                        br.depositsRefunded
+                                        br.depositsRejected
                                 )
                                 .toSet
                             Option.when(submitted.forall(seen.contains))(())

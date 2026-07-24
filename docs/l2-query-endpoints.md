@@ -2,7 +2,7 @@
 
 The user-facing HTTP server (`multisig/server/HydrozoaServer.scala`) exposes two read-only `GET`
 endpoints for inspecting the L2 ledger's current state and recent activity. They are the
-read counterpart to the existing write path (`POST /head/tx`, `POST /head/deposit`).
+read counterpart to the existing write path (`POST /head/requests`).
 
 | | `GET /l2/cardano-eutxo/utxos/{address}` | `GET /l2/cardano-eutxo/transactions` |
 |---|---|---|

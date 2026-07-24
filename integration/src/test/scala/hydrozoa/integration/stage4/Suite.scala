@@ -203,7 +203,7 @@ case class Stage4Suite(
                              .map(_.flatten)
             seen       = allBriefs
                              .flatMap(br =>
-                                 br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
+                                 br.requests.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRejected
                              )
                              .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
@@ -527,7 +527,7 @@ case class Stage4Suite(
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
-    // `JointLedger.rejectEvent` records every rejection as `(reqId, ValidityFlag.Invalid)` in
+    // `JointLedger.invalidateRequest` records every rejection as `(reqId, ValidityFlag.Invalid)` in
     // the in-progress block, so propLiveness sees the request landed in a brief — it cannot
     // distinguish:
     //   1. Reordering-induced ledger errors (e.g. `BadAllInputsUTxOException`) — legitimate
@@ -540,7 +540,7 @@ case class Stage4Suite(
     //
     // Plan:
     //   - Add `Stage4Sut.rejections: Ref[IO, Vector[(RequestId, UserRequestError | L1/L2 err)]]`
-    //     populated from a tracer hook in `JointLedger.rejectEvent` (one entry per rejection,
+    //     populated from a tracer hook in `JointLedger.invalidateRequest` (one entry per rejection,
     //     across all peers).
     //   - Add `propNoStaleRejections`: assert no `BlockOutOfRequestValidityInterval` rejections
     //     occurred. Other rejection types are informational only (printed in the analysis
@@ -559,7 +559,7 @@ case class Stage4Suite(
     ): Prop = {
         val processedIds: Set[RequestId] =
             canonicalBriefs
-                .flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded)
+                .flatMap(b => b.requests.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRejected)
                 .toSet
         val missing = submittedIds.toSet -- processedIds
         Prop(missing.isEmpty) :|
@@ -592,8 +592,8 @@ case class Stage4Suite(
       * permissive than the model. Compared as exact rationals via cross-multiplication.
       *
       * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go into
-      * `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit registration
-      * ends up in `events` via `JointLedger.rejectEvent` and would otherwise inflate the SUT total
+      * `depositsAbsorbed` / `depositsRejected` on the SUT side, but a rejected deposit registration
+      * ends up in `requests` via `JointLedger.invalidateRequest` and would otherwise inflate the SUT total
       * relative to the model.
       */
     private def propValidRatio(
@@ -605,7 +605,7 @@ case class Stage4Suite(
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
         val modelTotal = l2TxReqIds.size.toLong
         val sutL2Events =
-            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
         val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
         val sutTotal = sutL2Events.size.toLong
 
@@ -670,14 +670,14 @@ case class Stage4Suite(
             val vMaj = brief.blockVersion.major.convert
             val vMin = brief.blockVersion.minor.convert
             val leader = (brief.blockNum: Int) % nPeers
-            val evs = brief.events.map { case (reqId, flag) =>
+            val evs = brief.requests.map { case (reqId, flag) =>
                 val f = if flag == ValidityFlag.Valid then "V" else "I"
                 s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
             }
             val abs = brief.depositsAbsorbed.map(r =>
                 s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
-            val ref = brief.depositsRefunded.map(r =>
+            val ref = brief.depositsRejected.map(r =>
                 s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
             )
             val events = (evs ++ abs ++ ref).mkString(" ")
@@ -688,7 +688,7 @@ case class Stage4Suite(
 
         // SUT processing order — each block contributes its absorbed deposits, then its events.
         val sutOrder: Vector[RequestId] =
-            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
+            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.requests.map(_._1)).toVector
         val commonPrefixLen =
             submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
 
@@ -697,7 +697,7 @@ case class Stage4Suite(
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
         val modelTotal = l2TxReqIds.size
         val sutL2Events =
-            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
         val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
         val sutTotal = sutL2Events.size
 

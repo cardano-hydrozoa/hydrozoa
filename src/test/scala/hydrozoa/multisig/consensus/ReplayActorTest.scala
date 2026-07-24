@@ -397,7 +397,7 @@ class ReplayActorTest extends AnyFunSuite:
                     headConfig.txTiming.forcedMajorBlockWakeupTime(fallback),
                 mDepositDecisionWakeupTime = None
               ),
-              BlockBody.Minor(events = List.empty, depositsRefunded = List.empty)
+              BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
             )
         }
 

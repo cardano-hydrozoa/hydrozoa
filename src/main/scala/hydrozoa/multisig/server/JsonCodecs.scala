@@ -172,7 +172,7 @@ object JsonCodecs {
             case L2TxKind.Transaction       => "transaction"
             case L2TxKind.DepositRegistered => "depositRegistered"
             case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
-            case L2TxKind.DepositRefunded   => "depositRefunded"
+            case L2TxKind.DepositRejected   => "depositRejected"
         }
 
     given l2TxSummaryEncoder: Encoder[L2TxSummary] =

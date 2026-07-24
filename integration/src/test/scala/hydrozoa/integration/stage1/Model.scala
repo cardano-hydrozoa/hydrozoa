@@ -524,9 +524,9 @@ object Model:
                     mDepositDecisionWakeupTime = newDepositDecisionWakeupTime
                   ),
                   body = BlockBody.Major(
-                    events = events,
+                    requests = events,
                     depositsAbsorbed = absorbedThisBlock.map(_.cmd.request.requestId).toList,
-                    depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                    depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
                   )
                 )
 
@@ -563,8 +563,8 @@ object Model:
                 mDepositDecisionWakeupTime = mDepositDecisionWakeupTime
               ),
               body = BlockBody.Minor(
-                events = events,
-                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                requests = events,
+                depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
         } yield minorBlock
@@ -587,8 +587,8 @@ object Model:
                 endTime = blockEndTime,
               ),
               body = BlockBody.Final(
-                events = events,
-                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                requests = events,
+                depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
         } yield finalBlock

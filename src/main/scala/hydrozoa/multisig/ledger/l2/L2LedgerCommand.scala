@@ -122,7 +122,7 @@ object L2LedgerCommand {
         blockNumber: BlockNumber,
         blockCreationEndTime: PosixTime,
         absorbedDeposits: List[RequestId],
-        refundedDeposits: List[RequestId]
+        rejectedDeposits: List[RequestId]
     ) extends L2LedgerCommand.Real
 
     object ApplyDepositDecisions {
