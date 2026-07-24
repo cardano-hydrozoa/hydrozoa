@@ -119,16 +119,18 @@ just stage             # -> target/universal/stage/bin/hydrozoa
 ```
 
 Docker image (used by the composition in §4, and the only thing non-Nix users need — its entrypoint
-is the same `hydrozoa` CLI, so `docker run … <subcommand>` runs any command):
+is the same `hydrozoa` CLI, so `docker run … <subcommand>` runs any command). Pull the published
+image, or build it locally:
 
 ```bash
-sbt docker:publishLocal
-# -> cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT
+docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0   # published on each release (RELEASE.md)
+just docker-image                                     # or build locally -> cardano-hydrozoa/hydrozoa:0.1.0
 #    base eclipse-temurin:25-jre, EXPOSE 8080
 #    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
 ```
 
-There is no publish/deploy CI — GitHub Actions runs checks only.
+Pushing a `v*` tag publishes the image to ghcr (`.github/workflows/release.yml`, RELEASE.md);
+ordinary pushes and PRs run checks only.
 
 ---
 
@@ -333,7 +335,7 @@ At this point every node has its two files, and the composition (§4) mounts
 
 - Config mounts come from `${HYDROZOA_CONFIG:-./config/demo}`: the shared `head-config.json` plus
   `head-N/private.json` or `coil-N/private.json` per node. `${HYDROZOA_IMAGE}` overrides the
-  hydrozoa image (default `cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT`).
+  hydrozoa image (default `cardano-hydrozoa/hydrozoa:0.1.0`).
 
 Caveats:
 - **State is ephemeral.** No data volumes are mounted (only read-only config bind mounts), so both
@@ -351,7 +353,7 @@ Caveats:
 ### Bringing up the head
 
 ```bash
-sbt docker:publishLocal        # hydrozoa image (once, after code changes)
+just docker-image              # build the hydrozoa image locally (once, after code changes)
 docker compose up -d
 ```
 

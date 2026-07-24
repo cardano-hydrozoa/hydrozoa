@@ -68,6 +68,18 @@ _require-launcher:
     exit 1
   fi
 
+# Build the hydrozoa Docker image locally (cardano-hydrozoa/hydrozoa:<version>); publish via RELEASE.md.
+docker-image:
+  #!/usr/bin/env bash
+  trap 'just notify "docker-image"' EXIT
+  sbt Docker/publishLocal
+
+# Write the Docker build context to target/docker/stage without building it (what the release workflow builds).
+docker-stage:
+  #!/usr/bin/env bash
+  trap 'just notify "docker-stage"' EXIT
+  sbt Docker/stage
+
 # Generate a whole head's keys + configs into the config layout:
 #   OUTDIR/bootstrap/{roster.json, defaults.json, l2-cardano-eutxo.json}
 #   OUTDIR/private/{head,coil}-N/private.json
