@@ -211,15 +211,22 @@ ThisBuild / scalacOptions ++= Seq(
 addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
 // Custom commands to format and lint all subprojects
-// TODO: Restore integration module to fmt and lint
-//addCommandAlias("fmtAll", ";core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll")
-//addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
-//addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
-//addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
-addCommandAlias("fmtAll", ";core/scalafmtAll ;examples/scalafmtAll")
-addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;examples/scalafmtCheckAll")
-addCommandAlias("lintAll", ";core/scalafixAll ;examples/scalafixAll")
-addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;examples/scalafixAll --check")
+addCommandAlias(
+  "fmtAll",
+  ";core/scalafmtAll ;examples/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll"
+)
+addCommandAlias(
+  "fmtCheckAll",
+  ";core/scalafmtCheckAll ;examples/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll"
+)
+addCommandAlias(
+  "lintAll",
+  ";core/scalafixAll ;examples/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
+)
+addCommandAlias(
+  "lintCheckAll",
+  ";core/scalafixAll --check ;examples/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
+)
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")

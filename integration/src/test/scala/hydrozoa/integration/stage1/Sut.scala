@@ -228,9 +228,7 @@ object SutCommands:
                     val id = cmd.request.requestId
                     val tx = cmd.depositTxBytesSigned
 
-                    sut.cardanoBackend.submitTx(RawTx(tx)) >>= (ret =>
-                        IO.pure((id, tx) -> ret)
-                    )
+                    sut.cardanoBackend.submitTx(RawTx(tx)) >>= (ret => IO.pure((id, tx) -> ret))
                 })
 
                 submissionErrors = ret.filter(_._2.isLeft)

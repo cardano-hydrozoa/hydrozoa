@@ -30,7 +30,9 @@ trait ModelCommand[Cmd, Result, State] {
     /** Returns the result and the new [[State]] after this command has run. The effect monad [[M]]
       * and tracer are supplied by the caller.
       */
-    def runState[M[_]: MonadThrow](cmd: Cmd)(using ContraTracer[M, Slf4jMsg]): StateT[M, State, Result]
+    def runState[M[_]: MonadThrow](cmd: Cmd)(using
+        ContraTracer[M, Slf4jMsg]
+    ): StateT[M, State, Result]
 
     /** Precondition that decides if this command is allowed to run when the model is in the
       * provided state.
@@ -110,8 +112,8 @@ trait CommandLabel[Cmd]:
 // AdvanceState — rank-2 state-advance function
 // ===================================
 
-/** Rank-2 advance-state function: the caller supplies the effect monad [[M]] and a matching
-  * tracer at use time.
+/** Rank-2 advance-state function: the caller supplies the effect monad [[M]] and a matching tracer
+  * at use time.
   */
 trait AdvanceState[State]:
     def apply[M[_]: MonadThrow](state: State)(using ContraTracer[M, Slf4jMsg]): M[State]
@@ -158,14 +160,16 @@ object AnyCommand {
           preCondition = state => mc.preCondition(cmd, state),
           advanceState = new AdvanceState[State]:
               def apply[M[_]: MonadThrow](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
-                  mc.runState[M](cmd).runS(s),
+                  mc.runState[M](cmd).runS(s)
+          ,
           delay = mc.delay(cmd),
           runPC = (sut, tracer) =>
               given ContraTracer[IO, Slf4jMsg] = tracer
               sc.run(cmd, sut).attempt.map { r => (s: State) =>
                   if mc.preCondition(cmd, s) then cp.postCondition[IO](cmd, s, r)
                   else IO.pure(Prop.passed)
-              },
+              }
+          ,
           repr = cmd.toString,
           label = cl.label(cmd)
         )
@@ -181,7 +185,8 @@ def noOp[State, Sut]: AnyCommand[State, Sut] =
       preCondition = _ => true,
       advanceState = new AdvanceState[State]:
           def apply[M[_]: MonadThrow](s: State)(using ContraTracer[M, Slf4jMsg]): M[State] =
-              MonadThrow[M].pure(s),
+              MonadThrow[M].pure(s)
+      ,
       delay = Duration.Zero,
       runPC = (_, _) => IO.pure(_ => IO.pure(Prop.passed)),
       repr = "NoOp",
@@ -350,37 +355,37 @@ trait ModelBasedSuite {
         PropertyM.monadicIO {
             for {
                 testCase <- genTestCase
-                prop     <- PropertyM.run {
+                prop <- PropertyM.run {
                     for {
                         _ <- log.info(
-                               "\n\n\n\n\n\n\n\n ---------------------------------------------- " +
-                                   "Executing the next test case..."
-                             )
+                          "\n\n\n\n\n\n\n\n ---------------------------------------------- " +
+                              "Executing the next test case..."
+                        )
                         sutId <- IO {
-                                     suts.synchronized {
-                                         if canStartupNewSut() then {
-                                             val sutId = new AnyRef
-                                             suts += (sutId -> None)
-                                             Some(sutId)
-                                         } else None
-                                     }
-                                 }
+                            suts.synchronized {
+                                if canStartupNewSut() then {
+                                    val sutId = new AnyRef
+                                    suts += (sutId -> None)
+                                    Some(sutId)
+                                } else None
+                            }
+                        }
                         prop <- sutId match {
-                                    case Some(id) =>
-                                        if suts.contains(id) then {
-                                            val _ = suts.put(id, Some(sutResource))
-                                            runTestCase(testCase, sutResource)
-                                                .handleErrorWith { e =>
-                                                    IO(suts.synchronized(suts.clear())) >>
-                                                        IO.raiseError(e)
-                                                }
-                                        } else
-                                            log.error("WARNING: you should never see that")
-                                                .as(Prop.undecided)
-                                    case None =>
-                                        log.error("WARNING: you should never see that")
-                                            .as(Prop.undecided)
-                                }
+                            case Some(id) =>
+                                if suts.contains(id) then {
+                                    val _ = suts.put(id, Some(sutResource))
+                                    runTestCase(testCase, sutResource)
+                                        .handleErrorWith { e =>
+                                            IO(suts.synchronized(suts.clear())) >>
+                                                IO.raiseError(e)
+                                        }
+                                } else
+                                    log.error("WARNING: you should never see that")
+                                        .as(Prop.undecided)
+                            case None =>
+                                log.error("WARNING: you should never see that")
+                                    .as(Prop.undecided)
+                        }
                     } yield prop
                 }
             } yield prop
@@ -409,35 +414,36 @@ trait ModelBasedSuite {
         import Gen.sized
 
         def sizedCmds(initialState: State)(size: Int): PropertyM[IO, (State, Commands)] =
-            List.fill(size)(()).foldLeft[PropertyM[IO, (State, Commands)]](
-              run(IO.pure((initialState, Nil: Commands)))
-            ) { (pm, _) =>
-                for {
-                    sc       <- pm
-                    (s0, cs) = sc
-                    c        <- scenarioGen.genNextCommand(s0)
-                    s1       <- run(c.advanceState[IO](s0))
-                } yield (s1, cs :+ c)
-            }
+            List.fill(size)(())
+                .foldLeft[PropertyM[IO, (State, Commands)]](
+                  run(IO.pure((initialState, Nil: Commands)))
+                ) { (pm, _) =>
+                    for {
+                        sc <- pm
+                        (s0, cs) = sc
+                        c <- scenarioGen.genNextCommand(s0)
+                        s1 <- run(c.advanceState[IO](s0))
+                    } yield (s1, cs :+ c)
+                }
 
         def cmdsPrecond(s: State, cmds: Commands): IO[Boolean] = cmds match {
-            case Nil                          => IO.pure(true)
+            case Nil => IO.pure(true)
             case c :: cs if c.preCondition(s) =>
                 c.advanceState[IO](s).flatMap(s1 => cmdsPrecond(s1, cs))
-            case _                            => IO.pure(false)
+            case _ => IO.pure(false)
         }
 
         for {
-            env             <- initEnv
-            s0              <- genInitialState(env)
-            n               <- pick[IO, Int](commandGenTweaker[Int](sized(n => Gen.const(n))))
-            sc              <- sizedCmds(s0)(n)
-            (s, seqCmds)    = sc
-            tc               = TestCase(s0, seqCmds)
-            _               <- pre[IO](initialStatePreCondition(tc.initialState))
-            precondMet      <- run(cmdsPrecond(tc.initialState, tc.commands))
-            _               <- pre[IO](precondMet)
-            _               <- pre[IO](scenarioGen.targetStatePrecondition(s))
+            env <- initEnv
+            s0 <- genInitialState(env)
+            n <- pick[IO, Int](commandGenTweaker[Int](sized(n => Gen.const(n))))
+            sc <- sizedCmds(s0)(n)
+            (s, seqCmds) = sc
+            tc = TestCase(s0, seqCmds)
+            _ <- pre[IO](initialStatePreCondition(tc.initialState))
+            precondMet <- run(cmdsPrecond(tc.initialState, tc.commands))
+            _ <- pre[IO](precondMet)
+            _ <- pre[IO](scenarioGen.targetStatePrecondition(s))
         } yield tc
     }
 
@@ -456,15 +462,16 @@ trait ModelBasedSuite {
             else runCommandsPlain(testCase, sutResource)
         (_, prop, s, lastCmd, _) = result
         r = prop.apply(Gen.Parameters.default)
-        _ <- if r.failure then
-                 log.warn(
-                   "Property is falsified (see the labels down below). Additional information: \n" +
-                       s"Initial state:\n  ${testCase.initialState}\n" +
-                       s"Last state:\n  ${s}\n" +
-                       s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, lastCmd)}\n" +
-                       s"Last executed command: $lastCmd"
-                 )
-             else IO(ModelBasedSuite.recordTestCase(testCase.commands.map(_.label)))
+        _ <-
+            if r.failure then
+                log.warn(
+                  "Property is falsified (see the labels down below). Additional information: \n" +
+                      s"Initial state:\n  ${testCase.initialState}\n" +
+                      s"Last state:\n  ${s}\n" +
+                      s"Sequential Commands:\n${prettyCmdsRes(testCase.commands, lastCmd)}\n" +
+                      s"Last executed command: $lastCmd"
+                )
+            else IO(ModelBasedSuite.recordTestCase(testCase.commands.map(_.label)))
     } yield prop :| "Property failed, see the log above for details"
 
     private def prettyCmdsRes(rs: List[AnyCommand[State, Sut]], lastCmd: Int) = {
@@ -501,34 +508,35 @@ trait ModelBasedSuite {
         testCase: TestCase,
         sutResource: State => Resource[IO, Sut]
     ): IO[(Sut, Prop, State, Int, TestCase)] = for {
-        _      <- log.debug("Using plain IO to run the test case...")
+        _ <- log.debug("Using plain IO to run the test case...")
         result <- sutResource(testCase.initialState).use { sut =>
-                      val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
-                      for {
-                          result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                                        acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
-                                            if hasFailed then IO.pure((sut, p, s, lastCmd, true))
-                                            else for {
-                                                _        <- IO.sleep(c.delay)
-                                                // Predicate evaluation re-runs the model-side
-                                                // runState internally; advanceState walks the
-                                                // model forward. Silence model-side logs from
-                                                // both — they would duplicate the per-command
-                                                // logs already emitted by the SUT side.
-                                                pred     <- c.runPC(sut, ContraTracer.nullTracer)
-                                                pp       <- pred(s)
-                                                newState <- c.advanceState[IO](s)(using
-                                                                MonadThrow[IO],
-                                                                ContraTracer.nullTracer
-                                                            )
-                                                predResult = pp.apply(Gen.Parameters.default)
-                                            } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
-                                        }
-                                    }
-                          (sut, prop, s, lastCmd, _) = result
-                          beforeFinalizeProp <- beforeFinalize(s, sut)
-                      } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
-                  }
+            val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
+            for {
+                result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
+                    acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
+                        if hasFailed then IO.pure((sut, p, s, lastCmd, true))
+                        else
+                            for {
+                                _ <- IO.sleep(c.delay)
+                                // Predicate evaluation re-runs the model-side
+                                // runState internally; advanceState walks the
+                                // model forward. Silence model-side logs from
+                                // both — they would duplicate the per-command
+                                // logs already emitted by the SUT side.
+                                pred <- c.runPC(sut, ContraTracer.nullTracer)
+                                pp <- pred(s)
+                                newState <- c.advanceState[IO](s)(using
+                                  MonadThrow[IO],
+                                  ContraTracer.nullTracer
+                                )
+                                predResult = pp.apply(Gen.Parameters.default)
+                            } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
+                    }
+                }
+                (sut, prop, s, lastCmd, _) = result
+                beforeFinalizeProp <- beforeFinalize(s, sut)
+            } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
+        }
     } yield result
 
     /** [[TestControl]]-based execution. Command delays are advanced via the virtual clock, allowing
@@ -577,34 +585,35 @@ trait ModelBasedSuite {
                 val initial = (sut, Prop.proved: Prop, testCase.initialState, 0, false)
                 for {
                     result <- testCase.commands.foldLeft(IO.pure(initial)) { case (acc, c) =>
-                                  acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
-                                      if hasFailed then IO.pure((sut, p, s, lastCmd, true))
-                                      else for {
-                                          gate     <- Deferred[IO, Unit]
-                                          _        <- IO(pendingDelay.set(Some((c.delay, gate))))
-                                          _        <- log.info("Suspend on the gate...")
-                                          _        <- gate.get
-                                          _        <- log.info("Running the command...")
-                                          // Silence model-side logs from predicate evaluation +
-                                          // state advancement — see runCommandsPlain for the
-                                          // rationale.
-                                          predFn   <- c.runPC(sut, ContraTracer.nullTracer)
-                                          pp       <- predFn(s)
-                                          newState <- c.advanceState[IO](s)(using
-                                                          MonadThrow[IO],
-                                                          ContraTracer.nullTracer
-                                                      )
-                                          predResult = pp.apply(Gen.Parameters.default)
-                                      } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
-                                  }
-                              }
+                        acc.flatMap { case (sut, p, s, lastCmd, hasFailed) =>
+                            if hasFailed then IO.pure((sut, p, s, lastCmd, true))
+                            else
+                                for {
+                                    gate <- Deferred[IO, Unit]
+                                    _ <- IO(pendingDelay.set(Some((c.delay, gate))))
+                                    _ <- log.info("Suspend on the gate...")
+                                    _ <- gate.get
+                                    _ <- log.info("Running the command...")
+                                    // Silence model-side logs from predicate evaluation +
+                                    // state advancement — see runCommandsPlain for the
+                                    // rationale.
+                                    predFn <- c.runPC(sut, ContraTracer.nullTracer)
+                                    pp <- predFn(s)
+                                    newState <- c.advanceState[IO](s)(using
+                                      MonadThrow[IO],
+                                      ContraTracer.nullTracer
+                                    )
+                                    predResult = pp.apply(Gen.Parameters.default)
+                                } yield (sut, p && pp, newState, lastCmd + 1, predResult.failure)
+                        }
+                    }
                     (sut, prop, s, lastCmd, _) = result
                     // Sentinel: signal outer that all commands are done before entering shutdownSut.
                     // shutdownSut calls waitForIdle → IO.sleep, which needs nextInterval advances.
                     // The sentinel lets the outer switch from tickUntil (strict) to tickUntilAdvancing.
                     shutdownGate <- Deferred[IO, Unit]
-                    _            <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
-                    _            <- shutdownGate.get
+                    _ <- IO(pendingDelay.set(Some((Duration.Zero, shutdownGate))))
+                    _ <- shutdownGate.get
                     beforeFinalizeProp <- beforeFinalize(s, sut)
                 } yield (sut, prop && beforeFinalizeProp, s, lastCmd, testCase)
             }
@@ -686,12 +695,12 @@ trait ModelBasedSuite {
 
             // 10. Extract the result
             result <- tc.results
-            days   <- IO {
-                          val nanos = totalAdvanced.get
-                          ModelBasedSuite.addSimulatedNanos(nanos)
-                          nanos / 86_400_000_000_000L
-                      }
-            _      <- log.info(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
+            days <- IO {
+                val nanos = totalAdvanced.get
+                ModelBasedSuite.addSimulatedNanos(nanos)
+                nanos / 86_400_000_000_000L
+            }
+            _ <- log.info(s"---- TC ---- seed: ${tc.seed}  simulated: ${days} days")
         } yield result match {
             case Some(cats.effect.Outcome.Succeeded(value)) => value
             case Some(cats.effect.Outcome.Errored(e))       => throw e

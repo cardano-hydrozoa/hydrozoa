@@ -41,8 +41,8 @@ final class Signal[T] private (
     def await: IO[T] = signal.get
 
     /** Manually fire the signal once. Used when the test detects the condition outside the
-      * predicate path (e.g. at arming time the condition is already met and no future event
-      * would re-trigger the predicate).
+      * predicate path (e.g. at arming time the condition is already met and no future event would
+      * re-trigger the predicate).
       */
     def complete(value: T): IO[Unit] = signal.complete(value).void
 

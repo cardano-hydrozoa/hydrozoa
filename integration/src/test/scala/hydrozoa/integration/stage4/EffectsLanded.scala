@@ -12,16 +12,15 @@ import scalus.cardano.ledger.TransactionHash
 /** Stage4 "effects landed" assertion: every backbone tx the slow cycle produced (settlement /
   * finalization / init plus dependent rollouts) lands on L1.
   *
-  * Backend-agnostic via [[CardanoBackend.isTxKnown]]. Rule-based fallback is out of scope — see
-  * the package docstring; the suite-level fallback signal fails the test before this property
-  * runs.
+  * Backend-agnostic via [[CardanoBackend.isTxKnown]]. Rule-based fallback is out of scope — see the
+  * package docstring; the suite-level fallback signal fails the test before this property runs.
   *
-  * == Out of scope ==
+  * ==Out of scope==
   *
   *   - Refunds: user-submitted, not produced by `CardanoLiaison`.
   *   - Standalone evac commitments: header signatures, not L1 txs.
-  *   - Strong (model-predicted) backbone: this only verifies what the slow cycle produced
-  *     landed; it cannot catch "the slow side never produced an expected settlement".
+  *   - Strong (model-predicted) backbone: this only verifies what the slow cycle produced landed;
+  *     it cannot catch "the slow side never produced an expected settlement".
   */
 object EffectsLanded {
 
@@ -174,8 +173,8 @@ object EffectsLanded {
     ): IO[Unit] =
         log.info(renderEffectsTable(results))
 
-    /** Build the property directly from observed stacks + backend. Vacuous when the observed
-      * stack list is empty — [[Stage4Suite.propStackCoverage]] catches that case, not this one.
+    /** Build the property directly from observed stacks + backend. Vacuous when the observed stack
+      * list is empty — [[Stage4Suite.propStackCoverage]] catches that case, not this one.
       */
     def propEffectsLanded(
         stacks: Seq[Stack.HardConfirmed],
