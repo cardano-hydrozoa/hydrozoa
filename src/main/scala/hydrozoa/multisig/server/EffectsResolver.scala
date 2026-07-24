@@ -104,13 +104,27 @@ final class EffectsResolver(reader: ConsensusStoreReader[IO]):
 
     /** A transaction's carriers: the effects of its inclusion-block partition. */
     private def transactionEffects(requestId: RequestId): IO[List[ResolvedEffect]] =
-        reader.requestBlock(requestId).flatMap {
-            case None => IO.pure(Nil)
-            case Some(entry) =>
-                partitionForBlock(entry.blockNum).map {
-                    case None                  => Nil
-                    case Some((blockNums, pe)) => carrierEffects(blockNums.head, pe)
-                }
+        // The carriers of the tx's inclusion-block partition (its SEC / settlement / finalization),
+        val carriers: IO[List[ResolvedEffect]] =
+            reader.requestBlock(requestId).flatMap {
+                case None => IO.pure(Nil)
+                case Some(entry) =>
+                    partitionForBlock(entry.blockNum).map {
+                        case None                  => Nil
+                        case Some((blockNums, pe)) => carrierEffects(blockNums.head, pe)
+                    }
+            }
+        // plus the effect txs that pay this request's L1-bound withdrawals — settlement / rollout(s)
+        // / finalization, which may live in a later stack than the tx's inclusion block. Resolved
+        // from the stored withdrawal index (no forward-walk over stacks needed).
+        val withdrawals: IO[List[ResolvedEffect]] =
+            reader
+                .withdrawalEffects(requestId)
+                .flatMap(_.traverse(effectById))
+                .map(_.flatten)
+        (carriers, withdrawals).mapN { (cs, ws) =>
+            // A withdrawal's settlement is also a carrier when settled in the same partition; dedup.
+            (cs ++ ws).distinctBy(_.l1TxId)
         }
 
     /** A deposit's effects: its post-dated refund (registration-block partition) and, once

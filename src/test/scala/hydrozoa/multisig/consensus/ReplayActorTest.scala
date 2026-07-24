@@ -436,6 +436,7 @@ class ReplayActorTest extends AnyFunSuite:
           brief = brief,
           evacuationMapDiff = Nil,
           payoutObligations = Nil,
+          payoutRequestIds = Nil,
           postDatedRefundTxs = Nil,
           absorbedDeposits = Nil,
           competingFallbackTxTime =
