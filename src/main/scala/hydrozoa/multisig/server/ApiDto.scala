@@ -709,21 +709,50 @@ object ApiDto {
     )
     given Codec[BlockEffectsView] = deriveCodec
 
-    /** One L1 effect in full. Every effect has an `l1TxId`, `kind`, and `blockNumber`. A real tx
-      * effect carries its `txCbor` (hex); a standalone evacuation commitment (kind `sec`) carries
-      * its serialized on-chain bytes (whose hash is the synthetic `l1TxId`) and the hard-ack
-      * signatures split into `headSignatures` then `coilSignatures`.
+    /** An L1 effect in full, `type`-tagged by kind — the `GET /head/effects/{l1TxId}` response. Its
+      * `l1TxId` is the queried path, so it is not echoed. Each real-tx kind carries its `txCbor`
+      * (hex); `sec` (a standalone evacuation commitment, whose synthetic hash is that l1TxId)
+      * carries its serialized on-chain bytes and the hard-ack signatures split `headSignatures`
+      * then `coilSignatures`.
       */
-    final case class EffectView(
+    sealed trait EffectView
+    object EffectView:
+        private given CirceConfig = circeTag(kindTag)
+        private given TapirConfig = tapirTag(kindTag)
+
+        final case class InitializationView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class SettlementView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class FallbackView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class RolloutView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class FinalizationView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class RefundView(blockNumber: Int, txCbor: String) extends EffectView
+        final case class SecView(
+            blockNumber: Int,
+            secOnchainSerialized: String,
+            headSignatures: List[String],
+            coilSignatures: List[String]
+        ) extends EffectView
+        given Codec[EffectView] = ConfiguredCodec.derived
+        given Schema[EffectView] = Schema.derived
+
+    /** A real-tx effect at a path-fixed kind — the block-scoped by-kind endpoints' response (the
+      * kind is the path, so it is not discriminated). Carries its `l1TxId` and `txCbor` (hex).
+      */
+    final case class TxEffectView(l1TxId: String, blockNumber: Int, txCbor: String)
+    given Codec[TxEffectView] = deriveCodec
+
+    /** A standalone evacuation commitment (SEC) effect — the block-scoped `sec` endpoint's
+      * response. Carries its `l1TxId` (the synthetic hash), on-chain bytes, and split hard-ack
+      * signatures.
+      */
+    final case class SecEffectView(
         l1TxId: String,
-        kind: EffectKindView,
         blockNumber: Int,
-        txCbor: Option[String],
-        secOnchainSerialized: Option[String],
-        headSignatures: Option[List[String]],
-        coilSignatures: Option[List[String]]
+        secOnchainSerialized: String,
+        headSignatures: List[String],
+        coilSignatures: List[String]
     )
-    given Codec[EffectView] = deriveCodec
+    given Codec[SecEffectView] = deriveCodec
 
     /** The effect-kind label (matches the sub-resource path segments). */
     def effectKindView(kind: EffectKind): EffectKindView = kind match
@@ -755,35 +784,64 @@ object ApiDto {
           refunds = idsOf(EffectKind.Refund)
         )
 
-    /** Map a resolved effect to its full view; `nHeadPeers` splits an SEC's hard-ack signatures
-      * into head (first `nHeadPeers`) then coil.
+    /** Map any resolved effect to the `type`-tagged by-id view (no `l1TxId` — it is the queried
+      * path); `nHeadPeers` splits an SEC's hard-ack signatures into head (first `nHeadPeers`) then
+      * coil.
       */
     def mkEffectView(effect: ResolvedEffect, nHeadPeers: Int): EffectView = effect match
         case tx: ResolvedEffect.Tx =>
-            EffectView(
-              l1TxId = tx.l1TxId.toHex,
-              kind = effectKindView(tx.kind),
-              blockNumber = tx.blockNumber.convert,
-              txCbor = Some(ByteString.fromArray(tx.tx.toCbor).toHex),
-              secOnchainSerialized = None,
-              headSignatures = None,
-              coilSignatures = None
-            )
+            val blockNumber = tx.blockNumber.convert
+            val cbor = txCborHex(tx)
+            tx.kind match
+                case EffectKind.Initialization => EffectView.InitializationView(blockNumber, cbor)
+                case EffectKind.Settlement     => EffectView.SettlementView(blockNumber, cbor)
+                case EffectKind.Fallback       => EffectView.FallbackView(blockNumber, cbor)
+                case EffectKind.Rollout        => EffectView.RolloutView(blockNumber, cbor)
+                case EffectKind.Finalization   => EffectView.FinalizationView(blockNumber, cbor)
+                case EffectKind.Refund         => EffectView.RefundView(blockNumber, cbor)
+                case EffectKind.Sec =>
+                    throw new IllegalStateException(s"tx effect ${tx.l1TxId.toHex} tagged Sec")
         case sec: ResolvedEffect.Sec =>
-            val sigsHex = sec.commitment.headerMultiSigned.map { sig =>
-                val bytes: Array[Byte] = sig
-                ByteString.fromArray(bytes).toHex
-            }
-            val headerBytes: Array[Byte] = sec.commitment.commitment.header
-            EffectView(
-              l1TxId = sec.l1TxId.toHex,
-              kind = EffectKindView.Sec,
-              blockNumber = sec.blockNumber.convert,
-              txCbor = None,
-              secOnchainSerialized = Some(ByteString.fromArray(headerBytes).toHex),
-              headSignatures = Some(sigsHex.take(nHeadPeers)),
-              coilSignatures = Some(sigsHex.drop(nHeadPeers))
+            val (headSignatures, coilSignatures) = secSignatures(sec, nHeadPeers)
+            EffectView.SecView(
+              sec.blockNumber.convert,
+              secOnchainHex(sec),
+              headSignatures,
+              coilSignatures
             )
+
+    /** Map a real-tx effect to the block-scoped by-kind view (carries `l1TxId`). */
+    def mkTxEffectView(tx: ResolvedEffect.Tx): TxEffectView =
+        TxEffectView(tx.l1TxId.toHex, tx.blockNumber.convert, txCborHex(tx))
+
+    /** Map an SEC effect to the block-scoped `sec` view (carries `l1TxId`). */
+    def mkSecEffectView(sec: ResolvedEffect.Sec, nHeadPeers: Int): SecEffectView =
+        val (headSignatures, coilSignatures) = secSignatures(sec, nHeadPeers)
+        SecEffectView(
+          sec.l1TxId.toHex,
+          sec.blockNumber.convert,
+          secOnchainHex(sec),
+          headSignatures,
+          coilSignatures
+        )
+
+    private def txCborHex(tx: ResolvedEffect.Tx): String =
+        ByteString.fromArray(tx.tx.toCbor).toHex
+
+    private def secOnchainHex(sec: ResolvedEffect.Sec): String =
+        val headerBytes: Array[Byte] = sec.commitment.commitment.header
+        ByteString.fromArray(headerBytes).toHex
+
+    /** An SEC's hard-ack signatures (hex), split into head (first `nHeadPeers`) then coil. */
+    private def secSignatures(
+        sec: ResolvedEffect.Sec,
+        nHeadPeers: Int
+    ): (List[String], List[String]) =
+        val sigsHex = sec.commitment.headerMultiSigned.map { sig =>
+            val bytes: Array[Byte] = sig
+            ByteString.fromArray(bytes).toHex
+        }
+        (sigsHex.take(nHeadPeers), sigsHex.drop(nHeadPeers))
 
     /** A utxo reference, `{ transaction_id, index }` (CIP-0116). */
     final case class TxInputView(transaction_id: String, index: Int)

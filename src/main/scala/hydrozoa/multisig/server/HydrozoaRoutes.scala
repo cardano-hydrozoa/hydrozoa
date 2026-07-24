@@ -220,10 +220,11 @@ class HydrozoaRoutes(
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
-    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per fixed kind — the effect in full, or a
-      * 404 when this block carries no effect of that kind.
+    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per real-tx kind — the effect in full
+      * (with its l1TxId; the kind is the path, so it is not discriminated), or a 404 when this
+      * block carries no effect of that kind.
       */
-    private def blockEffectKindEndpoint(
+    private def blockTxEffectEndpoint(
         segment: String,
         kind: EffectKind
     ): ServerEndpoint[Any, IO] =
@@ -231,11 +232,27 @@ class HydrozoaRoutes(
             .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / segment)
             .name(s"getHeadBlockEffect_$segment")
             .tag("Blocks")
-            .out(jsonBody[EffectView])
+            .out(jsonBody[TxEffectView])
             .errorOut(errorOut)
             .description(s"The block's $segment effect in full, or 404 if it has none.")
             .serverLogic(num =>
-                blockEffectOfKind(num, kind)
+                blockTxEffectOfKind(num, kind)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** `GET /head/blocks/<n>/effects/sec` — the block's SEC in full, or a 404. */
+    private val blockSecEffectEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "sec")
+            .name("getHeadBlockEffect_sec")
+            .tag("Blocks")
+            .out(jsonBody[SecEffectView])
+            .errorOut(errorOut)
+            .description(
+              "The block's SEC (standalone evacuation commitment), or 404 if it has none."
+            )
+            .serverLogic(num =>
+                blockSecEffect(num)
                     .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
             )
 
@@ -247,7 +264,7 @@ class HydrozoaRoutes(
             )
             .name("getHeadBlockRollout")
             .tag("Blocks")
-            .out(jsonBody[EffectView])
+            .out(jsonBody[TxEffectView])
             .errorOut(errorOut)
             .description("One rollout of the block's rollout chain by index, or 404 if absent.")
             .serverLogic((num, i) =>
@@ -274,9 +291,8 @@ class HydrozoaRoutes(
           "initialization" -> EffectKind.Initialization,
           "settlement" -> EffectKind.Settlement,
           "fallback" -> EffectKind.Fallback,
-          "sec" -> EffectKind.Sec,
           "finalization" -> EffectKind.Finalization
-        ).map(blockEffectKindEndpoint)
+        ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
 
     private val requestsEndpoint: ServerEndpoint[Any, IO] =
         endpoint.get
@@ -629,27 +645,40 @@ class HydrozoaRoutes(
                 }
         }
 
-    /** One kind of the block's effects in full, or a 404 (block missing, or no effect of that kind
-      * on this block).
+    /** One real-tx kind of the block's effects in full, or a 404 (block missing, or no effect of
+      * that kind on this block).
       */
-    private def blockEffectOfKind(
+    private def blockTxEffectOfKind(
         num: BlockNumber,
         kind: EffectKind
-    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
         effectsResolver.blockEffects(num).map {
             case None => Left(blockNotFound(num))
             case Some(effects) =>
-                effects.find(_.kind == kind) match
-                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                effects.collectFirst { case e: ResolvedEffect.Tx if e.kind == kind => e } match
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
                     case None =>
                         Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
+        }
+
+    /** The block's SEC in full, or a 404 (block missing, or no SEC on this block). */
+    private def blockSecEffect(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), SecEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst { case e: ResolvedEffect.Sec => e } match
+                    case Some(e) => Right(ApiDto.mkSecEffectView(e, headConfig.nHeadPeers))
+                    case None =>
+                        Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no sec effect"))
         }
 
     /** One rollout of the block's rollout chain by index, or a 404. */
     private def blockRollout(
         num: BlockNumber,
         index: Int
-    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
         effectsResolver.blockEffects(num).map {
             case None => Left(blockNotFound(num))
             case Some(effects) =>
@@ -658,7 +687,7 @@ class HydrozoaRoutes(
                         if e.kind == EffectKind.Rollout && e.rolloutIndex.contains(index) =>
                         e
                 } match
-                    case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
                     case None =>
                         Left(
                           fail(StatusCode.NotFound, s"Block ${num.convert} has no rollout $index")

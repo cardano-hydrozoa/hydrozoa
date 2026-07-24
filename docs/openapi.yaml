@@ -275,7 +275,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Effect'
+                $ref: '#/components/schemas/TxEffect'
         default:
           description: ''
           content:
@@ -351,7 +351,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Effect'
+                $ref: '#/components/schemas/TxEffect'
         default:
           description: ''
           content:
@@ -377,7 +377,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Effect'
+                $ref: '#/components/schemas/TxEffect'
         default:
           description: ''
           content:
@@ -403,33 +403,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Effect'
-        default:
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /head/blocks/{block-number}/effects/sec:
-    get:
-      tags:
-      - Blocks
-      description: The block's sec effect in full, or 404 if it has none.
-      operationId: getHeadBlockEffect_sec
-      parameters:
-      - name: block-number
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int32
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Effect'
+                $ref: '#/components/schemas/TxEffect'
         default:
           description: ''
           content:
@@ -455,7 +429,34 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Effect'
+                $ref: '#/components/schemas/TxEffect'
+        default:
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /head/blocks/{block-number}/effects/sec:
+    get:
+      tags:
+      - Blocks
+      description: The block's SEC (standalone evacuation commitment), or 404 if it
+        has none.
+      operationId: getHeadBlockEffect_sec
+      parameters:
+      - name: block-number
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecEffect'
         default:
           description: ''
           content:
@@ -768,39 +769,24 @@ components:
           const: deposit
     Effect:
       title: Effect
-      type: object
-      required:
-      - l1TxId
-      - kind
-      - blockNumber
-      properties:
-        l1TxId:
-          type: string
-        kind:
-          type: string
-          enum:
-          - initialization
-          - settlement
-          - fallback
-          - rollout
-          - finalization
-          - refund
-          - sec
-        blockNumber:
-          type: integer
-          format: int32
-        txCbor:
-          type: string
-        secOnchainSerialized:
-          type: string
-        headSignatures:
-          type: array
-          items:
-            type: string
-        coilSignatures:
-          type: array
-          items:
-            type: string
+      oneOf:
+      - $ref: '#/components/schemas/Fallback'
+      - $ref: '#/components/schemas/Finalization'
+      - $ref: '#/components/schemas/Initialization'
+      - $ref: '#/components/schemas/Refund'
+      - $ref: '#/components/schemas/Rollout'
+      - $ref: '#/components/schemas/Sec'
+      - $ref: '#/components/schemas/Settlement'
+      discriminator:
+        propertyName: type
+        mapping:
+          fallback: '#/components/schemas/Fallback'
+          finalization: '#/components/schemas/Finalization'
+          initialization: '#/components/schemas/Initialization'
+          refund: '#/components/schemas/Refund'
+          rollout: '#/components/schemas/Rollout'
+          sec: '#/components/schemas/Sec'
+          settlement: '#/components/schemas/Settlement'
     EffectRef:
       title: EffectRef
       type: object
@@ -828,6 +814,22 @@ components:
       properties:
         error:
           type: string
+    Fallback:
+      title: Fallback
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: fallback
     Final:
       title: Final
       type: object
@@ -855,6 +857,22 @@ components:
         type:
           type: string
           const: final
+    Finalization:
+      title: Finalization
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: finalization
     FinalizeResponse:
       title: FinalizeResponse
       type: object
@@ -945,6 +963,22 @@ components:
         type:
           type: string
           const: initial
+    Initialization:
+      title: Initialization
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: initialization
     Major:
       title: Major
       type: object
@@ -1028,6 +1062,22 @@ components:
           - active
           - finalized
           - handed-off-to-rule-based
+    Refund:
+      title: Refund
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: refund
     RequestAcceptedResponse:
       title: RequestAcceptedResponse
       type: object
@@ -1158,6 +1208,85 @@ components:
         type:
           type: string
           const: UNPROCESSED
+    Rollout:
+      title: Rollout
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: rollout
+    Sec:
+      title: Sec
+      type: object
+      required:
+      - blockNumber
+      - secOnchainSerialized
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        secOnchainSerialized:
+          type: string
+        headSignatures:
+          type: array
+          items:
+            type: string
+        coilSignatures:
+          type: array
+          items:
+            type: string
+        type:
+          type: string
+          const: sec
+    SecEffect:
+      title: SecEffect
+      type: object
+      required:
+      - l1TxId
+      - blockNumber
+      - secOnchainSerialized
+      properties:
+        l1TxId:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        secOnchainSerialized:
+          type: string
+        headSignatures:
+          type: array
+          items:
+            type: string
+        coilSignatures:
+          type: array
+          items:
+            type: string
+    Settlement:
+      title: Settlement
+      type: object
+      required:
+      - blockNumber
+      - txCbor
+      - type
+      properties:
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
+        type:
+          type: string
+          const: settlement
     SubmitDeposit:
       title: SubmitDeposit
       type: object
@@ -1208,6 +1337,21 @@ components:
         type:
           type: string
           const: transaction
+    TxEffect:
+      title: TxEffect
+      type: object
+      required:
+      - l1TxId
+      - blockNumber
+      - txCbor
+      properties:
+        l1TxId:
+          type: string
+        blockNumber:
+          type: integer
+          format: int32
+        txCbor:
+          type: string
     TxInput:
       title: TxInput
       type: object

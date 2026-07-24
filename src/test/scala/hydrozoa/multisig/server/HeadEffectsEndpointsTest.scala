@@ -210,8 +210,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             get(app, "/head/blocks/1/effects/sec").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
                 val c = body.hcursor
+                // The by-kind SEC response carries its l1TxId; the kind is fixed by the path (no
+                // `kind` field).
                 val _ = assert(c.get[String]("l1TxId") == Right(secId.toHex))
-                val _ = assert(c.get[String]("kind") == Right("sec"))
                 val _ = assert(c.get[Int]("blockNumber") == Right(1))
                 val _ = assert(c.downField("secOnchainSerialized").as[String].isRight)
                 // nHeadPeers head signatures, the remaining tail as coil signatures.
@@ -226,8 +227,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
         withRoutes { app =>
             get(app, s"/head/effects/${secId.toHex}").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
-                val _ = assert(body.hcursor.get[String]("l1TxId") == Right(secId.toHex))
-                val _ = assert(body.hcursor.get[String]("kind") == Right("sec"))
+                // The by-id response is type-tagged by kind and omits l1TxId (it is the queried path).
+                val _ = assert(body.hcursor.get[String]("type") == Right("sec"))
+                val _ = assert(body.hcursor.downField("secOnchainSerialized").as[String].isRight)
                 ()
             }
         }
