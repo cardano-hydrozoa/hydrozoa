@@ -99,9 +99,18 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ## 2. Building
 
+> **Tip — you probably don't need to build.** A pre-built image is published to the GitHub
+> Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
+> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt:
+>
+> ```bash
+> docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
+> ```
+>
+> The rest of this section is only for building a different version from source.
+
 Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using
-Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`). Don't want a JDK at all? Use the
-Docker image below — it covers every command.
+Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
@@ -118,13 +127,10 @@ just stage             # -> target/universal/stage/bin/hydrozoa
 # the `just` recipes below (keygen-fleet, build-head-config, submit-deposit, …) invoke it directly
 ```
 
-Docker image (used by the composition in §4, and the only thing non-Nix users need — its entrypoint
-is the same `hydrozoa` CLI, so `docker run … <subcommand>` runs any command). Pull the published
-image, or build it locally:
+To build the Docker image locally instead of pulling it (the composition in §4 can use either):
 
 ```bash
-docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0   # published on each release (RELEASE.md)
-just docker-image                                     # or build locally -> cardano-hydrozoa/hydrozoa:0.1.0
+just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
 #    base eclipse-temurin:25-jre, EXPOSE 8080
 #    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
 ```

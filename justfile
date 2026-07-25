@@ -88,38 +88,8 @@ docker-stage:
 # `just build-head-config`.
 keygen-fleet HEADS COILS QUORUM OUTDIR="config/demo": _require-launcher
   #!/usr/bin/env bash
-  set -euo pipefail
   trap 'just notify "keygen-fleet"' EXIT
-  outdir="{{OUTDIR}}"
-  if [ -e "$outdir/bootstrap/roster.json" ]; then
-    echo "error: $outdir/bootstrap/roster.json already exists; move it away or pick another OUTDIR" >&2
-    exit 1
-  fi
-  template="config/template/peer-private.template.json.local"
-  if [ ! -f "$template" ]; then
-    echo "error: $template not found — copy config/template/peer-private.template.json to it and set blockfrostApiKey" >&2
-    exit 1
-  fi
-  key=$(sed -n 's/.*"blockfrostApiKey"[^"]*"\([^"]*\)".*/\1/p' "$template")
-  case "$key" in
-    preview*) network=preview;;
-    preprod*) network=preprod;;
-    mainnet*) network=mainnet;;
-    *) echo "error: cannot derive the network from blockfrostApiKey in $template (expected a preview…/preprod…/mainnet… key)" >&2; exit 1;;
-  esac
-  echo "network (from the Blockfrost key): $network"
-  for i in $(seq 0 $(( {{HEADS}} - 1 ))); do
-    {{hydrozoa}} keygen --roster "$outdir/bootstrap/roster.json" --role head \
-      --ws-address "ws://head-$i:4001" --template "$template" \
-      --out "$outdir/private/head-$i/private.json"
-  done
-  for i in $(seq 0 $(( {{COILS}} - 1 ))); do
-    {{hydrozoa}} keygen --roster "$outdir/bootstrap/roster.json" --role coil \
-      --hub $(( i % {{HEADS}} )) --template "$template" \
-      --out "$outdir/private/coil-$i/private.json"
-  done
-  {{hydrozoa}} init-bootstrap-files "$outdir/bootstrap/roster.json" \
-    --out-dir "$outdir/bootstrap" --coil-quorum {{QUORUM}} --cardano-network "$network"
+  {{hydrozoa}} keygen-fleet {{HEADS}} {{COILS}} {{QUORUM}} --out-dir {{OUTDIR}}
 
 # Print head peer 0's L1 funding address (derived from the roster + defaults on demand — no
 # address files to go stale).

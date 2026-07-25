@@ -5,15 +5,16 @@ import com.monovore.decline.effect.CommandIOApp
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
 import hydrozoa.app.cli.{SubmitDeposit, SubmitL2Transaction}
-import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, Migrate, PrintHeadZeroAddress}
+import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
   * command. Each subcommand is defined next to its logic and surfaced here as a `Command` value:
   *
   *   - `serve` — run a head node ([[Serve]])
-  *   - `keygen` / `init-bootstrap-files` / `head-zero-address` / `deploy-scripts-and-g2-setup` /
-  *     `build-head-config` — the bootstrap ladder ([[GenerateKeyPair]], [[InitBootstrapFiles]],
-  *     [[PrintHeadZeroAddress]], [[hydrozoa.app.DeployScriptsAndG2Setup]], [[BuildHeadConfig]])
+  *   - `keygen-fleet` / `keygen` / `init-bootstrap-files` / `head-zero-address` /
+  *     `deploy-scripts-and-g2-setup` / `build-head-config` — the bootstrap ladder ([[KeygenFleet]],
+  *     [[GenerateKeyPair]], [[InitBootstrapFiles]], [[PrintHeadZeroAddress]],
+  *     [[hydrozoa.app.DeployScriptsAndG2Setup]], [[BuildHeadConfig]])
   *   - `submit-deposit` / `submit-l2-tx` — drive a running head ([[SubmitDeposit]],
   *     [[SubmitL2Transaction]])
   *   - `migrate` — sweep a wallet ([[Migrate]])
@@ -41,6 +42,7 @@ object Main
     override def main: Opts[IO[ExitCode]] =
         Opts.subcommands(
           Serve.command,
+          KeygenFleet.command,
           GenerateKeyPair.command,
           InitBootstrapFiles.command,
           PrintHeadZeroAddress.command,

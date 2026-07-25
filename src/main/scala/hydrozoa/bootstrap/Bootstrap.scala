@@ -591,7 +591,7 @@ object GenerateKeyPair:
             .mapN(generateAndWrite)
 
     /** Generate the key pair, print it, and perform whichever file outputs the options request. */
-    private def generateAndWrite(
+    private[bootstrap] def generateAndWrite(
         roster: Option[Path],
         role: Option[Role],
         wsAddress: Option[Uri],
@@ -1140,7 +1140,7 @@ object InitBootstrapFiles:
     private def runOpts: Opts[IO[ExitCode]] =
         (rosterArg, outDirOpt, coilQuorumOpt, cardanoNetworkOpt).mapN(init)
 
-    private def init(
+    private[bootstrap] def init(
         rosterPath: Path,
         outDir: Path,
         coilQuorumOverride: Option[Int],
@@ -1200,6 +1200,122 @@ object InitBootstrapFiles:
         } yield ExitCode.Success
 
 end InitBootstrapFiles
+
+/** Generate a whole head's keys and bootstrap files in one command: an Ed25519 key pair per head
+  * and coil peer (each registered in the roster and given a filled private config), then the shared
+  * `defaults.json` + `l2-cardano-eutxo.json`. Coil peers are hubbed round-robin across the head
+  * peers, and the target network is read from the template's `blockfrostApiKey` prefix. This is the
+  * [[GenerateKeyPair]] + [[InitBootstrapFiles]] ladder run in one process, so `just keygen-fleet`
+  * and `hydrozoa keygen-fleet` are the same command on either surface.
+  */
+object KeygenFleet:
+    import GenerateKeyPair.Role
+
+    private val defaultTemplate = "config/template/peer-private.template.json.local"
+    private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
+
+    private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
+    private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
+    private val quorumArg: Opts[Int] = Opts.argument[Int]("coil-quorum")
+    private val outDirOpt: Opts[Path] =
+        Opts.option[String](
+          "out-dir",
+          "Output directory for the config layout (default config/demo)",
+          short = "o"
+        ).map(Path.of(_))
+            .withDefault(Path.of("config/demo"))
+    private val templateOpt: Opts[Path] =
+        Opts.option[String](
+          "template",
+          s"Private-config template to fill with each peer's keys (default $defaultTemplate)"
+        ).map(Path.of(_))
+            .withDefault(Path.of(defaultTemplate))
+
+    /** The `keygen-fleet` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "keygen-fleet",
+          header =
+              "Generate a whole head's keys + bootstrap files (keygen per peer, then init-bootstrap-files)"
+        )((headsArg, coilsArg, quorumArg, outDirOpt, templateOpt).mapN(run))
+
+    private def run(
+        heads: Int,
+        coils: Int,
+        coilQuorum: Int,
+        outDir: Path,
+        template: Path
+    ): IO[ExitCode] = {
+        val bootstrapDir = outDir.resolve("bootstrap")
+        val rosterPath = bootstrapDir.resolve(Bootstrap.BootstrapDir.roster)
+        def privatePath(label: String): Path =
+            outDir.resolve("private").resolve(label).resolve("private.json")
+        for {
+            _ <- IO.raiseWhen(heads < 1)(
+              new IllegalArgumentException(s"heads must be at least 1, got $heads")
+            )
+            _ <- IO.raiseWhen(Files.exists(rosterPath))(
+              new IllegalStateException(
+                s"$rosterPath already exists; move it away or pick another --out-dir"
+              )
+            )
+            _ <- IO.raiseUnless(Files.exists(template))(
+              new IllegalArgumentException(
+                s"$template not found — copy config/template/peer-private.template.json to it " +
+                    "and set blockfrostApiKey"
+              )
+            )
+            network <- deriveNetwork(template)
+            _ <- IO.println(
+              s"Generating a $heads-head / $coils-coil fleet on $network (coil quorum $coilQuorum)"
+            )
+            _ <- (0 until heads).toList.traverse_ { i =>
+                GenerateKeyPair.generateAndWrite(
+                  roster = Some(rosterPath),
+                  role = Some(Role.Head),
+                  wsAddress = Some(Uri.unsafeFromString(s"ws://head-$i:4001")),
+                  hub = None,
+                  template = Some(template),
+                  out = Some(privatePath(s"head-$i"))
+                )
+            }
+            _ <- (0 until coils).toList.traverse_ { i =>
+                GenerateKeyPair.generateAndWrite(
+                  roster = Some(rosterPath),
+                  role = Some(Role.Coil),
+                  wsAddress = None,
+                  hub = Some(i % heads),
+                  template = Some(template),
+                  out = Some(privatePath(s"coil-$i"))
+                )
+            }
+            exit <- InitBootstrapFiles.init(rosterPath, bootstrapDir, Some(coilQuorum), network)
+        } yield exit
+    }
+
+    /** Derive the target network from the template's `blockfrostApiKey` prefix (as the justfile
+      * did) — the key's `preview…` / `preprod…` / `mainnet…` prefix picks the network.
+      */
+    private def deriveNetwork(template: Path): IO[CardanoNetwork] =
+        for {
+            content <- IO.blocking(Files.readString(template))
+            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
+              new IllegalArgumentException(s"no blockfrostApiKey found in $template")
+            )
+            network <-
+                if key.startsWith("preview") then IO.pure(CardanoNetwork.Preview)
+                else if key.startsWith("preprod") then IO.pure(CardanoNetwork.Preprod)
+                else if key.startsWith("mainnet") then IO.pure(CardanoNetwork.Mainnet)
+                else
+                    IO.raiseError(
+                      new IllegalArgumentException(
+                        s"cannot derive the network from blockfrostApiKey in $template " +
+                            "(expected a preview…/preprod…/mainnet… key)"
+                      )
+                    )
+        } yield network
+
+end KeygenFleet
 
 /** Print head peer 0's L1 address — the funding target for the head (in the demo model head peer 0
   * funds everything). Deriving it from the roster on demand beats writing address files next to the
