@@ -101,26 +101,25 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 > **Tip — you probably don't need to build.** A pre-built image is published to the GitHub
 > Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
-> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Set a few env vars
-> and alias `hydrozoa` to the image **once**; then every command below takes **no path flags** —
-> `HYDROZOA_HOME` points them at your config directory. (The alias passes the Blockfrost key and
-> `HYDROZOA_HOME` through, enables host networking + a TTY so the interactive `submit-*` commands
-> work, and runs as container-root so it can write the mounted config dir.)
+> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Export your Blockfrost
+> key and `source ./hydrozoa-docker.sh`, which defines a `hydrozoa` alias for the image; then every
+> command below takes **no path flags** — `HYDROZOA_HOME` (set by the script, default `./config/demo`)
+> points them at your config directory.
 >
 > ```bash
-> export HYDROZOA_VERSION=0.1.0
-> export BLOCKFROST_API_KEY=preview…      # your Blockfrost key; the bootstrap commands read it
-> export HYDROZOA_HOME=./config/demo      # the CLI reads/writes configs here
-> docker pull ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"
-> alias hydrozoa='docker run --rm -it --network host -e BLOCKFROST_API_KEY -e HYDROZOA_HOME \
->   --user root -v "$PWD/config:/work/config" -w /work \
->   ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"'
+> export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
+> docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
+> source ./hydrozoa-docker.sh             # sets HYDROZOA_VERSION/HYDROZOA_HOME + the `hydrozoa` alias
 > ```
 >
+> The alias passes the Blockfrost key + `HYDROZOA_HOME` into the container, enables host networking +
+> a TTY (for the interactive `submit-*` commands), and runs as container-root so it can write the
+> mounted config dir — see [`hydrozoa-docker.sh`](hydrozoa-docker.sh).
+>
 > `HYDROZOA_HOME=./config/demo` is the same relative path inside the container (working dir `/work`,
-> where the alias mounts `config/`) and on the host — so it's the same value local/`just` runs use,
-> and the same as `HYDROZOA_CONFIG` for `docker compose` (§4). For a separate config set, point both
-> at another subdir, e.g. `./config/demo-docker`.
+> where the alias mounts `config/`) and on the host — so the CLI (local, `just`, or Docker) and
+> `docker compose` (§4) all read the same directory from this one variable. For a separate config
+> set, point it at another subdir, e.g. `./config/demo-docker`.
 >
 > **This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
 > `user: root`) — assumes rootless Docker**, the tested configuration (see §4). Under rootless,
@@ -337,7 +336,7 @@ At this point every node has its two files, and the composition (§4) mounts
 `docker-compose.yml` — one `hydrozoa` container per node on a single user-defined bridge network,
 `mesh`.
 
-- Config mounts come from `${HYDROZOA_CONFIG:-./config/demo}`: the shared `head-config.json` plus
+- Config mounts come from `${HYDROZOA_HOME:-./config/demo}`: the shared `head-config.json` plus
   `head-N/private.json` or `coil-N/private.json` per node. The image defaults to the published
   `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
   another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.0`.
@@ -359,16 +358,16 @@ Caveats:
 
 ```bash
 docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 on first run
-# uses ./config/demo by default; point HYDROZOA_CONFIG at the config set you generated:
-#   HYDROZOA_CONFIG=./config/demo-docker docker compose up -d
+# uses ./config/demo by default; point HYDROZOA_HOME at the config set you generated:
+#   HYDROZOA_HOME=./config/demo-docker docker compose up -d
 # dev, to run a locally built image instead:
 #   just docker-image && HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.0 docker compose up -d
 ```
 
-**Which config does compose use?** `HYDROZOA_CONFIG` (default `./config/demo`) — it selects the
-directory each container mounts `head-config.json` + its `private.json` from. It takes the same value
-as the CLI's `HYDROZOA_HOME`: generate a config set with `HYDROZOA_HOME=./config/demo-docker`, then
-run it with `HYDROZOA_CONFIG=./config/demo-docker`.
+**Which config does compose use?** The same `HYDROZOA_HOME` (default `./config/demo`) — it selects
+the directory each container mounts `head-config.json` + its `private.json` from. So one variable
+drives everything: `HYDROZOA_HOME=./config/demo-docker` both generates the config set (the CLI) and
+runs it (`docker compose up -d`).
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 

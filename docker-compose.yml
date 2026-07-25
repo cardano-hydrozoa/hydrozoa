@@ -11,7 +11,7 @@
 #   1. just keygen-fleet 2 4 2     (then fund head-0, build-bootstrap, build-head-config — §5)
 #   2. docker compose up -d        (pulls ghcr.io/cardano-hydrozoa/hydrozoa by default)
 #
-# HYDROZOA_CONFIG overrides where the generated configs are read from (default ./config/demo);
+# HYDROZOA_HOME overrides where the generated configs are read from (default ./config/demo);
 # HYDROZOA_IMAGE overrides the image (e.g. a locally built cardano-hydrozoa/hydrozoa:<version>).
 
 name: hydrozoa
@@ -47,39 +47,39 @@ services:
     ports:
       - "8080:8080"   # hydrozoa-head-0 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/head-0/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/head-0/private.json:/configs/private.json:ro
 
   head-1:
     <<: *hydrozoa
     ports:
       - "8081:8080"   # hydrozoa-head-1 user/admin HTTP API
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/head-1/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/head-1/private.json:/configs/private.json:ro
 
   ## ---------------------------------------------------------- coil peers (dial out only)
 
   coil-0:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-0/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/coil-0/private.json:/configs/private.json:ro
 
   coil-1:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-1/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/coil-1/private.json:/configs/private.json:ro
 
   coil-2:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-2/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/coil-2/private.json:/configs/private.json:ro
 
   coil-3:
     <<: *hydrozoa
     volumes:
-      - ${HYDROZOA_CONFIG:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
-      - ${HYDROZOA_CONFIG:-./config/demo}/private/coil-3/private.json:/configs/private.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./config/demo}/private/coil-3/private.json:/configs/private.json:ro
