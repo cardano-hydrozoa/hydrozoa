@@ -103,15 +103,17 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 > Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
 > command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Set two env vars and
 > alias `hydrozoa` to the image **once**; every `hydrozoa <command>` throughout this guide then runs
-> from it (the alias passes the Blockfrost key through and enables host networking + a TTY, so the
-> interactive `submit-*` commands work too):
+> from it (the alias passes the Blockfrost key through, enables host networking + a TTY so the
+> interactive `submit-*` commands work, and runs as container-root — matching `docker-compose`'s
+> `user: root` — so it can write the mounted `config/`; under rootless Docker that maps to your host
+> user):
 >
 > ```bash
 > export HYDROZOA_VERSION=0.1.0
 > export BLOCKFROST_API_KEY=preview…      # your Blockfrost key; the bootstrap commands read it
 > docker pull ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"
 > alias hydrozoa='docker run --rm -it --network host -e BLOCKFROST_API_KEY \
->   -u "$(id -u):$(id -g)" -v "$PWD/config:/work/config" -w /work \
+>   --user root -v "$PWD/config:/work/config" -w /work \
 >   ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"'
 > ```
 >
