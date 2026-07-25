@@ -39,4 +39,5 @@ target/
 
 # The head working directory: scaffolded template.local (real Blockfrost key), generated rosters,
 # private configs + signing keys, head-config — all per-deployment, never commit.
-/head/
+/head/*
+!/head/.gitkeep

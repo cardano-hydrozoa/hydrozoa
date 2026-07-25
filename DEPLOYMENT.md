@@ -20,7 +20,7 @@
 >   Blockfrost key in clear JSON; the template ships `admin`/`welcome` admin credentials; the HTTP
 >   API and the WS mesh are unencrypted.
 > - **Ephemeral state, single-use head config.** No data volumes are mounted (config comes in via
->   read-only bind mounts), so any restart means re-initializing a fresh head on L1 (§4) — and
+>   read-only bind mounts), so any restart means re-initializing a fresh head on L1 (§5) — and
 >   `head-config.json` embeds real utxos + wall-clock anchors, so it cannot be reused.
 > - **Public testnet (Preview / Preprod) via Blockfrost only** — a trusted third party between
 >   every node and L1.
@@ -97,53 +97,55 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ---
 
-## 2. Building
+## 2. Getting Hydrozoa
 
-> **Tip — you probably don't need to build.** A pre-built image is published to the GitHub
-> Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
-> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Export your Blockfrost
-> key and `source ./hydrozoa.sh`, which defines a `hydrozoa` alias for the image; then every
-> command below takes **no path flags** — `HYDROZOA_HOME` (set by the script, default `./head/demo`)
-> points them at your head directory.
->
-> ```bash
-> export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
-> docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
-> source ./hydrozoa.sh             # sets HYDROZOA_VERSION/HYDROZOA_HOME + the `hydrozoa` alias
-> ```
->
-> The alias passes the Blockfrost key + `HYDROZOA_HOME` into the container, enables host networking +
-> a TTY (for the interactive `submit-*` commands), and runs as container-root so it can write the
-> mounted head dir — see [`hydrozoa.sh`](hydrozoa.sh).
->
-> `HYDROZOA_HOME=./head/demo` is the same relative path inside the container (working dir `/work`,
-> where the alias mounts `head/`) and on the host — so the CLI (local, `just`, or Docker) and
-> `docker compose` (§4) all read the same directory from this one variable. For a separate config
-> set, point it at another subdir, e.g. `./head/demo-docker`.
->
-> **This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
-> `user: root`) — assumes rootless Docker**, the tested configuration (see §4). Under rootless,
-> container-root maps to your host user, so files written to the mounts land owned by *you*. On
-> rootful Docker they would be owned by real root instead; there, use `-u "$(id -u):$(id -g)"` in the
-> alias to keep them yours.
->
-> **No repo at all?** The image scaffolds a fresh workspace — `docker-compose.yml`, `hydrozoa.sh`,
-> and the config template are baked in:
->
-> ```bash
-> mkdir myhead && cd myhead
-> docker run --rm -v "$PWD:/work" -w /work --user root \
->   ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 scaffold .
-> # writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
-> ```
->
-> Then set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, `export
-> BLOCKFROST_API_KEY=…`, and `source ./hydrozoa.sh` — every command then works, no clone needed.
->
-> The rest of this section is only for building a different version from source.
+A pre-built image is published to the GitHub Container Registry on every release. Its entrypoint is
+the `hydrozoa` CLI, so it covers every command (`serve`, the bootstrap ladder, `submit-*`) — no JDK,
+no Nix, no sbt. Pull it, export your Blockfrost key, and `source ./hydrozoa.sh` (which defines a
+`hydrozoa` alias for the image); then every command below takes **no path flags** — `HYDROZOA_HOME`
+(set by the script, default `./head/demo`) points them at your head directory.
 
-Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using
-Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
+```bash
+export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
+docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
+source ./hydrozoa.sh                    # sets HYDROZOA_VERSION/HYDROZOA_HOME + the `hydrozoa` alias
+```
+
+The alias passes the Blockfrost key + `HYDROZOA_HOME` into the container, enables host networking + a
+TTY (for the interactive `submit-*` commands), and runs as container-root so it can write the mounted
+head dir — see [`hydrozoa.sh`](hydrozoa.sh).
+
+`HYDROZOA_HOME=./head/demo` is the same relative path inside the container (working dir `/work`, where
+the alias mounts `head/`) and on the host — so the CLI (local, `just`, or Docker) and `docker compose`
+(§5) all read the same directory from this one variable. For a separate config set, point it at
+another subdir, e.g. `./head/demo-docker`.
+
+**This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
+`user: root`) — assumes rootless Docker**, the tested configuration (see §5). Under rootless,
+container-root maps to your host user, so files written to the mounts land owned by *you*. On rootful
+Docker they would be owned by real root instead; there, use `-u "$(id -u):$(id -g)"` in the alias to
+keep them yours.
+
+**No repo at all?** The image scaffolds a fresh workspace — `docker-compose.yml`, `hydrozoa.sh`, and
+the config template are baked in:
+
+```bash
+mkdir myhead && cd myhead
+docker run --rm -v "$PWD:/work" -w /work --user root \
+  ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 scaffold .
+# writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
+```
+
+Then set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, `export
+BLOCKFROST_API_KEY=…`, and `source ./hydrozoa.sh` — every command then works, no clone needed.
+
+---
+
+## 3. Building
+
+Only needed to run a different version than the published image, or to hack on Hydrozoa. Toolchain:
+Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using Nix (the
+runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
@@ -152,15 +154,17 @@ just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
 
-Every deployment and runtime command is a subcommand of one packaged CLI, `hydrozoa` (`hydrozoa
---help` lists them). Build it once — it launches fast and with clean output:
+There are two ways to run your own build.
+
+**(a) Locally compiled code, no image.** `just stage` builds the `hydrozoa` launcher from the current
+sources; the `just` recipes below (`keygen-fleet`, `build-head-config`, `submit-deposit`, …) invoke
+it directly — no Docker, and no sbt startup per command:
 
 ```bash
 just stage             # -> target/universal/stage/bin/hydrozoa
-# the `just` recipes below (keygen-fleet, build-head-config, submit-deposit, …) invoke it directly
 ```
 
-To build the Docker image locally instead of pulling it (the composition in §4 can use either):
+**(b) A local Docker image** (instead of pulling it — the composition in §5 can use either):
 
 ```bash
 just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
@@ -170,7 +174,7 @@ just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
 
 ---
 
-## 3. Configuration
+## 4. Configuration
 
 Everything a node reads comes from two files:
 
@@ -178,7 +182,7 @@ Everything a node reads comes from two files:
 the peer topology, the L1 network, `scriptReferenceUtxos`, the peer-agreed head parameters
 (including `l2Ledger` and `identityIsomorphism`), the head id, and
 the **pre-built initialization transaction** with its wall-clock timing anchors — so it is
-single-use per head (§4). Each node derives the fallback transaction from the initialization tx
+single-use per head (§5). Each node derives the fallback transaction from the initialization tx
 when it reads the config.
 
 **(b) Per-node `peer-private.json`** — `ownPeerPrivate` (identity +
@@ -193,7 +197,7 @@ EUTXO node may omit it.
 
 Two equivalent surfaces run the same CLI: **Nix** users call the `just` recipes (thin wrappers that
 extract the Blockfrost key from the `.local` template and create output dirs), after a one-time
-`just stage` (§2); **Docker** users call `hydrozoa …` via the alias from §2. Each step below shows
+`just stage` (§3); **Docker** users call `hydrozoa …` via the alias from §2. Each step below shows
 both.
 
 The walkthrough uses the docker topology: **2 head peers, 4 coil peers, coil quorum 2**. The
@@ -218,7 +222,7 @@ pipeline turns operator-authored files into the two runtime files each node need
    build-head-config ───► head-config/head-config.json  assembles the four bootstrap files, adds
                                       │                 headId + the pre-built init tx + timing
                                       ▼
-   distribute head-config.json (shared) + each node's private.json  →  run the nodes (§4)
+   distribute head-config.json (shared) + each node's private.json  →  run the nodes (§5)
 ```
 
 **Step 1 — Set the defaults.** Materialize the template and set `blockfrostApiKey` in it:
@@ -338,12 +342,12 @@ into the config (each node derives the fallback tx from it when reading the conf
 Blockfrost key comes from the `.local` template (step 1); the build fails fast if the key's
 network does not match the bootstrap config's `cardanoNetwork`.
 
-At this point every node has its two files, and the composition (§4) mounts
+At this point every node has its two files, and the composition (§5) mounts
 `head-config/head-config.json` + that node's `private/<peer>/private.json`.
 
 ---
 
-## 4. Running Hydrozoa L2
+## 5. Running Hydrozoa L2
 
 ### Docker composition (2 head + 4 coil)
 
@@ -408,7 +412,7 @@ finalization) appears in the same section as the head progresses.
 ### Restarting the head
 
 **Teardown first:** if the previous head initialized and still holds funds, finalize before
-anything else (Teardown / recovery of funds, §5) — otherwise the funds stay locked until the
+anything else (Teardown / recovery of funds, §6) — otherwise the funds stay locked until the
 fallback/evacuation path matures.
 
 The demo nodes keep no durable state across `docker compose down` (no volumes), so restarting means
@@ -442,7 +446,7 @@ code changes.
 
 ---
 
-## 5. Demo: drive the running head
+## 6. Demo: drive the running head
 
 These two commands are **interactive** (they prompt on the console) and reach the head over HTTP —
 the `hydrozoa` alias from §2 already enables the TTY and host networking they need.
