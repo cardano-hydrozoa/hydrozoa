@@ -99,12 +99,15 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ## 2. Getting Hydrozoa
 
-**You do not need to clone this repo.** The published image on the GitHub Container Registry carries
-the whole CLI *and* the workspace files — `docker-compose.yml`, `hydrozoa.sh`, and the config
-template are baked in — so you pull it once and scaffold a complete head workspace from it:
+> Assumes **rootless Docker** (the tested setup): the alias runs the container as root, which under
+> rootless maps to *your* host user, so it can write the mounted `head/`. On rootful Docker, add
+> `-u "$(id -u):$(id -g)"` to the alias instead.
+
+**You do not need to clone this repo.** The published image carries the whole CLI plus the workspace
+files (`docker-compose.yml`, `hydrozoa.sh`, config template), so pull it and scaffold a head
+workspace from it:
 
 ```bash
-export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
 mkdir myhead && cd myhead
 docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
 docker run --rm -v "$PWD:/work" -w /work --user root \
@@ -113,25 +116,7 @@ docker run --rm -v "$PWD:/work" -w /work --user root \
 ```
 
 Set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, then `source
-./hydrozoa.sh` — it defines a `hydrozoa` alias for the image and sets `HYDROZOA_HOME` (default
-`./head/demo`), so every command in §4–§6 takes **no path flags**:
-
-```bash
-source ./hydrozoa.sh
-hydrozoa keygen-fleet 2 4 2      # …then the rest of §4
-```
-
-`HYDROZOA_HOME=./head/demo` is the same relative path on the host, inside the container (working dir
-`/work`, where `head/` is mounted), and for `docker compose` (§5) — one variable everywhere. For a
-separate config set, point it at another subdir, e.g. `./head/demo-docker`.
-
-**Why `--user root`.** The alias runs the container as root on purpose, and this whole setup assumes
-**rootless Docker** (the tested configuration). Under rootless, the container's root maps to *your*
-host user — so running as root is what lets it write the bind-mounted `head/`, and the generated
-files land owned by you rather than an unwritable foreign uid. (The alias also passes the Blockfrost
-key + `HYDROZOA_HOME` through and enables host networking + a TTY for the interactive `submit-*`
-commands.) On **rootful** Docker, container-root is real root and the mounted files would be
-root-owned instead; there, use `-u "$(id -u):$(id -g)"` in the alias — see [`hydrozoa.sh`](hydrozoa.sh).
+./hydrozoa.sh` (sets the `hydrozoa` alias + `HYDROZOA_HOME=./head/demo`).
 
 ---
 
