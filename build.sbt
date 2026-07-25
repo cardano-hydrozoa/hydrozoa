@@ -21,7 +21,12 @@ lazy val gitRevision: String =
 // `LazyVals`' `sun.misc.Unsafe` restricted-method warnings.
 bashScriptExtraDefines ++= Seq(
   """addJava "--enable-native-access=ALL-UNNAMED"""",
-  """addJava "--sun-misc-unsafe-memory-access=allow""""
+  """addJava "--sun-misc-unsafe-memory-access=allow"""",
+  // The one-shot CLI subcommands use a quiet, console-only logback config: no hydrozoa-trace.jsonl /
+  // hydrozoa.log written into a possibly read-only cwd (e.g. inside the Docker image), and no
+  // trace-level spam. Only `serve` keeps the verbose, file-writing logback.xml. `$1` here is the
+  // subcommand (this runs before the launcher's own arg processing).
+  """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
 )
 
 // Docker settings

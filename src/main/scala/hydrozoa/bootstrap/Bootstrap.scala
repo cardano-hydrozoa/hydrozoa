@@ -588,36 +588,45 @@ object GenerateKeyPair:
 
     private def runOpts: Opts[IO[ExitCode]] =
         (rosterOpt, roleOpt, wsAddressOpt, hubOpt, templateOpt, outOpt)
-            .mapN(generateAndWrite)
+            .mapN((roster, role, ws, hub, template, out) =>
+                generateAndWrite(roster, role, ws, hub, template, out)
+            )
 
-    /** Generate the key pair, print it, and perform whichever file outputs the options request. */
+    /** Generate the key pair, print it, and perform whichever file outputs the options request.
+      * When `verbose` is false (the [[KeygenFleet]] path, which generates many peers at once), the
+      * per-key printout — including the signing key — is suppressed; the caller reports progress.
+      */
     private[bootstrap] def generateAndWrite(
         roster: Option[Path],
         role: Option[Role],
         wsAddress: Option[Uri],
         hub: Option[Int],
         template: Option[Path],
-        out: Option[Path]
-    ): IO[ExitCode] = for {
-        _ <- validateOptionCombos(roster, role, wsAddress, hub, template, out)
-        keyPair <- Bootstrap.generateKeyPair()
-        (vKey, sKey) = keyPair
-        vKeyHex = mkHex(vKey.bytes.toArray)
-        sKeyHex = mkHex(sKey.bytes.toArray)
-        address = vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get
-        _ <- IO.println("Generated new Ed25519 key pair:")
-        _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
-        _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
-        _ <- IO.println(s"Testnet address: $address")
-        _ <- roster.traverse_(path =>
-            registerInRoster(path, role.get, vKeyHex, wsAddress, hub) *>
-                IO.println(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
-        )
-        _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
-            writePrivateConfig(templatePath, outPath, role.get, vKeyHex, sKeyHex) *>
-                IO.println(s"Wrote private config: $outPath")
-        }
-    } yield ExitCode.Success
+        out: Option[Path],
+        verbose: Boolean = true
+    ): IO[ExitCode] = {
+        def say(msg: String): IO[Unit] = IO.whenA(verbose)(IO.println(msg))
+        for {
+            _ <- validateOptionCombos(roster, role, wsAddress, hub, template, out)
+            keyPair <- Bootstrap.generateKeyPair()
+            (vKey, sKey) = keyPair
+            vKeyHex = mkHex(vKey.bytes.toArray)
+            sKeyHex = mkHex(sKey.bytes.toArray)
+            address = vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get
+            _ <- say("Generated new Ed25519 key pair:")
+            _ <- say(s"Verification key (32 bytes): $vKeyHex")
+            _ <- say(s"Signing key (32 bytes): $sKeyHex")
+            _ <- say(s"Testnet address: $address")
+            _ <- roster.traverse_(path =>
+                registerInRoster(path, role.get, vKeyHex, wsAddress, hub) *>
+                    say(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
+            )
+            _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
+                writePrivateConfig(templatePath, outPath, role.get, vKeyHex, sKeyHex) *>
+                    say(s"Wrote private config: $outPath")
+            }
+        } yield ExitCode.Success
+    }
 
     /** Reject option combinations the file outputs can't act on. */
     private def validateOptionCombos(
@@ -1276,8 +1285,9 @@ object KeygenFleet:
                   wsAddress = Some(Uri.unsafeFromString(s"ws://head-$i:4001")),
                   hub = None,
                   template = Some(template),
-                  out = Some(privatePath(s"head-$i"))
-                )
+                  out = Some(privatePath(s"head-$i")),
+                  verbose = false
+                ) *> IO.println(s"  head-$i  -> ${privatePath(s"head-$i")}")
             }
             _ <- (0 until coils).toList.traverse_ { i =>
                 GenerateKeyPair.generateAndWrite(
@@ -1286,8 +1296,9 @@ object KeygenFleet:
                   wsAddress = None,
                   hub = Some(i % heads),
                   template = Some(template),
-                  out = Some(privatePath(s"coil-$i"))
-                )
+                  out = Some(privatePath(s"coil-$i")),
+                  verbose = false
+                ) *> IO.println(s"  coil-$i  -> ${privatePath(s"coil-$i")} (hub head-${i % heads})")
             }
             exit <- InitBootstrapFiles.init(rosterPath, bootstrapDir, Some(coilQuorum), network)
         } yield exit
