@@ -54,6 +54,13 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
 
 - **Version ↔ tag must agree.** `build.sbt`'s `version` is baked into the image; the tag names the
   published image. A mismatch means the image reports a different version than its tag.
+- **The `git:` line in `hydrozoa version`.** It is raw `git describe --always --dirty --abbrev=8`,
+  not the release version — `<nearest-tag>-<commits-since>-g<hash>` (e.g.
+  `pre-george-refactor-2196-g228a83c9` means 2196 commits past the last tag, at `228a83c9`). It
+  looks stale between releases because `git describe` reports the newest tag that *exists*. Building
+  from the freshly-pushed `vX.Y.Z` commit (as the release workflow does) makes it read a clean
+  `vX.Y.Z`; later commits then read `vX.Y.Z-<n>-g<hash>`. The release version proper is the
+  `hydrozoa X.Y.Z` line (from `build.sbt`), so this is provenance detail, not a mismatch.
 - **Architecture.** The image is currently linux/amd64 only. Multi-arch (adding linux/arm64 via
   buildx) is a future improvement — it needs the native deps (blst-java, rocksdbjni) verified on
   arm64 first.
