@@ -4,7 +4,7 @@ import cats.effect.{ExitCode, IO}
 import com.monovore.decline.effect.CommandIOApp
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.BuildInfo
-import hydrozoa.app.cli.{SubmitDeposit, SubmitL2Transaction}
+import hydrozoa.app.cli.{Scaffold, SubmitDeposit, SubmitL2Transaction}
 import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles, KeygenFleet, Migrate, PrintHeadZeroAddress}
 
 /** The `hydrozoa` command-line entry point: a single dispatcher over every deployment and runtime
@@ -18,6 +18,7 @@ import hydrozoa.bootstrap.{BuildHeadConfig, GenerateKeyPair, InitBootstrapFiles,
   *   - `submit-deposit` / `submit-l2-tx` — drive a running head ([[SubmitDeposit]],
   *     [[SubmitL2Transaction]])
   *   - `migrate` — sweep a wallet ([[Migrate]])
+  *   - `scaffold` — write the Docker workspace files for a repo-less user ([[Scaffold]])
   *   - `version` — print the baked build identity (also available as `--version`)
   *
   * This is the single main class packaged by native-packager and the Docker image entrypoint, so
@@ -51,6 +52,7 @@ object Main
           SubmitDeposit.command,
           SubmitL2Transaction.command,
           Migrate.command,
+          Scaffold.command,
           versionCommand
         )
 

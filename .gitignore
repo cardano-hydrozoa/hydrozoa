@@ -38,7 +38,7 @@ target/
 /CLAUDE.local.md
 
 # keygen-fleet output (rosters, private configs, signing keys — never commit)
-/config/demo/
+/config/demo*/
 
 # Local template override with real credentials (never commit)
 /config/template/peer-private.template.json.local

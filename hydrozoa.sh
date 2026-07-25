@@ -1,7 +1,7 @@
 # Source this to get the `hydrozoa` Docker CLI alias, so you don't retype the docker run flags:
 #
 #     export BLOCKFROST_API_KEY=preview…      # your key (a secret — not stored here)
-#     source ./hydrozoa-docker.sh
+#     source ./hydrozoa.sh
 #     hydrozoa keygen-fleet 2 4 2
 #     hydrozoa build-head-config
 #
