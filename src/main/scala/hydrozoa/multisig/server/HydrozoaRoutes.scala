@@ -2,6 +2,7 @@ package hydrozoa.multisig.server
 
 import cats.effect.IO
 import cats.syntax.traverse.*
+import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
@@ -465,6 +466,20 @@ class HydrozoaRoutes(
             .description("Liveness — always 200 while the process is serving HTTP.")
             .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
 
+    private val versionEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("version")
+            .name("getVersion")
+            .out(jsonBody[VersionResponse])
+            .description(
+              "The build identity (version, git commit, build time) baked in at compile."
+            )
+            .serverLogicSuccess(_ =>
+                IO.pure(
+                  VersionResponse(BuildInfo.version, BuildInfo.gitCommit, BuildInfo.builtAtString)
+                )
+            )
+
     /** Readiness — `200` only while the head is [[NodeStatus.Active]] (open on L1); otherwise
       * `503`, always with the lifecycle status in the body, so a proxy routes user traffic here
       * only when the node can serve it. The verdict is the status code; the body is diagnostic.
@@ -554,6 +569,7 @@ class HydrozoaRoutes(
           blockRolloutEndpoint,
           healthEndpoint,
           readyEndpoint,
+          versionEndpoint,
           finalizeEndpoint
         ) ++ blockEffectKindEndpoints
 

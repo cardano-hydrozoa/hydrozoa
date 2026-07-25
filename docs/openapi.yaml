@@ -356,6 +356,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+  /version:
+    get:
+      description: The build identity (version, git commit, build time) baked in at
+        compile.
+      operationId: getVersion
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
   /api/admin/finalize:
     post:
       tags:
@@ -1476,6 +1488,20 @@ components:
         index:
           type: integer
           format: int32
+    VersionResponse:
+      title: VersionResponse
+      type: object
+      required:
+      - version
+      - gitCommit
+      - buildTime
+      properties:
+        version:
+          type: string
+        gitCommit:
+          type: string
+        buildTime:
+          type: string
   securitySchemes:
     httpAuth:
       type: http

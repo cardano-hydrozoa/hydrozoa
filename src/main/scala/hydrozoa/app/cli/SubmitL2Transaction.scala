@@ -1,9 +1,9 @@
-package hydrozoa.examples.demo
+package hydrozoa.app.cli
 
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
+import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -37,18 +37,17 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   sbt "examples/runMain hydrozoa.examples.demo.SubmitL2Transaction [--config-dir config/demo] \
-  *     [--head-uri http://localhost:8080]"
+  *   hydrozoa submit-l2-tx [--config-dir config/demo] [--head-uri http://localhost:8080]
   * }}}
   */
-object SubmitL2Transaction
-    extends CommandIOApp(
-      name = "submit-l2-tx",
-      header = "Interactively build, sign, and submit an L2 transaction to a running head"
-    ):
+object SubmitL2Transaction:
 
-    override def main: Opts[IO[ExitCode]] =
-        (DemoOptions.configDirOpt, DemoOptions.headUriOpt).mapN(run)
+    /** The `submit-l2-tx` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "submit-l2-tx",
+          header = "Interactively build, sign, and submit an L2 transaction to a running head"
+        )((DemoOptions.configDirOpt, DemoOptions.headUriOpt).mapN(run))
 
     private def run(configDir: Path, headUri: Uri): IO[ExitCode] =
         EmberClientBuilder.default[IO].build.use { client =>
@@ -218,13 +217,9 @@ end SubmitL2Transaction
 
 /** The CLI options shared by the demo targets. */
 private object DemoOptions {
-    val configDirOpt: Opts[Path] =
-        Opts.option[String](
-          "config-dir",
-          "The config directory (head-config/ + private/), default config/demo",
-          short = "c"
-        ).map(Path.of(_))
-            .withDefault(Path.of("config/demo"))
+    // The config home (head-config/ + private/): `--home` / $HYDROZOA_HOME / config/demo, shared
+    // with the bootstrap subcommands.
+    val configDirOpt: Opts[Path] = Bootstrap.homeOpt
 
     val headUriOpt: Opts[Uri] =
         Opts.option[String](

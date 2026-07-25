@@ -4,8 +4,7 @@ import cats.data.{NonEmptyList, NonEmptyMap, Validated}
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.bloxbean.cardano.client.util.HexUtil
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
@@ -76,6 +75,29 @@ object Bootstrap:
 
             (vKey, sKey)
         }
+
+    /** The config home directory shared by every bootstrap/CLI subcommand: `--home`, else the
+      * `$HYDROZOA_HOME` env var, else `config/demo`. All the generated paths (the bootstrap
+      * directory, per-peer private configs, the head config) are derived from it via
+      * [[HomeLayout]], so the commands need no path flags — set `HYDROZOA_HOME` once (the Docker
+      * alias does) and run `hydrozoa keygen-fleet 2 4 2`, `hydrozoa build-head-config`, ….
+      */
+    val homeOpt: Opts[Path] =
+        Opts.option[String]("home", "Config home directory ($HYDROZOA_HOME, default config/demo)")
+            .orElse(Opts.env[String]("HYDROZOA_HOME", "Config home directory"))
+            .map(Path.of(_))
+            .withDefault(Path.of("config/demo"))
+
+    /** The fixed layout under the config home ([[homeOpt]]) that every subcommand agrees on. */
+    object HomeLayout {
+        def bootstrapDir(home: Path): Path = home.resolve("bootstrap")
+        def roster(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.roster)
+        def scriptRefs(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.scriptRefs)
+        def privateConfig(home: Path, label: String): Path =
+            home.resolve("private").resolve(label).resolve("private.json")
+        def headConfig(home: Path): Path =
+            home.resolve("head-config").resolve("head-config.json")
+    }
 
     // Shared peer-topology decoders, used by both `Membership` (the roster) and `BootstrapConfig`
     // (the full config). Nested in the enclosing object so both companions see them.
@@ -534,12 +556,7 @@ end Bootstrap
   *     --template config/template/peer-private.template.json --out nodes/head-0/private.json"
   * }}}
   */
-object GenerateKeyPair
-    extends CommandIOApp(
-      name = "keygen",
-      header = "Generate an Ed25519 key pair; optionally register it in a roster " +
-          "and write a private node config"
-    ):
+object GenerateKeyPair:
 
     /** The peer role a generated key pair is registered under. */
     enum Role:
@@ -584,38 +601,55 @@ object GenerateKeyPair
             .map(Path.of(_))
             .orNone
 
-    override def main: Opts[IO[ExitCode]] =
-        (rosterOpt, roleOpt, wsAddressOpt, hubOpt, templateOpt, outOpt)
-            .mapN(generateAndWrite)
+    /** The `keygen` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "keygen",
+          header = "Generate an Ed25519 key pair; optionally register it in a roster " +
+              "and write a private node config"
+        )(runOpts)
 
-    /** Generate the key pair, print it, and perform whichever file outputs the options request. */
-    private def generateAndWrite(
+    private def runOpts: Opts[IO[ExitCode]] =
+        (rosterOpt, roleOpt, wsAddressOpt, hubOpt, templateOpt, outOpt)
+            .mapN((roster, role, ws, hub, template, out) =>
+                generateAndWrite(roster, role, ws, hub, template, out)
+            )
+
+    /** Generate the key pair, print it, and perform whichever file outputs the options request.
+      * When `verbose` is false (the [[KeygenFleet]] path, which generates many peers at once), the
+      * per-key printout — including the signing key — is suppressed; the caller reports progress.
+      */
+    private[bootstrap] def generateAndWrite(
         roster: Option[Path],
         role: Option[Role],
         wsAddress: Option[Uri],
         hub: Option[Int],
         template: Option[Path],
-        out: Option[Path]
-    ): IO[ExitCode] = for {
-        _ <- validateOptionCombos(roster, role, wsAddress, hub, template, out)
-        keyPair <- Bootstrap.generateKeyPair()
-        (vKey, sKey) = keyPair
-        vKeyHex = mkHex(vKey.bytes.toArray)
-        sKeyHex = mkHex(sKey.bytes.toArray)
-        address = vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get
-        _ <- IO.println("Generated new Ed25519 key pair:")
-        _ <- IO.println(s"Verification key (32 bytes): $vKeyHex")
-        _ <- IO.println(s"Signing key (32 bytes): $sKeyHex")
-        _ <- IO.println(s"Testnet address: $address")
-        _ <- roster.traverse_(path =>
-            registerInRoster(path, role.get, vKeyHex, wsAddress, hub) *>
-                IO.println(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
-        )
-        _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
-            writePrivateConfig(templatePath, outPath, role.get, vKeyHex, sKeyHex) *>
-                IO.println(s"Wrote private config: $outPath")
-        }
-    } yield ExitCode.Success
+        out: Option[Path],
+        verbose: Boolean = true
+    ): IO[ExitCode] = {
+        def say(msg: String): IO[Unit] = IO.whenA(verbose)(IO.println(msg))
+        for {
+            _ <- validateOptionCombos(roster, role, wsAddress, hub, template, out)
+            keyPair <- Bootstrap.generateKeyPair()
+            (vKey, sKey) = keyPair
+            vKeyHex = mkHex(vKey.bytes.toArray)
+            sKeyHex = mkHex(sKey.bytes.toArray)
+            address = vKey.shelleyAddress()(using CardanoNetwork.Preview).toBech32.get
+            _ <- say("Generated new Ed25519 key pair:")
+            _ <- say(s"Verification key (32 bytes): $vKeyHex")
+            _ <- say(s"Signing key (32 bytes): $sKeyHex")
+            _ <- say(s"Testnet address: $address")
+            _ <- roster.traverse_(path =>
+                registerInRoster(path, role.get, vKeyHex, wsAddress, hub) *>
+                    say(s"Registered ${role.get.toString.toLowerCase} peer in roster: $path")
+            )
+            _ <- (template, out).tupled.traverse_ { (templatePath, outPath) =>
+                writePrivateConfig(templatePath, outPath, role.get, vKeyHex, sKeyHex) *>
+                    say(s"Wrote private config: $outPath")
+            }
+        } yield ExitCode.Success
+    }
 
     /** Reject option combinations the file outputs can't act on. */
     private def validateOptionCombos(
@@ -810,11 +844,7 @@ end GenerateKeyPair
   * "recover the head's funds" reading held only for the single-peer demo, where finalization
   * returns everything to peer 0's own address and this tool then sweeps it.
   */
-object Migrate
-    extends CommandIOApp(
-      name = "migrate",
-      header = "Send all UTXOs at the peer's wallet address to a destination address"
-    ):
+object Migrate:
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("hydrozoa.bootstrap.Migrate"))
@@ -825,7 +855,14 @@ object Migrate
         Opts.argument[String]("peer-private.json").map(Path.of(_))
     private val destArg: Opts[String] = Opts.argument[String]("bech32-destination")
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `migrate` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "migrate",
+          header = "Send all UTXOs at the peer's wallet address to a destination address"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (headArg, privateArg, destArg).mapN(migrateAllFunds)
 
     private def migrateAllFunds(
@@ -991,16 +1028,10 @@ end Migrate
   * against [[HydrozoaBlueprint]] here, so a stale deployment fails the build rather than every
   * node's startup.
   */
-object BuildHeadConfig
-    extends CommandIOApp(
-      name = "build-head-config",
-      header = "Build the shared head-config.json artifact every node loads"
-    ):
+object BuildHeadConfig:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
-    private val bootstrapDirArg: Opts[Path] =
-        Opts.argument[String]("bootstrap-dir").map(Path.of(_))
     private val blockfrostKeyOpt: Opts[String] =
         Opts.option[String](
           "blockfrost-key",
@@ -1009,13 +1040,22 @@ object BuildHeadConfig
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         )
-    private val outOpt: Opts[Path] =
-        Opts.option[String]("out", "Output path (default head-config.json)", short = "o")
-            .map(Path.of(_))
-            .withDefault(Path.of("head-config.json"))
 
-    override def main: Opts[IO[ExitCode]] =
-        (bootstrapDirArg, blockfrostKeyOpt, outOpt).mapN(buildHeadConfig)
+    /** The `build-head-config` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "build-head-config",
+          header = "Build the shared head-config.json artifact every node loads"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
+        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, key) =>
+            buildHeadConfig(
+              Bootstrap.HomeLayout.bootstrapDir(home),
+              key,
+              Bootstrap.HomeLayout.headConfig(home)
+            )
+        )
 
     private def buildHeadConfig(
         bootstrapDir: Path,
@@ -1070,7 +1110,10 @@ object BuildHeadConfig
               bootstrapConfig,
               scriptReferenceUtxos
             )
-            _ <- IO.blocking(Files.writeString(outPath, headConfig.asJson.spaces2))
+            _ <- IO.blocking {
+                Option(outPath.getParent).foreach(Files.createDirectories(_))
+                Files.writeString(outPath, headConfig.asJson.spaces2)
+            }
             _ <- logger.info(s"Wrote shared head config to $outPath")
         } yield ExitCode.Success
 
@@ -1098,11 +1141,7 @@ end BuildHeadConfig
   *   sbt "runMain hydrozoa.bootstrap.InitBootstrapFiles <roster.json> [--out-dir .]"
   * }}}
   */
-object InitBootstrapFiles
-    extends CommandIOApp(
-      name = "init-bootstrap-files",
-      header = "Write defaults.json and an l2-cardano-eutxo.json template from a roster"
-    ):
+object InitBootstrapFiles:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.InitBootstrapFiles")
 
@@ -1126,10 +1165,17 @@ object InitBootstrapFiles
             case other     => Validated.invalidNel(s"unknown network: $other")
         }.withDefault(CardanoNetwork.Preview)
 
-    override def main: Opts[IO[ExitCode]] =
+    /** The `init-bootstrap-files` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "init-bootstrap-files",
+          header = "Write defaults.json and an l2-cardano-eutxo.json template from a roster"
+        )(runOpts)
+
+    private def runOpts: Opts[IO[ExitCode]] =
         (rosterArg, outDirOpt, coilQuorumOpt, cardanoNetworkOpt).mapN(init)
 
-    private def init(
+    private[bootstrap] def init(
         rosterPath: Path,
         outDir: Path,
         coilQuorumOverride: Option[Int],
@@ -1190,6 +1236,116 @@ object InitBootstrapFiles
 
 end InitBootstrapFiles
 
+/** Generate a whole head's keys and bootstrap files in one command: an Ed25519 key pair per head
+  * and coil peer (each registered in the roster and given a filled private config), then the shared
+  * `defaults.json` + `l2-cardano-eutxo.json`. Coil peers are hubbed round-robin across the head
+  * peers, and the target network is read from the template's `blockfrostApiKey` prefix. This is the
+  * [[GenerateKeyPair]] + [[InitBootstrapFiles]] ladder run in one process, so `just keygen-fleet`
+  * and `hydrozoa keygen-fleet` are the same command on either surface.
+  */
+object KeygenFleet:
+    import GenerateKeyPair.Role
+
+    private val defaultTemplate = "config/template/peer-private.template.json.local"
+    private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
+
+    private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
+    private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
+    private val quorumArg: Opts[Int] = Opts.argument[Int]("coil-quorum")
+    private val templateOpt: Opts[Path] =
+        Opts.option[String](
+          "template",
+          s"Private-config template to fill with each peer's keys (default $defaultTemplate)"
+        ).map(Path.of(_))
+            .withDefault(Path.of(defaultTemplate))
+
+    /** The `keygen-fleet` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "keygen-fleet",
+          header =
+              "Generate a whole head's keys + bootstrap files (keygen per peer, then init-bootstrap-files)"
+        )((headsArg, coilsArg, quorumArg, Bootstrap.homeOpt, templateOpt).mapN(run))
+
+    private def run(
+        heads: Int,
+        coils: Int,
+        coilQuorum: Int,
+        home: Path,
+        template: Path
+    ): IO[ExitCode] = {
+        val bootstrapDir = Bootstrap.HomeLayout.bootstrapDir(home)
+        val rosterPath = Bootstrap.HomeLayout.roster(home)
+        def privatePath(label: String): Path = Bootstrap.HomeLayout.privateConfig(home, label)
+        for {
+            _ <- IO.raiseWhen(heads < 1)(
+              new IllegalArgumentException(s"heads must be at least 1, got $heads")
+            )
+            _ <- IO.raiseWhen(Files.exists(rosterPath))(
+              new IllegalStateException(
+                s"$rosterPath already exists; move it away or pick another --home"
+              )
+            )
+            _ <- IO.raiseUnless(Files.exists(template))(
+              new IllegalArgumentException(
+                s"$template not found — copy config/template/peer-private.template.json to it " +
+                    "and set blockfrostApiKey"
+              )
+            )
+            network <- deriveNetwork(template)
+            _ <- IO.println(
+              s"Generating a $heads-head / $coils-coil fleet on $network (coil quorum $coilQuorum)"
+            )
+            _ <- (0 until heads).toList.traverse_ { i =>
+                GenerateKeyPair.generateAndWrite(
+                  roster = Some(rosterPath),
+                  role = Some(Role.Head),
+                  wsAddress = Some(Uri.unsafeFromString(s"ws://head-$i:4001")),
+                  hub = None,
+                  template = Some(template),
+                  out = Some(privatePath(s"head-$i")),
+                  verbose = false
+                ) *> IO.println(s"  head-$i  -> ${privatePath(s"head-$i")}")
+            }
+            _ <- (0 until coils).toList.traverse_ { i =>
+                GenerateKeyPair.generateAndWrite(
+                  roster = Some(rosterPath),
+                  role = Some(Role.Coil),
+                  wsAddress = None,
+                  hub = Some(i % heads),
+                  template = Some(template),
+                  out = Some(privatePath(s"coil-$i")),
+                  verbose = false
+                ) *> IO.println(s"  coil-$i  -> ${privatePath(s"coil-$i")} (hub head-${i % heads})")
+            }
+            exit <- InitBootstrapFiles.init(rosterPath, bootstrapDir, Some(coilQuorum), network)
+        } yield exit
+    }
+
+    /** Derive the target network from the template's `blockfrostApiKey` prefix (as the justfile
+      * did) — the key's `preview…` / `preprod…` / `mainnet…` prefix picks the network.
+      */
+    private def deriveNetwork(template: Path): IO[CardanoNetwork] =
+        for {
+            content <- IO.blocking(Files.readString(template))
+            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
+              new IllegalArgumentException(s"no blockfrostApiKey found in $template")
+            )
+            network <-
+                if key.startsWith("preview") then IO.pure(CardanoNetwork.Preview)
+                else if key.startsWith("preprod") then IO.pure(CardanoNetwork.Preprod)
+                else if key.startsWith("mainnet") then IO.pure(CardanoNetwork.Mainnet)
+                else
+                    IO.raiseError(
+                      new IllegalArgumentException(
+                        s"cannot derive the network from blockfrostApiKey in $template " +
+                            "(expected a preview…/preprod…/mainnet… key)"
+                      )
+                    )
+        } yield network
+
+end KeygenFleet
+
 /** Print head peer 0's L1 address — the funding target for the head (in the demo model head peer 0
   * funds everything). Deriving it from the roster on demand beats writing address files next to the
   * private configs: fewer stale copies lying around to send funds to.
@@ -1202,21 +1358,18 @@ end InitBootstrapFiles
   *   sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress [--bootstrap-dir config/demo/bootstrap]"
   * }}}
   */
-object PrintHeadZeroAddress
-    extends CommandIOApp(
-      name = "head-zero-address",
-      header = "Print head peer 0's L1 funding address"
-    ):
+object PrintHeadZeroAddress:
 
-    private val bootstrapDirOpt: Opts[Path] =
-        Opts.option[String](
-          "bootstrap-dir",
-          "The bootstrap directory (roster.json + defaults.json)",
-          short = "d"
-        ).map(Path.of(_))
-            .withDefault(Path.of("config/demo/bootstrap"))
-
-    override def main: Opts[IO[ExitCode]] = bootstrapDirOpt.map(printHeadZeroAddress)
+    /** The `head-zero-address` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "head-zero-address",
+          header = "Print head peer 0's L1 funding address"
+        )(
+          Bootstrap.homeOpt.map(home =>
+              printHeadZeroAddress(Bootstrap.HomeLayout.bootstrapDir(home))
+          )
+        )
 
     private def printHeadZeroAddress(dir: Path): IO[ExitCode] =
         for {

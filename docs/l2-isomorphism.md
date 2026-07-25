@@ -66,8 +66,8 @@ the application already bakes a headId-like domain separator into its own txs. L
 | Validity | the tx's own slot interval, interpreted with the head's `SlotConfig`; block-creation start must fall inside it | submission (stateful) |
 | Fee | the fee field must be `0`, so inputs must exactly balance outputs — the L2 ledger has no fee pot (Scalus builders: `withZeroFees` + a prebalanced diff handler) | `L2ConformanceValidator` (`fee == 0`) at submission |
 
-`examples/src/main/scala/hydrozoa/examples/demo/SubmitL2Transaction.scala` builds exactly this
-shape end-to-end and is the reference client.
+`src/main/scala/hydrozoa/app/cli/SubmitL2Transaction.scala` (`just submit-l2-tx`) builds exactly
+this shape end-to-end and is the reference client.
 
 What a client needs from the head: `GET /head/info` serves the `headId` (for the pin) and the
 deposit timing offsets (`submissionDurationSeconds`, `absorptionStartOffsetSeconds`,
@@ -149,7 +149,7 @@ The deposit path, in order (client steps marked):
    production: the obligations spawn as L2 utxos, keyed by a synthetic genesis id
    ([Opening state](#opening-state) uses the same convention).
 
-`examples/src/main/scala/hydrozoa/examples/demo/SubmitDeposit.scala` (`just deposit`,
+`src/main/scala/hydrozoa/app/cli/SubmitDeposit.scala` (`just submit-deposit`,
 DEPLOYMENT.md §5) is the reference deposit client.
 
 ### Deposit timing: the head derives the accept-by deadline from the tx TTL
