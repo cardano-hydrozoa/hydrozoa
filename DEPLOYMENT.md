@@ -110,16 +110,17 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 > ```bash
 > export HYDROZOA_VERSION=0.1.0
 > export BLOCKFROST_API_KEY=preview…      # your Blockfrost key; the bootstrap commands read it
-> export HYDROZOA_HOME=/config/demo       # the CLI reads/writes configs here (a dir under /config)
+> export HYDROZOA_HOME=./config/demo      # the CLI reads/writes configs here
 > docker pull ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"
 > alias hydrozoa='docker run --rm -it --network host -e BLOCKFROST_API_KEY -e HYDROZOA_HOME \
->   --user root -v "$PWD/config:/config" \
+>   --user root -v "$PWD/config:/work/config" -w /work \
 >   ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"'
 > ```
 >
-> `HYDROZOA_HOME=/config/demo` maps to `./config/demo` on the host (via the mount). To keep separate
-> config sets, point it at another subdir, e.g. `/config/demo-docker`, and pass the matching
-> `HYDROZOA_CONFIG` to `docker compose` (§4).
+> `HYDROZOA_HOME=./config/demo` is the same relative path inside the container (working dir `/work`,
+> where the alias mounts `config/`) and on the host — so it's the same value local/`just` runs use,
+> and the same as `HYDROZOA_CONFIG` for `docker compose` (§4). For a separate config set, point both
+> at another subdir, e.g. `./config/demo-docker`.
 >
 > **This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
 > `user: root`) — assumes rootless Docker**, the tested configuration (see §4). Under rootless,
@@ -364,10 +365,10 @@ docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 o
 #   just docker-image && HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.0 docker compose up -d
 ```
 
-**Which config does compose use?** `HYDROZOA_CONFIG` (host path, default `./config/demo`) — it
-selects the directory each container mounts `head-config.json` + its `private.json` from. It is the
-host-side counterpart of the CLI's `HYDROZOA_HOME`: generate a config set with `HYDROZOA_HOME=/config/demo-docker`
-(→ host `./config/demo-docker`), then run it with `HYDROZOA_CONFIG=./config/demo-docker`.
+**Which config does compose use?** `HYDROZOA_CONFIG` (default `./config/demo`) — it selects the
+directory each container mounts `head-config.json` + its `private.json` from. It takes the same value
+as the CLI's `HYDROZOA_HOME`: generate a config set with `HYDROZOA_HOME=./config/demo-docker`, then
+run it with `HYDROZOA_CONFIG=./config/demo-docker`.
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
 
