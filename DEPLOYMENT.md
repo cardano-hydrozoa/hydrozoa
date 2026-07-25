@@ -101,13 +101,17 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 > **Tip — you probably don't need to build.** A pre-built image is published to the GitHub
 > Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
-> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt:
+> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Pull it and alias
+> `hydrozoa` to it **once**, and every `hydrozoa <command>` throughout this guide runs from the image:
 >
 > ```bash
 > docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
+> alias hydrozoa='docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/config:/work/config" \
+>   -w /work ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0'
 > ```
 >
-> The rest of this section is only for building a different version from source.
+> (The interactive `submit-*` commands additionally need `-it --network host`; see §5.) The rest of
+> this section is only for building a different version from source.
 
 Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using
 Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
@@ -135,9 +139,6 @@ just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
 #    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
 ```
 
-Pushing a `v*` tag publishes the image to ghcr (`.github/workflows/release.yml`, RELEASE.md);
-ordinary pushes and PRs run checks only.
-
 ---
 
 ## 3. Configuration
@@ -161,17 +162,10 @@ EUTXO node may omit it.
 
 ### Generating a head's configuration
 
-All commands run inside `nix develop` (after a one-time `just stage`; see §2). The `just` recipes
-are Nix-shell convenience wrappers (they extract the Blockfrost key from the `.local` template,
-create output dirs, and loop); each **Docker:** line below is the plain equivalent for non-Nix
-users, driving the same CLI baked into the image. Define the alias once — then every `hydrozoa …`
-command below runs unchanged (it mounts the repo's `config/` and writes files back as your user):
-
-```bash
-alias hydrozoa='docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/config:/work/config" \
-  -w /work cardano-hydrozoa/hydrozoa'
-export BLOCKFROST_API_KEY=preview…        # the Docker path passes the key explicitly
-```
+Two equivalent surfaces run the same CLI: **Nix** users call the `just` recipes (thin wrappers that
+extract the Blockfrost key from the `.local` template and create output dirs), after a one-time
+`just stage` (§2); **Docker** users call `hydrozoa …` via the alias from §2 (`export
+BLOCKFROST_API_KEY=…` first — the image passes the key explicitly). Each step below shows both.
 
 The walkthrough uses the docker topology: **2 head peers, 4 coil peers, coil quorum 2**. The
 pipeline turns operator-authored files into the two runtime files each node needs:
@@ -215,23 +209,13 @@ The template is read at generation time — regenerating means fresh keys, so re
 ```bash
 just keygen-fleet 2 4 2            # HEADS COILS QUORUM, → config/demo/
 # or: just keygen-fleet 2 4 2 mydir           # custom output dir
-```
-
-Runs `hydrozoa keygen` once per peer, then `hydrozoa init-bootstrap-files`. Docker has no
-fleet-loop wrapper, so run those directly (`--cardano-network` matches the key prefix):
-
-```bash
 # Docker
-tmpl=config/template/peer-private.template.json.local
-for i in 0 1;     do hydrozoa keygen --roster config/demo/bootstrap/roster.json --role head \
-  --ws-address ws://head-$i:4001 --template $tmpl --out config/demo/private/head-$i/private.json; done
-for i in 0 1 2 3; do hydrozoa keygen --roster config/demo/bootstrap/roster.json --role coil \
-  --hub $((i%2)) --template $tmpl --out config/demo/private/coil-$i/private.json; done
-hydrozoa init-bootstrap-files config/demo/bootstrap/roster.json --out-dir config/demo/bootstrap \
-  --coil-quorum 2 --cardano-network preview
+hydrozoa keygen-fleet 2 4 2 --out-dir config/demo
 ```
 
-Output layout:
+One command generates a key pair per peer (registered in the roster, with a filled private config),
+then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes from the template's
+Blockfrost-key prefix. Output layout:
 
 ```
 config/demo/
