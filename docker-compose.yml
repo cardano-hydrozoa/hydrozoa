@@ -9,7 +9,7 @@
 #
 # Bring-up (in the hydrozoa repo, inside `nix develop`):
 #   1. just keygen-fleet 2 4 2     (then fund head-0, build-bootstrap, build-head-config — §5)
-#   2. sbt docker:publishLocal
+#   2. just docker-image           (or: docker pull ghcr.io/cardano-hydrozoa/hydrozoa:<version>)
 #   3. docker compose up -d
 #
 # HYDROZOA_CONFIG overrides where the generated configs are read from (default ./config/demo);
@@ -24,13 +24,13 @@ networks:
       com.docker.network.driver.mtu: 1400
 
 x-hydrozoa: &hydrozoa
-  image: ${HYDROZOA_IMAGE:-cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT}
+  image: ${HYDROZOA_IMAGE:-cardano-hydrozoa/hydrozoa:0.1.0}
   # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
   # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head (§5b).
   user: root
   environment:
     JAVA_OPTS: -Xmx1g -Xms256m
-  command: ["/configs/head-config.json", "/configs/private.json"]
+  command: ["serve", "/configs/head-config.json", "/configs/private.json"]
   networks: [mesh]
   # Upstream resolver so the node can reach Blockfrost; the embedded DNS still resolves the
   # mesh service names (head-0, head-1, …) for the inter-peer WS mesh.

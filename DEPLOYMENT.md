@@ -74,7 +74,8 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
     `type` field — `{ "type": "deposit", … }` or `{ "type": "transaction", … }`);
   - **queries** — `GET /head/blocks[/{n}[/body]]`, `GET /head/requests[/{id}]` (lifecycle status per
     request), `GET /head/effects/{l1TxId}` (L1 effect by tx id);
-  - **observability** — `GET /health` (liveness), `GET /ready` (readiness);
+  - **observability** — `GET /health` (liveness), `GET /ready` (readiness), `GET /version` (the
+    baked version, git commit, and build time);
   - **admin** — `POST /api/admin/finalize` (basic-auth);
   - **L2 EUTXO queries** (EUTXO ledger only — a remote-ledger node serves neither):
     `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
@@ -98,8 +99,22 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ## 2. Building
 
-Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 21+ if not using
-Nix.
+> **Tip — you probably don't need to build.** A pre-built image is published to the GitHub
+> Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
+> command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Pull it and alias
+> `hydrozoa` to it **once**, and every `hydrozoa <command>` throughout this guide runs from the image:
+>
+> ```bash
+> docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
+> alias hydrozoa='docker run --rm -u "$(id -u):$(id -g)" -v "$PWD/config:/work/config" \
+>   -w /work ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0'
+> ```
+>
+> (The interactive `submit-*` commands additionally need `-it --network host`; see §5.) The rest of
+> this section is only for building a different version from source.
+
+Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using
+Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
@@ -108,15 +123,21 @@ just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
 
-Docker image (used by the composition in §4):
+Every deployment and runtime command is a subcommand of one packaged CLI, `hydrozoa` (`hydrozoa
+--help` lists them). Build it once — it launches fast and with clean output:
 
 ```bash
-sbt docker:publishLocal
-# -> cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT
-#    base eclipse-temurin:21-jre-jammy, EXPOSE 8080
+just stage             # -> target/universal/stage/bin/hydrozoa
+# the `just` recipes below (keygen-fleet, build-head-config, submit-deposit, …) invoke it directly
 ```
 
-There is no publish/deploy CI — GitHub Actions runs checks only.
+To build the Docker image locally instead of pulling it (the composition in §4 can use either):
+
+```bash
+just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
+#    base eclipse-temurin:25-jre, EXPOSE 8080
+#    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
+```
 
 ---
 
@@ -141,12 +162,16 @@ EUTXO node may omit it.
 
 ### Generating a head's configuration
 
-All commands run inside `nix develop`. The walkthrough uses the docker topology: **2 head peers,
-4 coil peers, coil quorum 2**. The pipeline turns operator-authored files into the two runtime
-files each node needs:
+Two equivalent surfaces run the same CLI: **Nix** users call the `just` recipes (thin wrappers that
+extract the Blockfrost key from the `.local` template and create output dirs), after a one-time
+`just stage` (§2); **Docker** users call `hydrozoa …` via the alias from §2 (`export
+BLOCKFROST_API_KEY=…` first — the image passes the key explicitly). Each step below shows both.
+
+The walkthrough uses the docker topology: **2 head peers, 4 coil peers, coil quorum 2**. The
+pipeline turns operator-authored files into the two runtime files each node needs:
 
 ```
-   keygen-fleet (one sbt run)                      the bootstrap directory (operator-authored)
+   keygen-fleet (keygen per peer, then init-bootstrap-files)   the bootstrap directory (operator-authored)
    ├─ bootstrap/roster.json ──────────┐  peer topology (head/coil vkeys, ws addresses, hubs)
    ├─ bootstrap/defaults.json ────────┤  network + head params + per-peer equity  (editable)
    ├─ bootstrap/l2-cardano-eutxo.json ┤  opening L2 outputs (one per head peer, editable)
@@ -179,14 +204,18 @@ files each node needs:
 
 The template is read at generation time — regenerating means fresh keys, so re-funding.
 
-**Step 2 — Generate keys, roster, and defaults in one run:**
+**Step 2 — Generate keys, roster, and defaults:**
 
 ```bash
 just keygen-fleet 2 4 2            # HEADS COILS QUORUM, → config/demo/
 # or: just keygen-fleet 2 4 2 mydir           # custom output dir
+# Docker
+hydrozoa keygen-fleet 2 4 2 --out-dir config/demo
 ```
 
-One sbt invocation: keygen once per peer, then the bootstrap files. Output layout:
+One command generates a key pair per peer (registered in the roster, with a filled private config),
+then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes from the template's
+Blockfrost-key prefix. Output layout:
 
 ```
 config/demo/
@@ -231,6 +260,8 @@ your network there; one 10k-tADA drip is plenty):
 
 ```bash
 just head-zero-address       # derives the address from bootstrap/{roster,defaults}.json on demand
+# Docker
+hydrozoa head-zero-address --bootstrap-dir config/demo/bootstrap
 ```
 
 The funding must cover equity + the whole head's fallback contingency + the opening L2 value +
@@ -242,6 +273,9 @@ network comes from the Blockfrost key):
 ```bash
 just deploy-scripts-and-g2-setup config/demo/private/head-0/private.json
 # -> config/demo/bootstrap/script-refs.json
+# Docker
+hydrozoa deploy-scripts-and-g2-setup --wallet config/demo/private/head-0/private.json \
+  --blockfrost-key "$BLOCKFROST_API_KEY" --out config/demo/bootstrap/script-refs.json
 ```
 
 **This step is optional when a committed default exists for the network**: with no
@@ -264,6 +298,10 @@ the ladder never changes.
 
 ```bash
 just build-head-config       # reads config/demo/bootstrap/, writes config/demo/head-config/head-config.json
+# Docker
+mkdir -p config/demo/head-config
+hydrozoa build-head-config config/demo/bootstrap \
+  --blockfrost-key "$BLOCKFROST_API_KEY" --out config/demo/head-config/head-config.json
 ```
 
 The build assembles the bootstrap directory's four files (roster, defaults, opening L2 state,
@@ -287,7 +325,7 @@ At this point every node has its two files, and the composition (§4) mounts
 
 - Config mounts come from `${HYDROZOA_CONFIG:-./config/demo}`: the shared `head-config.json` plus
   `head-N/private.json` or `coil-N/private.json` per node. `${HYDROZOA_IMAGE}` overrides the
-  hydrozoa image (default `cardano-hydrozoa/hydrozoa:0.1.0-SNAPSHOT`).
+  hydrozoa image (default `cardano-hydrozoa/hydrozoa:0.1.0`).
 
 Caveats:
 - **State is ephemeral.** No data volumes are mounted (only read-only config bind mounts), so both
@@ -305,7 +343,7 @@ Caveats:
 ### Bringing up the head
 
 ```bash
-sbt docker:publishLocal        # hydrozoa image (once, after code changes)
+just docker-image              # build the hydrozoa image locally (once, after code changes)
 docker compose up -d
 ```
 
@@ -370,10 +408,20 @@ code changes.
 
 ## 5. Demo: drive the running head
 
+These two commands are **interactive** (they prompt on the console) and reach the head over HTTP, so
+their Docker form needs a TTY and host networking — add `-it --network host` to the alias:
+
+```bash
+alias hydrozoa-live='docker run --rm -it --network host -u "$(id -u):$(id -g)" \
+  -v "$PWD/config:/work/config" -w /work cardano-hydrozoa/hydrozoa'
+```
+
 ### Submit an L2 transaction
 
 ```bash
 just submit-l2-tx        # or: just submit-l2-tx config/demo http://localhost:8081
+# Docker
+hydrozoa-live submit-l2-tx --config-dir config/demo --head-uri http://localhost:8080
 ```
 
 Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/cardano-eutxo/utxos/{address}`
@@ -408,7 +456,9 @@ Verify with `curl http://localhost:8080/l2/cardano-eutxo/utxos/<address>` for bo
 ### Deposit into the head
 
 ```bash
-just deposit
+just submit-deposit
+# Docker
+hydrozoa-live submit-deposit --config-dir config/demo --head-uri http://localhost:8080
 ```
 
 Pick a peer, pick one of its **L1** utxos (via the peer's Blockfrost backend — for the demo that
