@@ -106,7 +106,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           Json.arr().spaces2
         )
         Files.writeString(
-          dir.resolve(Bootstrap.BootstrapDir.scriptRefs),
+          dir.resolve(Bootstrap.BootstrapDir.refUtxos),
           """{
             |  "rulebasedTreasuryScriptInput": "d17362c69150ccf4cf0974ee4223f5f8c84b9171d74cd210aa042860a1a32ecd#0",
             |  "disputeResolutionScriptInput": "83ec7059e234a2d21b059ae81da478a2be994916675c7cede4617a8267a8e1ff#0",

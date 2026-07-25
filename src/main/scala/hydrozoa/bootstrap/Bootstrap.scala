@@ -93,7 +93,7 @@ object Bootstrap:
     object HomeLayout {
         def bootstrapDir(home: Path): Path = home.resolve("bootstrap")
         def roster(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.roster)
-        def scriptRefs(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.scriptRefs)
+        def refUtxos(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.refUtxos)
         def privateConfig(home: Path, label: String): Path =
             home.resolve("private").resolve(label).resolve("private.json")
         def headConfig(home: Path): Path =
@@ -221,14 +221,14 @@ object Bootstrap:
         val roster = "roster.json"
         val defaults = "defaults.json"
         val l2CardanoEutxo = "l2-cardano-eutxo.json"
-        val scriptRefs = "script-refs.json"
+        val refUtxos = "ref-utxos.json"
     }
 
     /** Read the bootstrap directory's four files ([[BootstrapDir]]) and assemble them into the
       * [[BootstrapConfig]]. The defaults decode against their own `cardanoNetwork` (the timing
       * codecs re-quantize against its slot config), so the network is read first and the rest
-      * decoded with it in scope. A missing `script-refs.json` falls back to the committed default
-      * for the network ([[BootstrapDir.defaultScriptRefsDir]]).
+      * decoded with it in scope. A missing `ref-utxos.json` falls back to the committed default for
+      * the network ([[BootstrapDir.defaultRefUtxosDir]]).
       */
     def readBootstrapDir(dir: Path): IO[BootstrapConfig] = {
         def readJson(path: Path): IO[Json] =
@@ -245,14 +245,14 @@ object Bootstrap:
             }
             l2StateJson <- readJson(dir.resolve(BootstrapDir.l2CardanoEutxo))
             l2State <- IO.fromEither(l2StateJson.as[List[L2Output]])
-            scriptRefsJson <- readScriptRefsJson(dir, network)
-            scriptRefs <- IO.fromEither(scriptRefsJson.as[ScriptReferenceUtxos.Unresolved])
+            refUtxosJson <- readRefUtxosJson(dir, network)
+            refUtxos <- IO.fromEither(refUtxosJson.as[ScriptReferenceUtxos.Unresolved])
         } yield BootstrapConfig(
           cardanoNetwork = defaults.cardanoNetwork,
           headParams = defaults.headParams,
           headPeers = roster.headPeers,
           coilPeers = roster.coilPeers,
-          scriptReferenceUtxos = scriptRefs,
+          scriptReferenceUtxos = refUtxos,
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
           blockZeroStartTime = defaults.blockZeroStartTime,
@@ -260,14 +260,14 @@ object Bootstrap:
         )
     }
 
-    /** Read the script-refs JSON: the bootstrap directory's own `script-refs.json` when present,
-      * else the per-network default baked into the image (`/scaffold/script-refs/<network>.json`,
+    /** Read the ref-utxos JSON: the bootstrap directory's own `ref-utxos.json` when present, else
+      * the per-network default baked into the image (`/scaffold/ref-utxos/<network>.json`,
       * committed under src/main/resources for Preview + Preprod). Fails when neither exists — the
       * network has no baked default, so run `hydrozoa deploy-scripts-and-g2-setup` first.
       */
-    private def readScriptRefsJson(dir: Path, network: CardanoNetwork): IO[Json] = {
-        val own = dir.resolve(BootstrapDir.scriptRefs)
-        val resource = s"/scaffold/script-refs/${network.toString.toLowerCase}.json"
+    private def readRefUtxosJson(dir: Path, network: CardanoNetwork): IO[Json] = {
+        val own = dir.resolve(BootstrapDir.refUtxos)
+        val resource = s"/scaffold/ref-utxos/${network.toString.toLowerCase}.json"
         IO.blocking {
             if Files.exists(own) then Files.readString(own)
             else
@@ -1016,7 +1016,7 @@ end Migrate
   *
   * Reads the bootstrap directory's four operator-facing files — `roster.json` (the peer topology
   * keygen writes), `defaults.json` (network, head params, equity, optional block-zero timing),
-  * `l2-cardano-eutxo.json` (the opening L2 state), and `script-refs.json` (from
+  * `l2-cardano-eutxo.json` (the opening L2 state), and `ref-utxos.json` (from
   * [[DeployScriptsAndG2Setup]], with committed per-network defaults as the fallback) — assembles
   * them into the [[Bootstrap.BootstrapConfig]], funds the head from head peer 0's L1 address (via
   * the Blockfrost backend), and writes the resulting [[HeadConfig]] as JSON to `--out` (default

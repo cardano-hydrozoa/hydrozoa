@@ -105,8 +105,8 @@ head-zero-address HOME="head/demo": _require-launcher
 
 # Deploy the treasury + dispute validators (and, unless reused, the G2 setup ladder), funded by
 # head peer 0's wallet under HOME (change returns to it). The network is derived from the Blockfrost
-# key (read from the .local template, else $BLOCKFROST_API_KEY). Writes HOME/bootstrap/script-refs.json
-# for build-head-config. Pass LADDER_REFS (an existing script-refs.json) to reuse the already-deployed
+# key (read from the .local template, else $BLOCKFROST_API_KEY). Writes HOME/bootstrap/ref-utxos.json
+# for build-head-config. Pass LADDER_REFS (an existing ref-utxos.json) to reuse the already-deployed
 # ladder and redeploy only the validators.
 deploy-scripts-and-g2-setup HOME="head/demo" LADDER_REFS="": _require-launcher
   #!/usr/bin/env bash
@@ -121,7 +121,7 @@ deploy-scripts-and-g2-setup HOME="head/demo" LADDER_REFS="": _require-launcher
   {{hydrozoa}} deploy-scripts-and-g2-setup "${args[@]}"
 
 # Build the shared head-config.json from HOME's bootstrap files (roster, defaults, l2-cardano-eutxo,
-# script-refs), writing HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
+# ref-utxos), writing HOME/head-config/head-config.json. Reads the Blockfrost key from the .local
 # template (else $BLOCKFROST_API_KEY); head peer 0's address must be funded on the target network
 # first (the tool logs the exact lovelace required and fails with the shortfall if not).
 build-head-config HOME="head/demo": _require-launcher
