@@ -4,8 +4,8 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.backend.cardano.{CardanoBackend as L1Backend, FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
@@ -18,23 +18,22 @@ import org.scalacheck.Prop
 import scala.concurrent.duration.*
 import test.{SeedPhrase, TestPeers}
 
-/** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain
-  * treasury lags behind the latest hard-confirmed stack, the RBA must vote with the SEC whose
-  * `versionMajor` matches the on-chain treasury (not the newest SEC in persistence), so the
-  * built Vote passes the Plutus dispute-script's `versionMajor field must match` check.
+/** Regression test for [[hydrozoa.rulebased.RuleBasedActor.loadAction]]: when the on-chain treasury
+  * lags behind the latest hard-confirmed stack, the RBA must vote with the SEC whose `versionMajor`
+  * matches the on-chain treasury (not the newest SEC in persistence), so the built Vote passes the
+  * Plutus dispute-script's `versionMajor field must match` check.
   *
   * Scenario:
   *   1. 2-peer head. Per-peer [[FirewalledCardanoBackend]] drops any [[SettlementTx]] whose
   *      `majorVersionProduced == 2` so the on-chain treasury stays pinned at major-1 while the
   *      off-chain view advances.
   *   2. Both peers hard-confirm through major-2 off-chain.
-  *   3. CL notices the on-chain treasury is stale and dispatches
-  *      `Action.FallbackToRuleBased`; HMRM auto-spawns
-  *      [[hydrozoa.rulebased.RuleBasedRegimeManager]], which spawns
+  *   3. CL notices the on-chain treasury is stale and dispatches `Action.FallbackToRuleBased`; HMRM
+  *      auto-spawns [[hydrozoa.rulebased.RuleBasedRegimeManager]], which spawns
   *      [[hydrozoa.rulebased.RuleBasedActor]].
-  *   4. `loadAction(treasuryVersionMajor)` walks backward through hard-confirmed stacks and
-  *      picks the last SEC matching `versionMajor = 1` (the on-chain treasury's). The Vote it
-  *      builds and submits passes Plutus and lands on chain.
+  *   4. `loadAction(treasuryVersionMajor)` walks backward through hard-confirmed stacks and picks
+  *      the last SEC matching `versionMajor = 1` (the on-chain treasury's). The Vote it builds and
+  *      submits passes Plutus and lands on chain.
   */
 object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version Mismatch"):
 
@@ -47,7 +46,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
     // ------------------------------------------------------------------
     // Test properties
     // ------------------------------------------------------------------
-    
+
     val _ = property("ws: RRM votes at latest hard-confirmed major even when on-chain lags") =
         testProperty(TransportMode.WebSocket)
 
@@ -97,8 +96,8 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
 
             // 4. Every head peer's RBA finds the SEC matching the on-chain treasury's
             // versionMajor and submits a Vote that passes Plutus.
-            _    <- lift(ctx.allHeadsBuildingVote.get.timeout(scenarioTimeout))
-            _    <- lift(ctx.allHeadsVoteSubmittedOk.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.allHeadsBuildingVote.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.allHeadsVoteSubmittedOk.get.timeout(scenarioTimeout))
             errs <- lift(ctx.harness.sutErrors.get)
             _ <- assertWith(
               !errs.exists(_.contains("versionMajor field must match")),
@@ -158,7 +157,7 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             bothPeersConfirmedMajor2 <- Resource.eval(Deferred[IO, Unit])
             allHeadsBuildingVote <- Resource.eval(Deferred[IO, Unit])
-            allHeadsVoteSubmittedOk    <- Resource.eval(Deferred[IO, Unit])
+            allHeadsVoteSubmittedOk <- Resource.eval(Deferred[IO, Unit])
             allCoilsHandledDispute <- Resource.eval(Deferred[IO, Unit])
 
             observer <- Resource.eval(
@@ -224,8 +223,8 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
           firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+| capture,
         )
 
-    /** Observer tracer wiring — vote/build signals fire when **every** head peer hits the
-      * milestone (not just the first), so a regression in the CL handoff would surface.
+    /** Observer tracer wiring — vote/build signals fire when **every** head peer hits the milestone
+      * (not just the first), so a regression in the CL handoff would surface.
       */
     private def observerTracer(
         bothPeersConfirmedMajor2: Deferred[IO, Unit],
@@ -247,8 +246,8 @@ object VoteVersionMismatchTest extends MultiPeerDisputeProperties("Vote Version 
             }
 
         for
-            peersAtMajor2       <- Ref[IO].of(Set.empty[HeadPeerNumber])
-            headsBuildingVote   <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            peersAtMajor2 <- Ref[IO].of(Set.empty[HeadPeerNumber])
+            headsBuildingVote <- Ref[IO].of(Set.empty[HeadPeerNumber])
             headsVoteSubmittedOk <- Ref[IO].of(Set.empty[HeadPeerNumber])
             coilsHandledDispute <- Ref[IO].of(Set.empty[Int])
         yield ContraTracer[IO, MultiPeerHeadHarness.Event] {
