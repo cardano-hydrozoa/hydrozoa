@@ -3,6 +3,7 @@ package hydrozoa.app.cli
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.monovore.decline.{Command, Opts}
+import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
@@ -216,13 +217,9 @@ end SubmitL2Transaction
 
 /** The CLI options shared by the demo targets. */
 private object DemoOptions {
-    val configDirOpt: Opts[Path] =
-        Opts.option[String](
-          "config-dir",
-          "The config directory (head-config/ + private/), default config/demo",
-          short = "c"
-        ).map(Path.of(_))
-            .withDefault(Path.of("config/demo"))
+    // The config home (head-config/ + private/): `--home` / $HYDROZOA_HOME / config/demo, shared
+    // with the bootstrap subcommands.
+    val configDirOpt: Opts[Path] = Bootstrap.homeOpt
 
     val headUriOpt: Opts[Uri] =
         Opts.option[String](

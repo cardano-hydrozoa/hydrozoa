@@ -76,6 +76,29 @@ object Bootstrap:
             (vKey, sKey)
         }
 
+    /** The config home directory shared by every bootstrap/CLI subcommand: `--home`, else the
+      * `$HYDROZOA_HOME` env var, else `config/demo`. All the generated paths (the bootstrap
+      * directory, per-peer private configs, the head config) are derived from it via
+      * [[HomeLayout]], so the commands need no path flags — set `HYDROZOA_HOME` once (the Docker
+      * alias does) and run `hydrozoa keygen-fleet 2 4 2`, `hydrozoa build-head-config`, ….
+      */
+    val homeOpt: Opts[Path] =
+        Opts.option[String]("home", "Config home directory ($HYDROZOA_HOME, default config/demo)")
+            .orElse(Opts.env[String]("HYDROZOA_HOME", "Config home directory"))
+            .map(Path.of(_))
+            .withDefault(Path.of("config/demo"))
+
+    /** The fixed layout under the config home ([[homeOpt]]) that every subcommand agrees on. */
+    object HomeLayout {
+        def bootstrapDir(home: Path): Path = home.resolve("bootstrap")
+        def roster(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.roster)
+        def scriptRefs(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.scriptRefs)
+        def privateConfig(home: Path, label: String): Path =
+            home.resolve("private").resolve(label).resolve("private.json")
+        def headConfig(home: Path): Path =
+            home.resolve("head-config").resolve("head-config.json")
+    }
+
     // Shared peer-topology decoders, used by both `Membership` (the roster) and `BootstrapConfig`
     // (the full config). Nested in the enclosing object so both companions see them.
     private given Decoder[Uri] =
@@ -1009,8 +1032,6 @@ object BuildHeadConfig:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
-    private val bootstrapDirArg: Opts[Path] =
-        Opts.argument[String]("bootstrap-dir").map(Path.of(_))
     private val blockfrostKeyOpt: Opts[String] =
         Opts.option[String](
           "blockfrost-key",
@@ -1019,10 +1040,6 @@ object BuildHeadConfig:
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         )
-    private val outOpt: Opts[Path] =
-        Opts.option[String]("out", "Output path (default head-config.json)", short = "o")
-            .map(Path.of(_))
-            .withDefault(Path.of("head-config.json"))
 
     /** The `build-head-config` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
@@ -1032,7 +1049,13 @@ object BuildHeadConfig:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (bootstrapDirArg, blockfrostKeyOpt, outOpt).mapN(buildHeadConfig)
+        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, key) =>
+            buildHeadConfig(
+              Bootstrap.HomeLayout.bootstrapDir(home),
+              key,
+              Bootstrap.HomeLayout.headConfig(home)
+            )
+        )
 
     private def buildHeadConfig(
         bootstrapDir: Path,
@@ -1087,7 +1110,10 @@ object BuildHeadConfig:
               bootstrapConfig,
               scriptReferenceUtxos
             )
-            _ <- IO.blocking(Files.writeString(outPath, headConfig.asJson.spaces2))
+            _ <- IO.blocking {
+                Option(outPath.getParent).foreach(Files.createDirectories(_))
+                Files.writeString(outPath, headConfig.asJson.spaces2)
+            }
             _ <- logger.info(s"Wrote shared head config to $outPath")
         } yield ExitCode.Success
 
@@ -1226,13 +1252,6 @@ object KeygenFleet:
     private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
     private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
     private val quorumArg: Opts[Int] = Opts.argument[Int]("coil-quorum")
-    private val outDirOpt: Opts[Path] =
-        Opts.option[String](
-          "out-dir",
-          "Output directory for the config layout (default config/demo)",
-          short = "o"
-        ).map(Path.of(_))
-            .withDefault(Path.of("config/demo"))
     private val templateOpt: Opts[Path] =
         Opts.option[String](
           "template",
@@ -1246,26 +1265,25 @@ object KeygenFleet:
           name = "keygen-fleet",
           header =
               "Generate a whole head's keys + bootstrap files (keygen per peer, then init-bootstrap-files)"
-        )((headsArg, coilsArg, quorumArg, outDirOpt, templateOpt).mapN(run))
+        )((headsArg, coilsArg, quorumArg, Bootstrap.homeOpt, templateOpt).mapN(run))
 
     private def run(
         heads: Int,
         coils: Int,
         coilQuorum: Int,
-        outDir: Path,
+        home: Path,
         template: Path
     ): IO[ExitCode] = {
-        val bootstrapDir = outDir.resolve("bootstrap")
-        val rosterPath = bootstrapDir.resolve(Bootstrap.BootstrapDir.roster)
-        def privatePath(label: String): Path =
-            outDir.resolve("private").resolve(label).resolve("private.json")
+        val bootstrapDir = Bootstrap.HomeLayout.bootstrapDir(home)
+        val rosterPath = Bootstrap.HomeLayout.roster(home)
+        def privatePath(label: String): Path = Bootstrap.HomeLayout.privateConfig(home, label)
         for {
             _ <- IO.raiseWhen(heads < 1)(
               new IllegalArgumentException(s"heads must be at least 1, got $heads")
             )
             _ <- IO.raiseWhen(Files.exists(rosterPath))(
               new IllegalStateException(
-                s"$rosterPath already exists; move it away or pick another --out-dir"
+                s"$rosterPath already exists; move it away or pick another --home"
               )
             )
             _ <- IO.raiseUnless(Files.exists(template))(
@@ -1342,20 +1360,16 @@ end KeygenFleet
   */
 object PrintHeadZeroAddress:
 
-    private val bootstrapDirOpt: Opts[Path] =
-        Opts.option[String](
-          "bootstrap-dir",
-          "The bootstrap directory (roster.json + defaults.json)",
-          short = "d"
-        ).map(Path.of(_))
-            .withDefault(Path.of("config/demo/bootstrap"))
-
     /** The `head-zero-address` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "head-zero-address",
           header = "Print head peer 0's L1 funding address"
-        )(bootstrapDirOpt.map(printHeadZeroAddress))
+        )(
+          Bootstrap.homeOpt.map(home =>
+              printHeadZeroAddress(Bootstrap.HomeLayout.bootstrapDir(home))
+          )
+        )
 
     private def printHeadZeroAddress(dir: Path): IO[ExitCode] =
         for {

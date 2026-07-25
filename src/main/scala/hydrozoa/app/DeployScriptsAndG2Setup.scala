@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.monovore.decline.{Command, Opts}
+import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.ScriptReferenceUtxos.given
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
@@ -26,9 +27,8 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup \
-  *     --wallet config/demo/head-0/private.json \
-  *     [--ladder-refs script-refs.json] [--out script-refs.json]"
+  *   hydrozoa deploy-scripts-and-g2-setup [--home config/demo] [--wallet <private.json>] \
+  *     [--ladder-refs <script-refs.json>]
   * }}}
   *
   * The G2 setup ladder never changes, so it is deployed exactly once; the validator scripts change
@@ -39,8 +39,8 @@ import scalus.uplc.builtin.ByteString
   * private config (change returns to the wallet, so the head funding survives): one per validator
   * script, plus — unless the ladder is reused — one carrying all seven [[SetupLadder]] rungs at
   * outputs 0-6, all locked at the unspendable burn address. Waits until every reference UTxO is
-  * visible on L1, then writes their inputs as `--out` in the shape [[BuildHeadConfig]] consumes via
-  * `--script-refs`.
+  * visible on L1, then writes their inputs to `<home>/bootstrap/script-refs.json` in the shape
+  * [[BuildHeadConfig]] consumes.
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
@@ -55,12 +55,13 @@ object DeployScriptsAndG2Setup:
           Slf4jMsgFormat.humanFormat("hydrozoa.app.DeployScriptsAndG2Setup")
         )
 
-    private val walletOpt: Opts[Path] =
+    private val walletOpt: Opts[Option[Path]] =
         Opts.option[String](
           "wallet",
-          "A keygen private config whose ownHeadWallet funds the deployment (e.g. head-0's)",
+          "Private config whose ownHeadWallet funds the deployment (default: head-0's, under --home)",
           short = "w"
         ).map(Path.of(_))
+            .orNone
 
     private val blockfrostKeyOpt: Opts[String] =
         Opts.option[String](
@@ -79,11 +80,6 @@ object DeployScriptsAndG2Setup:
         ).map(Path.of(_))
             .orNone
 
-    private val outOpt: Opts[Path] =
-        Opts.option[String]("out", "Output path (default script-refs.json)", short = "o")
-            .map(Path.of(_))
-            .withDefault(Path.of("script-refs.json"))
-
     /** The `deploy-scripts-and-g2-setup` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
@@ -92,7 +88,15 @@ object DeployScriptsAndG2Setup:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (walletOpt, blockfrostKeyOpt, ladderRefsOpt, outOpt).mapN(deployScriptsAndG2Setup)
+        (Bootstrap.homeOpt, walletOpt, blockfrostKeyOpt, ladderRefsOpt).mapN(
+          (home, walletOverride, key, ladder) =>
+              deployScriptsAndG2Setup(
+                walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
+                key,
+                ladder,
+                Bootstrap.HomeLayout.scriptRefs(home)
+              )
+        )
 
     private def deployScriptsAndG2Setup(
         walletPath: Path,
