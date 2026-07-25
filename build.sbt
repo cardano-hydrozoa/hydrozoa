@@ -13,7 +13,7 @@ Compile / discoveredMainClasses := Seq("hydrozoa.app.Main")
 // The git revision baked into the Docker image labels; matches `hydrozoa.BuildInfo.gitCommit`.
 lazy val gitRevision: String =
     scala.util
-        .Try(scala.sys.process.Process("git describe --always --dirty --abbrev=8").!!.trim)
+        .Try(scala.sys.process.Process("git describe --tags --always --dirty --abbrev=8").!!.trim)
         .getOrElse("unknown")
 
 // Bake the clean-output JVM flags into the generated launcher scripts (both `stage` and the Docker
@@ -171,7 +171,12 @@ lazy val core: Project = (project in file("."))
         version,
         BuildInfoKey.action("gitCommit") {
             scala.util
-                .Try(scala.sys.process.Process("git describe --always --dirty --abbrev=8").!!.trim)
+                .Try(
+                    scala.sys.process
+                        .Process("git describe --tags --always --dirty --abbrev=8")
+                        .!!
+                        .trim
+                )
                 .getOrElse("unknown")
         }
       ),
