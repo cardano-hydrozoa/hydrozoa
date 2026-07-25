@@ -104,9 +104,8 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 > command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Set two env vars and
 > alias `hydrozoa` to the image **once**; every `hydrozoa <command>` throughout this guide then runs
 > from it (the alias passes the Blockfrost key through, enables host networking + a TTY so the
-> interactive `submit-*` commands work, and runs as container-root — matching `docker-compose`'s
-> `user: root` — so it can write the mounted `config/`; under rootless Docker that maps to your host
-> user):
+> interactive `submit-*` commands work, and runs as container-root so it can write the mounted
+> `config/`):
 >
 > ```bash
 > export HYDROZOA_VERSION=0.1.0
@@ -116,6 +115,12 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 >   --user root -v "$PWD/config:/work/config" -w /work \
 >   ghcr.io/cardano-hydrozoa/hydrozoa:"$HYDROZOA_VERSION"'
 > ```
+>
+> **This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
+> `user: root`) — assumes rootless Docker**, the tested configuration (see §4). Under rootless,
+> container-root maps to your host user, so files written to the mounts land owned by *you*. On
+> rootful Docker they would be owned by real root instead; there, use `-u "$(id -u):$(id -g)"` in the
+> alias to keep them yours.
 >
 > The rest of this section is only for building a different version from source.
 
