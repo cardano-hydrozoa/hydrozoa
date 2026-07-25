@@ -188,6 +188,20 @@ lazy val core: Project = (project in file("."))
       // The interactive `submit-deposit` / `submit-l2-tx` subcommands read console prompts; wire
       // stdin through to the forked `sbt run` JVM. The packaged launcher gets stdin natively.
       run / connectInput := true,
+      // Copy the repo-root `docker-compose.yml` + `hydrozoa.sh` into the `/scaffold/*` classpath
+      // resources at build time (the template + script-refs defaults live directly under
+      // src/main/resources/scaffold/). The `scaffold` subcommand materializes these for a
+      // Docker-only user, and `build-head-config` reads the baked script-refs — no repo clone.
+      Compile / resourceGenerators += Def.task {
+          val out = (Compile / resourceManaged).value / "scaffold"
+          IO.createDirectory(out)
+          val copies = Seq(
+            baseDirectory.value / "docker-compose.yml" -> out / "docker-compose.yml",
+            baseDirectory.value / "hydrozoa.sh" -> out / "hydrozoa.sh"
+          )
+          copies.foreach { case (src, dst) => IO.copyFile(src, dst) }
+          copies.map(_._2)
+      }.taskValue,
       // Fork each test run into a fresh JVM: isolates native state (RocksDB JNI), the
       // cats-effect IORuntime, and daemon threads, and makes re-running a `testOnly` in a
       // warm sbt session actually re-run instead of reporting 0 tests.

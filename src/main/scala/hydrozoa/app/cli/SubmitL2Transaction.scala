@@ -37,7 +37,7 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   hydrozoa submit-l2-tx [--config-dir config/demo] [--head-uri http://localhost:8080]
+  *   hydrozoa submit-l2-tx [--home head/demo] [--head-uri http://localhost:8080]
   * }}}
   */
 object SubmitL2Transaction:
@@ -217,7 +217,7 @@ end SubmitL2Transaction
 
 /** The CLI options shared by the demo targets. */
 private object DemoOptions {
-    // The config home (head-config/ + private/): `--home` / $HYDROZOA_HOME / config/demo, shared
+    // The config home (head-config/ + private/): `--home` / $HYDROZOA_HOME / head/demo, shared
     // with the bootstrap subcommands.
     val configDirOpt: Opts[Path] = Bootstrap.homeOpt
 

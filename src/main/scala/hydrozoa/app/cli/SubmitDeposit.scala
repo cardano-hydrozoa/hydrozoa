@@ -36,7 +36,7 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   hydrozoa submit-deposit [--config-dir config/demo] [--head-uri http://localhost:8080]
+  *   hydrozoa submit-deposit [--home head/demo] [--head-uri http://localhost:8080]
   * }}}
   */
 object SubmitDeposit:

@@ -27,19 +27,19 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   hydrozoa deploy-scripts-and-g2-setup [--home config/demo] [--wallet <private.json>] \
-  *     [--ladder-refs <script-refs.json>]
+  *   hydrozoa deploy-scripts-and-g2-setup [--home head/demo] [--wallet <private.json>] \
+  *     [--ladder-refs <ref-utxos.json>]
   * }}}
   *
   * The G2 setup ladder never changes, so it is deployed exactly once; the validator scripts change
-  * per release. Pass `--ladder-refs <existing script-refs.json>` to reuse an already-deployed
-  * ladder and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
+  * per release. Pass `--ladder-refs <existing ref-utxos.json>` to reuse an already-deployed ladder
+  * and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
   *
   * Builds and submits chained [[DeploymentTx]]s funded from the wallet carried by the given keygen
   * private config (change returns to the wallet, so the head funding survives): one per validator
   * script, plus — unless the ladder is reused — one carrying all seven [[SetupLadder]] rungs at
   * outputs 0-6, all locked at the unspendable burn address. Waits until every reference UTxO is
-  * visible on L1, then writes their inputs to `<home>/bootstrap/script-refs.json` in the shape
+  * visible on L1, then writes their inputs to `<home>/bootstrap/ref-utxos.json` in the shape
   * [[BuildHeadConfig]] consumes.
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
@@ -75,7 +75,7 @@ object DeployScriptsAndG2Setup:
     private val ladderRefsOpt: Opts[Option[Path]] =
         Opts.option[String](
           "ladder-refs",
-          "Existing script-refs.json whose G2 setup ladder to reuse (skips redeploying it)",
+          "Existing ref-utxos.json whose G2 setup ladder to reuse (skips redeploying it)",
           short = "l"
         ).map(Path.of(_))
             .orNone
@@ -94,7 +94,7 @@ object DeployScriptsAndG2Setup:
                 walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
                 key,
                 ladder,
-                Bootstrap.HomeLayout.scriptRefs(home)
+                Bootstrap.HomeLayout.refUtxos(home)
               )
         )
 
@@ -278,8 +278,8 @@ object DeployScriptsAndG2Setup:
         )
     } yield wallet
 
-    /** Read the G2 setup ladder's reference inputs from an existing `script-refs.json`, to reuse
-      * the already-deployed ladder instead of redeploying it.
+    /** Read the G2 setup ladder's reference inputs from an existing `ref-utxos.json`, to reuse the
+      * already-deployed ladder instead of redeploying it.
       */
     private def readLadderInputs(path: Path): IO[List[TransactionInput]] = for {
         json <- IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))
