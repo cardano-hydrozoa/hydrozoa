@@ -27,7 +27,7 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   hydrozoa deploy-scripts-and-g2-setup [--home config/demo] [--wallet <private.json>] \
+  *   hydrozoa deploy-scripts-and-g2-setup [--home head/demo] [--wallet <private.json>] \
   *     [--ladder-refs <script-refs.json>]
   * }}}
   *

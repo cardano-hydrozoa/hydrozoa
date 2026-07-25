@@ -8,9 +8,8 @@ import java.nio.file.{Files, Path}
 /** The `scaffold` subcommand: materialize the operator-facing workspace files that are baked into
   * the image, so a Docker-only user never has to clone the repo. Into `<dir>` (default `.`) it
   * writes `docker-compose.yml`, `hydrozoa.sh` (the CLI alias — `source` it), and
-  * `config/template/peer-private.template.json.local` (fill in `blockfrostApiKey`) — the same
-  * layout the repo has, so every later command runs with no path flags. Refuses to overwrite
-  * existing files.
+  * `head/template/peer-private.template.json.local` (fill in `blockfrostApiKey`) — the layout every
+  * later command expects, so they run with no path flags. Refuses to overwrite existing files.
   */
 object Scaffold:
 
@@ -18,7 +17,7 @@ object Scaffold:
     private val resources: List[(String, String)] = List(
       "/scaffold/docker-compose.yml" -> "docker-compose.yml",
       "/scaffold/hydrozoa.sh" -> "hydrozoa.sh",
-      "/scaffold/peer-private.template.json" -> "config/template/peer-private.template.json.local"
+      "/scaffold/peer-private.template.json" -> "head/template/peer-private.template.json.local"
     )
 
     private val dirArg: Opts[Path] =
@@ -34,26 +33,26 @@ object Scaffold:
 
     private def run(dir: Path): IO[ExitCode] =
         for {
-            targets <- IO.pure(resources.map((res, rel) => (res, dir.resolve(rel))))
-            existing <- IO.blocking(targets.map(_._2).filter(Files.exists(_)))
-            _ <- IO.raiseWhen(existing.nonEmpty)(
-              new IllegalStateException(
-                s"refusing to overwrite existing file(s): ${existing.mkString(", ")}"
-              )
-            )
-            _ <- targets.traverse_ { (res, dst) =>
-                IO.blocking {
-                    Option(dst.getParent).foreach(Files.createDirectories(_))
-                    val in = Option(getClass.getResourceAsStream(res)).getOrElse(
-                      throw new IllegalStateException(s"missing baked resource $res")
-                    )
-                    try Files.copy(in, dst)
-                    finally in.close()
-                } *> IO.println(s"wrote $dst")
+            // Skip files that already exist (never clobber a filled-in template, and let a repo
+            // checkout that already has docker-compose.yml / hydrozoa.sh materialize only the rest).
+            _ <- resources.traverse_ { (res, rel) =>
+                val dst = dir.resolve(rel)
+                IO.blocking(Files.exists(dst)).flatMap {
+                    case true => IO.println(s"skipped $dst (exists)")
+                    case false =>
+                        IO.blocking {
+                            Option(dst.getParent).foreach(Files.createDirectories(_))
+                            val in = Option(getClass.getResourceAsStream(res)).getOrElse(
+                              throw new IllegalStateException(s"missing baked resource $res")
+                            )
+                            try Files.copy(in, dst)
+                            finally in.close()
+                        } *> IO.println(s"wrote $dst")
+                }
             }
             _ <- IO.println(
               s"Scaffolded into $dir. Next: set blockfrostApiKey in " +
-                  "config/template/peer-private.template.json.local, then `source ./hydrozoa.sh`."
+                  "head/template/peer-private.template.json.local, then `source ./hydrozoa.sh`."
             )
         } yield ExitCode.Success
 

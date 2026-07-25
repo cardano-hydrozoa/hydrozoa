@@ -36,6 +36,7 @@ import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, parser}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.SecureRandom
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -76,19 +77,19 @@ object Bootstrap:
             (vKey, sKey)
         }
 
-    /** The config home directory shared by every bootstrap/CLI subcommand: `--home`, else the
-      * `$HYDROZOA_HOME` env var, else `config/demo`. All the generated paths (the bootstrap
+    /** The head directory shared by every bootstrap/CLI subcommand: `--home`, else the
+      * `$HYDROZOA_HOME` env var, else `head/demo`. All the generated paths (the bootstrap
       * directory, per-peer private configs, the head config) are derived from it via
       * [[HomeLayout]], so the commands need no path flags — set `HYDROZOA_HOME` once (the Docker
       * alias does) and run `hydrozoa keygen-fleet 2 4 2`, `hydrozoa build-head-config`, ….
       */
     val homeOpt: Opts[Path] =
-        Opts.option[String]("home", "Config home directory ($HYDROZOA_HOME, default config/demo)")
-            .orElse(Opts.env[String]("HYDROZOA_HOME", "Config home directory"))
+        Opts.option[String]("home", "Head directory ($HYDROZOA_HOME, default head/demo)")
+            .orElse(Opts.env[String]("HYDROZOA_HOME", "Head directory"))
             .map(Path.of(_))
-            .withDefault(Path.of("config/demo"))
+            .withDefault(Path.of("head/demo"))
 
-    /** The fixed layout under the config home ([[homeOpt]]) that every subcommand agrees on. */
+    /** The fixed layout under the head directory ([[homeOpt]]) that every subcommand agrees on. */
     object HomeLayout {
         def bootstrapDir(home: Path): Path = home.resolve("bootstrap")
         def roster(home: Path): Path = bootstrapDir(home).resolve(BootstrapDir.roster)
@@ -221,12 +222,6 @@ object Bootstrap:
         val defaults = "defaults.json"
         val l2CardanoEutxo = "l2-cardano-eutxo.json"
         val scriptRefs = "script-refs.json"
-
-        /** The committed per-network script-refs defaults (`preview.json`, `preprod.json`, …) that
-          * [[readBootstrapDir]] falls back to when the bootstrap directory carries no
-          * [[scriptRefs]] file.
-          */
-        val defaultScriptRefsDir: Path = Path.of("config", "script-refs")
     }
 
     /** Read the bootstrap directory's four files ([[BootstrapDir]]) and assemble them into the
@@ -250,8 +245,7 @@ object Bootstrap:
             }
             l2StateJson <- readJson(dir.resolve(BootstrapDir.l2CardanoEutxo))
             l2State <- IO.fromEither(l2StateJson.as[List[L2Output]])
-            scriptRefsPath <- resolveScriptRefsPath(dir, network)
-            scriptRefsJson <- readJson(scriptRefsPath)
+            scriptRefsJson <- readScriptRefsJson(dir, network)
             scriptRefs <- IO.fromEither(scriptRefsJson.as[ScriptReferenceUtxos.Unresolved])
         } yield BootstrapConfig(
           cardanoNetwork = defaults.cardanoNetwork,
@@ -266,23 +260,29 @@ object Bootstrap:
         )
     }
 
-    /** Pick the script-refs source: the bootstrap directory's own `script-refs.json` when present,
-      * else the committed per-network default. Fails naming both candidates when neither exists —
-      * the network has no default yet, so run `just deploy-scripts-and-g2-setup` first.
+    /** Read the script-refs JSON: the bootstrap directory's own `script-refs.json` when present,
+      * else the per-network default baked into the image (`/scaffold/script-refs/<network>.json`,
+      * committed under src/main/resources for Preview + Preprod). Fails when neither exists — the
+      * network has no baked default, so run `hydrozoa deploy-scripts-and-g2-setup` first.
       */
-    private def resolveScriptRefsPath(dir: Path, network: CardanoNetwork): IO[Path] = {
+    private def readScriptRefsJson(dir: Path, network: CardanoNetwork): IO[Json] = {
         val own = dir.resolve(BootstrapDir.scriptRefs)
-        val default = BootstrapDir.defaultScriptRefsDir
-            .resolve(s"${network.toString.toLowerCase}.json")
+        val resource = s"/scaffold/script-refs/${network.toString.toLowerCase}.json"
         IO.blocking {
-            if Files.exists(own) then own
-            else if Files.exists(default) then default
+            if Files.exists(own) then Files.readString(own)
             else
-                throw RuntimeException(
-                  s"no script refs: neither $own nor the committed default $default exists — " +
-                      "run `just deploy-scripts-and-g2-setup` first"
-                )
-        }
+                Option(getClass.getResourceAsStream(resource))
+                    .map { in =>
+                        try new String(in.readAllBytes(), StandardCharsets.UTF_8)
+                        finally in.close()
+                    }
+                    .getOrElse(
+                      throw RuntimeException(
+                        s"no script refs: neither $own nor a baked default for $network exists — " +
+                            "run `hydrozoa deploy-scripts-and-g2-setup` first"
+                      )
+                    )
+        }.flatMap(s => IO.fromEither(parser.parse(s)))
     }
 
     /** Build the shared [[HeadConfig]] every node loads, for an N-head + M-coil head.
@@ -551,9 +551,8 @@ end Bootstrap
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.bootstrap.GenerateKeyPair \
-  *     --roster nodes/roster.json --role head --ws-address ws://head-0:4001 \
-  *     --template config/template/peer-private.template.json --out nodes/head-0/private.json"
+  *   hydrozoa keygen --roster nodes/roster.json --role head --ws-address ws://head-0:4001 \
+  *     --template head/template/peer-private.template.json.local --out nodes/head-0/private.json
   * }}}
   */
 object GenerateKeyPair:
@@ -1246,7 +1245,7 @@ end InitBootstrapFiles
 object KeygenFleet:
     import GenerateKeyPair.Role
 
-    private val defaultTemplate = "config/template/peer-private.template.json.local"
+    private val defaultTemplate = "head/template/peer-private.template.json.local"
     private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
 
     private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
@@ -1288,8 +1287,8 @@ object KeygenFleet:
             )
             _ <- IO.raiseUnless(Files.exists(template))(
               new IllegalArgumentException(
-                s"$template not found — copy config/template/peer-private.template.json to it " +
-                    "and set blockfrostApiKey"
+                s"$template not found — run `hydrozoa scaffold` to create it, then set " +
+                    "blockfrostApiKey in it"
               )
             )
             network <- deriveNetwork(template)
@@ -1355,7 +1354,7 @@ end KeygenFleet
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.bootstrap.PrintHeadZeroAddress [--bootstrap-dir config/demo/bootstrap]"
+  *   hydrozoa head-zero-address [--home head/demo]
   * }}}
   */
 object PrintHeadZeroAddress:

@@ -103,8 +103,8 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 > Container Registry on every release. Its entrypoint is the same `hydrozoa` CLI, so it covers every
 > command (`serve`, the bootstrap ladder, `submit-*`) — no JDK, no Nix, no sbt. Export your Blockfrost
 > key and `source ./hydrozoa.sh`, which defines a `hydrozoa` alias for the image; then every
-> command below takes **no path flags** — `HYDROZOA_HOME` (set by the script, default `./config/demo`)
-> points them at your config directory.
+> command below takes **no path flags** — `HYDROZOA_HOME` (set by the script, default `./head/demo`)
+> points them at your head directory.
 >
 > ```bash
 > export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
@@ -114,12 +114,12 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 >
 > The alias passes the Blockfrost key + `HYDROZOA_HOME` into the container, enables host networking +
 > a TTY (for the interactive `submit-*` commands), and runs as container-root so it can write the
-> mounted config dir — see [`hydrozoa.sh`](hydrozoa.sh).
+> mounted head dir — see [`hydrozoa.sh`](hydrozoa.sh).
 >
-> `HYDROZOA_HOME=./config/demo` is the same relative path inside the container (working dir `/work`,
-> where the alias mounts `config/`) and on the host — so the CLI (local, `just`, or Docker) and
+> `HYDROZOA_HOME=./head/demo` is the same relative path inside the container (working dir `/work`,
+> where the alias mounts `head/`) and on the host — so the CLI (local, `just`, or Docker) and
 > `docker compose` (§4) all read the same directory from this one variable. For a separate config
-> set, point it at another subdir, e.g. `./config/demo-docker`.
+> set, point it at another subdir, e.g. `./head/demo-docker`.
 >
 > **This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
 > `user: root`) — assumes rootless Docker**, the tested configuration (see §4). Under rootless,
@@ -134,10 +134,10 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 > mkdir myhead && cd myhead
 > docker run --rm -v "$PWD:/work" -w /work --user root \
 >   ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 scaffold .
-> # writes docker-compose.yml, hydrozoa.sh, config/template/peer-private.template.json.local
+> # writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
 > ```
 >
-> Then set `blockfrostApiKey` in `config/template/peer-private.template.json.local`, `export
+> Then set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, `export
 > BLOCKFROST_API_KEY=…`, and `source ./hydrozoa.sh` — every command then works, no clone needed.
 >
 > The rest of this section is only for building a different version from source.
@@ -210,8 +210,8 @@ pipeline turns operator-authored files into the two runtime files each node need
    deploy-scripts-and-g2-setup        │
    (head-0 wallet, Blockfrost)        │
    └─ bootstrap/script-refs.json ─────┤  the on-chain reference UTxOs: treasury + dispute
-                                      │  validators and the G2 setup ladder (falls back to
-                                      │  config/script-refs/<network>.json when committed)
+                                      │  validators and the G2 setup ladder (falls back to the
+                                      │  per-network default baked into the image)
                                       │
                                       │  + head-0 UTxOs + protocol params   (Blockfrost)
                                       ▼
@@ -221,9 +221,9 @@ pipeline turns operator-authored files into the two runtime files each node need
    distribute head-config.json (shared) + each node's private.json  →  run the nodes (§4)
 ```
 
-**Step 1 — Set the defaults.** Two decisions live here, made with one edit: copy
-`config/template/peer-private.template.json` to `config/template/peer-private.template.json.local`
-(gitignored) and set `blockfrostApiKey` there.
+**Step 1 — Set the defaults.** Materialize the template and set `blockfrostApiKey` in it:
+`just scaffold` (Nix) or `hydrozoa scaffold .` (Docker) writes
+`head/template/peer-private.template.json.local` (gitignored); edit it and set `blockfrostApiKey`.
 
 - **Blockfrost key** — keygen-fleet reads only the `.local` file and refuses to run without it,
   so the real key never lands in a committed file.
@@ -236,8 +236,8 @@ The template is read at generation time — regenerating means fresh keys, so re
 **Step 2 — Generate keys, roster, and defaults:**
 
 ```bash
-just keygen-fleet 2 4 2            # HEADS COILS QUORUM, → config/demo/
-# or: just keygen-fleet 2 4 2 config/mydir    # custom config home
+just keygen-fleet 2 4 2            # HEADS COILS QUORUM, → head/demo/
+# or: just keygen-fleet 2 4 2 head/mydir      # custom head dir
 # Docker (writes under $HYDROZOA_HOME)
 hydrozoa keygen-fleet 2 4 2
 ```
@@ -247,7 +247,7 @@ then the shared `defaults.json` + `l2-cardano-eutxo.json`; the network comes fro
 Blockfrost-key prefix. Output layout:
 
 ```
-config/demo/
+head/demo/
 ├── bootstrap/                     # the operator-facing bootstrap directory (build-head-config input)
 │   ├── roster.json                #   peer topology
 │   ├── defaults.json              #   network + head params (coilQuorum, timing…) + per-peer equity
@@ -299,14 +299,15 @@ tx fee; step 5 logs the exact lovelace required and fails with the shortfall if 
 **Step 4 — Deploy the reference scripts** (once per network per script version; the target
 network comes from the Blockfrost key).
 
-> **You can likely skip this.** With no `bootstrap/script-refs.json`, `build-head-config` falls
-> back to a committed `config/script-refs/<network>.json` — Preview's and Preprod's are committed —
-> so on those networks skip to Step 5. Run this only for a network without committed refs, or after
-> the compiled scripts change; commit the fresh refs afterward so the next head can skip it too.
+> **You can likely skip this.** With no `bootstrap/script-refs.json`, `build-head-config` falls back
+> to the per-network default **baked into the image** — Preview and Preprod are included — so on
+> those networks skip to Step 5. Run this only for a network without a baked default, or after the
+> compiled scripts change (then update `src/main/resources/scaffold/script-refs/` so the next head
+> can skip it too).
 
 ```bash
 just deploy-scripts-and-g2-setup
-# -> config/demo/bootstrap/script-refs.json (funded by head-0's wallet under the config home)
+# -> head/demo/bootstrap/script-refs.json (funded by head-0's wallet under the head dir)
 # Docker
 hydrozoa deploy-scripts-and-g2-setup
 ```
@@ -325,7 +326,7 @@ the ladder never changes.
 **Step 5 — Build the shared head config:**
 
 ```bash
-just build-head-config       # reads config/demo/bootstrap/, writes config/demo/head-config/head-config.json
+just build-head-config       # reads head/demo/bootstrap/, writes head/demo/head-config/head-config.json
 # Docker
 hydrozoa build-head-config
 ```
@@ -349,7 +350,7 @@ At this point every node has its two files, and the composition (§4) mounts
 `docker-compose.yml` — one `hydrozoa` container per node on a single user-defined bridge network,
 `mesh`.
 
-- Config mounts come from `${HYDROZOA_HOME:-./config/demo}`: the shared `head-config.json` plus
+- Config mounts come from `${HYDROZOA_HOME:-./head/demo}`: the shared `head-config.json` plus
   `head-N/private.json` or `coil-N/private.json` per node. The image defaults to the published
   `ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0` (pulled on first run); set `${HYDROZOA_IMAGE}` to use
   another, e.g. a locally built `cardano-hydrozoa/hydrozoa:0.1.0`.
@@ -371,15 +372,15 @@ Caveats:
 
 ```bash
 docker compose up -d           # pulls ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 on first run
-# uses ./config/demo by default; point HYDROZOA_HOME at the config set you generated:
-#   HYDROZOA_HOME=./config/demo-docker docker compose up -d
+# uses ./head/demo by default; point HYDROZOA_HOME at the config set you generated:
+#   HYDROZOA_HOME=./head/demo-docker docker compose up -d
 # dev, to run a locally built image instead:
 #   just docker-image && HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.0 docker compose up -d
 ```
 
-**Which config does compose use?** The same `HYDROZOA_HOME` (default `./config/demo`) — it selects
+**Which config does compose use?** The same `HYDROZOA_HOME` (default `./head/demo`) — it selects
 the directory each container mounts `head-config.json` + its `private.json` from. So one variable
-drives everything: `HYDROZOA_HOME=./config/demo-docker` both generates the config set (the CLI) and
+drives everything: `HYDROZOA_HOME=./head/demo-docker` both generates the config set (the CLI) and
 runs it (`docker compose up -d`).
 
 Stack 0 initializes once both head peers + any `coilQuorum` coil peers are signing.
@@ -432,8 +433,8 @@ just build-head-config
 docker compose up -d           # right after the build — the config is freshest now
 ```
 
-**Reusable across restarts:** the whole `config/demo/bootstrap/` directory and every
-`config/demo/private/` config — identities and keys are not time- or UTxO-bound, and the
+**Reusable across restarts:** the whole `head/demo/bootstrap/` directory and every
+`head/demo/private/` config — identities and keys are not time- or UTxO-bound, and the
 reference-script UTxOs sit at an unspendable burn address. Only `head-config/head-config.json` is
 single-use. Regenerate the fleet (`just keygen-fleet`) only for fresh identities; that changes head
 peer 0's address, so re-fund it. The hydrozoa docker image only needs rebuilding after hydrozoa
@@ -449,7 +450,7 @@ the `hydrozoa` alias from §2 already enables the TTY and host networking they n
 ### Submit an L2 transaction
 
 ```bash
-just submit-l2-tx        # or: just submit-l2-tx config/demo http://localhost:8081
+just submit-l2-tx        # or: just submit-l2-tx head/demo http://localhost:8081
 # Docker
 hydrozoa submit-l2-tx    # add --head-uri http://localhost:8081 to hit head-1
 ```
