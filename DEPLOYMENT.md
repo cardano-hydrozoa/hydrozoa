@@ -99,53 +99,47 @@ to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
 ## 2. Getting Hydrozoa
 
-A pre-built image is published to the GitHub Container Registry on every release. Its entrypoint is
-the `hydrozoa` CLI, so it covers every command (`serve`, the bootstrap ladder, `submit-*`) — no JDK,
-no Nix, no sbt. Pull it, export your Blockfrost key, and `source ./hydrozoa.sh` (which defines a
-`hydrozoa` alias for the image); then every command below takes **no path flags** — `HYDROZOA_HOME`
-(set by the script, default `./head/demo`) points them at your head directory.
+**You do not need to clone this repo.** The published image on the GitHub Container Registry carries
+the whole CLI *and* the workspace files — `docker-compose.yml`, `hydrozoa.sh`, and the config
+template are baked in — so you pull it once and scaffold a complete head workspace from it:
 
 ```bash
 export BLOCKFROST_API_KEY=preview…      # your Blockfrost key (a secret; the CLI reads it)
-docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
-source ./hydrozoa.sh                    # sets HYDROZOA_VERSION/HYDROZOA_HOME + the `hydrozoa` alias
-```
-
-The alias passes the Blockfrost key + `HYDROZOA_HOME` into the container, enables host networking + a
-TTY (for the interactive `submit-*` commands), and runs as container-root so it can write the mounted
-head dir — see [`hydrozoa.sh`](hydrozoa.sh).
-
-`HYDROZOA_HOME=./head/demo` is the same relative path inside the container (working dir `/work`, where
-the alias mounts `head/`) and on the host — so the CLI (local, `just`, or Docker) and `docker compose`
-(§5) all read the same directory from this one variable. For a separate config set, point it at
-another subdir, e.g. `./head/demo-docker`.
-
-**This Docker setup — the alias, `--user root`, and `docker-compose.yml` (which also runs
-`user: root`) — assumes rootless Docker**, the tested configuration (see §5). Under rootless,
-container-root maps to your host user, so files written to the mounts land owned by *you*. On rootful
-Docker they would be owned by real root instead; there, use `-u "$(id -u):$(id -g)"` in the alias to
-keep them yours.
-
-**No repo at all?** The image scaffolds a fresh workspace — `docker-compose.yml`, `hydrozoa.sh`, and
-the config template are baked in:
-
-```bash
 mkdir myhead && cd myhead
+docker pull ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0
 docker run --rm -v "$PWD:/work" -w /work --user root \
   ghcr.io/cardano-hydrozoa/hydrozoa:0.1.0 scaffold .
 # writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
 ```
 
-Then set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, `export
-BLOCKFROST_API_KEY=…`, and `source ./hydrozoa.sh` — every command then works, no clone needed.
+Set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, then `source
+./hydrozoa.sh` — it defines a `hydrozoa` alias for the image and sets `HYDROZOA_HOME` (default
+`./head/demo`), so every command in §4–§6 takes **no path flags**:
+
+```bash
+source ./hydrozoa.sh
+hydrozoa keygen-fleet 2 4 2      # …then the rest of §4
+```
+
+`HYDROZOA_HOME=./head/demo` is the same relative path on the host, inside the container (working dir
+`/work`, where `head/` is mounted), and for `docker compose` (§5) — one variable everywhere. For a
+separate config set, point it at another subdir, e.g. `./head/demo-docker`.
+
+**Why `--user root`.** The alias runs the container as root on purpose, and this whole setup assumes
+**rootless Docker** (the tested configuration). Under rootless, the container's root maps to *your*
+host user — so running as root is what lets it write the bind-mounted `head/`, and the generated
+files land owned by you rather than an unwritable foreign uid. (The alias also passes the Blockfrost
+key + `HYDROZOA_HOME` through and enables host networking + a TTY for the interactive `submit-*`
+commands.) On **rootful** Docker, container-root is real root and the mounted files would be
+root-owned instead; there, use `-u "$(id -u):$(id -g)"` in the alias — see [`hydrozoa.sh`](hydrozoa.sh).
 
 ---
 
 ## 3. Building
 
-Only needed to run a different version than the published image, or to hack on Hydrozoa. Toolchain:
-Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if not using Nix (the
-runtime passes `--sun-misc-unsafe-memory-access=allow`).
+Cloning this repo is only needed to run a version other than the published image, or to hack on
+Hydrozoa. Toolchain: Nix flake devshell (JDK 25, sbt, just — `flake.nix`); Scala 3.3.7. JDK 23+ if
+not using Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
@@ -154,23 +148,27 @@ just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
 
-There are two ways to run your own build.
+Two ways to use your build:
 
-**(a) Locally compiled code, no image.** `just stage` builds the `hydrozoa` launcher from the current
-sources; the `just` recipes below (`keygen-fleet`, `build-head-config`, `submit-deposit`, …) invoke
-it directly — no Docker, and no sbt startup per command:
+**3.1 A local Docker image** — the same image as the published one, from your sources; point
+`docker compose` (§5) at it with `HYDROZOA_IMAGE`:
+
+```bash
+just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0 (base eclipse-temurin:25-jre, EXPOSE 8080)
+# then: HYDROZOA_IMAGE=cardano-hydrozoa/hydrozoa:0.1.0 docker compose up -d
+```
+
+**3.2 Locally-compiled code (development)** — `just stage` builds the `hydrozoa` launcher from the
+current sources, and the `just` recipes invoke it directly, with no Docker and no sbt startup per
+command:
 
 ```bash
 just stage             # -> target/universal/stage/bin/hydrozoa
 ```
 
-**(b) A local Docker image** (instead of pulling it — the composition in §5 can use either):
-
-```bash
-just docker-image      # -> cardano-hydrozoa/hydrozoa:0.1.0
-#    base eclipse-temurin:25-jre, EXPOSE 8080
-#    labels carry the version + git revision; `hydrozoa version` (and GET /version) print them
-```
+Every command in §4–§6 is shown **both ways**: a `# Docker` line (`hydrozoa <cmd>`, via the image and
+the alias from §2) and the `just` equivalent (`just <cmd>`, which runs the staged launcher). Use
+whichever matches the build you made.
 
 ---
 
