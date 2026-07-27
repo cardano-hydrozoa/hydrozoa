@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.ObservableMarking
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
@@ -114,15 +114,23 @@ case class RbrMbtSuite(
 
     override def beforeFinalize(lastState: ModelState, sut: Sut): IO[Prop] =
         for
-            _         <- log.info("beforeFinalize: awaiting fallback + autonomous evacuation")
-            _         <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
-            _         <- sut.evacuationDone.get.timeout(scenarioTimeout)
-            _         <- IO.sleep(quiescenceDelay)
-            utxos     <- sut.harness.l1Snapshot
-            payouts   <- sut.firstPayoutsLeft.get
-            errors    <- sut.harness.sutErrors.get
+            _       <- log.info("beforeFinalize: awaiting fallback + autonomous evacuation")
+            _       <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
+            _       <- sut.evacuationDone.get.timeout(scenarioTimeout)
+            _       <- IO.sleep(quiescenceDelay)
+            utxos   <- sut.harness.l1Snapshot
+            payouts <- sut.firstPayoutsLeft.get
+            errors  <- sut.harness.sutErrors.get
+            // Instantiate the net seeded with the committed-obligation count the head evacuated (for
+            // now, with no pre-fallback load, that is the initial evacuation-map size) and drive it
+            // to the all-evacuated terminal — the "autonomous match".
+            obligationCount = lastState.multiNodeConfig.headConfig.initialEvacuationMap.size
+            alpha = alphaTerminal(obligationCount)
             betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
-            _ <- log.info(s"beforeFinalize: firstPayoutsLeft=$payouts beta=$betaEither")
+            _ <- log.info(
+              s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount\n" +
+                  s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
+            )
         yield
             if errors.nonEmpty then
                 Prop.exception(RuntimeException(s"SUT actor errors:\n${errors.mkString("\n")}"))
@@ -130,15 +138,19 @@ case class RbrMbtSuite(
                 betaEither match
                     case Left(msg) => Prop.falsified :| s"beta projection failed: $msg"
                     case Right(beta) =>
-                        // Step 1 (plumbing): the head reached fallback and the RBA autonomously
-                        // evacuated to a Resolved treasury. The precise `alpha == beta` match on the
-                        // evacuation count follows once the net's obligations are parameterized.
-                        (Prop(beta.counts.getOrElse(RBRPlaceId.ResolvedTreasury, 0) == 1) :|
-                            s"expected a Resolved treasury; beta=$beta") &&
-                        (Prop(beta.counts.getOrElse(RBRPlaceId.EvacuationOutput, 0) > 0) :|
-                            s"expected some evacuation outputs; beta=$beta") &&
-                        (Prop(beta.ballots.isEmpty) :|
-                            s"expected no ballots after evacuation; beta=$beta")
+                        Prop(alpha == beta) :|
+                            s"autonomous match failed:\n  alpha (model): $alpha\n  beta  (L1):    $beta"
+
+    /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with
+      * `obligationCount` committed outputs and drive it through the dispute to full evacuation.
+      */
+    private def alphaTerminal(obligationCount: Int): ObservableMarking =
+        val seed = RBRHlNet(
+          nHeadPeers,
+          maxVersionMinor,
+          _ => RBRHlNet.committedOutputs(obligationCount),
+        ).toOption.get
+        ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
     /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the first
       * `Evacuation.PayoutsLeft`, and completes `evacuationDone` once every head + coil peer has fired

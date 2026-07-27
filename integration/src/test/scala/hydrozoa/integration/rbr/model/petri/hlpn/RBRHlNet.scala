@@ -196,6 +196,7 @@ object RBRHlNet {
     def apply(
         nHeadPeers: Int,
         maxVersionMinor: Int,
+        committedObligationsFor: Int => List[TransactionOutput] = committedOutputs,
     ): ValidatedNel[NetBuilder.Error, HlNet[RBRPlaceId, RBRTransitionId, Any]] = {
         import RBRPlaceId.*
 
@@ -241,14 +242,16 @@ object RBRHlNet {
         // The committed obligations of every candidate SEC version, keyed by version.
         val committedObligations: List[(BigInt, TransactionOutput)] =
             (1 to maxVersionMinor).toList.flatMap { v =>
-                committedOutputs(v).map(output => BigInt(v) -> output)
+                committedObligationsFor(v).map(output => BigInt(v) -> output)
             }
+        // The output-class carrier is every distinct committed output (a net-specific carrier, never
+        // enumerated by the unifying selector). Fall back to version 0's outputs if no version 1..N
+        // carries any.
+        val allOutputs: List[TransactionOutput] =
+            (committedObligations.map(_._2) ++ committedObligationsFor(0)).distinct
         val outputClass = Sort.Class(
           "Output",
-          NonEmptySet.of(
-            committedObligations.headOption.map(_._2).getOrElse(committedOutputs(0).head),
-            committedObligations.drop(1).map(_._2)*
-          ),
+          NonEmptySet.of(allOutputs.head, allOutputs.drop(1)*),
           Sort.Discipline.Unordered
         )
         // Ballot and Owner domains are enumerated: their colors are exactly the structurally-valid
