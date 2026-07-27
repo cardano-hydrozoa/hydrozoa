@@ -1,7 +1,7 @@
 package hydrozoa.rulebased.ledger.l1.state
 
-import scalus.compiler.Compile
 import scalus.cardano.onchain.plutus.v3.*
+import scalus.compiler.Compile
 import scalus.uplc.builtin.{ByteString, FromData, ToData}
 
 @Compile
@@ -11,9 +11,9 @@ object TreasuryState:
     /** Treasury datum, used both on- and off-chain.
       *
       * `headMp` is the induction anchor for reference-input lookups: written by the
-      * all-peers-signed FallbackTx and preserved across Resolve/Evacuate, it lets validators
-      * locate the rule-based regime utxo (HRWT beacon under `headMp`) without trusting tokens in
-      * the treasury's own value, which holds arbitrary L2 assets.
+      * all-peers-signed FallbackTx and preserved across Resolve/Evacuate, it lets validators locate
+      * the rule-based regime utxo (HRWT beacon under `headMp`) without trusting tokens in the
+      * treasury's own value, which holds arbitrary L2 assets.
       *
       * The immutable head-identity fields live in the regime utxo ([[RegimeState]]); the KZG G2
       * setup lives in the deployed setup-ladder utxos.
@@ -40,9 +40,9 @@ object TreasuryState:
 
     given ToData[RuleBasedTreasuryDatum] = ToData.derived
 
-    /** The only valid treasury-datum transitions, single-sourcing which fields advance and which are
-      * carried forward immutably. Validators build the expected next datum from these and check the
-      * output against it; off-chain builders construct the next datum the same way.
+    /** The only valid treasury-datum transitions, single-sourcing which fields advance and which
+      * are carried forward immutably. Validators build the expected next datum from these and check
+      * the output against it; off-chain builders construct the next datum the same way.
       */
     extension (self: RuleBasedTreasuryDatum.Unresolved)
         /** Resolve advances the unresolved treasury to the winning vote's commitment and minor
