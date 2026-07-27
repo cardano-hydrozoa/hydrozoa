@@ -390,12 +390,12 @@ object Stage4ScenarioGen extends ScenarioGen[ModelState, Stage4Sut]:
         // marginal stream is exactly Poisson at its configured rate, so peers with smaller mean
         // inter-arrival are picked proportionally more often and the global rate is Σλ_p.
         pick(
-            for {
-                (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
-                  state.params.meanInterArrivalTimes
-                )
-                cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
-            } yield cmd
+          for {
+              (peerNum, interArrivalDelay) <- CommandGenerators.genSuperposedNextEvent(
+                state.params.meanInterArrivalTimes
+              )
+              cmd <- genCommandForPeer(peerNum, interArrivalDelay, state)
+          } yield cmd
         )
 
     private def genCommandForPeer(

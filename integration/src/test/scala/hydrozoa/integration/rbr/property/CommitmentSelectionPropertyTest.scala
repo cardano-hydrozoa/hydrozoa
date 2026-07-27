@@ -7,8 +7,8 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.{KickRequest, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.{KickRequest, MultiPeerHeadHarness}
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedFiniteDuration
@@ -28,17 +28,17 @@ import scala.concurrent.duration.*
 import scalus.cardano.ledger.{Utxo, Utxos}
 import test.{SeedPhrase, TestPeers}
 
-/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]], with the vote path
-  * disabled at the tx layer to exercise how tally selects a commitment when peers cannot vote.
+/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]], with the vote path disabled
+  * at the tx layer to exercise how tally selects a commitment when peers cannot vote.
   *
   *   - **Test 1** — firewall every [[VoteTx]] head + coil. No vote lands, tally's max-by-
-  *     versionMinor reduction preserves the public/default ballot box, resolves to `major1`
-  *     (the FallbackTx-produced treasury's kzg = on-chain Major-1 commitment). Peers evacuate
-  *     against `initialEvacuationMap`.
+  *     versionMinor reduction preserves the public/default ballot box, resolves to `major1` (the
+  *     FallbackTx-produced treasury's kzg = on-chain Major-1 commitment). Peers evacuate against
+  *     `initialEvacuationMap`.
   *   - **Test 2** — same firewall, plus an exogenously-built [[VoteTx]] for `sec2` (the SEC at
-  *     hard-confirmed stack 2) submitted directly to the shared L1. Tally's max-by-
-  *     versionMinor picks our vote (default is `versionMinor = 0`; ours is > 0). Peers
-  *     evacuate against `sec2`'s map.
+  *     hard-confirmed stack 2) submitted directly to the shared L1. Tally's max-by- versionMinor
+  *     picks our vote (default is `versionMinor = 0`; ours is > 0). Peers evacuate against `sec2`'s
+  *     map.
   *
   * Setup mirrors [[EvacuationPropertyTest]] (3 head + 2 coil, firewalled v2 settlement, widened
   * init window).
@@ -49,10 +49,10 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         p: org.scalacheck.Test.Parameters
     ): org.scalacheck.Test.Parameters = p.withMinSuccessfulTests(1)
 
-    private val nHeadPeers: Int                 = 3
-    private val nCoilPeers: Int                 = 2
+    private val nHeadPeers: Int = 3
+    private val nCoilPeers: Int = 2
     private val scenarioTimeout: FiniteDuration = 5.minutes
-    private val cardanoNetwork: CardanoNetwork  = CardanoNetwork.Preprod
+    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     /** The commitment we expect the resolved treasury to end up with. Drives both what (if
       * anything) the scenario submits between fallback and resolution, and the expected
@@ -71,9 +71,9 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         transportMode: TransportMode,
         expected: ExpectedCommitment
     ): Prop =
-        val testPeers   = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
         val coilWallets = testPeers.coilWallets
-        val coilPeers   = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
+        val coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
         val fastDisputeResolutionConfig: test.GenWithTestPeers[DisputeResolutionConfig] =
             ReaderT { network =>
@@ -137,20 +137,20 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(submitOneUserRequest(ctx))
+            _ <- lift(submitOneUserRequest(ctx))
         yield ()
 
     private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
-            ctx   <- ask
+            ctx <- ask
             fiber <- lift((IO.sleep(1.second) >> submitOneUserRequest(ctx)).foreverM.start)
-            _     <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
+            _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
         yield ()
 
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
     /** For [[ExpectedCommitment.DefaultMajor1]] this is a no-op. */
@@ -158,43 +158,42 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         for
             ctx <- ask
             _ <- lift(ctx.expected match
-                case ExpectedCommitment.DefaultMajor1 => IO.unit
-            )
+                case ExpectedCommitment.DefaultMajor1 => IO.unit)
         yield ()
 
     private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
         yield ()
 
     private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
         yield ()
 
     private def step5_assertTerminalHistogram: test.TestM[Ctx, Unit] =
         for
-            ctx    <- ask
-            _      <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
-            _      <- lift(IO.sleep(quiescenceDelay))
-            utxos  <- lift(ctx.harness.l1Snapshot)
+            ctx <- ask
+            _ <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
+            _ <- lift(IO.sleep(quiescenceDelay))
+            utxos <- lift(ctx.harness.l1Snapshot)
             actual <- lift(runClassifier(utxos)(using ctx.multiNodeConfig))
             expectedEvacCount <- lift(
-                                     ctx.firstPayoutsLeft.get.flatMap(
-                                       IO.fromOption(_)(
-                                         new IllegalStateException(
-                                           "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
-                                         )
-                                       )
-                                     )
-                                 )
+              ctx.firstPayoutsLeft.get.flatMap(
+                IO.fromOption(_)(
+                  new IllegalStateException(
+                    "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
+                  )
+                )
+              )
+            )
             expected = expectedCardinalities(expectedEvacCount)
             _ <- assertWith(
-                     actual == expected,
-                     s"Cardinality mismatch:\n  expected: $expected\n  actual:   $actual"
-                 )
+              actual == expected,
+              s"Cardinality mismatch:\n  expected: $expected\n  actual:   $actual"
+            )
         yield ()
 
     private val quiescenceDelay: FiniteDuration = 2.seconds
@@ -212,11 +211,11 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         takeoffTime: Option[java.time.Instant]
     ): Resource[IO, Ctx] =
         for
-            fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
-            resolutionSubmitted  <- Resource.eval(Deferred[IO, Unit])
-            peersEvacuationDone  <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
-            evacuationDone       <- Resource.eval(Deferred[IO, Unit])
-            firstPayoutsLeft     <- Resource.eval(Ref[IO].of(Option.empty[Int]))
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
+            resolutionSubmitted <- Resource.eval(Deferred[IO, Unit])
+            peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
+            evacuationDone <- Resource.eval(Deferred[IO, Unit])
+            firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             preinitPeerUtxosL1 = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
@@ -224,7 +223,8 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
 
             coilNodeConfigs = multiNodeConfig.mkCoilNodeConfigs(coilWallets)
 
-            startEpochMs = multiNodeConfig.headConfig.initialBlock.blockBrief.endTime.convert.instant.toEpochMilli
+            startEpochMs =
+                multiNodeConfig.headConfig.initialBlock.blockBrief.endTime.convert.instant.toEpochMilli
 
             hooks = MultiPeerHeadHarness.Hooks[Option[RequestSequencer.Handle]](
               tracer = humanFormatTracer |+| observerTracer(
@@ -281,7 +281,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     // ------------------------------------------------------------------
 
     private def submitOneUserRequest(ctx: Ctx): IO[Unit] =
-        val peerNum     = HeadPeerNumber(0)
+        val peerNum = HeadPeerNumber(0)
         val userRequest = KickRequest.mkKickTransactionRequest(ctx.multiNodeConfig, peerNum)
         for
             sequencer <- IO.fromOption(ctx.harness.peers.get(peerNum).flatMap(_.handle))(
@@ -303,10 +303,10 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
                 )
         }
 
-    /** Same as [[EvacuationPropertyTest.wrapPeerBackend]] plus a blanket drop on every
-      * vote-related tx: head-side [[VoteTx]], coil-side [[RatchetVoteTx]] (structurally the same
-      * as [[VoteTx]] but ratchets an already-`Voted` box forward — can move the resolved kzg),
-      * and [[AbstainTx]] for symmetry. Applies to both head and coil backends.
+    /** Same as [[EvacuationPropertyTest.wrapPeerBackend]] plus a blanket drop on every vote-related
+      * tx: head-side [[VoteTx]], coil-side [[RatchetVoteTx]] (structurally the same as [[VoteTx]]
+      * but ratchets an already-`Voted` box forward — can move the resolved kzg), and [[AbstainTx]]
+      * for symmetry. Applies to both head and coil backends.
       */
     private def wrapPeerBackend(
         peerId: PeerId,
@@ -391,7 +391,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         utxos: Utxos
     )(using MultiNodeConfig): IO[Map[RBRPlaceId, Int]] =
         val classifier = new RBRClassifier
-        val allUtxos   = utxos.toList.map { case (i, o) => Utxo(i, o) }
+        val allUtxos = utxos.toList.map { case (i, o) => Utxo(i, o) }
         Histogram.empty(classifier).addAll(allUtxos).toEither match
             case Left(errs) =>
                 IO.raiseError(
@@ -403,9 +403,11 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
     @unused
     private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
         val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
-        val lines = ambient.zipWithIndex.map { case (u, idx) =>
-            s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
-        }.mkString("\n")
+        val lines = ambient.zipWithIndex
+            .map { case (u, idx) =>
+                s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
+            }
+            .mkString("\n")
         Slf4jTracer.sink.traceWith(
           hydrozoa.lib.logging.LogEvent
               .From(Map.empty, "AmbientDiagnostic")
@@ -414,21 +416,21 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
 
     /** Shape identical to [[EvacuationPropertyTest.expectedCardinalities]]. Only
       * `EvacuationOutputPlaceId` varies with the winning commitment; the count comes from
-      * `PayoutsLeft(n)` observed by the RBA at drain start, which equals the resolved
-      * commitment's evacuation-map size.
+      * `PayoutsLeft(n)` observed by the RBA at drain start, which equals the resolved commitment's
+      * evacuation-map size.
       */
     private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
         Map(
-          TreasuryRefPlaceId        -> 1,
-          DisputeRefPlaceId         -> 1,
-          RegimeRefPlaceId          -> 1,
-          SetupLadderRefPlaceId     -> 7,
-          ResolvedTreasuryPlaceId   -> 1,
+          TreasuryRefPlaceId -> 1,
+          DisputeRefPlaceId -> 1,
+          RegimeRefPlaceId -> 1,
+          SetupLadderRefPlaceId -> 7,
+          ResolvedTreasuryPlaceId -> 1,
           UnresolvedTreasuryPlaceId -> 0,
-          VotedPlaceId              -> 0,
-          UnvotedPlaceId            -> 0,
-          CollateralPlaceId         -> 0,
-          EvacuationOutputPlaceId   -> evacuationCount,
-          PayoutObligationsPlaceId  -> 0,
-          AmbientPlaceId            -> (nHeadPeers * 2 + nCoilPeers)
+          VotedPlaceId -> 0,
+          UnvotedPlaceId -> 0,
+          CollateralPlaceId -> 0,
+          EvacuationOutputPlaceId -> evacuationCount,
+          PayoutObligationsPlaceId -> 0,
+          AmbientPlaceId -> (nHeadPeers * 2 + nCoilPeers)
         )

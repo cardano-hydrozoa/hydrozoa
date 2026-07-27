@@ -713,8 +713,8 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
                   )
 
                   _ <- assertWith(
-                    msg = "Block's deposit absorbed and deposits refunded should both be empty",
-                    condition = block.body.depositsRefunded.isEmpty
+                    msg = "Block's deposit absorbed and deposits rejected should both be empty",
+                    condition = block.body.depositsRejected.isEmpty
                         && block.body.depositsAbsorbed.isEmpty
                   )
                   // Post-dated refund txs are slow-cycle (`StackEffects`), not block-attached,
@@ -786,7 +786,7 @@ object JointLedgerTest extends Properties("Joint Ledger Test") {
               _ <- assertWith(
                 msg = "Deposits should be correct with absorbed deposit",
                 condition = majorBlock.body.depositsAbsorbed == List(depositReq.requestId) &&
-                    majorBlock.body.depositsRefunded == List.empty
+                    majorBlock.body.depositsRejected == List.empty
               )
 
               // No evacuation-map / KZG assertions here: that state lives in StackComposer, not

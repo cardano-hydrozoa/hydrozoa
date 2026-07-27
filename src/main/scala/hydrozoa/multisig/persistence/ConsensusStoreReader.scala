@@ -62,10 +62,10 @@ trait ConsensusStoreReader[F[_]]:
       */
     def requestBlock(id: RequestId): F[Option[RequestBlockEntry]]
 
-    /** The major block that absorbed a deposit into the treasury — absent while the deposit is
-      * unabsorbed (or the request is not a deposit).
+    /** A deposit's block-completion decision (absorbed / rejected) and the block that decided it —
+      * absent while the deposit is undecided (or the request is not a deposit).
       */
-    def absorptionBlock(id: RequestId): F[Option[BlockNumber]]
+    def decision(id: RequestId): F[Option[DepositDecision]]
 
     /** The L1 effect txs that pay a withdrawing request's L1-bound outputs (settlement / rollout /
       * finalization), by their `l1TxId`. Empty for a non-withdrawing request, or one whose covering
@@ -74,9 +74,9 @@ trait ConsensusStoreReader[F[_]]:
     def withdrawalEffects(id: RequestId): F[List[TransactionHash]]
 
     /** The wall-clock instant an arrival stamp was recorded at, via the store's per-generation
-      * zero-time anchor. `None` for a stamp whose generation predates the anchor.
+      * zero-time anchor (total — see [[Persistence.wallClockOf]]).
       */
-    def wallClockOf(stamp: ArrivalStamp): F[Option[Instant]]
+    def wallClockOf(stamp: ArrivalStamp): F[Instant]
 
 object ConsensusStoreReader:
 
@@ -135,8 +135,8 @@ object ConsensusStoreReader:
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] =
                 persistence.get(StoreKey.RequestBlockIndex(id))
 
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] =
-                persistence.get(StoreKey.DepositAbsorptionIndex(id))
+            def decision(id: RequestId): IO[Option[DepositDecision]] =
+                persistence.get(StoreKey.DepositDecisionIndex(id))
 
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] =
                 // Prefix scan the (requestId, l1TxId) index: seek to the 8-byte packed-i64 prefix,
@@ -153,7 +153,7 @@ object ConsensusStoreReader:
                   stop = (k: (Long, TransactionHash)) => k._1 != id.asI64
                 )((k, _) => k._2)
 
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] =
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
                 persistence.wallClockOf(stamp)
 
     /** A reader over no data — every lookup is empty. For wiring the routes on a node whose store
@@ -176,6 +176,6 @@ object ConsensusStoreReader:
                 IO.pure(Nil)
             def request(id: RequestId): IO[Option[Timestamped[UserRequestWithId]]] = IO.pure(None)
             def requestBlock(id: RequestId): IO[Option[RequestBlockEntry]] = IO.pure(None)
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)

@@ -142,7 +142,7 @@ case class EutxoL2Ledger private (
               s.focus(_.activeUtxos)
                   .modify(_ ++ addedL2Utxos.map((i, o) => i -> o.value))
                   .focus(_.pendingDeposits)
-                  .modify(_.removedAll(req.absorbedDeposits ++ req.refundedDeposits))
+                  .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
                   .focus(_.commandNumber)
                   .modify(_.increment)
             )

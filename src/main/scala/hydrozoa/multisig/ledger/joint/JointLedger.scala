@@ -33,7 +33,7 @@ import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
-import hydrozoa.multisig.persistence.{JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
+import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
 
 private case class UserRequestState(
@@ -196,7 +196,7 @@ final case class JointLedger(
         case req: UserRequestWithId.TransactionRequest => applyTransaction(req)
     }
 
-    private def rejectEvent(
+    private def invalidateRequest(
         requestId: RequestId,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError
     ): IO[Unit] =
@@ -208,7 +208,7 @@ final case class JointLedger(
                 .modify(_.appended((requestId, Invalid)))
             _ <- state.set(newState)
             _ <- tracer.traceWith(
-              JointLedgerEvent.RequestRejected(requestId, currentBlockNum, e.toString)
+              JointLedgerEvent.RequestInvalidated(requestId, currentBlockNum, e.toString)
             )
         } yield ()
 
@@ -216,7 +216,7 @@ final case class JointLedger(
       * deposits map — this actor's only L1-ledger surface. Parsing derives the deposit's accept-by
       * deadline (`validityEnd`) from the tx's mandatory TTL (`ttl − submissionDuration`) and stamps
       * it on the produced utxo. Returns the new map + the produced deposit utxo and its post-dated
-      * refund tx, or a [[DepositLedgerError]] (rejected via `rejectEvent`, never raised). The
+      * refund tx, or a [[DepositLedgerError]] (rejected via `invalidateRequest`, never raised). The
       * accept-by check itself is enforced by the caller, [[registerDeposit]].
       */
     private def registerDepositInMap(
@@ -258,7 +258,7 @@ final case class JointLedger(
             currentBlockNum = p.nextBlockNumber
 
             _ <- registerDepositInMap(p.deposits, req) match {
-                case Left(error) => rejectEvent(requestId, error)
+                case Left(error) => invalidateRequest(requestId, error)
                 case Right((newDeposits, (depositProduced, refundTx))) =>
                     // The accept-by deadline is derived from the deposit tx's TTL during the parse
                     // above (ttl − submissionDuration), so the check can only run post-parse.
@@ -267,7 +267,7 @@ final case class JointLedger(
                           depositProduced.requestValidityEndTime
                         )
                     then
-                        rejectEvent(
+                        invalidateRequest(
                           requestId,
                           JointLedger.UserRequestError.BlockOutOfRequestValidityInterval(
                             blockStartTime,
@@ -290,7 +290,7 @@ final case class JointLedger(
                             _ <- res match {
                                 // FIXME: Should we distinguish between genuine L2 failures and things like
                                 // network errors?
-                                case Left(e) => rejectEvent(requestId, e)
+                                case Left(e) => invalidateRequest(requestId, e)
                                 case Right(newL2State) =>
                                     for {
                                         _ <- state.set(
@@ -347,7 +347,7 @@ final case class JointLedger(
                 for {
                     res <- runL2Command(p, l2Command)
                     _ <- res match {
-                        case Left(e) => rejectEvent(requestId, e)
+                        case Left(e) => invalidateRequest(requestId, e)
                         case Right(newL2State) =>
                             for {
                                 _ <- state.set(
@@ -423,7 +423,7 @@ final case class JointLedger(
                 // Verify the produced brief against the reference brief (follower mode).
                 _ <- panicOnMismatchWithExpectedBrief(referenceBlockBrief, blockBrief)
 
-                // Drop the deposits we just absorbed/refunded from the L1 deposits map.
+                // Drop the deposits we just absorbed/rejected from the L1 deposits map.
                 newJlState = pBlockBrief.setDeposits(split.surviving)
 
                 _ <- state.set(newJlState.done(blockBrief.header))
@@ -460,25 +460,25 @@ final case class JointLedger(
         val blockCreationStartTime = p.BlockCreationStartTime
         val previousHeader = p.previousBlockHeader
         val blockWithdrawnUtxos = p.l2LedgerState.payouts
-        val events = p.userRequestState.requests
+        val requests = p.userRequestState.requests
         for {
             _ <- tracer.traceWith(
               JointLedgerEvent.BlockBriefBuilding(
                 previousHeader,
                 blockCreationStartTime,
                 p.competingFallbackTxTime,
-                events,
+                requests,
                 decisions.absorbed.requestIds,
-                decisions.refunded.requestIds
+                decisions.rejected.requestIds
               )
             )
 
-            depositEventDecisions: L2LedgerCommand.ApplyDepositDecisions =
+            depositRequestDecisions: L2LedgerCommand.ApplyDepositDecisions =
                 L2LedgerCommand.ApplyDepositDecisions(
                   blockNumber = p.nextBlockNumber,
                   blockCreationEndTime = blockCreationEndTime.toPosixTime,
                   absorbedDeposits = decisions.absorbed.requestIds,
-                  refundedDeposits = decisions.refunded.requestIds
+                  rejectedDeposits = decisions.rejected.requestIds
                 )
 
             // Block header
@@ -488,8 +488,8 @@ final case class JointLedger(
                     val evacDiffs = p.l2LedgerState.diffs
                     for {
                         newL2State <-
-                            if decisions.refunded.isEmpty then IO.pure(p.l2LedgerState)
-                            else executeL2Command(p, depositEventDecisions)
+                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
+                            else executeL2Command(p, depositRequestDecisions)
 
                         // `evacDiffs` are surfaced to the slow side via `BlockResult`.
                         newJLState = p.setL2LedgerState(newL2State)
@@ -506,7 +506,7 @@ final case class JointLedger(
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
-                        newL2State <- executeL2Command(p, depositEventDecisions)
+                        newL2State <- executeL2Command(p, depositRequestDecisions)
                         evacDiffs = newL2State.diffs
                         newJLState = p.setL2LedgerState(newL2State)
 
@@ -523,13 +523,13 @@ final case class JointLedger(
             // Block brief
             blockBrief: BlockBrief.Intermediate = headerIntermediate match {
                 case header: BlockHeader.Minor =>
-                    val blockBody = BlockBody.Minor(events, decisions.refunded.requestIds)
+                    val blockBody = BlockBody.Minor(requests, decisions.rejected.requestIds)
                     BlockBrief.Minor(header, blockBody)
                 case header: BlockHeader.Major =>
                     val blockBody = BlockBody.Major(
-                      events,
+                      requests,
                       decisions.absorbed.requestIds,
-                      decisions.refunded.requestIds
+                      decisions.rejected.requestIds
                     )
                     BlockBrief.Major(header, blockBody)
             }
@@ -563,9 +563,9 @@ final case class JointLedger(
                       args.blockCreationEndTime
                     )
                     val blockBody = BlockBody.Final(
-                      events = requests,
+                      requests = requests,
                       // Final block should reject all the deposits known.
-                      depositsRefunded = p.deposits.requestIds
+                      depositsRejected = p.deposits.requestIds
                     )
                     BlockBrief.Final(blockHeader, blockBody)
                 }
@@ -677,7 +677,7 @@ final case class JointLedger(
       *   - one request → (block, validity) reverse-index row per event in this block →
       *     `RequestBlockIndex[requestId]` (keyed by the opaque request id's packed i64);
       *   - one deposit-request → block reverse-index row per deposit absorbed in this (major) block
-      *     → `DepositAbsorptionIndex[requestId]`.
+      *     → `DepositDecisionIndex[requestId]`.
       *
       * A head peer adds its own `Block` (leader) + `SoftAck` lanes on top
       * ([[persistOwnAckBundle]]); a coil peer persists exactly this subset
@@ -693,7 +693,7 @@ final case class JointLedger(
             // and never pruned below the fast anchor, so the predecessor entry is always present
             // once past the first block).
             priorHighWater <- previousBlockHighWater(brief.blockNum)
-            highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.events.map(_._1))
+            highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.requests.map(_._1))
             // The L2 ledger has already committed this block's commands (JL is its sole, single-
             // message-at-a-time driver), so its command number now reflects this block; record it
             // so recover can co-anchor the L2 ledger to the fast anchor via restoreTo.
@@ -706,16 +706,25 @@ final case class JointLedger(
                 .put(StoreKey.L2CommandNumber(brief.blockNum))(commandNumber)
             // One reverse-index row per event, in the same atomic bundle: the request's id maps
             // to the block that processed it and the validity verdict it received.
-            val withRequestBlocks = brief.events.foldLeft(bundle) {
+            val withRequestBlocks = brief.requests.foldLeft(bundle) {
                 case (batch, (requestId, validity)) =>
                     batch.put(StoreKey.RequestBlockIndex(requestId))(
                       RequestBlockEntry(brief.blockNum, validity)
                     )
             }
-            // One row per deposit absorbed in this (major) block: the deposit request's id maps to
-            // the block whose settlement absorbs it into the treasury.
-            brief.depositsAbsorbed.foldLeft(withRequestBlocks) { (batch, requestId) =>
-                batch.put(StoreKey.DepositAbsorptionIndex(requestId))(brief.blockNum)
+            // One decision row per deposit decided in this block: absorbed (into the treasury by
+            // this major block's settlement) or rejected (repaid by its post-dated refund). Both
+            // map the deposit request's id to the deciding block; absence of a row means undecided.
+            val withAbsorptions =
+                brief.depositsAbsorbed.foldLeft(withRequestBlocks) { (batch, requestId) =>
+                    batch.put(StoreKey.DepositDecisionIndex(requestId))(
+                      DepositDecision.Absorbed(brief.blockNum)
+                    )
+                }
+            brief.depositsRejected.foldLeft(withAbsorptions) { (batch, requestId) =>
+                batch.put(StoreKey.DepositDecisionIndex(requestId))(
+                  DepositDecision.Rejected(brief.blockNum)
+                )
             }
         }
 
@@ -782,7 +791,7 @@ final case class JointLedger(
     /** Field-level diff of the leader's `expected` brief against this peer's `actual` one, so an
       * intermittent consensus-divergence panic names WHICH part flipped instead of dumping two
       * opaque briefs. The common cause is a deposit landing in a different compartment on the two
-      * peers (`depositsAbsorbed` vs `depositsRefunded`) because their `pollResults`/block-window
+      * peers (`depositsAbsorbed` vs `depositsRejected`) because their `pollResults`/block-window
       * timing differed — e.g. a deposit absorbed by the leader but `NotInPollResults` here, which
       * reflects a polling cadence violating the `cardanoLiaisonPollingPeriodSafetyFactor` margin on
       * `TxTiming`.
@@ -810,9 +819,9 @@ final case class JointLedger(
             s"endTime: expected=${expected.endTime} actual=${actual.endTime}"
           ),
           setDiff("depositsAbsorbed", expected.depositsAbsorbed, actual.depositsAbsorbed),
-          setDiff("depositsRefunded", expected.depositsRefunded, actual.depositsRefunded),
-          Option.when(expected.events != actual.events)(
-            s"events: expected=${expected.events} actual=${actual.events}"
+          setDiff("depositsRejected", expected.depositsRejected, actual.depositsRejected),
+          Option.when(expected.requests != actual.requests)(
+            s"requests: expected=${expected.requests} actual=${actual.requests}"
           )
         ).flatten match
             case Nil   => " (accessor fields equal; differs in header internals)"
@@ -862,7 +871,7 @@ object JointLedger {
 
     /** Failure registering a deposit into the fast-side L1 deposits map — either the deposit tx
       * fails to parse, or its submission deadline doesn't match the one expected from its
-      * validity-end. Rejected via `rejectEvent` (stringified into the L2 proxy error), never
+      * validity-end. Rejected via `invalidateRequest` (stringified into the L2 proxy error), never
       * raised, so it need not extend `Throwable`.
       */
     sealed trait DepositLedgerError

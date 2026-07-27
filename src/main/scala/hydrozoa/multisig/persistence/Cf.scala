@@ -101,12 +101,13 @@ object Cf:
     case object EffectStackIndex extends Cf:
         def name = "EffectStackIndex"
 
-    /** Deposit-request → absorbing-block reverse index: the deposit request's opaque id (packed
-      * i64) → the major `blockNum` that absorbed the deposit into the treasury. Written by JL in
-      * the same atomic bundle as that block.
+    /** Deposit-request → decision reverse index: the deposit request's opaque id (packed i64) → the
+      * [[DepositDecision]] (absorbed / rejected) and the `blockNum` that decided it. Absence of a
+      * row means the deposit is still undecided. Written by JL in the same atomic bundle as the
+      * deciding block.
       */
-    case object DepositAbsorptionIndex extends Cf:
-        def name = "DepositAbsorptionIndex"
+    case object DepositDecisionIndex extends Cf:
+        def name = "DepositDecisionIndex"
 
     /** Withdrawal-request → effect reverse index: a set of `(requestId, l1TxId)` pairs (both in the
       * key, empty value), so a prefix scan by the packed-i64 request id yields the settlement /
@@ -157,7 +158,7 @@ object Cf:
       Treasury,
       EvacuationMap,
       RequestBlockIndex,
-      DepositAbsorptionIndex,
+      DepositDecisionIndex,
       WithdrawalEffectIndex,
       BlockStackIndex,
       EffectStackIndex,

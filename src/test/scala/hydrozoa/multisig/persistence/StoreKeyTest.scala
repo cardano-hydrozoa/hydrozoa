@@ -35,8 +35,8 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
           StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
               Cf.RequestBlockIndex,
-          StoreKey.DepositAbsorptionIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
-              Cf.DepositAbsorptionIndex,
+          StoreKey.DepositDecisionIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
+              Cf.DepositDecisionIndex,
           StoreKey
               .WithdrawalEffectIndex(RequestId(HeadPeerNumber(0), RequestNumber(0)), sampleHash) ->
               Cf.WithdrawalEffectIndex,

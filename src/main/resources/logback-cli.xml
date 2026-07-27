@@ -1,0 +1,18 @@
+<configuration>
+    <!-- Quiet, console-only config for the one-shot CLI subcommands (keygen-fleet,
+         build-head-config, …). The launcher selects this for every subcommand except `serve`, which
+         keeps the verbose, file-writing logback.xml. No file appenders: the CLI must not try to
+         write hydrozoa-trace.jsonl / hydrozoa.log into the cwd (that cwd is often read-only, e.g.
+         inside the Docker image), and it keeps the output to the few lines a command actually needs. -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %-5level %msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="warn">
+        <appender-ref ref="STDOUT"/>
+    </root>
+    <logger name="hydrozoa" level="info"/>
+    <logger name="com.bloxbean" level="warn"/>
+    <logger name="scalus" level="warn"/>
+</configuration>

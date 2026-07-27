@@ -1,10 +1,9 @@
-package hydrozoa.examples.demo
+package hydrozoa.app.cli
 
 import cats.data.NonEmptyList
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.NodeConfig
@@ -32,20 +31,15 @@ import scalus.uplc.builtin.ByteString
   * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
   * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload (its hash
   * pins the payload in the deposit tx metadata, docs/l2-isomorphism.md), registers the deposit with
-  * the head (`POST /head/deposit`), then signs the deposit tx and submits it to L1 via Blockfrost,
+  * the head (`POST /head/requests`), then signs the deposit tx and submits it to L1 via Blockfrost,
   * polling until the deposit utxo lands. The head absorbs it after maturity.
   *
   * Usage:
   * {{{
-  *   sbt "examples/runMain hydrozoa.examples.demo.SubmitDeposit [--config-dir config/demo] \
-  *     [--head-uri http://localhost:8080]"
+  *   hydrozoa submit-deposit [--home head/demo] [--head-uri http://localhost:8080]
   * }}}
   */
-object SubmitDeposit
-    extends CommandIOApp(
-      name = "deposit",
-      header = "Interactively build, register, and submit a deposit into a running head"
-    ):
+object SubmitDeposit:
 
     /** The accept-by margin: the head must learn the deposit within this window, so it has to
       * comfortably exceed the interactive prompting + L1 submission time. Absorption is anchored on
@@ -53,8 +47,12 @@ object SubmitDeposit
       */
     private val acceptByMargin = 3.minutes
 
-    override def main: Opts[IO[ExitCode]] =
-        (DemoOptions.configDirOpt, DemoOptions.headUriOpt).mapN(run)
+    /** The `submit-deposit` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "submit-deposit",
+          header = "Interactively build, register, and submit a deposit into a running head"
+        )((DemoOptions.configDirOpt, DemoOptions.headUriOpt).mapN(run))
 
     private def run(configDir: Path, headUri: Uri): IO[ExitCode] =
         EmberClientBuilder.default[IO].build.use { client =>

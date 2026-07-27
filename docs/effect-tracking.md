@@ -40,7 +40,7 @@ by recovery — they exist only to serve these queries.
 | CF | key → value | written by / when |
 |---|---|---|
 | `RequestBlockIndex` | request id (packed i64) → `(blockNum, validity)` | `JointLedger`, in the block bundle — the block that locally processed the request |
-| `DepositAbsorptionIndex` | deposit request id (packed i64) → `blockNum` | `JointLedger`, in the block bundle — the **major** block that absorbed the deposit |
+| `DepositDecisionIndex` | deposit request id (packed i64) → `DepositDecision` (`Absorbed(block)` \| `Rejected(block)`) | `JointLedger`, in the block bundle — the block that **decided** the deposit (folding both `depositsAbsorbed` and `depositsRejected`); absence = still pending |
 | `WithdrawalEffectIndex` | `(request id i64 : 8)(l1TxId : 32)` → *(empty)* | `StackComposer` at stack close — one row per (withdrawing request, paying effect); prefix-scan by request id yields many effects |
 | `BlockStackIndex` | `blockNum` → `stackNum` | `SlowConsensusActor` at hard-confirmation |
 | `EffectStackIndex` | `l1TxId` → `stackNum` | `SlowConsensusActor` at hard-confirmation — backs `GET /head/effects/{l1TxId}` |
@@ -81,15 +81,38 @@ withdrew, the effect tx(s) that pay its L1-bound outputs (see the withdrawal sec
 unioned and **deduped by `l1TxId`** (a withdrawal's settlement is also a carrier when settled in the
 same partition).
 
-**Deposit.** Two links, disjoint from the transaction path:
+**Deposit.** A deposit's `relatedEffects` is just its **post-dated refund** — the
+`RefundTx.PostDated` in the deposit's *registration*-block partition whose `requestId` matches. The
+refund carries the request id and is attributed to the registration block, so `RequestBlockIndex`
+reaches it with no extra storage. It is **always** presented (the post-dated refund exists from
+registration, whatever the deposit's eventual fate), so `relatedEffects` does not gate on the
+decision.
 
-- its **post-dated refund** — the `RefundTx.PostDated` in the deposit's *registration*-block
-  partition whose `requestId` matches. The refund carries the request id and is attributed to the
-  registration block, so `RequestBlockIndex` reaches it with no extra storage.
-- once absorbed, the **settlement** of its *absorbing* block's partition. The absorbing block is a
-  later major block, distinct from the registration block, so it is not derivable from
-  `RequestBlockIndex` — `DepositAbsorptionIndex` records it, and the resolver reads that block's
-  partition settlement.
+The **absorbing settlement** is *not* a related effect. It rides on the deposit's absorption-decision
+status instead (`GET /head/requests/{id}` → `absorptionDecisionStatus`), because it belongs to the
+*absorbing* block — a later major block, distinct from the registration block and not derivable from
+`RequestBlockIndex`. See the decision index below.
+
+### Deposit decision index
+
+A registered deposit has three fates, decided at block completion (`DepositsMap.Decisions`):
+
+- **absorbed** — folded into the treasury by a later major block's settlement;
+- **rejected** — repaid (its post-dated refund is the payout); the **final block rejects all
+  remaining deposits**;
+- **pending** — carried to a future block, no decision yet.
+
+`DepositDecisionIndex` records the first two as a `DepositDecision` (`Absorbed(block)` /
+`Rejected(block)`) keyed by request id; **pending is the absence of a row**. `JointLedger` writes it
+in the block bundle, folding both `brief.depositsAbsorbed` and `brief.depositsRejected` (covering
+minor / major / final decisions), and `ConsensusStoreReader.decision(id)` reads it. This backs the
+`absorptionDecisionStatus` ladder: the deciding block and `ABSORBED`/`REJECTED` outcome, plus — once
+an `Absorbed` deposit is hard-confirmed — the absorbing partition's settlement (`depositSettlement`).
+
+> **Terminology.** The deposit *decision* is `Rejected`; the *tx effect* that pays a rejected (or
+> expired) deposit is still a **refund** (`RefundTx`, `EffectKind.Refund`). Neither is the
+> request-level `Invalid` / `invalidateRequest` concept in `JointLedger`, which is a registration
+> request that failed to parse or fell outside its validity interval — a different rejection.
 
 ## Withdrawal effect tracking
 
@@ -228,7 +251,8 @@ were never removed from the treasury, since the final block never got settled).
   withdrawal tracking works for the built-in EUTXO ledger and the remote backend.
 - **Explicit withdrawals only.** Finalization also pays out *residual L2 balances* (everyone's
   leftover utxos); those are not requests and are not tracked (their `provenance` entries are `None`).
-- **Request → withdrawal effects is stored; transaction carriers and deposit refunds are query-time.**
-  The stored `WithdrawalEffectIndex` and `DepositAbsorptionIndex` exist because those links reach a
-  block the request's `RequestBlockIndex` entry does not; the transaction-carrier and deposit-refund
-  links fall out of `RequestBlockIndex` + the partition decomposition with no extra storage.
+- **Request → withdrawal effects and the deposit decision are stored; transaction carriers and
+  deposit refunds are query-time.** The stored `WithdrawalEffectIndex` and `DepositDecisionIndex`
+  exist because those links reach a block the request's `RequestBlockIndex` entry does not (the paying
+  effect's stack; the absorbing block); the transaction-carrier and deposit-refund links fall out of
+  `RequestBlockIndex` + the partition decomposition with no extra storage.
