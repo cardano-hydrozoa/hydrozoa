@@ -34,6 +34,7 @@ case class RbrMbtSuite(
     nCoilPeers: Int = 2,
     maxVersionMinor: Int = 2,
     settlementFirewallMajor: Int = 2,
+    nCommands: Int = 3,
 ) extends ModelBasedSuite:
 
     override type Env = Unit
@@ -51,9 +52,8 @@ case class RbrMbtSuite(
 
     override def scenarioGen: ScenarioGen[ModelState, Sut] = RbrMbtScenarioGen
 
-    // No pre-fallback commands yet.
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] =
-        [A] => (g: Gen[A]) => Gen.resize(0, g)
+        [A] => (g: Gen[A]) => Gen.resize(nCommands, g)
 
     override def initEnv: PropertyM[IO, Unit] = PropertyM.run(IO.unit)
 
