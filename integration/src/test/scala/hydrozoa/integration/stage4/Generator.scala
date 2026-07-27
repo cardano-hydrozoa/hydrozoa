@@ -203,6 +203,9 @@ object CommandGenerators:
     def genRegisterDepositCommand(
         peerNum: HeadPeerNumber,
         interArrivalDelay: FiniteDuration,
+        // Optional inline datum stamped on each L2 output — e.g. the RBR MBT passes the "evacuation"
+        // sentinel so its RBRClassifier can bucket deposit-derived evacuation outputs on L1.
+        l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
     )(state: ModelState): Gen[Option[RegisterAndSubmitDepositCommand]] = {
         val config = state.params.multiNodeConfig
         val peerAddress = config.addressOf(peerNum)
@@ -251,7 +254,8 @@ object CommandGenerators:
                                         outputs <- Gen
                                             .sequence[List[TransactionOutput], TransactionOutput](
                                               outputValues.map(v =>
-                                                  Gen.const(peerAddress).map(a => Babbage(a, v))
+                                                  Gen.const(peerAddress)
+                                                      .map(a => Babbage(a, v, datumOption = l2OutputDatum))
                                               )
                                             )
 
