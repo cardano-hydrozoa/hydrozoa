@@ -3,18 +3,19 @@ package hydrozoa.integration.rbr.property
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Awaiting, Voted}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
-import org.scalatest.funsuite.AnyFunSuite
+import org.scalacheck.{Prop, Properties}
 
-class ObservableMarkingTest extends AnyFunSuite:
+object ObservableMarkingTest extends Properties("ObservableMarking"):
 
     private def net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
 
-    test("alpha projects the RBR seed marking (public Voted box + 3 Awaiting peer boxes)") {
+    // Deterministic example assertions checked once (no generators).
+    private def allTrue(conds: Boolean*): Prop = Prop.all(conds.map(Prop.propBoolean)*)
+
+    val _ = property("alpha projects the RBR seed marking (public Voted box + 3 Awaiting peer boxes)") = {
         val obs = ObservableMarking.alpha(net)
-        val _ = assert(
-          obs.ballots == Map((Voted, BigInt(0)) -> 1, (Awaiting, BigInt(0)) -> 3)
-        )
-        assert(
+        allTrue(
+          obs.ballots == Map((Voted, BigInt(0)) -> 1, (Awaiting, BigInt(0)) -> 3),
           obs.counts == Map(
             UnresolvedTreasury -> 1,
             ResolvedTreasury   -> 0,
