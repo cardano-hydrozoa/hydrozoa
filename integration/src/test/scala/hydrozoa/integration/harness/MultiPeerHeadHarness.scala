@@ -297,6 +297,33 @@ object MultiPeerHeadHarness:
     )(
         buildCtx: (Option[Instant], MultiNodeConfig) => Resource[IO, Ctx]
     ): PropertyM[IO, Resource[IO, Ctx]] =
+        genDisputeMnc(
+          transportMode,
+          testPeers,
+          testPeerToUtxos,
+          takeoffOffset,
+          fastTxTiming,
+          disputeResolutionConfig,
+          coilPeers,
+          coilQuorum,
+        ).map { case (takeoffTime, mnc) => buildCtx(takeoffTime, mnc) }
+
+    /** The config-generation half of [[mkResource]]: pick the takeoff time and a
+      * yaci-genesis-pinned [[MultiNodeConfig]] with the fast dispute timings/rate-limits both dispute
+      * callers need. Split out so a `ModelBasedSuite` can generate the config in `genInitialState`
+      * (the `PropertyM` phase) and build the harness separately in `sutResource`.
+      */
+    def genDisputeMnc(
+        transportMode: Transport.Mode,
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        takeoffOffset: FiniteDuration,
+        fastTxTiming: GenWithTestPeers[TxTiming] = fastTxTiming,
+        disputeResolutionConfig: GenWithTestPeers[DisputeResolutionConfig] =
+            fastDisputeResolutionConfig,
+        coilPeers: CoilPeers = CoilPeers.empty,
+        coilQuorum: Int = 0,
+    ): PropertyM[IO, (Option[Instant], MultiNodeConfig)] =
         for {
             takeoffTime <- PropertyM.run(
               mkTakeoffTime(transportMode.useTestControl, takeoffOffset)
@@ -349,7 +376,7 @@ object MultiPeerHeadHarness:
                   )
                   .label("MultiNodeConfig")
             )
-        } yield buildCtx(takeoffTime, mnc)
+        } yield (takeoffTime, mnc)
 
     case class Config(
         label: String,
