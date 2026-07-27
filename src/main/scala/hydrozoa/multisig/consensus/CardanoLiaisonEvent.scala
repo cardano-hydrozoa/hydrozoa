@@ -62,16 +62,29 @@ object CardanoLiaisonEvent:
 
     final case class FinalizationTxQueryError(err: String) extends CardanoLiaisonEvent
 
+    /** Whether the init tx is on L1, probed (step 4) when the target anchor is missing and no
+      * rule-based treasury exists. `isKnown == "not known"` triggers a full skeleton re-submission.
+      */
+    final case class InitTxStatus(hash: String, isKnown: String) extends CardanoLiaisonEvent
+
+    final case class InitTxQueryError(err: String) extends CardanoLiaisonEvent
+
+    /** The rule-based treasury beacon probe (step 3) failed — skipped this cycle, retried next
+      * tick.
+      */
+    final case class RuleBasedTreasuryQueryError(err: String) extends CardanoLiaisonEvent
+
     /** Some actions will be submitted to L1. `hasFallback` true means at least one is a fallback or
       * silence-period noop (logged at warn level).
       */
     final case class ActionsDispatched(msgs: List[String], hasFallback: Boolean)
         extends CardanoLiaisonEvent
 
-    /** A `FallbackToRuleBased` action has been selected for submission: the head is flipping into
-      * rule-based fallback. Distinct from `ActionsDispatched.hasFallback`, which also covers
-      * `SilencePeriodNoop`. Tests can observe this to short-circuit scenarios that drift outside
-      * the modeled happy-path regime.
+    /** The rule-based treasury has been observed on L1 and the handoff to the rule-based regime has
+      * been dispatched (step 3): the head has fallen into rule-based fallback. `txId` is the tx
+      * that produced the observed treasury utxo (the fallback tx, or a later rule-based tx). Tests
+      * can observe this to short-circuit scenarios that drift outside the modeled happy-path
+      * regime.
       */
     final case class FallbackToRuleBasedDispatched(txId: TransactionHash)
         extends CardanoLiaisonEvent

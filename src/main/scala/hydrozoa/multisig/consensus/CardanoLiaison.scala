@@ -4,6 +4,8 @@ import cats.effect.{IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.ActorRef
+import hydrozoa.config.HydrozoaBlueprint
+import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.FallbackTxStartTime
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
@@ -32,6 +34,39 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, Transac
   *   - Submits whichever L1 effects are not yet reflected in the Cardano blockchain.
   *   - Keeps track of confirmed L1 effects of L2 blocks that are immutable on L1 (TODO F14)
   *
+  * ==Decision schema (one pass of `runEffects`, per poll/timeout)==
+  *
+  * Every pass first polls the head multisig address for its utxo set, forwards it to BlockWeaver,
+  * then walks the following ladder, taking the first branch that applies. All L1 reads beyond the
+  * one address poll (steps 2–4) are made lazily — only on the branch that needs them — so a head
+  * that is in sync makes exactly one Cardano query per pass.
+  *
+  *   1. '''Due effects at the multisig address.''' If any polled utxo is a known effect input
+  *      (`state.effectInputs`), submit those direct actions — push the backbone forward
+  *      (`PushForwardMultisig` / `Rollout`), enter the silence period (`SilencePeriodNoop`), or
+  *      submit the now-valid competing fallback (`FallbackToRuleBased` action). A tip settlement
+  *      whose fallback has just become valid but has no competing next backbone is caught by the
+  *      `lastFallback` fallthrough and submitted the same way. This is the multisig-regime path —
+  *      the happy path plus the timing-driven fallback submission (not purely happy-path).
+  *   2. '''Finalization reached''' (only when the target is `Finalized`). If the finalization tx is
+  *      on L1, the head is settled for good — nothing to do.
+  *   3. '''Rule-based treasury present.''' If the target anchor (treasury utxo / finalization tx)
+  *      is gone, probe the rule-based treasury beacon at its script address. Its presence means the
+  *      head has fallen into the rule-based regime — send
+  *      [[HeadMultisigRegimeManager.HandoffToRuleBased]] (idempotent; every peer that observes it
+  *      hands off) and submit nothing. The rule-based side reads its version and status from this
+  *      on-chain treasury utxo, so no tx needs to be carried.
+  *   4. '''Resubmit the skeleton.''' No rule-based treasury either ⇒ a genuine L1 rollback. If the
+  *      init tx is no longer on L1 the head must be re-established: resubmit the whole skeleton
+  *      (`InitializeHead`), but only while inside the init tx's validity window (else
+  *      `InitWindowElapsed`). If the init tx still stands, the head is up and step 1 alone repairs
+  *      it as inputs reappear — nothing is resubmitted here.
+  *
+  * Submitting a fallback (step 1) and handing off to rule-based (step 3) are deliberately
+  * decoupled: a peer first waits out the silence period and submits a suitable fallback, and only
+  * on a later pass — once that fallback has landed and produced the rule-based treasury — does the
+  * treasury-beacon probe fire the handoff.
+  *
   * Some notes:
   *   - Though this module belongs to the multisig regime, the component's lifespan lasts longer
   *     since once a fallback tx gets submitted unfinished rollouts still may exist.
@@ -56,7 +91,7 @@ object CardanoLiaison:
             CardanoLiaison.Connections,
         tracer: ContraTracer[IO, CardanoLiaisonEvent],
         persistence: Persistence[IO],
-        mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
+        mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type],
         advanceNodeStatus: NodeStatus => IO[Unit],
     ): IO[CardanoLiaison] =
         IO(
@@ -72,7 +107,7 @@ object CardanoLiaison:
         )
 
     type Config = CardanoNetwork.Section & NodeOperationMultisigConfig.Section &
-        OwnPeerPublic.Section & HeadPeers.Section
+        OwnPeerPublic.Section & HeadPeers.Section & InitializationParameters.Section
 
     final case class Connections(
         blockWeaver: BlockWeaver.Handle
@@ -354,7 +389,7 @@ trait CardanoLiaison(
     pendingConnections: HeadMultisigRegimeManager.PendingConnections | CardanoLiaison.Connections,
     tracer: ContraTracer[IO, CardanoLiaisonEvent],
     persistence: Persistence[IO],
-    mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased],
+    mrmSelf: ActorRef[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type],
     advanceNodeStatus: NodeStatus => IO[Unit],
 ) extends Actor[IO, CardanoLiaison.Request]:
     import CardanoLiaison.*
@@ -595,12 +630,12 @@ trait CardanoLiaison(
                       IO.pure
                     )
 
-                    // 3. Decide what to submit this cycle, in priority order:
-                    //      (a) direct actions — effects whose inputs just appeared on L1;
-                    //      (b) else a fallback tx that has become valid → rule-based regime;
-                    //      (c) else reconcile the L1 target state (init / settlement / finalization).
+                    // 3. Decide what to submit this cycle. See the decision schema in the class
+                    //    doc: (1) due direct actions, else a now-valid tip fallback; otherwise
+                    //    reconcile the target — (2) finalized, (3) rule-based treasury present →
+                    //    handoff, (4) resubmit the skeleton.
                     actionsToSubmit <-
-                        // (a) Effect inputs are on L1 — submit exactly those direct actions.
+                        // (1) Effect inputs are on L1 — submit exactly those direct actions.
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else
@@ -608,11 +643,10 @@ trait CardanoLiaison(
 
                                 _ <- tracer.traceWith(CardanoLiaisonEvent.NoActionsScheduled)
 
-                                // No direct actions. Fall through to (b) a now-valid fallback, else
-                                // (c) reconciling the target state.
-
-                                // TODO: this is done in a bit a makeshift manner to fix the test, likely we want to do it
-                                //   more systematically
+                                // (1) A tip settlement's fallback that has just become valid (its
+                                // spent treasury is present and its start time has passed) still
+                                // needs submitting: the last settlement has no competing next
+                                // backbone to trigger it via `mkDirectAction`.
                                 lastFallback: Option[FallbackTx] = for {
                                     maxKey <- state.fallbackEffects.keySet.maxOption
                                     fallbackTx = state.fallbackEffects(maxKey)
@@ -622,115 +656,11 @@ trait CardanoLiaison(
                                 } yield fallbackTx
 
                                 ret <- lastFallback match {
-                                    // (b) A fallback tx has become valid on L1 (its spent treasury is
-                                    // present and its start time has passed) — switch to rule-based.
                                     case Some(fallback) =>
                                         IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
-                                    // (c) No fallback due — reconcile the L1 target state below.
-                                    case None => {
-                                        // `initAction` re-submits the full effect sequence to rebuild
-                                        // the head's L1 state when the expected target isn't there
-                                        // (e.g. after an L1 rollback). The init tx — and its validity
-                                        // window — come from the hard-confirmed stack 0 (held in
-                                        // `happyPathEffects`), NOT the unsigned config body; it is
-                                        // present whenever the head is Active/Finalized, i.e. whenever
-                                        // `initAction` runs. Within that window it resubmits
-                                        // everything; once `initializationTxEndTime` passes the init tx
-                                        // can never confirm, so the head cannot be rebuilt and we trace
-                                        // `InitWindowElapsed`.
-                                        val initEndTime =
-                                            state.happyPathEffects
-                                                .get(EffectId.initializationEffectId)
-                                                .collect { case it: InitializationTx =>
-                                                    it.initializationTxEndTime.convert
-                                                }
-                                        val initAction: IO[Seq[Action]] =
-                                            initEndTime match {
-                                                case Some(end) if currentTime < end =>
-                                                    IO.pure(
-                                                      Seq(
-                                                        Action.InitializeHead(
-                                                          state.happyPathEffects.values.toSeq
-                                                        )
-                                                      )
-                                                    )
-                                                case Some(end) =>
-                                                    tracer.traceWith(
-                                                      CardanoLiaisonEvent.InitWindowElapsed(
-                                                        currentTime.toString,
-                                                        end.toString
-                                                      )
-                                                    ) >> IO.pure(Seq.empty)
-                                                case None =>
-                                                    // No hard-confirmed init tx in state yet —
-                                                    // nothing to re-submit.
-                                                    IO.pure(Seq.empty)
-                                            }
-                                        // TODO: check the rule-based treasury, and if it exists, don't try to initialize the head.
-                                        // (c) Reconcile the local target with what is actually on L1:
-                                        state.targetState match {
-                                            case TargetState.Uninitialized =>
-                                                // Pre stack-0: no L1 target to reconcile and nothing
-                                                // submittable — wait for the Initial stack effects.
-                                                IO.pure(List.empty)
-                                            case TargetState.Active(targetTreasuryUtxoId) =>
-                                                // The head's current treasury should be on L1.
-                                                if utxoIds.contains(targetTreasuryUtxoId)
-                                                then
-                                                    // Present — L1 is in sync with the target.
-                                                    tracer.traceWith(
-                                                      CardanoLiaisonEvent.TargetUtxoStatus(
-                                                        targetTreasuryUtxoId.toString,
-                                                        found = true
-                                                      )
-                                                    ) >> IO.pure(List.empty)
-                                                else
-                                                    // Missing — the expected state isn't on L1 (a
-                                                    // possible rollback, or the head moved to the
-                                                    // rule-based regime — see TODO). Re-submit the
-                                                    // full sequence to rebuild.
-                                                    tracer.traceWith(
-                                                      CardanoLiaisonEvent.TargetUtxoStatus(
-                                                        targetTreasuryUtxoId.toString,
-                                                        found = false
-                                                      )
-                                                    ) >> initAction
-
-                                            case TargetState.Finalized(finalizationTxHash) =>
-                                                // Head is finalized: the finalization tx should be on
-                                                // L1. Check whether the backend knows it yet.
-                                                for {
-                                                    txResp <- cardanoBackend.isTxKnown(
-                                                      finalizationTxHash
-                                                    )
-                                                    mbInitAction <- txResp match {
-                                                        // Couldn't query its status — skip this cycle.
-                                                        case Left(err) =>
-                                                            tracer.traceWith(
-                                                              CardanoLiaisonEvent
-                                                                  .FinalizationTxQueryError(
-                                                                    err.toString
-                                                                  )
-                                                            ) >> IO.pure(Seq.empty)
-                                                        case Right(isKnown) =>
-                                                            tracer.traceWith(
-                                                              CardanoLiaisonEvent
-                                                                  .FinalizationTxStatus(
-                                                                    finalizationTxHash.toString,
-                                                                    if isKnown then "known"
-                                                                    else "not known"
-                                                                  )
-                                                            ) >> (
-                                                              // Known → in sync. Not on L1 →
-                                                              // possible rollback; re-submit the full
-                                                              // sequence to recover.
-                                                              if isKnown then IO.pure(Seq.empty)
-                                                              else initAction
-                                                            )
-                                                    }
-                                                } yield mbInitAction
-                                        }
-                                    }
+                                    // Steps (2)/(3)/(4): nothing is due at the multisig address.
+                                    case None =>
+                                        reconcileTargetState(state, utxoIds, currentTime)
                                 }
                             } yield ret
 
@@ -767,28 +697,149 @@ trait CardanoLiaison(
                       tracer.traceWith(CardanoLiaisonEvent.SubmissionErrors(submissionErrors.size))
                     )
 
-                    // Every peer that sees a known fallback tx on L1 hands off — not just the
-                    // submitter. MRM handler is idempotent so re-fires are safe.
-                    _ <- state.fallbackEffects.values.toList
-                        .traverse { ft =>
-                            cardanoBackend.isTxKnown(ft.tx.id).map {
-                                case Right(true) => Some(ft)
-                                case _           => None
-                            }
-                        }
-                        .map(_.flatten.headOption)
-                        .flatMap {
-                            case None => IO.unit
-                            case Some(ft) =>
-                                tracer.traceWith(
-                                  CardanoLiaisonEvent.FallbackToRuleBasedDispatched(ft.tx.id)
-                                ) >>
-                                    (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased(ft))
-                        }
+                    // The handoff to the rule-based regime is driven by the rule-based treasury
+                    // probe in `reconcileTargetState` (step 3), not by an isTxKnown sweep over every
+                    // known fallback tx here.
 
                 } yield ()
         }
     } yield ()
+
+    /** Steps (2)–(4) of the decision schema, reached when no L1 effect is due at the multisig
+      * address this pass. Walks the target state:
+      *   - `Uninitialized`: pre stack-0 — nothing submittable.
+      *   - `Active` with its treasury utxo present, or `Finalized` with its finalization tx on L1:
+      *     the head is in sync — nothing to do.
+      *   - otherwise the target anchor is gone: probe the rule-based treasury and either hand off
+      *     (step 3) or resubmit the skeleton (step 4), via [[handoffOrResubmit]].
+      */
+    private def reconcileTargetState(
+        state: State,
+        utxoIds: Set[TransactionInput],
+        currentTime: QuantizedInstant
+    ): IO[Seq[Action]] =
+        state.targetState match {
+            case TargetState.Uninitialized =>
+                // Pre stack-0: no L1 target to reconcile and nothing submittable — wait for the
+                // Initial stack effects.
+                IO.pure(Seq.empty)
+
+            case TargetState.Active(targetTreasuryUtxoId) =>
+                if utxoIds.contains(targetTreasuryUtxoId) then
+                    // (1) Present — L1 is in sync with the target; anything due was already a direct
+                    // action above.
+                    tracer.traceWith(
+                      CardanoLiaisonEvent
+                          .TargetUtxoStatus(targetTreasuryUtxoId.toString, found = true)
+                    ) >> IO.pure(Seq.empty)
+                else
+                    // The treasury is gone: either we fell into the rule-based regime, or an L1
+                    // rollback took it. Steps (3)/(4) tell those apart.
+                    tracer.traceWith(
+                      CardanoLiaisonEvent
+                          .TargetUtxoStatus(targetTreasuryUtxoId.toString, found = false)
+                    ) >> handoffOrResubmit(state, currentTime)
+
+            case TargetState.Finalized(finalizationTxHash) =>
+                // (2) Finalization is the target: if its tx is on L1 the head is settled for good.
+                cardanoBackend.isTxKnown(finalizationTxHash).flatMap {
+                    // Couldn't query its status — skip this cycle.
+                    case Left(err) =>
+                        tracer.traceWith(
+                          CardanoLiaisonEvent.FinalizationTxQueryError(err.toString)
+                        ) >> IO.pure(Seq.empty)
+                    case Right(true) =>
+                        tracer.traceWith(
+                          CardanoLiaisonEvent
+                              .FinalizationTxStatus(finalizationTxHash.toString, "known")
+                        ) >> IO.pure(Seq.empty)
+                    // Not on L1 — possible rollback of the finalization; fall to steps (3)/(4).
+                    case Right(false) =>
+                        tracer.traceWith(
+                          CardanoLiaisonEvent
+                              .FinalizationTxStatus(finalizationTxHash.toString, "not known")
+                        ) >> handoffOrResubmit(state, currentTime)
+                }
+        }
+
+    /** Steps (3) then (4): the target anchor (treasury utxo / finalization tx) is not on L1. First
+      * probe the rule-based treasury beacon — if it exists the head has fallen into the rule-based
+      * regime, so hand off (idempotent) and submit nothing. Otherwise it is a genuine L1 rollback:
+      * resubmit the skeleton via [[resubmitSkeleton]].
+      */
+    private def handoffOrResubmit(state: State, currentTime: QuantizedInstant): IO[Seq[Action]] =
+        ruleBasedTreasuryPresent.flatMap {
+            // Couldn't probe — skip this cycle, retry on the next tick.
+            case Left(err) =>
+                tracer.traceWith(CardanoLiaisonEvent.RuleBasedTreasuryQueryError(err.toString)) >>
+                    IO.pure(Seq.empty)
+            // (3) The rule-based treasury is on L1 — hand off. Every peer that observes it hands
+            // off, not just the fallback's submitter; the MRM handler is idempotent so re-fires are
+            // safe. The rule-based side reads its version/status from this treasury utxo, so the
+            // trigger carries no tx. `txId` is the tx that produced the observed treasury utxo.
+            case Right(Some(treasuryUtxoId)) =>
+                tracer.traceWith(
+                  CardanoLiaisonEvent.FallbackToRuleBasedDispatched(treasuryUtxoId.transactionId)
+                ) >>
+                    (mrmSelf ! HeadMultisigRegimeManager.HandoffToRuleBased) >>
+                    IO.pure(Seq.empty)
+            // (4) No rule-based treasury — a real rollback.
+            case Right(None) =>
+                resubmitSkeleton(state, currentTime)
+        }
+
+    /** Step (4): the target anchor is gone and there is no rule-based treasury — a genuine L1
+      * rollback. If the init tx is no longer on L1 the head must be re-established from scratch, so
+      * resubmit the whole skeleton (`InitializeHead`) — but only while inside its validity window
+      * (`currentTime < initializationTxEndTime`); once that passes the init tx can never confirm
+      * and the head cannot be re-established (`InitWindowElapsed`). If the init tx still stands the
+      * head is up; nothing is resubmitted here — step (1)'s direct actions push it forward as
+      * inputs reappear. The init tx (and its window) come from the hard-confirmed stack 0 held in
+      * `happyPathEffects`, not the unsigned config body.
+      */
+    private def resubmitSkeleton(state: State, currentTime: QuantizedInstant): IO[Seq[Action]] =
+        state.happyPathEffects.get(EffectId.initializationEffectId) match {
+            case Some(initTx: InitializationTx) =>
+                cardanoBackend.isTxKnown(initTx.tx.id).flatMap {
+                    case Left(err) =>
+                        tracer.traceWith(CardanoLiaisonEvent.InitTxQueryError(err.toString)) >>
+                            IO.pure(Seq.empty)
+                    case Right(true) =>
+                        // Head is established — leave recovery to the direct-action path.
+                        tracer.traceWith(
+                          CardanoLiaisonEvent.InitTxStatus(initTx.tx.id.toString, "known")
+                        ) >> IO.pure(Seq.empty)
+                    case Right(false) =>
+                        val initEnd = initTx.initializationTxEndTime.convert
+                        if currentTime < initEnd then
+                            tracer.traceWith(
+                              CardanoLiaisonEvent.InitTxStatus(initTx.tx.id.toString, "not known")
+                            ) >> IO.pure(
+                              Seq(Action.InitializeHead(state.happyPathEffects.values.toSeq))
+                            )
+                        else
+                            tracer.traceWith(
+                              CardanoLiaisonEvent
+                                  .InitWindowElapsed(currentTime.toString, initEnd.toString)
+                            ) >> IO.pure(Seq.empty)
+                }
+            case _ =>
+                // No hard-confirmed init tx in state yet — nothing to resubmit.
+                IO.pure(Seq.empty)
+        }
+
+    /** Probe L1 for the rule-based treasury: the treasury-token beacon at the rule-based treasury
+      * script address. Its presence means the head has fallen into the rule-based regime. Returns
+      * the treasury utxo's id when found (its `transactionId` names the producing tx, for tracing).
+      */
+    private def ruleBasedTreasuryPresent
+        : IO[Either[CardanoBackend.Error, Option[TransactionInput]]] =
+        cardanoBackend
+            .utxosAt(
+              HydrozoaBlueprint.mkTreasuryAddress(config.network),
+              (config.headMultisigScript.policyId, config.headTokenNames.treasuryTokenName)
+            )
+            .map(_.map(_.keySet.headOption))
 
     // ===================================
     // Actions
