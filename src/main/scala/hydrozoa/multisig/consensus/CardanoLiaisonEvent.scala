@@ -45,7 +45,10 @@ object CardanoLiaisonEvent:
 
     final case class CriticalError(msg: String) extends CardanoLiaisonEvent
 
-    case object NoActionsScheduled extends CardanoLiaisonEvent
+    /** No direct action was due at the multisig address this pass. Later steps (finalization check,
+      * rule-based handoff, skeleton resubmission) may still produce an action.
+      */
+    case object NoDirectActions extends CardanoLiaisonEvent
 
     final case class TargetUtxoStatus(targetId: String, found: Boolean) extends CardanoLiaisonEvent
 
