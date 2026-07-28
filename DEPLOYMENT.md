@@ -226,7 +226,9 @@ Set `blockfrostApiKey` in `head/template/peer-private.template.json.local` (scaf
 Nix users create it with `just scaffold`).
 
 - **Blockfrost key** — keygen-fleet reads only the `.local` file and refuses to run without it,
-  so the real key never lands in a committed file.
+  so the real key never lands in a committed file. The build steps that query the chain
+  (`build-head-config`, `deploy-scripts-and-g2-setup`) fall back to this same `blockfrostApiKey`
+  unless you pass `--blockfrost-key` / `$BLOCKFROST_API_KEY`, so you set the key once, here.
 - **Cardano network** — the key's prefix (`preview…` / `preprod…` / `mainnet…`) selects the
   network for everything downstream: the `cardanoNetwork` seeded into `defaults.json` and the
   target of `deploy-scripts-and-g2-setup`.

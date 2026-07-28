@@ -100,6 +100,31 @@ object Bootstrap:
             home.resolve("head-config").resolve("head-config.json")
     }
 
+    /** The scaffolded private-config template. `keygen-fleet` reads its `blockfrostApiKey` (to
+      * derive the network and to fill each peer's `private.json`); the build commands
+      * (`build-head-config`, `deploy-scripts-and-g2-setup`) fall back to it for the Cardano backend
+      * key when neither `--blockfrost-key` nor `$BLOCKFROST_API_KEY` is given — so the key set once
+      * in the template is the single source.
+      */
+    val defaultPrivateTemplate: Path =
+        Path.of("head/template/peer-private.template.json.local")
+
+    private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
+
+    /** Extract `blockfrostApiKey` from a private-config JSON (the template, or a peer's filled
+      * `private.json`). Fails if the field is absent.
+      */
+    def blockfrostKeyFrom(privateConfig: Path): IO[String] =
+        for {
+            content <- IO.blocking(Files.readString(privateConfig))
+            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
+              RuntimeException(
+                s"no blockfrostApiKey found in $privateConfig — pass --blockfrost-key or set " +
+                    "$BLOCKFROST_API_KEY"
+              )
+            )
+        } yield key
+
     // Shared peer-topology decoders, used by both `Membership` (the roster) and `BootstrapConfig`
     // (the full config). Nested in the enclosing object so both companions see them.
     private given Decoder[Uri] =
@@ -1031,14 +1056,15 @@ object BuildHeadConfig:
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.BuildHeadConfig")
 
-    private val blockfrostKeyOpt: Opts[String] =
+    private val blockfrostKeyOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-key",
-          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY)",
+          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY, then the " +
+              "template's blockfrostApiKey)",
           short = "k"
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
-        )
+        ).orNone
 
     /** The `build-head-config` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
@@ -1048,20 +1074,27 @@ object BuildHeadConfig:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, key) =>
+        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, mbKey) =>
             buildHeadConfig(
               Bootstrap.HomeLayout.bootstrapDir(home),
-              key,
+              mbKey,
               Bootstrap.HomeLayout.headConfig(home)
             )
         )
 
     private def buildHeadConfig(
         bootstrapDir: Path,
-        blockfrostKey: String,
+        mbBlockfrostKey: Option[String],
         outPath: Path
     ): IO[ExitCode] =
         for {
+            // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
+            blockfrostKey <- mbBlockfrostKey.fold(
+              logger.info(
+                "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
+                    s"${Bootstrap.defaultPrivateTemplate}"
+              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+            )(IO.pure)
             bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir)
             cardanoNetwork = bootstrapConfig.cardanoNetwork
             // Fail fast on a key/network mismatch — a Blockfrost key only works on its own
@@ -1245,8 +1278,7 @@ end InitBootstrapFiles
 object KeygenFleet:
     import GenerateKeyPair.Role
 
-    private val defaultTemplate = "head/template/peer-private.template.json.local"
-    private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
+    private val defaultTemplate = Bootstrap.defaultPrivateTemplate.toString
 
     private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
     private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
@@ -1325,23 +1357,18 @@ object KeygenFleet:
       * did) — the key's `preview…` / `preprod…` / `mainnet…` prefix picks the network.
       */
     private def deriveNetwork(template: Path): IO[CardanoNetwork] =
-        for {
-            content <- IO.blocking(Files.readString(template))
-            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
-              new IllegalArgumentException(s"no blockfrostApiKey found in $template")
-            )
-            network <-
-                if key.startsWith("preview") then IO.pure(CardanoNetwork.Preview)
-                else if key.startsWith("preprod") then IO.pure(CardanoNetwork.Preprod)
-                else if key.startsWith("mainnet") then IO.pure(CardanoNetwork.Mainnet)
-                else
-                    IO.raiseError(
-                      new IllegalArgumentException(
-                        s"cannot derive the network from blockfrostApiKey in $template " +
-                            "(expected a preview…/preprod…/mainnet… key)"
-                      )
-                    )
-        } yield network
+        Bootstrap.blockfrostKeyFrom(template).flatMap { key =>
+            if key.startsWith("preview") then IO.pure(CardanoNetwork.Preview)
+            else if key.startsWith("preprod") then IO.pure(CardanoNetwork.Preprod)
+            else if key.startsWith("mainnet") then IO.pure(CardanoNetwork.Mainnet)
+            else
+                IO.raiseError(
+                  new IllegalArgumentException(
+                    s"cannot derive the network from blockfrostApiKey in $template " +
+                        "(expected a preview…/preprod…/mainnet… key)"
+                  )
+                )
+        }
 
 end KeygenFleet
 
