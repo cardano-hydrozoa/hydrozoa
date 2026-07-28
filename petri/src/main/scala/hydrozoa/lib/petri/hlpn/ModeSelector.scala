@@ -215,7 +215,7 @@ object ModeSelector {
         sort match
             case Sort.Dot                     => List(())
             case Sort.Class(_, carrier, _, _) => carrier.toSortedSet.toList
-            case Sort.Data(_)                 => Nil
+            case _: Sort.Data[?]              => Nil
             case Sort.Prod(left, right) =>
                 for
                     x <- enumerate(left)

@@ -10,11 +10,7 @@ object RBRHlNetDotTest extends Properties("RBRHlNetDot"):
 
     val _ = property("RBRHlNetDot renders the RBR net, whole and per transition") = {
         val net =
-            RBRHlNet(
-              nHeadPeers = 3,
-              maxVersionMinor = 2,
-              RBRHlNet.committedObligations(2)
-            ).toOption.get
+            RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
 
         // whole net (dense) — one file
         val whole = Path.of("target", "rbr-net.dot")

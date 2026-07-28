@@ -93,14 +93,18 @@ object Sort:
       * with no enumerable carrier — for opaque token payloads (large data) bound from present
       * tokens, never generated. May be empty or infinite.
       *
-      * No discipline or subclasses: both are defined over the enumerated carrier (successor indexes
-      * the element list; a Concept-15 partition must be checked to cover it), so neither is
-      * expressible without enumeration — and nothing here needs them.
+      * `linear` declares the order is *semantic* — usable in `<` guards ([[Guard.Lt]]), like a
+      * Linear class. It needs only the `Order` (not enumeration), so unlike successor and
+      * subclasses it is not forced out; set it only when the domain's values are genuinely ordered
+      * (e.g. version numbers), not for opaque payloads. No discipline or subclasses otherwise: both
+      * are defined over the enumerated carrier (successor indexes the element list; a Concept-15
+      * partition must be checked to cover it), so neither is expressible without enumeration.
       *
-      * Equality is by `name` alone (the `Order` is not a case field), so an inscription leaf
+      * Equality is by `(name, linear)` (the `Order` is not a case field), so an inscription leaf
       * matches the place domain by name.
       */
-    final case class Data[C](name: String)(using ord: Order[C]) extends Sort[C]:
+    final case class Data[C](name: String, linear: Boolean = false)(using ord: Order[C])
+        extends Sort[C]:
         def order: Order[C] = ord
         def contains(@unused c: C): Boolean = true
 

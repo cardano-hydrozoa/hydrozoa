@@ -134,13 +134,14 @@ object SortCheck:
     private def isOrdered(sort: Sort[?]): Boolean =
         sort match
             case Sort.Class(_, _, discipline, _) => discipline != Sort.Discipline.Unordered
+            case d: Sort.Data[?]                 => d.linear
             case _                               => false
 
     private def name(sort: Sort[?]): String =
         sort match
             case Sort.Dot               => "Dot"
             case Sort.Class(n, _, _, _) => n
-            case Sort.Data(n)           => n
+            case Sort.Data(n, _)        => n
             case Sort.Prod(left, right) => s"(${name(left)}, ${name(right)})"
 
 /** A static well-sortedness violation in a net's terms or a sort definition. */

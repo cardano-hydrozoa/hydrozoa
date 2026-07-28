@@ -9,8 +9,9 @@ import org.scalacheck.{Prop, Properties}
 import spire.algebra.Order
 import spire.math.SafeLong
 
-/** Drives the RBR HLPN with explicit modes (the tally transitions bind 9 variables — the
-  * enumerating selector's candidate space is ~10⁵, so tests construct bindings directly).
+/** Drives the RBR HLPN with explicit modes: the reified `Sort.Data` domains (Peer/Key/Version) have
+  * no enumerable carrier, so the enumerating selector can't propose their bindings — tests
+  * construct bindings directly, or fire via the unifying selector.
   */
 object RBRHlNetTest extends Properties("RBRHlNet"):
 
@@ -19,7 +20,7 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
 
     // n = 3 peers → boxes (0,(1,(Voted,0))) public, (1,(2,·)), (2,(3,·)), (3,(0,·)) for peers 0..2
     private def net =
-        RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2, RBRHlNet.committedObligations(2)).toOption.get
+        RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
 
     private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
 
@@ -164,22 +165,25 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
       SortCheck.errors(net).isEmpty
     )
 
-    // The `Output` domain is intensional, so a head that committed nothing is a valid, empty seed —
-    // no fabricated obligation. Versions remain votable; PayoutObligations is simply empty.
+    // The reified domains are intensional, so a head that committed nothing is a valid, empty seed —
+    // no fabricated obligation. Nothing is votable and nothing is evacuable: both PayoutObligations
+    // and VotableVersions are simply empty.
     val _ = property(
-      "empty committedObligations: assembles well-sorted, PayoutObligations empty"
+      "empty committedObligations: assembles well-sorted, PayoutObligations/VotableVersions empty"
     ) = {
-        val emptyNet = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2, Nil).toOption.get
+        val emptyNet = RBRHlNet(nHeadPeers = 3, Nil).toOption.get
         allTrue(
           SortCheck.errors(emptyNet).isEmpty,
-          emptyNet.placesMap(RBRPlaceId.PayoutObligations).marking.multiplicityMap.isEmpty
+          emptyNet.placesMap(RBRPlaceId.PayoutObligations).marking.multiplicityMap.isEmpty,
+          emptyNet.placesMap(RBRPlaceId.VotableVersions).marking.multiplicityMap.isEmpty
         )
     }
 
     val _ = property(
       "Ballot invariant (validBallots): excludes self-links and non-Voted versions"
     ) = {
-        val valid = RBRHlNet.validBallots(nHeadPeers = 3, maxVersionMinor = 2)
+        val valid =
+            RBRHlNet.validBallots(nHeadPeers = 3, votableVersions = Set(BigInt(1), BigInt(2)))
         allTrue(
           valid.contains(box(0, 0, Voted, 2)), // fully-tallied terminal box
           valid.contains(box(1, 2, Awaiting, 0)), // awaiting box carries version 0
