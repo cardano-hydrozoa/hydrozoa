@@ -64,10 +64,10 @@ object Sort:
         ): Class[C] =
             new Class(name, carrier, discipline, Map.empty)
 
-        /** A color class with a declared Concept-15 partition: `subclasses` must genuinely partition
-          * the carrier — every block non-empty and within the carrier, pairwise disjoint, and
-          * together covering it — else a [[SortError.MalformedPartition]] naming the first breach.
-          * An empty map is the undivided class (the trivial partition).
+        /** A color class with a declared Concept-15 partition: `subclasses` must genuinely
+          * partition the carrier — every block non-empty and within the carrier, pairwise disjoint,
+          * and together covering it — else a [[SortError.MalformedPartition]] naming the first
+          * breach. An empty map is the undivided class (the trivial partition).
           */
         def apply[C](
             name: String,
@@ -81,9 +81,11 @@ object Sort:
                 Left(SortError.MalformedPartition(name, reason))
             if subclasses.isEmpty then Right(new Class(name, carrier, discipline, subclasses))
             else if blocks.exists(_.isEmpty) then bad("a declared subclass is empty")
-            else if !members.forall(carrier.contains) then bad("a subclass color is outside the carrier")
+            else if !members.forall(carrier.contains) then
+                bad("a subclass color is outside the carrier")
             else if members.size != members.toSet.size then bad("subclasses overlap")
-            else if members.toSet != carrier.toSortedSet.toSet then bad("subclasses do not cover the carrier")
+            else if members.toSet != carrier.toSortedSet.toSet then
+                bad("subclasses do not cover the carrier")
             else Right(new Class(name, carrier, discipline, subclasses))
 
     /** A color domain that is the cartesian product of two sorts (Concept 14). N-ary domains nest
