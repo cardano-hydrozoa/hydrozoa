@@ -1026,7 +1026,10 @@ trait CardanoLiaison(
                 }
 
             // A tip treasury whose only spender is a fallback (no next backbone learned yet). Submit
-            // it once its window opens.
+            // it once its window opens. `mbFallback` is `Some` here — `mkDirectActions` drops utxos
+            // with neither an entry point nor a fallback — and `None` would correctly mean "not one
+            // of ours, do nothing", so no error check is needed (unlike the backbone arm above,
+            // where a due backbone with no fallback is a real `MissingFallback`).
             case None =>
                 Right(
                   mbFallback
