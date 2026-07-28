@@ -5,7 +5,7 @@ import io.circe.generic.semiauto.{deriveDecoder, deriveEncoder}
 import io.circe.{Decoder, DecodingFailure, Encoder, Json, KeyDecoder, KeyEncoder, parser}
 import scala.util.Try
 import scalus.cardano.address.Network
-import scalus.cardano.ledger.{CardanoInfo, KeepRaw, ProtocolParams, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo}
+import scalus.cardano.ledger.{CardanoInfo, CostModels, DRepVotingThresholds, ExUnitPrices, ExUnits, KeepRaw, NonNegativeInterval, PoolVotingThresholds, ProtocolParams, ProtocolVersion, SlotConfig, Transaction, TransactionHash, TransactionInput, TransactionOutput, UnitInterval, Utxo}
 import scalus.crypto.ed25519.SigningKey
 import scalus.uplc.builtin.ByteString
 
@@ -13,21 +13,101 @@ import scalus.uplc.builtin.ByteString
   */
 object Codecs {
 
-    given protocolParamsDecoder: Decoder[ProtocolParams] = Decoder.decodeString.emap(rawString =>
-        Try(ProtocolParams.fromBlockfrostJson(rawString)).toEither.left.map(e =>
-            "ProtocolParams decoding failed. NOTE: we wrap the scalus blockfrost codec," +
-                s"which uses the upickle JSON library instead of circe. The message from upickle is: $e"
+    /** Symmetric, human-observable JSON codec for [[ProtocolParams]] and its nested field types.
+      *
+      * scalus provides only upickle codecs for `ProtocolParams`, and neither round-trips exactly:
+      * `blockfrostParamsReadWriter` is write/read asymmetric (its `cost_models` writer emits arrays
+      * while the reader expects objects), and `cardanoCliParamsReadWriter` routes the
+      * `UnitInterval`/`NonNegativeInterval` fields through `Double`, which is lossy (a mainnet
+      * `priceSteps` of `0.0000721` decodes back as `0.000072`). We instead derive circe codecs
+      * field-by-field from the record structure and serialize the two fraction types as exact
+      * `{ "numerator": <Long>, "denominator": <Long> }` objects, so a `Custom` head-config's
+      * `CardanoInfo` stays readable and survives a serialize/deserialize cycle unchanged.
+      *
+      * The leaf codecs are defined before the derived aggregates that summon them.
+      */
+
+    /** Shared `{ "numerator": <Long>, "denominator": <Long> }` shape for the two scalus fraction
+      * types. The decoder wraps construction in `Try` because both `require` a positive
+      * denominator, which keeps it total — a malformed fraction yields a `Left`, never a thrown
+      * exception.
+      */
+    private def fractionEncoder[A](numerator: A => Long, denominator: A => Long): Encoder[A] =
+        Encoder.instance(fraction =>
+            Json.obj(
+              "numerator" -> Json.fromLong(numerator(fraction)),
+              "denominator" -> Json.fromLong(denominator(fraction))
+            )
+        )
+
+    private def fractionDecoder[A](name: String)(build: (Long, Long) => A): Decoder[A] =
+        Decoder.instance(c =>
+            for {
+                numerator <- c.downField("numerator").as[Long]
+                denominator <- c.downField("denominator").as[Long]
+                fraction <- Try(build(numerator, denominator)).toEither.left.map(e =>
+                    DecodingFailure(s"Invalid $name: ${e.getMessage}", c.history)
+                )
+            } yield fraction
+        )
+
+    given nonNegativeIntervalEncoder: Encoder[NonNegativeInterval] =
+        fractionEncoder[NonNegativeInterval](_.numerator, _.denominator)
+    given nonNegativeIntervalDecoder: Decoder[NonNegativeInterval] =
+        fractionDecoder("NonNegativeInterval")((numerator, denominator) =>
+            NonNegativeInterval(numerator, denominator)
+        )
+
+    given unitIntervalEncoder: Encoder[UnitInterval] =
+        fractionEncoder[UnitInterval](_.numerator, _.denominator)
+    given unitIntervalDecoder: Decoder[UnitInterval] =
+        fractionDecoder("UnitInterval")((numerator, denominator) =>
+            UnitInterval(numerator, denominator)
+        )
+
+    /** `cost_models` serialize as a JSON object keyed by language id (`"0"`, `"1"`, `"2"`), each
+      * mapped to its cost list. Keys are emitted in id order for a deterministic encoding.
+      */
+    given costModelsEncoder: Encoder[CostModels] = Encoder.instance(costModels =>
+        Json.obj(
+          costModels.models.toSeq.sortBy(_._1).map { case (languageId, costs) =>
+              languageId.toString -> Json.arr(costs.map(Json.fromLong)*)
+          }*
         )
     )
 
-    given protocolParamsEncoder: Encoder[ProtocolParams] with {
-        override def apply(pp: ProtocolParams): Json = {
-            val scalusSerialization =
-                upickle.write(pp)(using ProtocolParams.blockfrostParamsReadWriter)
-            val Right(json) = parser.parse(scalusSerialization): @unchecked
-            json
-        }
-    }
+    given costModelsDecoder: Decoder[CostModels] = Decoder.instance(c =>
+        for {
+            raw <- c.as[Map[String, List[Long]]]
+            models <- Try(
+              raw.map { case (languageId, costs) => languageId.toInt -> costs.toIndexedSeq }
+            ).toEither.left.map(e =>
+                DecodingFailure(s"Invalid CostModels: ${e.getMessage}", c.history)
+            )
+        } yield CostModels(models)
+    )
+
+    given protocolVersionEncoder: Encoder[ProtocolVersion] = deriveEncoder[ProtocolVersion]
+    given protocolVersionDecoder: Decoder[ProtocolVersion] = deriveDecoder[ProtocolVersion]
+
+    given exUnitsEncoder: Encoder[ExUnits] = deriveEncoder[ExUnits]
+    given exUnitsDecoder: Decoder[ExUnits] = deriveDecoder[ExUnits]
+
+    given exUnitPricesEncoder: Encoder[ExUnitPrices] = deriveEncoder[ExUnitPrices]
+    given exUnitPricesDecoder: Decoder[ExUnitPrices] = deriveDecoder[ExUnitPrices]
+
+    given drepVotingThresholdsEncoder: Encoder[DRepVotingThresholds] =
+        deriveEncoder[DRepVotingThresholds]
+    given drepVotingThresholdsDecoder: Decoder[DRepVotingThresholds] =
+        deriveDecoder[DRepVotingThresholds]
+
+    given poolVotingThresholdsEncoder: Encoder[PoolVotingThresholds] =
+        deriveEncoder[PoolVotingThresholds]
+    given poolVotingThresholdsDecoder: Decoder[PoolVotingThresholds] =
+        deriveDecoder[PoolVotingThresholds]
+
+    given protocolParamsEncoder: Encoder[ProtocolParams] = deriveEncoder[ProtocolParams]
+    given protocolParamsDecoder: Decoder[ProtocolParams] = deriveDecoder[ProtocolParams]
 
     given cardanoInfoEncoder: Encoder[CardanoInfo] = deriveEncoder[CardanoInfo]
 
