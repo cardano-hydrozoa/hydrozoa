@@ -157,17 +157,38 @@ object SubmitDeposit:
                     )
                 _ <- IO.println(s"Submitted deposit tx ${signed.id} to L1; waiting for the utxo…")
                 _ <- awaitUtxo(backend, depositTx.depositProduced.utxoId)
-                _ <- IO.println(
-                  "Deposit is on L1. The head absorbs it after maturity — watch the spawned " +
-                      "outputs:\n" +
-                      outputs.toList
-                          .flatMap((address, _) => address.toBech32.toOption)
-                          .distinct
-                          .map(dest => s"  GET $headUri/l2/cardano-eutxo/utxos/$dest")
-                          .mkString("\n")
-                )
+                _ <- {
+                    val txLine = cexplorerTxUrl(config.cardanoNetwork, signed.id.toHex)
+                        .fold(s"  deposit tx:      ${signed.id.toHex}")(url =>
+                            s"  deposit tx:      $url"
+                        )
+                    val requestLine =
+                        s"  request details: GET $headUri/head/requests/${requestId.asI64}"
+                    val watchLines = outputs.toList
+                        .flatMap((address, _) => address.toBech32.toOption)
+                        .distinct
+                        .map(dest => s"    GET $headUri/l2/cardano-eutxo/utxos/$dest")
+                        .mkString("\n")
+                    IO.println(
+                      "Deposit is on L1. The head absorbs it after maturity.\n" +
+                          s"$txLine\n$requestLine\n" +
+                          "  spawned outputs (watch after absorption):\n" +
+                          watchLines
+                    )
+                }
             } yield ExitCode.Success
         }
+
+    /** cexplorer.io transaction URL for the head's network; `None` for a Custom network, which has
+      * no public explorer.
+      */
+    private def cexplorerTxUrl(network: CardanoNetwork, txHex: String): Option[String] =
+        val subdomain = network match
+            case CardanoNetwork.Mainnet   => Some("")
+            case CardanoNetwork.Preprod   => Some("preprod.")
+            case CardanoNetwork.Preview   => Some("preview.")
+            case _: CardanoNetwork.Custom => None
+        subdomain.map(s => s"https://${s}cexplorer.io/tx/$txHex")
 
     /** Poll L1 until the deposit utxo is visible (5s intervals, 3 minutes). */
     private def awaitUtxo(
