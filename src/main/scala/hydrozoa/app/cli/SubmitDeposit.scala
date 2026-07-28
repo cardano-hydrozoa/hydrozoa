@@ -158,8 +158,13 @@ object SubmitDeposit:
                 _ <- IO.println(s"Submitted deposit tx ${signed.id} to L1; waiting for the utxo…")
                 _ <- awaitUtxo(backend, depositTx.depositProduced.utxoId)
                 _ <- IO.println(
-                  "Deposit is on L1. The head absorbs it after maturity — watch " +
-                      s"GET $headUri/l2/cardano-eutxo/utxos/{destination} for the spawned outputs."
+                  "Deposit is on L1. The head absorbs it after maturity — watch the spawned " +
+                      "outputs:\n" +
+                      outputs.toList
+                          .flatMap((address, _) => address.toBech32.toOption)
+                          .distinct
+                          .map(dest => s"  GET $headUri/l2/cardano-eutxo/utxos/$dest")
+                          .mkString("\n")
                 )
             } yield ExitCode.Success
         }
