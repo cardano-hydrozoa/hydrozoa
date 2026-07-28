@@ -24,33 +24,9 @@ object Codecs {
       * `{ "numerator": <Long>, "denominator": <Long> }` objects, so a `Custom` head-config's
       * `CardanoInfo` stays readable and survives a serialize/deserialize cycle unchanged.
       *
-      * The leaf codecs are defined before the derived aggregates that summon them.
+      * The leaf codecs are defined before the derived aggregates that summon them; the two private
+      * fraction helpers they share sit at the foot of the object, per the file's ordering rule.
       */
-
-    /** Shared `{ "numerator": <Long>, "denominator": <Long> }` shape for the two scalus fraction
-      * types. The decoder wraps construction in `Try` because both `require` a positive
-      * denominator, which keeps it total — a malformed fraction yields a `Left`, never a thrown
-      * exception.
-      */
-    private def fractionEncoder[A](numerator: A => Long, denominator: A => Long): Encoder[A] =
-        Encoder.instance(fraction =>
-            Json.obj(
-              "numerator" -> Json.fromLong(numerator(fraction)),
-              "denominator" -> Json.fromLong(denominator(fraction))
-            )
-        )
-
-    private def fractionDecoder[A](name: String)(build: (Long, Long) => A): Decoder[A] =
-        Decoder.instance(c =>
-            for {
-                numerator <- c.downField("numerator").as[Long]
-                denominator <- c.downField("denominator").as[Long]
-                fraction <- Try(build(numerator, denominator)).toEither.left.map(e =>
-                    DecodingFailure(s"Invalid $name: ${e.getMessage}", c.history)
-                )
-            } yield fraction
-        )
-
     given nonNegativeIntervalEncoder: Encoder[NonNegativeInterval] =
         fractionEncoder[NonNegativeInterval](_.numerator, _.denominator)
     given nonNegativeIntervalDecoder: Decoder[NonNegativeInterval] =
@@ -88,7 +64,20 @@ object Codecs {
     )
 
     given protocolVersionEncoder: Encoder[ProtocolVersion] = deriveEncoder[ProtocolVersion]
-    given protocolVersionDecoder: Decoder[ProtocolVersion] = deriveDecoder[ProtocolVersion]
+
+    /** `ProtocolVersion` `require`s `major >= 1` and `minor >= 0`, so — like the fraction decoders
+      * — construction is wrapped in `Try` to keep the decoder total instead of letting circe's
+      * derivation throw the constructor `require` on malformed input.
+      */
+    given protocolVersionDecoder: Decoder[ProtocolVersion] = Decoder.instance(c =>
+        for {
+            major <- c.downField("major").as[Int]
+            minor <- c.downField("minor").as[Int]
+            version <- Try(ProtocolVersion(major, minor)).toEither.left.map(e =>
+                DecodingFailure(s"Invalid ProtocolVersion: ${e.getMessage}", c.history)
+            )
+        } yield version
+    )
 
     given exUnitsEncoder: Encoder[ExUnits] = deriveEncoder[ExUnits]
     given exUnitsDecoder: Decoder[ExUnits] = deriveDecoder[ExUnits]
@@ -109,10 +98,6 @@ object Codecs {
     given protocolParamsEncoder: Encoder[ProtocolParams] = deriveEncoder[ProtocolParams]
     given protocolParamsDecoder: Decoder[ProtocolParams] = deriveDecoder[ProtocolParams]
 
-    given cardanoInfoEncoder: Encoder[CardanoInfo] = deriveEncoder[CardanoInfo]
-
-    given cardanoInfoDecoder: Decoder[CardanoInfo] = deriveDecoder[CardanoInfo]
-
     given networkEncoder: Encoder[Network] = deriveEncoder[Network]
 
     given networkDecoder: Decoder[Network] = deriveDecoder[Network]
@@ -120,6 +105,11 @@ object Codecs {
     given slotConfigEncoder: Encoder[SlotConfig] = deriveEncoder[SlotConfig]
 
     given slotConfigDecoder: Decoder[SlotConfig] = deriveDecoder[SlotConfig]
+
+    // CardanoInfo aggregates ProtocolParams, Network, and SlotConfig, so its codecs follow theirs.
+    given cardanoInfoEncoder: Encoder[CardanoInfo] = deriveEncoder[CardanoInfo]
+
+    given cardanoInfoDecoder: Decoder[CardanoInfo] = deriveDecoder[CardanoInfo]
 
     given utxoEncoder: Encoder[Utxo] = deriveEncoder[Utxo]
 
@@ -250,5 +240,29 @@ object Codecs {
                 case _ => None
             }
     }
+
+    /** Shared `{ "numerator": <Long>, "denominator": <Long> }` shape for the two scalus fraction
+      * types ([[NonNegativeInterval]], [[UnitInterval]]). The decoder wraps construction in `Try`
+      * because both `require` a positive denominator, which keeps it total — a malformed fraction
+      * yields a `Left`, never a thrown exception.
+      */
+    private def fractionEncoder[A](numerator: A => Long, denominator: A => Long): Encoder[A] =
+        Encoder.instance(fraction =>
+            Json.obj(
+              "numerator" -> Json.fromLong(numerator(fraction)),
+              "denominator" -> Json.fromLong(denominator(fraction))
+            )
+        )
+
+    private def fractionDecoder[A](name: String)(build: (Long, Long) => A): Decoder[A] =
+        Decoder.instance(c =>
+            for {
+                numerator <- c.downField("numerator").as[Long]
+                denominator <- c.downField("denominator").as[Long]
+                fraction <- Try(build(numerator, denominator)).toEither.left.map(e =>
+                    DecodingFailure(s"Invalid $name: ${e.getMessage}", c.history)
+                )
+            } yield fraction
+        )
 
 }

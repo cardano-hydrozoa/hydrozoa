@@ -1,9 +1,10 @@
 package hydrozoa.config.head.network
 
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
+import io.circe.Json
 import io.circe.syntax.*
 import org.scalatest.funsuite.AnyFunSuite
-import scalus.cardano.ledger.{CardanoInfo, ProtocolParams}
+import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, ProtocolVersion}
 
 /** Shape and round-trip coverage for the [[CardanoNetwork]] JSON codec.
   *
@@ -53,6 +54,16 @@ class CardanoNetworkCodecTest extends AnyFunSuite:
               s"Custom round-trip failed for ${info.network}"
             )
         }
+    }
+
+    test("a malformed ProtocolVersion decodes to a Left, not a thrown exception") {
+        // ProtocolVersion requires major >= 1; a derived decoder would let that require throw. The
+        // total decoder must surface it as a DecodingFailure (a Left) instead.
+        val badVersion = Json.obj("major" -> Json.fromInt(0), "minor" -> Json.fromInt(0))
+        assert(
+          badVersion.as[ProtocolVersion].isLeft,
+          s"expected a Left for major=0, got ${badVersion.as[ProtocolVersion]}"
+        )
     }
 
 end CardanoNetworkCodecTest
