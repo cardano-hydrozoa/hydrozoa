@@ -1,6 +1,7 @@
 # Direnv
 .direnv
 .pre-commit-config.yaml
+.envrc.local
 
 # Scala
 .bsp/
