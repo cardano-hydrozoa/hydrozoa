@@ -45,7 +45,10 @@ object CardanoLiaisonEvent:
 
     final case class CriticalError(msg: String) extends CardanoLiaisonEvent
 
-    case object NoActionsScheduled extends CardanoLiaisonEvent
+    /** No direct action was due at the multisig address this pass. Later steps (finalization check,
+      * rule-based handoff, skeleton resubmission) may still produce an action.
+      */
+    case object NoDirectActions extends CardanoLiaisonEvent
 
     final case class TargetUtxoStatus(targetId: String, found: Boolean) extends CardanoLiaisonEvent
 
@@ -61,6 +64,16 @@ object CardanoLiaisonEvent:
     final case class FinalizationTxStatus(hash: String, isKnown: String) extends CardanoLiaisonEvent
 
     final case class FinalizationTxQueryError(err: String) extends CardanoLiaisonEvent
+
+    /** A learned backbone and the fallback for the treasury it spends do not have disjoint validity
+      * windows (`happyPathTtl > fallbackValidityStart`) — a bad tx-timing config. The liaison stops
+      * after emitting this.
+      */
+    final case class DisjointWindowViolation(
+        treasuryUtxo: String,
+        happyPathTtl: String,
+        fallbackValidityStart: String
+    ) extends CardanoLiaisonEvent
 
     /** Whether the init tx is on L1, probed (step 4) when the target anchor is missing and no
       * rule-based treasury exists. `isKnown == "not known"` triggers a full skeleton re-submission.

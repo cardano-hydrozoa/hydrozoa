@@ -35,8 +35,8 @@ object CardanoLiaisonEventFormat:
                 trace(s"current time=$time utxoIds=$utxoIds state=$dump")
             case CriticalError(msg) =>
                 error(s"Critical error: $msg")
-            case NoActionsScheduled =>
-                trace("due actions is empty")
+            case NoDirectActions =>
+                trace("no direct actions due; reconciling target state")
             case TargetUtxoStatus(targetId, true) =>
                 trace(s"target $targetId found, do nothing")
             case TargetUtxoStatus(targetId, false) =>
@@ -51,6 +51,12 @@ object CardanoLiaisonEventFormat:
                 trace(s"finalizationTx: hash=$hash known=$isKnown")
             case FinalizationTxQueryError(err) =>
                 error(s"error when getting finalization tx info: $err")
+            case DisjointWindowViolation(treasuryUtxo, happyPathTtl, fallbackValidityStart) =>
+                error(
+                  s"disjoint-window invariant violated for treasury $treasuryUtxo: happy-path TTL" +
+                      s" $happyPathTtl > fallback validity start $fallbackValidityStart — bad tx" +
+                      " timing; stopping the liaison"
+                )
             case InitTxStatus(hash, isKnown) =>
                 trace(s"initTx: hash=$hash known=$isKnown")
             case InitTxQueryError(err) =>
