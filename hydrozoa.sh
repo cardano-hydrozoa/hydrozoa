@@ -7,7 +7,7 @@
 #
 # Override the version or head directory before sourcing (or edit the defaults below). HYDROZOA_HOME
 # is the one head directory the CLI and `docker compose` (DEPLOYMENT.md §4) both read.
-: "${HYDROZOA_VERSION:=0.1.0}"      # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
+: "${HYDROZOA_VERSION:=0.1.1}"      # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
 : "${HYDROZOA_HOME:=./head/demo}"  # head directory
 export HYDROZOA_VERSION HYDROZOA_HOME
 

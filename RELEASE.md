@@ -10,9 +10,19 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
 
 ## Making a release
 
-1. **Pick the version** and set it in `build.sbt` (`inThisBuild { version := "X.Y.Z" }`). This
-   drives the image tag, `hydrozoa.BuildInfo.version`, and `GET /version` — keep it equal to the
-   git tag below. Commit the bump on `main` (via PR; `main` is protected).
+1. **Bump the version** to `X.Y.Z`. The release version lives in `build.sbt`
+   (`inThisBuild { version := "X.Y.Z" }`) and drives the image tag, `hydrozoa.BuildInfo.version`,
+   and `GET /version` — keep it equal to the git tag below. The same image tag is **hard-coded** in
+   a few deployment files that do *not* read `build.sbt`, so bump them in lockstep:
+
+   - `hydrozoa.sh` — `HYDROZOA_VERSION` default
+   - `docker-compose.yml` — the default `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z}`
+   - `DEPLOYMENT.md` — the `…/hydrozoa:X.Y.Z` pull/run examples
+
+   Catch stragglers with `grep -rn "hydrozoa:<previous-version>"` (and the bare previous version in
+   `hydrozoa.sh`). Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract
+   version, separate from the release version). Commit the bump on `main` (via PR; `main` is
+   protected).
 
 2. **Sanity-check the image locally** (optional but recommended):
 
