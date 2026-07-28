@@ -30,8 +30,8 @@ import spire.math.SafeLong
   * The voting deadline is the untimed phase pair `VotingOpen`/`VotingClosed`: `VotingDeadline` is
   * the untimed projection of an ISO 15909-1 Clause-10 `[D,D]` transition — adding Clause-10 time
   * later changes only *when* it fires. `Vote`/`RatchetVote` read `VotingOpen`
-  * (`ValidityEndSlot(deadline)`); the tallies read `VotingClosed` (`ValidityStartSlot(deadline+1)`);
-  * `Abstain` reads neither (`AbstainTx` has no validity window).
+  * (`ValidityEndSlot(deadline)`); the tallies read `VotingClosed`
+  * (`ValidityStartSlot(deadline+1)`); `Abstain` reads neither (`AbstainTx` has no validity window).
   *
   * Payout obligations are the committed outputs of each candidate SEC, held in `PayoutObligations`
   * keyed by version. `Resolution` produces the `ResolvedVersion` selector; `Evacuation` drains only
@@ -107,8 +107,8 @@ object RBRHlNet {
 
     /** A ballot-box color value: key, link (both `VoteState` aliases over `BigInt`), status, and
       * minor version. Opaque over the underlying `(Key, (Link, (BallotStatus, BigInt)))` product:
-      * the color algebra requires the runtime color to be that tuple (Concept 14, and the marking is
-      * keyed by it), so this is a named product with a constructor and accessors rather than a
+      * the color algebra requires the runtime color to be that tuple (Concept 14, and the marking
+      * is keyed by it), so this is a named product with a constructor and accessors rather than a
       * `case class` — whose instances would not match the tuple-keyed marking.
       */
     opaque type Ballot = (Key, (Link, (BallotStatus, BigInt)))
@@ -148,7 +148,10 @@ object RBRHlNet {
       */
     def committedOutputs(versionMinor: Int): List[TransactionOutput] =
         (1 to versionMinor.max(1)).toList.map { j =>
-            TransactionOutput(payoutAddress, Value(Coin((versionMinor.toLong * 100 + j) * 1_000_000L)))
+            TransactionOutput(
+              payoutAddress,
+              Value(Coin((versionMinor.toLong * 100 + j) * 1_000_000L))
+            )
         }
 
     private val payoutAddress: Address =
@@ -156,7 +159,8 @@ object RBRHlNet {
 
     /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
       * (Awaiting/Abstained carry 0), and a box never links to itself except the fully-tallied
-      * terminal box `(0, 0)`. Refines the `Key × Key × Status × Version` product on the Ballots place.
+      * terminal box `(0, 0)`. Refines the `Key × Key × Status × Version` product on the Ballots
+      * place.
       */
     def validBallots(nHeadPeers: Int, maxVersionMinor: Int): Set[Ballot] =
         val validStatusVersion: Set[(BallotStatus, BigInt)] =
@@ -251,7 +255,8 @@ object RBRHlNet {
         given Order[Ballot] =
             Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass))).order
         given Order[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass).order
-        val ballotSort: Sort[Ballot] = enumerated("Ballot", validBallots(nHeadPeers, maxVersionMinor))
+        val ballotSort: Sort[Ballot] =
+            enumerated("Ballot", validBallots(nHeadPeers, maxVersionMinor))
         val ownerSort: Sort[(HeadPeerNumber, Key)] = enumerated("Owner", validOwners(nHeadPeers))
         // A committed obligation is (version, output): PayoutObligations holds one per candidate SEC.
         val payoutSort: Sort[(BigInt, TransactionOutput)] = Sort.Prod(versionClass, outputClass)
@@ -341,7 +346,10 @@ object RBRHlNet {
                 treasuryScriptRef <- b.place(TreasuryScriptRef, RBRPlace(oneDot, Sort.Dot))
                 setupLadder <- b.place(SetupLadder, RBRPlace(oneDot, Sort.Dot))
                 collateral <- b.place(Collateral, RBRPlace(allPeers, peerClass))
-                payoutObligations <- b.place(PayoutObligations, RBRPlace(initialObligations, payoutSort))
+                payoutObligations <- b.place(
+                  PayoutObligations,
+                  RBRPlace(initialObligations, payoutSort)
+                )
                 resolvedVersion <- b.place(ResolvedVersion, RBRPlace(noVersions, versionClass))
                 evacuationOutput <- b.place(EvacuationOutput, RBRPlace(noOutputs, payoutSort))
             } yield RBRPlaces(
@@ -366,8 +374,16 @@ object RBRHlNet {
             for {
                 t <- b.transition(RBRTransitionId.Vote, List(peer, key, link, version), Guard.True)
                 // uncastBallotBox.votingSpend / votedOutput.send: AwaitingVote → Voted(version)
-                _ <- b.input(places.ballots, t, one(ballot(Ref(key), Ref(link), awaiting, version0)))
-                _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(version))))
+                _ <- b.input(
+                  places.ballots,
+                  t,
+                  one(ballot(Ref(key), Ref(link), awaiting, version0))
+                )
+                _ <- b.output(
+                  t,
+                  places.ballots,
+                  one(ballot(Ref(key), Ref(link), voted, Ref(version)))
+                )
                 // addRequiredSigners(votingSigners): the box's peer signs — presence in Owner
                 _ <- b.read(places.owner, t, ownerToken)
                 // collateralUtxo.spend / collateralOutput.send: the peer's collateral, recreated
@@ -386,7 +402,11 @@ object RBRHlNet {
             for {
                 t <- b.transition(RBRTransitionId.Abstain, List(peer, key, link), Guard.True)
                 // uncastBallotBox.votingSpend(Abstain) / abstainOutput.send: AwaitingVote → Abstain
-                _ <- b.input(places.ballots, t, one(ballot(Ref(key), Ref(link), awaiting, version0)))
+                _ <- b.input(
+                  places.ballots,
+                  t,
+                  one(ballot(Ref(key), Ref(link), awaiting, version0))
+                )
                 _ <- b.output(
                   t,
                   places.ballots,
@@ -421,7 +441,11 @@ object RBRHlNet {
                   t,
                   one(ballot(Ref(key), Ref(link), Ref(status), Ref(versionOld)))
                 )
-                _ <- b.output(t, places.ballots, one(ballot(Ref(key), Ref(link), voted, Ref(versionNew))))
+                _ <- b.output(
+                  t,
+                  places.ballots,
+                  one(ballot(Ref(key), Ref(link), voted, Ref(versionNew)))
+                )
                 // collateralUtxo.spend / collateralOutput.send: the acting peer's collateral
                 _ <- b.read(places.collateral, t, collateralPeerToken)
                 // treasuryUtxo.referenceOutput / regimeUtxo.referenceOutput / config.referenceDispute
@@ -440,12 +464,25 @@ object RBRHlNet {
             for {
                 t <- b.transition(
                   RBRTransitionId.TallyContinuingWins,
-                  List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
+                  List(
+                    collateralPeer,
+                    key1,
+                    link1,
+                    status1,
+                    version1,
+                    key2,
+                    link2,
+                    status2,
+                    version2
+                  ),
                   Guard.And(
                     Guard.Eq(Ref(link1), Ref(key2)),
                     Guard.Or(
                       Guard.Lt(Ref(status2), Ref(status1)),
-                      Guard.And(Guard.Eq(Ref(status1), Ref(status2)), Guard.Lt(Ref(version2), Ref(version1)))
+                      Guard.And(
+                        Guard.Eq(Ref(status1), Ref(status2)),
+                        Guard.Lt(Ref(version2), Ref(version1))
+                      )
                     )
                   )
                 )
@@ -478,14 +515,27 @@ object RBRHlNet {
             for {
                 t <- b.transition(
                   RBRTransitionId.TallyRemovedWins,
-                  List(collateralPeer, key1, link1, status1, version1, key2, link2, status2, version2),
+                  List(
+                    collateralPeer,
+                    key1,
+                    link1,
+                    status1,
+                    version1,
+                    key2,
+                    link2,
+                    status2,
+                    version2
+                  ),
                   Guard.And(
                     Guard.Eq(Ref(link1), Ref(key2)),
                     Guard.Or(
                       Guard.Lt(Ref(status1), Ref(status2)),
                       Guard.And(
                         Guard.Eq(Ref(status1), Ref(status2)),
-                        Guard.Or(Guard.Lt(Ref(version1), Ref(version2)), Guard.Eq(Ref(version1), Ref(version2)))
+                        Guard.Or(
+                          Guard.Lt(Ref(version1), Ref(version2)),
+                          Guard.Eq(Ref(version1), Ref(version2))
+                        )
                       )
                     )
                   )
@@ -525,7 +575,11 @@ object RBRHlNet {
         // No validity window: the terminal box exists only post-deadline, so timing is implicit.
         def resolution(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
             for {
-                t <- b.transition(RBRTransitionId.Resolution, List(version, collateralPeer), Guard.True)
+                t <- b.transition(
+                  RBRTransitionId.Resolution,
+                  List(version, collateralPeer),
+                  Guard.True
+                )
                 // talliedBallotBox.spend(Resolve): consume (0, 0, Voted, version)
                 _ <- b.input(places.ballots, t, one(ballot(key0, key0, voted, Ref(version))))
                 // treasuryUtxo.spendAttached(Resolve) / newTreasury.send: Unresolved → Resolved
@@ -552,7 +606,11 @@ object RBRHlNet {
         val evacuatedBatch = Inscription.Collect(batch, Tuple(Ref(version), Wildcard(outputClass)))
         def evacuation(places: RBRPlaces): Build[RBRPlaceId, RBRTransitionId, Unit] =
             for {
-                t <- b.transition(RBRTransitionId.Evacuation, List(version, collateralPeer), Guard.True)
+                t <- b.transition(
+                  RBRTransitionId.Evacuation,
+                  List(version, collateralPeer),
+                  Guard.True
+                )
                 // ValidityStartSlot / resolved-version read: binds `version` to the resolved SEC
                 _ <- b.read(places.resolvedVersion, t, one(Ref(version)))
                 // treasuryUtxo.spendAttached(Evacuate) / newTreasury.send: treasury stays Resolved

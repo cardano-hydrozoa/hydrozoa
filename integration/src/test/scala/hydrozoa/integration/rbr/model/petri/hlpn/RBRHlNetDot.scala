@@ -8,9 +8,9 @@ import spire.math.SafeLong
   * ellipses (id + current token count, filled when marked), transitions are boxes (id + guard), and
   * each `Arc.Flow` is an edge labelled with its inscription — ordinary consume/produce arcs are
   * plain arrows, ISO 15909-3 read (test) arcs are a plain undirected segment (§A.5) and inhibitor
-  * arcs end in a circle at the transition (§A.4). [[toDot]] draws the whole net; [[toDotPerTransition]] draws one
-  * small diagram per transition (the whole net is too dense to read). Render with e.g.
-  * `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
+  * arcs end in a circle at the transition (§A.4). [[toDot]] draws the whole net;
+  * [[toDotPerTransition]] draws one small diagram per transition (the whole net is too dense to
+  * read). Render with e.g. `dot -Tsvg target/rbr-net/Vote.dot -o Vote.svg`, or `just graphviz`.
   */
 object RBRHlNetDot {
 
@@ -35,7 +35,9 @@ object RBRHlNetDot {
                 .map((flow, _) => flow.place)
                 .distinct
                 .flatMap(pid => net.placesMap.get(pid).map(p => renderPlace(pid, p)))
-            val body = (renderTransition(tid, t) :: placeNodes) ++ arcs.map((flow, a) => renderEdge(flow, a))
+            val body = (renderTransition(tid, t) :: placeNodes) ++ arcs.map((flow, a) =>
+                renderEdge(flow, a)
+            )
             tid -> wrap(tid.toString, body)
         }
 
