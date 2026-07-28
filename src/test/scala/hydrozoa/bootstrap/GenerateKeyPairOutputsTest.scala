@@ -19,8 +19,9 @@ import scalus.uplc.builtin.ByteString
 /** Pins the two file outputs keygen cooks: the roster grows into a decodable
   * [[Bootstrap.Membership]], and a template filled by [[GenerateKeyPair.fillPrivateConfig]] decodes
   * into the matching own-peer identity — head *and* coil — through
-  * [[NodePrivateConfig.nodePrivateConfigDecoder]]. Uses the committed
-  * `config/template/peer-private.template.json`, so it also pins the template's shape.
+  * [[NodePrivateConfig.nodePrivateConfigDecoder]]. Uses the committed template resource
+  * (`src/main/resources/scaffold/peer-private.template.json`), so it also pins the template's
+  * shape.
   */
 class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
@@ -49,7 +50,9 @@ class GenerateKeyPairOutputsTest extends AnyFunSuite {
 
     private val template =
         parser
-            .parse(Files.readString(Path.of("config/template/peer-private.template.json")))
+            .parse(
+              Files.readString(Path.of("src/main/resources/scaffold/peer-private.template.json"))
+            )
             .fold(e => fail(s"template does not parse: $e"), identity)
 
     test("appendPeer grows a roster that decodes as a Membership") {

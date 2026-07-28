@@ -158,9 +158,7 @@ class PersistenceTest extends AnyFunSuite:
                 wall <- p.wallClockOf(stamp)
                 after <- IO.realTimeInstant
             yield assert(
-              wall.exists(w =>
-                  !w.isBefore(before.minusSeconds(5)) && !w.isAfter(after.plusSeconds(5))
-              ),
+              !wall.isBefore(before.minusSeconds(5)) && !wall.isAfter(after.plusSeconds(5)),
               s"wallClockOf($stamp) = $wall, expected within [$before, $after]"
             )
         }
@@ -192,7 +190,7 @@ class PersistenceTest extends AnyFunSuite:
                         Persistence.fromBackend(backend, tracer).flatMap(_.wallClockOf(oldStamp))
                     )
             yield assert(
-              firstWall.isDefined && secondWall == firstWall,
+              secondWall == firstWall,
               s"old-generation stamp converted to $firstWall before re-open, $secondWall after"
             )
             program.unsafeRunSync()

@@ -16,15 +16,15 @@ trait BlockBody extends BlockBody.Section {
 object BlockBody {
     case object Initial extends BlockBody, BlockType.Initial {
         override transparent inline def body: BlockBody.Initial.type = this
-        override transparent inline def events: List[(RequestId, ValidityFlag)] = List()
+        override transparent inline def requests: List[(RequestId, ValidityFlag)] = List()
         override transparent inline def depositsAbsorbed: List[RequestId] = List()
-        override transparent inline def depositsRefunded: List[RequestId] = List()
+        override transparent inline def depositsRejected: List[RequestId] = List()
     }
 
     given Codec[Minor] = deriveCodec[Minor]
     final case class Minor(
-        override val events: List[(RequestId, ValidityFlag)],
-        override val depositsRefunded: List[RequestId]
+        override val requests: List[(RequestId, ValidityFlag)],
+        override val depositsRejected: List[RequestId]
     ) extends BlockBody,
           BlockType.Minor {
         override transparent inline def body: BlockBody.Minor = this
@@ -33,9 +33,9 @@ object BlockBody {
 
     given Codec[Major] = deriveCodec[Major]
     final case class Major(
-        override val events: List[(RequestId, ValidityFlag)],
+        override val requests: List[(RequestId, ValidityFlag)],
         override val depositsAbsorbed: List[RequestId],
-        override val depositsRefunded: List[RequestId]
+        override val depositsRejected: List[RequestId]
     ) extends BlockBody,
           BlockType.Major {
         override transparent inline def body: BlockBody.Major = this
@@ -43,8 +43,8 @@ object BlockBody {
 
     given Codec[Final] = deriveCodec[Final]
     final case class Final(
-        override val events: List[(RequestId, ValidityFlag)],
-        override val depositsRefunded: List[RequestId]
+        override val requests: List[(RequestId, ValidityFlag)],
+        override val depositsRejected: List[RequestId]
     ) extends BlockBody,
           BlockType.Final {
         override transparent inline def body: BlockBody.Final = this
@@ -56,8 +56,8 @@ object BlockBody {
 
     trait Section {
         def body: BlockBody
-        def events: List[(RequestId, ValidityFlag)]
+        def requests: List[(RequestId, ValidityFlag)]
         def depositsAbsorbed: List[RequestId]
-        def depositsRefunded: List[RequestId]
+        def depositsRejected: List[RequestId]
     }
 }

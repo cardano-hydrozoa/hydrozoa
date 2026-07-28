@@ -66,8 +66,8 @@ the application already bakes a headId-like domain separator into its own txs. L
 | Validity | the tx's own slot interval, interpreted with the head's `SlotConfig`; block-creation start must fall inside it | submission (stateful) |
 | Fee | the fee field must be `0`, so inputs must exactly balance outputs — the L2 ledger has no fee pot (Scalus builders: `withZeroFees` + a prebalanced diff handler) | `L2ConformanceValidator` (`fee == 0`) at submission |
 
-`examples/src/main/scala/hydrozoa/examples/demo/SubmitL2Transaction.scala` builds exactly this
-shape end-to-end and is the reference client.
+`src/main/scala/hydrozoa/app/cli/SubmitL2Transaction.scala` (`just submit-l2-tx`) builds exactly
+this shape end-to-end and is the reference client.
 
 What a client needs from the head: `GET /head/info` serves the `headId` (for the pin) and the
 deposit timing offsets (`submissionDurationSeconds`, `absorptionStartOffsetSeconds`,
@@ -82,7 +82,7 @@ no clock, so at apply it receives the block-creation time. What Hydrozoa keeps i
 *sequencing*: a request is screened first, admitted second.
 
 ```
-user ──POST /head/tx──► RequestSequencer
+user ──POST /head/requests──► RequestSequencer
                                    │  sendScreenTx(l2Payload)            (stateless)
                                    ▼
                               L2Ledger screening ── fail ──► rejected, no RequestId
@@ -105,7 +105,7 @@ tx id). Screening cannot resolve inputs, check balance, or test the validity win
 state. It returns pass/fail with an error reason; Hydrozoa itself never inspects or compares head
 identities — the pin check lives entirely inside the ledger. Passing is what assigns the
 `RequestId`, so an unparseable or unauthenticated payload is dropped before it consumes a durable
-id or any peer traffic. On the wire, `POST /head/tx` returns the assigned `RequestId` on
+id or any peer traffic. On the wire, `POST /head/requests` returns the assigned `RequestId` on
 acceptance and the rejection reason otherwise (`docs/openapi.yaml`).
 
 **Submission** is the stateful apply path at block production: the validity interval against the
@@ -131,7 +131,7 @@ and void the signatures.
 The deposit path, in order (client steps marked):
 
 1. **Client:** build the deposit tx (`DepositTx.Build` puts `blake2b_256(l2Payload)` in its
-   metadata) and register both payloads with `POST /head/deposit`.
+   metadata) and register both payloads with `POST /head/requests`.
 2. **Deposit L1 screening** — Hydrozoa's stage, before the ledger sees the deposit
    (`multisig/ledger/l1/tx/DepositL1Screening.scala`, called by `RequestSequencer`).
    `screen(l1Payload, l2Payload, now)`:
@@ -149,7 +149,7 @@ The deposit path, in order (client steps marked):
    production: the obligations spawn as L2 utxos, keyed by a synthetic genesis id
    ([Opening state](#opening-state) uses the same convention).
 
-`examples/src/main/scala/hydrozoa/examples/demo/SubmitDeposit.scala` (`just deposit`,
+`src/main/scala/hydrozoa/app/cli/SubmitDeposit.scala` (`just submit-deposit`,
 DEPLOYMENT.md §5) is the reference deposit client.
 
 ### Deposit timing: the head derives the accept-by deadline from the tx TTL

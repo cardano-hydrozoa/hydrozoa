@@ -18,7 +18,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l2.Destination
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import java.time.Instant
 import org.scalacheck.Gen
@@ -72,7 +72,7 @@ class EffectsResolverTest extends AnyFunSuite:
                 headConfig.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime),
             mDepositDecisionWakeupTime = None
           ),
-          BlockBody.Minor(events = List.empty, depositsRefunded = List.empty)
+          BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
         )
 
     private val sec: StandaloneEvacuationCommitment.MultiSigned =
@@ -171,12 +171,14 @@ class EffectsResolverTest extends AnyFunSuite:
                     RequestBlockEntry(BlockNumber(1), ValidityFlag.Valid)
                   )
                 )
-            // The deposit's absorbing block is the minor block 1 (its partition has no settlement),
-            // so absorption resolves to no effect — the positive major-settlement path is exercised
+            // The deposit is absorbed at the minor block 1 (its partition has no settlement), so
+            // the absorption resolves to no effect — the positive major-settlement path is exercised
             // by the stage suites, which build real settlement transactions.
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] =
-                IO.pure(Option.when(id == depositRequestId)(BlockNumber(1)))
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def decision(id: RequestId): IO[Option[DepositDecision]] =
+                IO.pure(
+                  Option.when(id == depositRequestId)(DepositDecision.Absorbed(BlockNumber(1)))
+                )
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)
 
     private val resolver = EffectsResolver(reader)
 

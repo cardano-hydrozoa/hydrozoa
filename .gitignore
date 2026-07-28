@@ -38,8 +38,7 @@ target/
 .claude/
 /CLAUDE.local.md
 
-# keygen-fleet output (rosters, private configs, signing keys — never commit)
-/config/demo/
-
-# Local template override with real credentials (never commit)
-/config/template/peer-private.template.json.local
+# The head working directory: scaffolded template.local (real Blockfrost key), generated rosters,
+# private configs + signing keys, head-config — all per-deployment, never commit.
+/head/*
+!/head/.gitkeep

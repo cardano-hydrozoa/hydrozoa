@@ -1,0 +1,51 @@
+name: Release
+
+# Publishes the Docker image to the GitHub Container Registry on a version tag.
+# See RELEASE.md for the full release procedure.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so BuildInfo's `git describe` resolves
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Stage the Docker build context
+        # Native-packager writes the Dockerfile + app under target/docker/stage (no daemon needed).
+        run: nix develop --command sbt Docker/stage
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/cardano-hydrozoa/hydrozoa
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: target/docker/stage
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

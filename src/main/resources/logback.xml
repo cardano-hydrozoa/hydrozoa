@@ -22,6 +22,9 @@
         <appender-ref ref="LOG_FILE"/>
     </root>
     <logger name="CardanoBackend" level="warn"/>
+    <!-- Bloxbean's backend logs every Blockfrost request at DEBUG; mute the flood (noise in both
+         the server and the bootstrap CLIs, which share this config). -->
+    <logger name="com.bloxbean" level="warn"/>
     <logger name="CardanoLiaison" level="trace"/>
     <logger name="PeerLiaison" level="trace"/>
     <logger name="PeerLiaison.HeadToHead" level="trace"/>

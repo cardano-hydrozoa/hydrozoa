@@ -1,16 +1,41 @@
 enablePlugins(
   JavaAppPackaging,
-  DockerPlugin
+  DockerPlugin,
+  BuildInfoPlugin
 )
 
 Compile / mainClass := Some("hydrozoa.app.Main")
+// Name the packaged launcher `hydrozoa`, and generate only the dispatcher's script (not forwarder
+// scripts for every other discovered main); every command is a `hydrozoa <subcommand>`.
+executableScriptName := "hydrozoa"
+Compile / discoveredMainClasses := Seq("hydrozoa.app.Main")
+
+// The git revision baked into the Docker image labels; matches `hydrozoa.BuildInfo.gitCommit`.
+lazy val gitRevision: String =
+    scala.util
+        .Try(scala.sys.process.Process("git describe --tags --always --dirty --abbrev=8").!!.trim)
+        .getOrElse("unknown")
+
+// Bake the clean-output JVM flags into the generated launcher scripts (both `stage` and the Docker
+// image), matching the `run` / `Test` settings: silence blst-java's JNI `System::load` and Scala
+// `LazyVals`' `sun.misc.Unsafe` restricted-method warnings.
+bashScriptExtraDefines ++= Seq(
+  """addJava "--enable-native-access=ALL-UNNAMED"""",
+  """addJava "--sun-misc-unsafe-memory-access=allow"""",
+  // The one-shot CLI subcommands use a quiet, console-only logback config: no hydrozoa-trace.jsonl /
+  // hydrozoa.log written into a possibly read-only cwd (e.g. inside the Docker image), and no
+  // trace-level spam. Only `serve` keeps the verbose, file-writing logback.xml. `$1` here is the
+  // subcommand (this runs before the launcher's own arg processing).
+  """if [ "${1:-}" != "serve" ]; then addJava "-Dlogback.configurationFile=logback-cli.xml"; fi"""
+)
 
 // Docker settings
 Docker / packageName := "cardano-hydrozoa/hydrozoa"
 Docker / version := version.value
 Docker / daemonUser := "hydrozoa"
 Docker / daemonGroup := "hydrozoa"
-dockerBaseImage := "eclipse-temurin:21-jre-jammy" // Use Debian-based image for better compatibility
+// JDK 25 to match the project's language/runtime flags (--sun-misc-unsafe-memory-access is 23+).
+dockerBaseImage := "eclipse-temurin:25-jre"
 dockerExposedPorts ++= Seq(8080)
 
 // Skip documentation generation for Docker
@@ -23,7 +48,8 @@ Global / excludeLintKeys += Docker / dockerEnvVars
 Docker / dockerLabels := Map(
   "org.opencontainers.image.title" -> "Hydrozoa",
   "org.opencontainers.image.description" -> "Cardano Hydrozoa L2 State Channel",
-  "org.opencontainers.image.version" -> version.value
+  "org.opencontainers.image.version" -> version.value,
+  "org.opencontainers.image.revision" -> gitRevision
 )
 
 Docker / dockerEnvVars := Map(
@@ -138,8 +164,49 @@ lazy val core: Project = (project in file("."))
         "dev.optics" %% "monocle-macro" % "3.3.0" % Test,
         "co.fs2" %% "fs2-io" % "3.12.2" % Test
       ),
+      // Bake the version, git revision, and build time into `hydrozoa.BuildInfo` so they can be
+      // logged at startup, served from `GET /version`, and stamped onto the Docker image labels.
+      buildInfoPackage := "hydrozoa",
+      buildInfoKeys := Seq[BuildInfoKey](
+        version,
+        BuildInfoKey.action("gitCommit") {
+            scala.util
+                .Try(
+                    scala.sys.process
+                        .Process("git describe --tags --always --dirty --abbrev=8")
+                        .!!
+                        .trim
+                )
+                .getOrElse("unknown")
+        }
+      ),
+      // BuildTime forces a regenerate each build, keeping gitCommit current within a warm session.
+      buildInfoOptions += BuildInfoOption.BuildTime,
       // Fork JVM to properly pass system properties
       run / fork := true,
+      // Silence the JVM's restricted-method warnings (blst-java JNI `System::load`, Scala
+      // `LazyVals` via `sun.misc.Unsafe`) for forked `run`/CLI invocations, matching Test.
+      run / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow"
+      ),
+      // The interactive `submit-deposit` / `submit-l2-tx` subcommands read console prompts; wire
+      // stdin through to the forked `sbt run` JVM. The packaged launcher gets stdin natively.
+      run / connectInput := true,
+      // Copy the repo-root `docker-compose.yml` + `hydrozoa.sh` into the `/scaffold/*` classpath
+      // resources at build time (the template + script-refs defaults live directly under
+      // src/main/resources/scaffold/). The `scaffold` subcommand materializes these for a
+      // Docker-only user, and `build-head-config` reads the baked script-refs — no repo clone.
+      Compile / resourceGenerators += Def.task {
+          val out = (Compile / resourceManaged).value / "scaffold"
+          IO.createDirectory(out)
+          val copies = Seq(
+            baseDirectory.value / "docker-compose.yml" -> out / "docker-compose.yml",
+            baseDirectory.value / "hydrozoa.sh" -> out / "hydrozoa.sh"
+          )
+          copies.foreach { case (src, dst) => IO.copyFile(src, dst) }
+          copies.map(_._2)
+      }.taskValue,
       // Fork each test run into a fresh JVM: isolates native state (RocksDB JNI), the
       // cats-effect IORuntime, and daemon threads, and makes re-running a `testOnly` in a
       // warm sbt session actually re-run instead of reporting 0 tests.
@@ -154,20 +221,6 @@ lazy val core: Project = (project in file("."))
         "--enable-native-access=ALL-UNNAMED",
         "--sun-misc-unsafe-memory-access=allow"
       ),
-    )
-
-// Interactive demo targets that drive a running head (DEPLOYMENT.md §7).
-lazy val examples: Project = (project in file("examples"))
-    .dependsOn(core)
-    .settings(
-      name := "hydrozoa-examples",
-      publish / skip := true,
-      run / fork := true,
-      // Wire stdin through to the forked JVM — the demo targets read prompts from the console.
-      run / connectInput := true,
-      // Forked runs resolve relative paths (config/demo) from the repo root, not examples/.
-      Compile / run / forkOptions := (Compile / run / forkOptions).value
-          .withWorkingDirectory((ThisBuild / baseDirectory).value),
     )
 
 // Integration tests
@@ -211,15 +264,22 @@ ThisBuild / scalacOptions ++= Seq(
 addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVersion.full)
 
 // Custom commands to format and lint all subprojects
-// TODO: Restore integration module to fmt and lint
-//addCommandAlias("fmtAll", ";core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll")
-//addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll")
-//addCommandAlias("lintAll", ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll")
-//addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check")
-addCommandAlias("fmtAll", ";core/scalafmtAll ;examples/scalafmtAll")
-addCommandAlias("fmtCheckAll", ";core/scalafmtCheckAll ;examples/scalafmtCheckAll")
-addCommandAlias("lintAll", ";core/scalafixAll ;examples/scalafixAll")
-addCommandAlias("lintCheckAll", ";core/scalafixAll --check ;examples/scalafixAll --check")
+addCommandAlias(
+  "fmtAll",
+  ";cardanoOnchain/scalafmtAll ;petri/scalafmtAll ;core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll"
+)
+addCommandAlias(
+  "fmtCheckAll",
+  ";cardanoOnchain/scalafmtCheckAll ;petri/scalafmtCheckAll ;core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll"
+)
+addCommandAlias(
+  "lintAll",
+  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
+)
+addCommandAlias(
+  "lintCheckAll",
+  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
+)
 
 // Test dependencies
 ThisBuild / testFrameworks += new TestFramework("org.scalatest.tools.Framework")
@@ -234,6 +294,9 @@ Global / concurrentRestrictions := Seq(
 
 inThisBuild(
   List(
+    // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
+    // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
+    version := "0.1.0",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision

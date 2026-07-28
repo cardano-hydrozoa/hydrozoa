@@ -34,10 +34,11 @@ object SubmissionClient:
                 }
 
     /** http4s-based impl: posts the request body (no header, no signature envelope — auth is the
-      * native tx's own witnesses, verified at the ledger's screening) to the deposit-register or
-      * l2-submit endpoint by variant, and expects a [[RequestAccepted]] JSON response. `client` can
-      * be a real http4s `Client[IO]` or an in-memory `Client.fromHttpApp` — the harness uses the
-      * latter.
+      * native tx's own witnesses, verified at the ledger's screening) to the single submission
+      * endpoint and expects a [[RequestAccepted]] JSON response. The body is internally tagged — a
+      * `type` field (`deposit` / `transaction`) selects the kind, with the payloads alongside it
+      * (see [[requestJson]]). `client` can be a real http4s `Client[IO]` or an in-memory
+      * `Client.fromHttpApp` — the harness uses the latter.
       */
     def http(
         client: Client[IO],
@@ -46,17 +47,14 @@ object SubmissionClient:
         new SubmissionClient:
             def submit(userRequest: UserRequest): IO[RequestId] =
                 val bodyJson = requestJson(userRequest)
-                val path = pathFor(userRequest)
-                val req = Http4sRequest[IO](Method.POST, baseUri.withPath(path))
-                    .withEntity(bodyJson)
+                val req = Http4sRequest[IO](
+                  Method.POST,
+                  baseUri.withPath(Uri.Path.unsafeFromString("/head/requests"))
+                ).withEntity(bodyJson)
                 client.expect[RequestAccepted](req).map(_.requestId)
 
-    private def pathFor(request: UserRequest): Uri.Path =
-        request match
-            case _: UserRequest.DepositRequest     => Uri.Path.unsafeFromString("/head/deposit")
-            case _: UserRequest.TransactionRequest => Uri.Path.unsafeFromString("/head/tx")
-
     private def requestJson(request: UserRequest): Json =
-        request.body match
-            case b: UserRequestBody.DepositRequestBody     => Json.obj("deposit" -> b.asJson)
-            case b: UserRequestBody.TransactionRequestBody => Json.obj("transaction" -> b.asJson)
+        val (tag, body) = request.body match
+            case b: UserRequestBody.DepositRequestBody     => ("deposit", b.asJson)
+            case b: UserRequestBody.TransactionRequestBody => ("transaction", b.asJson)
+        Json.obj("type" -> Json.fromString(tag)).deepMerge(body)
