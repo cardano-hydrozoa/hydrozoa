@@ -18,13 +18,15 @@ object Stage4Runner:
     def generateCommands(
         initialState: ModelState,
         n: Int
-    )(using ContraTracer[IO, Slf4jMsg]): PropertyM[IO, (ModelState, List[AnyCommand[ModelState, Stage4Sut]])] =
+    )(using
+        ContraTracer[IO, Slf4jMsg]
+    ): PropertyM[IO, (ModelState, List[AnyCommand[ModelState, Stage4Sut]])] =
         val step: StateT[[x] =>> PropertyM[IO, x], ModelState, AnyCommand[ModelState, Stage4Sut]] =
             for
-                state    <- StateT.get[[x] =>> PropertyM[IO, x], ModelState]
-                cmd      <- StateT.liftF(Stage4ScenarioGen.genNextCommand(state))
+                state <- StateT.get[[x] =>> PropertyM[IO, x], ModelState]
+                cmd <- StateT.liftF(Stage4ScenarioGen.genNextCommand(state))
                 newState <- StateT.liftF(PropertyM.run(cmd.advanceState[IO](state)))
-                _        <- StateT.set[[x] =>> PropertyM[IO, x], ModelState](newState)
+                _ <- StateT.set[[x] =>> PropertyM[IO, x], ModelState](newState)
             yield cmd
         step.replicateA(n).run(initialState)
 
@@ -67,9 +69,11 @@ object Stage4Runner:
 
         // Collect (genSeqNum, cmd, nextState) for all non-NoOp commands
         commands.zipWithIndex
-            .foldLeft(IO.pure(
-              (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
-            )) { case (ioAcc, (cmd, idx)) =>
+            .foldLeft(
+              IO.pure(
+                (initialState, List.empty[(Int, AnyCommand[ModelState, Stage4Sut], ModelState)])
+              )
+            ) { case (ioAcc, (cmd, idx)) =>
                 ioAcc.flatMap { case (state, acc) =>
                     cmd.advanceState[IO](state).map { nextState =>
                         val entry =
@@ -86,20 +90,23 @@ object Stage4Runner:
                     (nextState.currentModelTime.getEpochSecond, genSeq)
                 }
 
-                val rowLines = sorted.zipWithIndex.map { case ((genSeq, cmd, nextState), displayIdx) =>
-                    val actingPeer =
-                        peerRegex.findFirstMatchIn(cmd.label).map(m => HeadPeerNumber(m.group(1).toInt))
-                    s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
-                        val cell =
-                            if actingPeer.contains(p) then
-                                val t = nextState.currentModelTime.getEpochSecond - startEpoch
-                                val d = cmd.delay.toSeconds
-                                s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
-                                    .take(colWidth)
-                                    .padTo(colWidth, ' ')
-                            else " " * colWidth
-                        s" $cell |"
-                    }.mkString
+                val rowLines = sorted.zipWithIndex.map {
+                    case ((genSeq, cmd, nextState), displayIdx) =>
+                        val actingPeer =
+                            peerRegex
+                                .findFirstMatchIn(cmd.label)
+                                .map(m => HeadPeerNumber(m.group(1).toInt))
+                        s"| ${(displayIdx + 1).toString.padTo(stepWidth, ' ')} |" + peers.map { p =>
+                            val cell =
+                                if actingPeer.contains(p) then
+                                    val t = nextState.currentModelTime.getEpochSecond - startEpoch
+                                    val d = cmd.delay.toSeconds
+                                    s"#$genSeq ${compactLabel(cmd.label)} +${t}s Δ${d}s"
+                                        .take(colWidth)
+                                        .padTo(colWidth, ' ')
+                                else " " * colWidth
+                            s" $cell |"
+                        }.mkString
                 }
 
                 (List(divider, header, divider) ++ rowLines ++ List(divider, legend)).mkString("\n")
@@ -116,17 +123,19 @@ object Stage4Runner:
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Runner"))
     val prop = PropertyM.monadicIO {
         for
-            initialState <- PropertyM.pick[IO, ModelState](Stage4Suite.genInitialState(
+            initialState <- PropertyM.pick[IO, ModelState](
+              Stage4Suite.genInitialState(
                 nPeers = 3,
                 meanInterArrivalTime = p =>
                     (p: Int) match
                         case 0 => 30.seconds
                         case 1 => 8.seconds
                         case _ => 15.seconds
-            ))
+              )
+            )
             commandsResult <- Stage4Runner.generateCommands(initialState, 300)
-            (_, commands)   = commandsResult
-            _              <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
+            (_, commands) = commandsResult
+            _ <- PropertyM.run(Stage4Runner.printTable(initialState, commands))
         yield Prop.passed
     }
     val _ = Test.check(Test.Parameters.default.withMinSuccessfulTests(1), prop)
@@ -175,13 +184,12 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     val _ = property("Two-peers head works (extended)") =
         Stage4Suite(label = "stage4-two-peers-extended", nPeers = 2, nCommands = 500).property()
 
-    val _ = property("Two-heads-one-coil works (extended)") =
-        Stage4Suite(
-          label = "stage4-2h1c-extended",
-          nPeers = 2,
-          nCoilPeers = 1,
-          nCommands = 500,
-        ).property()
+    val _ = property("Two-heads-one-coil works (extended)") = Stage4Suite(
+      label = "stage4-2h1c-extended",
+      nPeers = 2,
+      nCoilPeers = 1,
+      nCommands = 500,
+    ).property()
 
     val _ = property("Three-peers head works (extended)") =
         Stage4Suite(label = "stage4-three-peers-extended", nPeers = 3, nCommands = 500).property()
@@ -208,13 +216,12 @@ object Stage4Properties extends YetAnotherProperties("Integration Stage 4"):
     // WebSocket transport variant of the two-heads-one-coil run: the hub↔coil link runs over the
     // shared per-peer WS server (`/hub` route) instead of in-process handles, exercising the
     // HubWsTransport / CoilPeerWsTransport / CoilFrame path end-to-end.
-    val _ = property("Two-heads-one-coil works WS") =
-        Stage4Suite(
-          label = "stage4-ws-2h1c",
-          nPeers = 2,
-          nCoilPeers = 1,
-          transportMode = TransportMode.WebSocket,
-        ).property()
+    val _ = property("Two-heads-one-coil works WS") = Stage4Suite(
+      label = "stage4-ws-2h1c",
+      nPeers = 2,
+      nCoilPeers = 1,
+      transportMode = TransportMode.WebSocket,
+    ).property()
 
 // ===================================
 // Diagnostic: termination check
@@ -224,7 +231,6 @@ object Stage4Diagnostics extends YetAnotherProperties("Integration Stage 4 Diagn
 
     override def overrideParameters(p: Test.Parameters): Test.Parameters =
         p.withWorkers(1).withMinSuccessfulTests(1)
-
 
     val _ = property("Two-peers 1 command") =
         Stage4Suite(label = "diag-1", nPeers = 2, nCommands = 1).property()

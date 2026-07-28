@@ -21,7 +21,7 @@ import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.stack.{EffectIds, PartitionEffects, StackBrief, StackEffects, StackNumber, StandaloneEvacuationCommitment}
-import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, RequestBlockEntry, Timestamped}
+import hydrozoa.multisig.persistence.{ArrivalStamp, ConsensusStoreReader, DepositDecision, RequestBlockEntry, Timestamped}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
 import io.circe.Json
 import java.time.Instant
@@ -66,7 +66,7 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                     headConfig.txTiming.forcedMajorBlockWakeupTime(fallbackTxStartTime),
                 mDepositDecisionWakeupTime = None
               ),
-              BlockBody.Minor(events = List.empty, depositsRefunded = List.empty)
+              BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
             )
         }
 
@@ -151,9 +151,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
                     RequestBlockEntry(BlockNumber(1), ValidityFlag.Valid)
                   )
                 )
-            def absorptionBlock(id: RequestId): IO[Option[BlockNumber]] = IO.pure(None)
+            def decision(id: RequestId): IO[Option[DepositDecision]] = IO.pure(None)
             def withdrawalEffects(id: RequestId): IO[List[TransactionHash]] = IO.pure(Nil)
-            def wallClockOf(stamp: ArrivalStamp): IO[Option[Instant]] = IO.pure(None)
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] = IO.pure(Instant.EPOCH)
 
     private def withRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
         mkMinorBrief1
@@ -195,11 +195,10 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             get(app, "/head/blocks/1/effects").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
                 val c = body.hcursor
-                val _ = assert(c.get[String]("blockType") == Right("minor"))
+                // A minor block's effects carry only its (optional) SEC and refunds.
+                val _ = assert(c.get[String]("type") == Right("minor"))
                 val _ = assert(c.get[String]("sec") == Right(secId.toHex))
                 val _ = assert(c.get[List[String]]("refunds") == Right(Nil))
-                val _ = assert(c.get[List[String]]("rollouts") == Right(Nil))
-                val _ = assert(c.downField("settlement").focus.forall(_.isNull))
                 ()
             }
         }
@@ -210,8 +209,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
             get(app, "/head/blocks/1/effects/sec").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
                 val c = body.hcursor
+                // The by-kind SEC response carries its l1TxId; the kind is fixed by the path (no
+                // `kind` field).
                 val _ = assert(c.get[String]("l1TxId") == Right(secId.toHex))
-                val _ = assert(c.get[String]("kind") == Right("sec"))
                 val _ = assert(c.get[Int]("blockNumber") == Right(1))
                 val _ = assert(c.downField("secOnchainSerialized").as[String].isRight)
                 // nHeadPeers head signatures, the remaining tail as coil signatures.
@@ -226,8 +226,9 @@ class HeadEffectsEndpointsTest extends AnyFunSuite:
         withRoutes { app =>
             get(app, s"/head/effects/${secId.toHex}").map { (status, body) =>
                 val _ = assert(status == Status.Ok)
-                val _ = assert(body.hcursor.get[String]("l1TxId") == Right(secId.toHex))
-                val _ = assert(body.hcursor.get[String]("kind") == Right("sec"))
+                // The by-id response is type-tagged by kind and omits l1TxId (it is the queried path).
+                val _ = assert(body.hcursor.get[String]("type") == Right("sec"))
+                val _ = assert(body.hcursor.downField("secOnchainSerialized").as[String].isRight)
                 ()
             }
         }

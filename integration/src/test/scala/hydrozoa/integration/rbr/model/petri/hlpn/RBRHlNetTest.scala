@@ -1,7 +1,7 @@
 package hydrozoa.integration.rbr.model.petri.hlpn
 
-import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId, committedOutputs}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Abstained, Awaiting, Voted}
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId, committedOutputs}
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber

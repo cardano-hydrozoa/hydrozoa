@@ -4,35 +4,35 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
-import scala.annotation.unused
-import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
+import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.RBRPlaceId.*
 import hydrozoa.lib.classification.Histogram
+import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
+import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import org.scalacheck.Prop
+import scala.annotation.unused
 import scala.concurrent.duration.*
 import scalus.cardano.ledger.{Utxo, Utxos}
 import test.{SeedPhrase, TestPeers}
 
-/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence
-  * + RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
+/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence +
+  * RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
   *
   * Scenario:
   *   1. 3-peer head + 2 coil followers; per-head-peer [[FirewalledCardanoBackend]] drops any
-  *      [[SettlementTx]] with
-  *      `versionMajor == 2`, so on-chain lags at v1 while peers hard-confirm through v2 off-chain.
+  *      [[SettlementTx]] with `versionMajor == 2`, so on-chain lags at v1 while peers hard-confirm
+  *      through v2 off-chain.
   *   2. Bootstrap L2 request + periodic requests give each Major stack a trailing Minor with SEC.
   *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, HMRM spawns
   *      [[RuleBasedRegimeManager]] which spawns [[RuleBasedActor]].
-  *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the
-  *      on-chain treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
+  *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the on-chain
+  *      treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
   *   5. Voting deadline elapses → TallyTx → ResolutionTx.
   *   6. Every peer's RBA builds and submits an [[EvacuationTx]] until its `Evacuation.NoMore`
   *      terminal event fires.
@@ -40,12 +40,13 @@ import test.{SeedPhrase, TestPeers}
   */
 object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation Property"):
 
-    private val nHeadPeers: Int              = 3
-    private val nCoilPeers: Int              = 2
+    private val nHeadPeers: Int = 3
+    private val nCoilPeers: Int = 2
     private val scenarioTimeout: FiniteDuration = 5.minutes
 
-    val _ = property("ws: fallback→RRM→vote→tally→resolve→evacuate happy path") =
-        testProperty(TransportMode.WebSocket)
+    val _ = property("ws: fallback→RRM→vote→tally→resolve→evacuate happy path") = testProperty(
+      TransportMode.WebSocket
+    )
 
     private def testProperty(transportMode: TransportMode): Prop =
         val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
@@ -124,39 +125,41 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
     private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
         yield ()
 
     private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
         yield ()
 
-    /** After evacuation completes, cancel the periodic-request loop, wait a beat for any
-      * in-flight tx to settle, snapshot the shared mock L1, and check the UTxO distribution
-      * matches the expected terminal buckets.
+    /** After evacuation completes, cancel the periodic-request loop, wait a beat for any in-flight
+      * tx to settle, snapshot the shared mock L1, and check the UTxO distribution matches the
+      * expected terminal buckets.
       */
     private def step5_assertTerminalHistogram: test.TestM[Ctx, Unit] =
         for
-            ctx    <- ask
-            _      <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
-            _      <- lift(IO.sleep(quiescenceDelay))
-            utxos  <- lift(ctx.harness.l1Snapshot)
+            ctx <- ask
+            _ <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
+            _ <- lift(IO.sleep(quiescenceDelay))
+            utxos <- lift(ctx.harness.l1Snapshot)
             actual <- lift(runClassifier(utxos)(using ctx.harness.multiNodeConfig))
-            expectedEvacCount <- lift(ctx.firstPayoutsLeft.get.flatMap(
-              IO.fromOption(_)(
-                new IllegalStateException(
-                  "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
+            expectedEvacCount <- lift(
+              ctx.firstPayoutsLeft.get.flatMap(
+                IO.fromOption(_)(
+                  new IllegalStateException(
+                    "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
+                  )
                 )
               )
-            ))
+            )
             expected = expectedCardinalities(expectedEvacCount)
             _ <- assertWith(
               actual == expected,
@@ -179,11 +182,11 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
-            fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
-            resolutionSubmitted  <- Resource.eval(Deferred[IO, Unit])
-            peersEvacuationDone  <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
-            evacuationDone       <- Resource.eval(Deferred[IO, Unit])
-            firstPayoutsLeft     <- Resource.eval(Ref[IO].of(Option.empty[Int]))
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
+            resolutionSubmitted <- Resource.eval(Deferred[IO, Unit])
+            peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
+            evacuationDone <- Resource.eval(Deferred[IO, Unit])
+            firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
@@ -278,7 +281,7 @@ object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation
         utxos: Utxos
     )(using MultiNodeConfig): IO[Map[RBRPlaceId, Int]] =
         val classifier = new RBRClassifier
-        val allUtxos   = utxos.toList.map { case (i, o) => Utxo(i, o) }
+        val allUtxos = utxos.toList.map { case (i, o) => Utxo(i, o) }
         Histogram.empty(classifier).addAll(allUtxos).toEither match
             case Left(errs) =>
                 IO.raiseError(

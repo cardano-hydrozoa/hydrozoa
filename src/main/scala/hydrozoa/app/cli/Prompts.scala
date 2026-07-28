@@ -1,4 +1,4 @@
-package hydrozoa.examples.demo
+package hydrozoa.app.cli
 
 import cats.data.NonEmptyList
 import cats.effect.IO

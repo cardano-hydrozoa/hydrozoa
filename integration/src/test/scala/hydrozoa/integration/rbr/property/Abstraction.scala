@@ -13,8 +13,8 @@ import scalus.uplc.builtin.{ByteString, Data}
 
 /** Histogram of every UTxO in the shared mock backend, bucketed by [[RBRPlaceId]].
   *
-  * A type alias for [[Histogram]]`[RBRPlaceId, Utxo]`. Produced by running
-  * [[RBRClassifier]] over a UTxO snapshot.
+  * A type alias for [[Histogram]]`[RBRPlaceId, Utxo]`. Produced by running [[RBRClassifier]] over a
+  * UTxO snapshot.
   */
 type RBRHistogram = Histogram[RBRPlaceId, Utxo]
 
@@ -43,13 +43,13 @@ class RBRClassifier(using env: MultiNodeConfig)
     extends Classifier[RBRPlaceId, Utxo](Ambient):
 
     def classifierFns: List[Utxo => Option[RBRPlaceId]] =
-        val policyId              = env.headConfig.headMultisigScript.policyId
-        val treasuryToken         = env.headConfig.headTokenNames.treasuryTokenName
-        val voteToken             = env.headConfig.headTokenNames.voteTokenName
-        val treasuryScriptInput   = env.headConfig.rulebasedTreasuryScriptInput
-        val disputeScriptInput    = env.headConfig.disputeResolutionScriptInput
-        val setupLadderInputs     = env.headConfig.setupLadderInputs.toSet
-        val regimeWitnessToken    = env.headConfig.headTokenNames.regimeWitnessTokenName
+        val policyId = env.headConfig.headMultisigScript.policyId
+        val treasuryToken = env.headConfig.headTokenNames.treasuryTokenName
+        val voteToken = env.headConfig.headTokenNames.voteTokenName
+        val treasuryScriptInput = env.headConfig.rulebasedTreasuryScriptInput
+        val disputeScriptInput = env.headConfig.disputeResolutionScriptInput
+        val setupLadderInputs = env.headConfig.setupLadderInputs.toSet
+        val regimeWitnessToken = env.headConfig.headTokenNames.regimeWitnessTokenName
         val collateralDatumMarker = toData(ByteString.fromString("collateral"))
         val evacuationDatumMarker = toData(ByteString.fromString("evacuation"))
 
