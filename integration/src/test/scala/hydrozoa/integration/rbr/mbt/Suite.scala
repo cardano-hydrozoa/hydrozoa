@@ -11,8 +11,8 @@ import hydrozoa.integration.rbr.property.ObservableMarking
 import hydrozoa.integration.stage4.Model
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
-import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, genesisObligationDecoder}
 import hydrozoa.multisig.ledger.event.RequestNumber
@@ -49,7 +49,7 @@ case class RbrMbtSuite(
     override type State = Model.ModelState
     override type Sut = hydrozoa.integration.rbr.mbt.Sut
 
-    private val cardanoNetwork: CardanoNetwork  = CardanoNetwork.Preprod
+    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
     private val scenarioTimeout: FiniteDuration = 5.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
 
@@ -95,13 +95,13 @@ case class RbrMbtSuite(
                 k.headPeerNumber -> v
             }
         val coilNodeConfigs = config.mkCoilNodeConfigs(testPeers.coilWallets)
-        val initTx          = config.headConfig.initializationTx.tx
-        val spentInputs     = initTx.body.value.inputs.toSet
+        val initTx = config.headConfig.initializationTx.tx
+        val spentInputs = initTx.body.value.inputs.toSet
         val initOutputsList = initTx.body.value.outputs.toList.map(_.value).zipWithIndex
-        val peers           = config.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
+        val peers = config.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val peerUtxosL1 = peers.map { pn =>
-            val peerAddr          = config.addressOf(pn)
-            val survived: Utxos   = preinitPeerUtxosL1(pn) -- spentInputs
+            val peerAddr = config.addressOf(pn)
+            val survived: Utxos = preinitPeerUtxosL1(pn) -- spentInputs
             val newOutputs: Utxos = initOutputsList
                 .filter((out, _) => out.address.asInstanceOf[ShelleyAddress] == peerAddr)
                 .map((out, ix) => TransactionInput(initTx.id, ix) -> out)
@@ -128,11 +128,11 @@ case class RbrMbtSuite(
 
     override def sutResource(state: Model.ModelState): Resource[IO, Sut] =
         for
-            fallbackDispatched      <- Resource.eval(Deferred[IO, Unit])
-            evacuationDone          <- Resource.eval(Deferred[IO, Unit])
-            firstPayoutsLeft        <- Resource.eval(Ref[IO].of(Option.empty[Int]))
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
+            evacuationDone <- Resource.eval(Deferred[IO, Unit])
+            firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             settlementFirewallArmed <- Resource.eval(Ref[IO].of(false))
-            peersEvacuationDone     <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
+            peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
@@ -176,16 +176,16 @@ case class RbrMbtSuite(
             // 1. Wait until every deposit L1 utxo is consumed by a settlement (committed on-chain).
             _ <- awaitDepositsCommitted(sut, depositUtxos).timeout(scenarioTimeout)
             // 2. Arm the firewall → the next settlement is dropped → fallback.
-            _       <- sut.settlementFirewallArmed.set(true)
-            _       <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
-            _       <- sut.evacuationDone.get.timeout(scenarioTimeout)
-            _       <- IO.sleep(quiescenceDelay)
-            utxos   <- sut.harness.l1Snapshot
+            _ <- sut.settlementFirewallArmed.set(true)
+            _ <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
+            _ <- sut.evacuationDone.get.timeout(scenarioTimeout)
+            _ <- IO.sleep(quiescenceDelay)
+            utxos <- sut.harness.l1Snapshot
             payouts <- sut.firstPayoutsLeft.get
-            errors  <- sut.harness.sutErrors.get
+            errors <- sut.harness.sutErrors.get
             obligationCount = committedObligationCount(lastState)
-            alpha           = alphaTerminal(obligationCount)
-            betaEither      = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
+            alpha = alphaTerminal(obligationCount)
+            betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
@@ -235,9 +235,9 @@ case class RbrMbtSuite(
         ).toOption.get
         ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
-    /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the first
-      * `Evacuation.PayoutsLeft`, and completes `evacuationDone` once every head + coil peer has fired
-      * `Evacuation.NoMore`.
+    /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the
+      * first `Evacuation.PayoutsLeft`, and completes `evacuationDone` once every head + coil peer
+      * has fired `Evacuation.NoMore`.
       */
     private def observerTracer(
         fallbackDispatched: Deferred[IO, Unit],

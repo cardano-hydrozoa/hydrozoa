@@ -309,9 +309,9 @@ object MultiPeerHeadHarness:
         ).map { case (takeoffTime, mnc) => buildCtx(takeoffTime, mnc) }
 
     /** The config-generation half of [[mkResource]]: pick the takeoff time and a
-      * yaci-genesis-pinned [[MultiNodeConfig]] with the fast dispute timings/rate-limits both dispute
-      * callers need. Split out so a `ModelBasedSuite` can generate the config in `genInitialState`
-      * (the `PropertyM` phase) and build the harness separately in `sutResource`.
+      * yaci-genesis-pinned [[MultiNodeConfig]] with the fast dispute timings/rate-limits both
+      * dispute callers need. Split out so a `ModelBasedSuite` can generate the config in
+      * `genInitialState` (the `PropertyM` phase) and build the harness separately in `sutResource`.
       */
     def genDisputeMnc(
         transportMode: Transport.Mode,

@@ -59,7 +59,7 @@ object ObservableMarking:
       */
     def beta(utxos: Utxos)(using cfg: MultiNodeConfig): Either[String, ObservableMarking] =
         val classifier = new RBRClassifier
-        val all        = utxos.toList.map((i, o) => Utxo(i, o))
+        val all = utxos.toList.map((i, o) => Utxo(i, o))
         Histogram.empty(classifier).addAll(all).toEither match
             case Left(errs) => Left(s"ambiguous UTxO classification: ${errs.toList}")
             case Right(hist) =>

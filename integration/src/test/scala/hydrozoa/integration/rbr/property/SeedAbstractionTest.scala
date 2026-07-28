@@ -25,25 +25,34 @@ import test.{SeedPhrase, TestPeers}
   */
 object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstraction"):
 
-    private val nHeadPeers: Int                 = 3
-    private val nCoilPeers: Int                 = 2
-    private val maxVersionMinor: Int            = 2
+    private val nHeadPeers: Int = 3
+    private val nCoilPeers: Int = 2
+    private val maxVersionMinor: Int = 2
     private val scenarioTimeout: FiniteDuration = 5.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
 
     // Freeze the dispute: dropping the v2 settlement triggers fallback; dropping every dispute
     // family keeps the RBA from mutating the post-fallback state so the snapshot stays at the seed.
     private val disputeFamilies: Set[String] =
-        Set("VoteTx", "AbstainTx", "RatchetVoteTx", "TallyTx", "Resolution", "EvacuationTx", "Deinit")
+        Set(
+          "VoteTx",
+          "AbstainTx",
+          "RatchetVoteTx",
+          "TallyTx",
+          "Resolution",
+          "EvacuationTx",
+          "Deinit"
+        )
 
     private val freezeDispute: MultiPeerHeadHarness.DropRule =
         MultiPeerHeadHarness.DropRule(etx => disputeFamilies.contains(etx.transactionFamily))
 
-    val _ = property("ws: post-fallback L1 snapshot matches the RBRHlNet seed") =
-        testProperty(TransportMode.WebSocket)
+    val _ = property("ws: post-fallback L1 snapshot matches the RBRHlNet seed") = testProperty(
+      TransportMode.WebSocket
+    )
 
     private def testProperty(transportMode: TransportMode): Prop =
-        val testPeers       = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
         val resource = MultiPeerHeadHarness.mkResource(
@@ -83,14 +92,16 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
     private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
+            _ <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
         yield ()
 
     private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
             fiber <- lift(
-              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(ctx.harness)).foreverM.start
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(
+                ctx.harness
+              )).foreverM.start
             )
             _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
         yield ()
@@ -98,17 +109,18 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
     private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
-            _   <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
         yield ()
 
     /** Cancel the request loop, let the fallback tx settle (the dispute is frozen, so no dispute tx
-      * can land in this window), snapshot the shared L1, and assert `alpha(seed) == beta(snapshot)`.
+      * can land in this window), snapshot the shared L1, and assert
+      * `alpha(seed) == beta(snapshot)`.
       */
     private def step3_assertSeedAbstraction: test.TestM[Ctx, Unit] =
         for
-            ctx   <- ask
-            _     <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
-            _     <- lift(IO.sleep(quiescenceDelay))
+            ctx <- ask
+            _ <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
+            _ <- lift(IO.sleep(quiescenceDelay))
             utxos <- lift(ctx.harness.l1Snapshot)
             beta <- lift(
               IO.fromEither(
@@ -135,7 +147,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
         takeoffTime: Option[java.time.Instant],
     ): Resource[IO, Ctx] =
         for
-            fallbackDispatched   <- Resource.eval(Deferred[IO, Unit])
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
             periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
 
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
@@ -150,8 +162,9 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
               wrapBackend = (peerId, backend) =>
                   FirewalledCardanoBackend(
                     underlying = backend,
-                    shouldDrop =
-                        (MultiPeerHeadHarness.DropRule.settlementProducingMajor(2) || freezeDispute).toGate,
+                    shouldDrop = (MultiPeerHeadHarness.DropRule.settlementProducingMajor(
+                      2
+                    ) || freezeDispute).toGate,
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId),
                   ),
             )

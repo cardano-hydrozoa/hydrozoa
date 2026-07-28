@@ -8,10 +8,10 @@ import hydrozoa.integration.stage4.Model.{ModelState, given}
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
+import scala.concurrent.duration.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.uplc.builtin.ByteString
 import scalus.uplc.builtin.Data.toData
-import scala.concurrent.duration.*
 
 /** Pre-fallback generator: submit L1 deposits (reusing stage4's `genRegisterDepositCommand`, which
   * builds a real signed deposit tx from the peer's L1 funding). Each deposit's L2 outputs carry the

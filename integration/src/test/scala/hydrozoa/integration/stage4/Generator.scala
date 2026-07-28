@@ -255,7 +255,9 @@ object CommandGenerators:
                                             .sequence[List[TransactionOutput], TransactionOutput](
                                               outputValues.map(v =>
                                                   Gen.const(peerAddress)
-                                                      .map(a => Babbage(a, v, datumOption = l2OutputDatum))
+                                                      .map(a =>
+                                                          Babbage(a, v, datumOption = l2OutputDatum)
+                                                      )
                                               )
                                             )
 

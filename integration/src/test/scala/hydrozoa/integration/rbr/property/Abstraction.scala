@@ -24,23 +24,22 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Treasury and vote UTxOs carry a distinctive policy token
   *   - Collateral UTxOs carry the datum sentinel `"collateral"`
   *   - Evacuation outputs carry the datum sentinel `"evacuation"`
-  *   - Script reference UTxOs are identified by their known [[scalus.cardano.ledger.TransactionInput]] keys
+  *   - Script reference UTxOs are identified by their known
+  *     [[scalus.cardano.ledger.TransactionInput]] keys
   *   - Everything else falls into the [[RBRPlaceId.Ambient]] default bucket
   *
-  * TODO: the `"collateral"` sentinel only exists in the synthetic `InitialDisputeUtxos`
-  * fixture — the real rule-based tx builders (`VoteTx`, `TallyTx`, `ResolutionTx`,
-  * `AbstainTx`, `RatchetVoteTx`, `EvacuationTx`) draw collateral from plain Ada wallet
-  * UTxOs whose `datumOption` is `None`, so content-based detection fails in end-to-end
-  * scenarios and collateral outputs land in [[RBRPlaceId.Ambient]]. The right fix is to bucket
-  * collateral by role in the tx graph — mark any output that is later consumed as a
-  * `collateral_input` of some downstream tx — rather than by a content sentinel. That
-  * requires shifting the classifier from `Utxo => Option[Bucket]` to a form that has
-  * access to the surrounding tx history.
+  * TODO: the `"collateral"` sentinel only exists in the synthetic `InitialDisputeUtxos` fixture —
+  * the real rule-based tx builders (`VoteTx`, `TallyTx`, `ResolutionTx`, `AbstainTx`,
+  * `RatchetVoteTx`, `EvacuationTx`) draw collateral from plain Ada wallet UTxOs whose `datumOption`
+  * is `None`, so content-based detection fails in end-to-end scenarios and collateral outputs land
+  * in [[RBRPlaceId.Ambient]]. The right fix is to bucket collateral by role in the tx graph — mark
+  * any output that is later consumed as a `collateral_input` of some downstream tx — rather than by
+  * a content sentinel. That requires shifting the classifier from `Utxo => Option[Bucket]` to a
+  * form that has access to the surrounding tx history.
   *
   * Usage: `Histogram.empty(RBRClassifier(using env)).addAll(utxos.map(Utxo(_, _)))`
   */
-class RBRClassifier(using env: MultiNodeConfig)
-    extends Classifier[RBRPlaceId, Utxo](Ambient):
+class RBRClassifier(using env: MultiNodeConfig) extends Classifier[RBRPlaceId, Utxo](Ambient):
 
     def classifierFns: List[Utxo => Option[RBRPlaceId]] =
         val policyId = env.headConfig.headMultisigScript.policyId
@@ -66,29 +65,30 @@ class RBRClassifier(using env: MultiNodeConfig)
             out.value.assets.assets.get(policyId).exists(_.contains(regimeWitnessToken))
 
         List(
-            (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryScriptRef),
-            (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeScriptRef),
-            (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadder),
-            (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRef),
-            // ResolvedTreasury / UnresolvedTreasury: carries treasury token; parse datum to distinguish
-            (u: Utxo) =>
-                Option
-                    .when(hasTreasuryToken(u.output))(u)
-                    .flatMap(RuleBasedTreasuryUtxo.parse(_)(using env.nodeConfigs.values.head).toOption)
-                    .map(tu =>
-                        if tu.treasuryOutput.datum.isInstanceOf[RuleBasedTreasuryDatum.Resolved] then
-                            ResolvedTreasury
-                        else UnresolvedTreasury
-                    ),
-            // Ballots: any vote-token box (Voted / Awaiting / Abstain) — one colored place. The
-            // per-status (status, version) split lives in the bisimulation projection, not the bucket.
-            (u: Utxo) =>
-                Option
-                    .when(hasVoteToken(u.output) && !hasTreasuryToken(u.output))(u)
-                    .flatMap(BallotBox.parse(_)(using env.nodeConfigs.values.head).toOption)
-                    .map(_ => Ballots),
-            (u: Utxo) =>
-                Option.when(hasInlineDatum(collateralDatumMarker)(u.output))(Collateral),
-            (u: Utxo) =>
-                Option.when(hasInlineDatum(evacuationDatumMarker)(u.output))(EvacuationOutput),
+          (u: Utxo) => Option.when(u.input == treasuryScriptInput)(TreasuryScriptRef),
+          (u: Utxo) => Option.when(u.input == disputeScriptInput)(DisputeScriptRef),
+          (u: Utxo) => Option.when(setupLadderInputs.contains(u.input))(SetupLadder),
+          (u: Utxo) => Option.when(hasRegimeToken(u.output))(RegimeRef),
+          // ResolvedTreasury / UnresolvedTreasury: carries treasury token; parse datum to distinguish
+          (u: Utxo) =>
+              Option
+                  .when(hasTreasuryToken(u.output))(u)
+                  .flatMap(
+                    RuleBasedTreasuryUtxo.parse(_)(using env.nodeConfigs.values.head).toOption
+                  )
+                  .map(tu =>
+                      if tu.treasuryOutput.datum.isInstanceOf[RuleBasedTreasuryDatum.Resolved] then
+                          ResolvedTreasury
+                      else UnresolvedTreasury
+                  ),
+          // Ballots: any vote-token box (Voted / Awaiting / Abstain) — one colored place. The
+          // per-status (status, version) split lives in the bisimulation projection, not the bucket.
+          (u: Utxo) =>
+              Option
+                  .when(hasVoteToken(u.output) && !hasTreasuryToken(u.output))(u)
+                  .flatMap(BallotBox.parse(_)(using env.nodeConfigs.values.head).toOption)
+                  .map(_ => Ballots),
+          (u: Utxo) => Option.when(hasInlineDatum(collateralDatumMarker)(u.output))(Collateral),
+          (u: Utxo) =>
+              Option.when(hasInlineDatum(evacuationDatumMarker)(u.output))(EvacuationOutput),
         )

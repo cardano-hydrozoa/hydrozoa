@@ -3,8 +3,7 @@ package hydrozoa.integration.rbr.mbt
 import cats.effect.{Deferred, IO, Ref}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.stage4.Commands.{DelayCommand, RegisterAndSubmitDepositCommand}
-import hydrozoa.multisig.consensus.RequestSequencer
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
@@ -28,8 +27,9 @@ object SutCommands:
     /** One-way lowering of a request-with-id to the submission payload (mirrors stage4). */
     extension (self: UserRequestWithId)
         private def asUserRequest: UserRequest = self match
-            case UserRequestWithId.DepositRequest(_, r)     => UserRequest.DepositRequest(r.body)
-            case UserRequestWithId.TransactionRequest(_, r) => UserRequest.TransactionRequest(r.body)
+            case UserRequestWithId.DepositRequest(_, r) => UserRequest.DepositRequest(r.body)
+            case UserRequestWithId.TransactionRequest(_, r) =>
+                UserRequest.TransactionRequest(r.body)
 
     given SutCommand[DelayCommand, Unit, Sut] with
         // The framework sleeps `ModelCommand.delay` before running; the SUT step itself is a no-op.
@@ -40,7 +40,10 @@ object SutCommands:
         // the head absorbs it into L2 and commits it at the next major (settlement not yet firewalled).
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Sut): IO[ValidityFlag] =
             for
-                _ <- sut.harness.peers(cmd.peerNum).submissionClient.submit(cmd.request.asUserRequest)
+                _ <- sut.harness
+                    .peers(cmd.peerNum)
+                    .submissionClient
+                    .submit(cmd.request.asUserRequest)
                 _ <- sut.harness.cardanoBackend.submitTx(RawTx(cmd.depositTxBytesSigned))
             yield ValidityFlag.Valid
 
