@@ -154,6 +154,13 @@ object RBRHlNet {
             )
         }
 
+    /** The scenario's committed obligations across candidate SEC versions `1..maxVersionMinor`,
+      * keyed by version — the standard `PayoutObligations` seed passed to [[apply]], shared with
+      * tests. An empty list (no candidate versions) is a valid, empty seed.
+      */
+    def committedObligations(maxVersionMinor: Int): List[(BigInt, TransactionOutput)] =
+        (1 to maxVersionMinor).toList.flatMap(v => committedOutputs(v).map(BigInt(v) -> _))
+
     private val payoutAddress: Address =
         Address.fromBech32("addr_test1wqt2v8zcpjldyu2zcwz3yuu8p4wpk0hzaqwthh23qgs5xgg7266qn")
 
@@ -175,8 +182,8 @@ object RBRHlNet {
             (s, v) <- validStatusVersion
         } yield Ballot(k, l, s, v)
 
-    /** The static ownership diagonal: peer `i` owns box key `i + 1`. Refines the `Peer × Key`
-      * product on the Owner place.
+    /** The static ownership diagonal: peer `i` owns box key `i + 1`. Seeds the `Owner` place's
+      * initial marking within its `Peer × Key` domain.
       */
     def validOwners(nHeadPeers: Int): Set[(HeadPeerNumber, Key)] =
         (0 until nHeadPeers).map(i => HeadPeerNumber(i) -> BigInt(i + 1)).toSet
@@ -195,10 +202,15 @@ object RBRHlNet {
       *
       * Initial ballots mirror `FallbackTx`: the public box `(0, (1, (Voted, 0)))` plus peer boxes
       * `(i+1, (i+2 | 0 for the last, (Awaiting, 0)))`.
+      *
+      * `committedObligations` seeds `PayoutObligations` with the `(version, output)` payout tokens
+      * of each candidate SEC (see [[committedObligations]]); `Output` is an intensional domain, so
+      * an empty list is a valid, empty seed (a head with nothing to evacuate).
       */
     def apply(
         nHeadPeers: Int,
         maxVersionMinor: Int,
+        committedObligations: List[(BigInt, TransactionOutput)],
     ): ValidatedNel[NetBuilder.Error, HlNet[RBRPlaceId, RBRTransitionId, Any]] = {
         import RBRPlaceId.*
 
@@ -225,39 +237,28 @@ object RBRHlNet {
           Sort.Discipline.Linear
         )
         // A payout obligation is a real `TransactionOutput` (`EvacuationTx` drains
-        // `evacuatedOutputs: List[TransactionOutput]`); its class carrier is the scenario's committed
-        // outputs. Outputs are large opaque data, so the carrier is net-specific, not a symmetric
-        // color class — the unifying selector binds them from present tokens, never enumerating.
-        // Ordered by serialized bytes (spire `Order` extends cats `Order`, so this one instance also
-        // satisfies `NonEmptySet` and the `SortedMap` marking key).
+        // `evacuatedOutputs: List[TransactionOutput]`). Outputs are large opaque data, bound from
+        // present tokens and never enumerated, so `Output` is an intensional `Sort.Data` domain (all
+        // outputs) rather than a carrier-listed color class — the committed set enters as the initial
+        // marking, not the domain. Ordered by serialized bytes (spire `Order` extends cats `Order`,
+        // satisfying the `SortedMap` marking key).
         given Order[TransactionOutput] = Order.from { (left, right) =>
             Cbor.encode(left).mkString(",").compareTo(Cbor.encode(right).mkString(","))
         }
-        // The committed obligations of every candidate SEC version, keyed by version.
-        val committedObligations: List[(BigInt, TransactionOutput)] =
-            (1 to maxVersionMinor).toList.flatMap { v =>
-                committedOutputs(v).map(output => BigInt(v) -> output)
-            }
-        val outputClass = Sort.Class(
-          "Output",
-          NonEmptySet.of(
-            committedObligations.headOption.map(_._2).getOrElse(committedOutputs(0).head),
-            committedObligations.drop(1).map(_._2)*
-          ),
-          Sort.Discipline.Unordered
-        )
-        // Ballot and Owner domains are enumerated: their colors are exactly the structurally-valid
-        // tuples (a flat `Sort.Class` carrier), not the full `Key × Key × Status × Version` /
-        // `Peer × Key` product — which over-approximates with self-links, non-Voted versions, and
-        // off-diagonal ownership. The marking-key order is the structural product's; SortCheck accepts
-        // the componentwise (Prod-sorted) arc inscriptions against the narrower class (its carrier ⊆
-        // the product), and `ColoredPlace.markingError` rejects any out-of-carrier color on firing.
+        val outputClass = Sort.Data[TransactionOutput]("Output")
+        // The Ballot domain is enumerated: its colors are exactly the structurally-valid tuples (a
+        // flat `Sort.Class` carrier), not the full `Key × Key × Status × Version` product — which
+        // over-approximates with self-links and non-Voted versions. The marking-key order is the
+        // structural product's; SortCheck accepts the componentwise (Prod-sorted) arc inscriptions
+        // against the narrower class (its carrier ⊆ the product), and `ColoredPlace.markingError`
+        // rejects any out-of-carrier color on firing.
         given Order[Ballot] =
             Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass))).order
         given Order[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass).order
         val ballotSort: Sort[Ballot] =
             enumerated("Ballot", validBallots(nHeadPeers, maxVersionMinor))
-        val ownerSort: Sort[(HeadPeerNumber, Key)] = enumerated("Owner", validOwners(nHeadPeers))
+        // Owner is the full Peer × Key product; the diagonal seed lives in the marking (read-only place).
+        val ownerSort: Sort[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass)
         // A committed obligation is (version, output): PayoutObligations holds one per candidate SEC.
         val payoutSort: Sort[(BigInt, TransactionOutput)] = Sort.Prod(versionClass, outputClass)
         given Order[(BigInt, TransactionOutput)] = payoutSort.order
@@ -323,7 +324,7 @@ object RBRHlNet {
               }*
         )
         val ownership: MultiSet[(HeadPeerNumber, BigInt)] =
-            bagOf((0 until nHeadPeers).map(i => (HeadPeerNumber(i), BigInt(i + 1)) -> 1)*)
+            bagOf(validOwners(nHeadPeers).toSeq.map(_ -> 1)*)
         // Every candidate SEC's committed obligation is present but inert (the kzg-hiding abstraction);
         // only the resolved version's is ever drained. ResolvedVersion / EvacuationOutput start empty.
         val initialObligations: MultiSet[(BigInt, TransactionOutput)] =

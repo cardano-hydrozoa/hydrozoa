@@ -18,7 +18,8 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         (HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(2))
 
     // n = 3 peers → boxes (0,(1,(Voted,0))) public, (1,(2,·)), (2,(3,·)), (3,(0,·)) for peers 0..2
-    private def net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
+    private def net =
+        RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2, RBRHlNet.committedObligations(2)).toOption.get
 
     private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
 
@@ -163,6 +164,18 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
       SortCheck.errors(net).isEmpty
     )
 
+    // The `Output` domain is intensional, so a head that committed nothing is a valid, empty seed —
+    // no fabricated obligation. Versions remain votable; PayoutObligations is simply empty.
+    val _ = property(
+      "empty committedObligations: assembles well-sorted, PayoutObligations empty"
+    ) = {
+        val emptyNet = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2, Nil).toOption.get
+        allTrue(
+          SortCheck.errors(emptyNet).isEmpty,
+          emptyNet.placesMap(RBRPlaceId.PayoutObligations).marking.multiplicityMap.isEmpty
+        )
+    }
+
     val _ = property("Ballot domain: the listing excludes self-links and non-Voted versions") = {
         val valid = RBRHlNet.validBallots(nHeadPeers = 3, maxVersionMinor = 2)
         allTrue(
@@ -188,11 +201,16 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         allTrue(place.mark(bad).markingError.isDefined)
     }
 
-    val _ = property("Owner place rejects an off-diagonal pair via markingError") = {
+    val _ = property(
+      "Owner domain is the full Peer × Key product: an off-diagonal pair is valid"
+    ) = {
         val place = net.placesMap(RBRPlaceId.Owner)
         given Order[Any] = place.colorDomain.order
-        val bad = Multiset(place.marking.multiplicityMap.updated((peer1, BigInt(1)), SafeLong(1)))
-        allTrue(place.mark(bad).markingError.isDefined)
+        val offDiagonal =
+            Multiset(place.marking.multiplicityMap.updated((peer1, BigInt(1)), SafeLong(1)))
+        // The diagonal is a marking fact, not a domain narrowing; Owner is read-only, so no firing
+        // can leave it. markingError therefore does not reject off-diagonal ownership.
+        allTrue(place.mark(offDiagonal).markingError.isEmpty)
     }
 
     val _ = property(

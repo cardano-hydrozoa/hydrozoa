@@ -140,6 +140,7 @@ object SortCheck:
         sort match
             case Sort.Dot               => "Dot"
             case Sort.Class(n, _, _, _) => n
+            case Sort.Data(n)           => n
             case Sort.Prod(left, right) => s"(${name(left)}, ${name(right)})"
 
 /** A static well-sortedness violation in a net's terms or a sort definition. */

@@ -10,7 +10,8 @@ import spire.algebra.Order
   * subclasses (ISO 15909-1 Concept 15).
   *
   * Symmetric-net-first: sorts are finite color classes (Concept 13) and their cartesian products
-  * (Concept 14, the color domains). Infinite HLPN carriers are deferred.
+  * (Concept 14, the color domains), plus an intensional [[Data]] domain for opaque token payloads
+  * that are matched, not enumerated. General infinite HLPN carriers are otherwise deferred.
   */
 sealed trait Sort[C]:
     /** Canonical total order over the carrier — the [[MultiSet]] key order for markings of this
@@ -87,6 +88,21 @@ object Sort:
             else if members.toSet != carrier.toSortedSet.toSet then
                 bad("subclasses do not cover the carrier")
             else Right(new Class(name, carrier, discipline, subclasses))
+
+    /** An intensional color domain: every color of type `C` is a member, ordered by `Order[C]`, but
+      * with no enumerable carrier — for opaque token payloads (large data) bound from present
+      * tokens, never generated. May be empty or infinite.
+      *
+      * No discipline or subclasses: both are defined over the enumerated carrier (successor indexes
+      * the element list; a Concept-15 partition must be checked to cover it), so neither is
+      * expressible without enumeration — and nothing here needs them.
+      *
+      * Equality is by `name` alone (the `Order` is not a case field), so an inscription leaf
+      * matches the place domain by name.
+      */
+    final case class Data[C](name: String)(using ord: Order[C]) extends Sort[C]:
+        def order: Order[C] = ord
+        def contains(@unused c: C): Boolean = true
 
     /** A color domain that is the cartesian product of two sorts (Concept 14). N-ary domains nest
       * to the right.
