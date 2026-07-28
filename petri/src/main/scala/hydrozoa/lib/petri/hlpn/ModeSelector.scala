@@ -207,12 +207,15 @@ object ModeSelector {
         go(entries, SafeLong(bound.max(0)), Nil)
 
     /** Enumerate every color of a finite sort. Specific to the carrier-materializing strategies, so
-      * it lives here rather than on `Sort` (which offers only membership).
+      * it lives here rather than on `Sort` (which offers only membership). A `Sort.Data` domain has
+      * no enumerable carrier, so it yields nothing — the enumerating selector is incomplete for a
+      * free variable of that sort (bind it from tokens with the unifying selector instead).
       */
     private def enumerate[C](sort: Sort[C]): List[C] =
         sort match
             case Sort.Dot                     => List(())
             case Sort.Class(_, carrier, _, _) => carrier.toSortedSet.toList
+            case _: Sort.Data[?]              => Nil
             case Sort.Prod(left, right) =>
                 for
                     x <- enumerate(left)

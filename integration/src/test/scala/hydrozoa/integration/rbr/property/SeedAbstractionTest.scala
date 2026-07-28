@@ -129,7 +129,9 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
                     .leftMap(new RuntimeException(_))
               )
             )
-            alpha = ObservableMarking.alpha(RBRHlNet(nHeadPeers, maxVersionMinor).toOption.get)
+            alpha = ObservableMarking.alpha(
+              RBRHlNet(nHeadPeers, RBRHlNet.committedObligations(maxVersionMinor)).toOption.get
+            )
             _ <- assertWith(
               alpha == beta,
               s"seed abstraction mismatch:\n  alpha (model): $alpha\n  beta  (L1):    $beta",

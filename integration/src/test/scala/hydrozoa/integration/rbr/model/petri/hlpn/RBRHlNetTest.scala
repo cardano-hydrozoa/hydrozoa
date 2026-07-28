@@ -9,8 +9,9 @@ import org.scalacheck.{Prop, Properties}
 import spire.algebra.Order
 import spire.math.SafeLong
 
-/** Drives the RBR HLPN with explicit modes (the tally transitions bind 9 variables — the
-  * enumerating selector's candidate space is ~10⁵, so tests construct bindings directly).
+/** Drives the RBR HLPN with explicit modes: the reified `Sort.Data` domains (Peer/Key/Version) have
+  * no enumerable carrier, so the enumerating selector can't propose their bindings — tests
+  * construct bindings directly, or fire via the unifying selector.
   */
 object RBRHlNetTest extends Properties("RBRHlNet"):
 
@@ -18,7 +19,8 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         (HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(2))
 
     // n = 3 peers → boxes (0,(1,(Voted,0))) public, (1,(2,·)), (2,(3,·)), (3,(0,·)) for peers 0..2
-    private def net = RBRHlNet(nHeadPeers = 3, maxVersionMinor = 2).toOption.get
+    private def net =
+        RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
 
     private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
 
@@ -163,8 +165,25 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
       SortCheck.errors(net).isEmpty
     )
 
-    val _ = property("Ballot domain: the listing excludes self-links and non-Voted versions") = {
-        val valid = RBRHlNet.validBallots(nHeadPeers = 3, maxVersionMinor = 2)
+    // The reified domains are intensional, so a head that committed nothing is a valid, empty seed —
+    // no fabricated obligation. Nothing is votable and nothing is evacuable: both PayoutObligations
+    // and VotableVersions are simply empty.
+    val _ = property(
+      "empty committedObligations: assembles well-sorted, PayoutObligations/VotableVersions empty"
+    ) = {
+        val emptyNet = RBRHlNet(nHeadPeers = 3, Nil).toOption.get
+        allTrue(
+          SortCheck.errors(emptyNet).isEmpty,
+          emptyNet.placesMap(RBRPlaceId.PayoutObligations).marking.multiplicityMap.isEmpty,
+          emptyNet.placesMap(RBRPlaceId.VotableVersions).marking.multiplicityMap.isEmpty
+        )
+    }
+
+    val _ = property(
+      "Ballot invariant (validBallots): excludes self-links and non-Voted versions"
+    ) = {
+        val valid =
+            RBRHlNet.validBallots(nHeadPeers = 3, votableVersions = Set(BigInt(1), BigInt(2)))
         allTrue(
           valid.contains(box(0, 0, Voted, 2)), // fully-tallied terminal box
           valid.contains(box(1, 2, Awaiting, 0)), // awaiting box carries version 0
@@ -181,18 +200,28 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         )
     }
 
-    val _ = property("Ballots place rejects a malformed box: a self-link fails markingError") = {
+    val _ = property("Ballots domain is the full product: a self-link is a valid color") = {
         val place = net.placesMap(RBRPlaceId.Ballots)
         given Order[Any] = place.colorDomain.order
-        val bad = Multiset(place.marking.multiplicityMap.updated(box(1, 1, Voted, 1), SafeLong(1)))
-        allTrue(place.mark(bad).markingError.isDefined)
+        val selfLink =
+            Multiset(place.marking.multiplicityMap.updated(box(1, 1, Voted, 1), SafeLong(1)))
+        // Ballot widened to the full Key × Key × Status × Version product, so a self-link is no
+        // longer a domain violation; markingError does not reject it.
+        // TODO(reachability): replace the dropped carrier guard — a property that explores firings
+        // from the initial marking and asserts every reachable Ballots token ∈ validBallots.
+        allTrue(place.mark(selfLink).markingError.isEmpty)
     }
 
-    val _ = property("Owner place rejects an off-diagonal pair via markingError") = {
+    val _ = property(
+      "Owner domain is the full Peer × Key product: an off-diagonal pair is valid"
+    ) = {
         val place = net.placesMap(RBRPlaceId.Owner)
         given Order[Any] = place.colorDomain.order
-        val bad = Multiset(place.marking.multiplicityMap.updated((peer1, BigInt(1)), SafeLong(1)))
-        allTrue(place.mark(bad).markingError.isDefined)
+        val offDiagonal =
+            Multiset(place.marking.multiplicityMap.updated((peer1, BigInt(1)), SafeLong(1)))
+        // The diagonal is a marking fact, not a domain narrowing; Owner is read-only, so no firing
+        // can leave it. markingError therefore does not reject off-diagonal ownership.
+        allTrue(place.mark(offDiagonal).markingError.isEmpty)
     }
 
     val _ = property(

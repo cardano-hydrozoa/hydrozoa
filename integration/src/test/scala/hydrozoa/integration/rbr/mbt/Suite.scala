@@ -228,11 +228,10 @@ case class RbrMbtSuite(
       * `obligationCount` committed outputs and drive it through the dispute to full evacuation.
       */
     private def alphaTerminal(obligationCount: Int): ObservableMarking =
-        val seed = RBRHlNet(
-          nHeadPeers,
-          maxVersionMinor,
-          _ => RBRHlNet.committedOutputs(obligationCount),
-        ).toOption.get
+        val obligations = (1 to maxVersionMinor).toList.flatMap { v =>
+            RBRHlNet.committedOutputs(obligationCount).map(BigInt(v) -> _)
+        }
+        val seed = RBRHlNet(nHeadPeers, obligations).toOption.get
         ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
     /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the
