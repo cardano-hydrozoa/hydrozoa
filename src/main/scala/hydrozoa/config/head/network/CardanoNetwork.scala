@@ -86,7 +86,7 @@ object CardanoNetwork {
             case CardanoNetwork.Custom(cardanoInfo, protocolMagic) =>
                 Json.obj(
                   "custom" -> cardanoInfo.asJson,
-                  "protocolMagic" -> cardanoInfo.protocolParams.asJson
+                  "protocolMagic" -> protocolMagic.asJson
                 )
         }
     }
