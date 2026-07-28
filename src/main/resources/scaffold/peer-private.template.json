@@ -13,7 +13,7 @@
     }
   },
   "nodeOperationMultisigConfig": {
-    "cardanoLiaisonPollingPeriod": 10000,
+    "cardanoLiaisonPollingPeriod": 20000,
     "peerLiaisonMaxRequestsPerBatch": 42,
     "peerLiaisonResendInterval": 5000,
     "rateLimits": {

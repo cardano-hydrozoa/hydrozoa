@@ -63,14 +63,15 @@ object DeployScriptsAndG2Setup:
         ).map(Path.of(_))
             .orNone
 
-    private val blockfrostKeyOpt: Opts[String] =
+    private val blockfrostKeyOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-key",
-          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY)",
+          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY, then the " +
+              "template's blockfrostApiKey)",
           short = "k"
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
-        )
+        ).orNone
 
     private val ladderRefsOpt: Opts[Option[Path]] =
         Opts.option[String](
@@ -89,10 +90,10 @@ object DeployScriptsAndG2Setup:
 
     private def runOpts: Opts[IO[ExitCode]] =
         (Bootstrap.homeOpt, walletOpt, blockfrostKeyOpt, ladderRefsOpt).mapN(
-          (home, walletOverride, key, ladder) =>
+          (home, walletOverride, mbKey, ladder) =>
               deployScriptsAndG2Setup(
                 walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
-                key,
+                mbKey,
                 ladder,
                 Bootstrap.HomeLayout.refUtxos(home)
               )
@@ -100,17 +101,26 @@ object DeployScriptsAndG2Setup:
 
     private def deployScriptsAndG2Setup(
         walletPath: Path,
-        blockfrostKey: String,
+        mbBlockfrostKey: Option[String],
         ladderRefsPath: Option[Path],
         outPath: Path
-    ): IO[ExitCode] = IO
-        .fromEither[StandardCardanoNetwork](
-          networkOfBlockfrostKey(blockfrostKey)
-        )
-        .flatMap { (cardanoNetwork: StandardCardanoNetwork) =>
-            given CardanoNetwork.Section = cardanoNetwork
-            deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
-        }
+    ): IO[ExitCode] =
+        for {
+            // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
+            blockfrostKey <- mbBlockfrostKey.fold(
+              log.info(
+                "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
+                    s"${Bootstrap.defaultPrivateTemplate}"
+              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+            )(IO.pure)
+            cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
+              networkOfBlockfrostKey(blockfrostKey)
+            )
+            exit <- {
+                given CardanoNetwork.Section = cardanoNetwork
+                deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
+            }
+        } yield exit
 
     private def deployOn(
         cardanoNetwork: StandardCardanoNetwork,
