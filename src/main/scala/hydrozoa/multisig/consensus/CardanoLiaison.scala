@@ -955,106 +955,116 @@ trait CardanoLiaison(
                 case InitializeHead(txs)             => s"InitializeHead (${txs.map(_.tx.id)}"
             }
 
+    /** A polled utxo classified as a due direct-action trigger, so [[mkDirectAction]] is total over
+      * well-formed inputs. [[triggerFor]] owns the malformed combinations: a utxo that is neither
+      * an entry point nor a fallback is dropped, and a backbone missing its fallback (or its
+      * settlement/finalization body) surfaces an [[EffectError]] there.
+      */
+    private enum DirectTrigger:
+        /** A rollout continuation — entry point `(major, index)` with `index != 0`. */
+        case Rollout(rolloutId: EffectId)
+
+        /** A settlement/finalization treasury — entry point `(major, 0)` — with its fallback. */
+        case Backbone(
+            backboneId: EffectId,
+            backboneTx: SettlementTx | FinalizationTx,
+            fallback: FallbackTx
+        )
+
+        /** The last settlement's treasury: only a fallback, no next backbone learned yet. */
+        case TipFallback(fallback: FallbackTx)
+
     private def mkDirectActions(
         state: State,
         utxosFound: Set[TransactionInput],
         currentTime: QuantizedInstant
     ): Either[EffectError, Seq[DirectAction]] =
         utxosFound.toSeq
-            .flatMap { utxo =>
-                (
-                  state.happyPathSkeletonEntryPoints.get(utxo),
-                  state.fallbackEffects.get(utxo)
-                ) match {
-                    case (None, None)               => None // not one of our effect inputs
-                    case (mbEntryPoint, mbFallback) => Some((mbEntryPoint, mbFallback))
-                }
-            }
-            // Entry points (a backbone before its rollouts) in EffectId order; a treasury with only
-            // a fallback (no entry point) has no ordering constraint and comes last.
-            .sortBy { case (mbEntryPoint, _) => (mbEntryPoint.isEmpty, mbEntryPoint) }
-            .traverse { case (mbEntryPoint, mbFallback) =>
-                mkDirectAction(state, currentTime)(mbEntryPoint, mbFallback)
-            }
-            .map(_.flatten)
+            .flatMap(triggerFor(state, _)) // drops utxos that are none of ours
+            .sequence
+            // Entry points (a backbone before its rollouts) in EffectId order; a tip fallback (no
+            // entry point) has no ordering constraint and comes last.
+            .map(_.sortBy(triggerSortKey).flatMap(mkDirectAction(state, currentTime)))
 
-    /** Decide the action for one on-chain effect input, given its happy-path entry point
-      * (`mbEntryPoint`) and/or the fallback that spends the same treasury utxo (`mbFallback`). Both
-      * are `Option`: a rollout utxo has only an entry point, and a tip treasury (the last
-      * settlement's, with no next backbone learned yet) has only a fallback. The happy tx and its
+    /** Classify one polled utxo. `None` — the utxo is neither an entry point nor a fallback (not
+      * ours). `Some(Left(_))` — a malformed backbone (its fallback or its settlement/finalization
+      * body is missing). `Some(Right(_))` — a well-formed [[DirectTrigger]].
+      */
+    private def triggerFor(
+        state: State,
+        utxo: TransactionInput
+    ): Option[Either[EffectError, DirectTrigger]] = {
+        import EffectError.*
+        (state.happyPathSkeletonEntryPoints.get(utxo), state.fallbackEffects.get(utxo)) match {
+            case (None, None) => None
+            case (Some(rolloutId @ (_, index)), _) if index != 0 =>
+                Some(Right(DirectTrigger.Rollout(rolloutId)))
+            case (Some(backboneId), mbFallback) =>
+                Some(for {
+                    fallback <- mbFallback.toRight(FallbackNotFound(backboneId))
+                    backboneTx <- state.happyPathEffects(backboneId) match {
+                        case tx: SettlementTx    => Right(tx)
+                        case tx: FinalizationTx  => Right(tx)
+                        case _: InitializationTx => Left(UnexpectedInitializationEffect(backboneId))
+                        case _: RolloutTx        => Left(UnexpectedRolloutEffect(backboneId))
+                    }
+                } yield DirectTrigger.Backbone(backboneId, backboneTx, fallback))
+            case (None, Some(fallback)) =>
+                Some(Right(DirectTrigger.TipFallback(fallback)))
+        }
+    }
+
+    private def triggerSortKey(trigger: DirectTrigger): (Boolean, Option[EffectId]) =
+        trigger match {
+            case DirectTrigger.Rollout(rolloutId) => (false, Some(rolloutId))
+            case DirectTrigger.Backbone(id, _, _) => (false, Some(id))
+            case DirectTrigger.TipFallback(_)     => (true, None)
+        }
+
+    /** Decide the action for one classified [[DirectTrigger]]. Total: a treasury's happy tx and its
       * fallback have disjoint validity windows separated by a silence period, so at most one is
-      * ever submittable. Returns `None` when nothing is submittable right now — the silence period,
-      * or a tip treasury whose fallback window has not opened yet.
+      * submittable; `None` means nothing is submittable now (the silence period, or a tip fallback
+      * whose window has not opened yet).
       */
     private def mkDirectAction(state: State, currentTime: QuantizedInstant)(
-        mbEntryPoint: Option[EffectId],
-        mbFallback: Option[FallbackTx]
-    ): Either[EffectError, Option[DirectAction]] = {
+        trigger: DirectTrigger
+    ): Option[DirectAction] = {
         import Action.*
-        import EffectError.*
-
-        mbEntryPoint match {
+        trigger match {
             // Rollout continuation — the rollout chain from here up to the next backbone.
-            case Some(rolloutId @ (versionMajor, index)) if index != 0 =>
+            case DirectTrigger.Rollout(rolloutId @ (versionMajor, _)) =>
                 val nextBackbone = versionMajor.increment -> 0
-                Right(
-                  Some(
-                    Rollout(state.happyPathEffects.range(rolloutId, nextBackbone).toSeq.map(_._2))
-                  )
-                )
+                Some(Rollout(state.happyPathEffects.range(rolloutId, nextBackbone).toSeq.map(_._2)))
 
-            // A treasury with its happy continuation (settlement/finalization). Submit the happy tx
-            // while its window is open, else the fallback once its (later, disjoint) window opens,
-            // else nothing during the silence period between them.
-            case Some(backboneId) =>
-                mbFallback match {
-                    case None => Left(MissingFallback(backboneId))
-                    case Some(fallback) =>
-                        happyPathEndTime(state.happyPathEffects(backboneId), backboneId).map {
-                            happyTtl =>
-                                val fallbackStart = fallback.fallbackTxStartTime
-                                if currentTime < happyTtl then
-                                    Some(
-                                      PushForwardMultisig(
-                                        state.happyPathEffects.rangeFrom(backboneId).toSeq.map(_._2)
-                                      )
-                                    )
-                                else if currentTime >= fallbackStart then
-                                    Some(FallbackToRuleBased(fallback))
-                                else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart))
-                        }
+            // Submit the happy tx while its window is open, else the fallback once its (later,
+            // disjoint) window opens, else nothing during the silence period between them.
+            case DirectTrigger.Backbone(backboneId, backboneTx, fallback) =>
+                val happyTtl: QuantizedInstant = backboneTx match {
+                    case tx: SettlementTx   => tx.settlementTxEndTime.convert
+                    case tx: FinalizationTx => tx.finalizationTxEndTime.convert
                 }
+                val fallbackStart = fallback.fallbackTxStartTime
+                if currentTime < happyTtl then
+                    Some(
+                      PushForwardMultisig(
+                        state.happyPathEffects.rangeFrom(backboneId).toSeq.map(_._2)
+                      )
+                    )
+                else if currentTime >= fallbackStart then Some(FallbackToRuleBased(fallback))
+                else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart))
 
-            // A tip treasury whose only spender is a fallback (no next backbone learned yet). Submit
-            // it once its window opens. `mbFallback` is `Some` here — `mkDirectActions` drops utxos
-            // with neither an entry point nor a fallback — and `None` would correctly mean "not one
-            // of ours, do nothing", so no error check is needed (unlike the backbone arm above,
-            // where a due backbone with no fallback is a real `MissingFallback`).
-            case None =>
-                Right(
-                  mbFallback
-                      .filter(_.fallbackTxStartTime.convert <= currentTime)
-                      .map(FallbackToRuleBased(_))
+            // A tip fallback: submit it once its window opens.
+            case DirectTrigger.TipFallback(fallback) =>
+                Option.when(fallback.fallbackTxStartTime.convert <= currentTime)(
+                  FallbackToRuleBased(fallback)
                 )
         }
     }
 
-    /** Validity end time (TTL) of a backbone happy-path effect (settlement or finalization). */
-    private def happyPathEndTime(
-        effect: HappyPathEffect,
-        effectId: EffectId
-    ): Either[EffectError, QuantizedInstant] =
-        effect match {
-            case tx: SettlementTx    => Right(tx.settlementTxEndTime.convert)
-            case tx: FinalizationTx  => Right(tx.finalizationTxEndTime.convert)
-            case _: InitializationTx => Left(EffectError.UnexpectedInitializationEffect(effectId))
-            case _: RolloutTx        => Left(EffectError.UnexpectedRolloutEffect(effectId))
-        }
-
     private enum EffectError extends Throwable:
         case UnexpectedRolloutEffect(effectId: EffectId)
         case UnexpectedInitializationEffect(effectId: EffectId)
-        case MissingFallback(effectId: EffectId)
+        case FallbackNotFound(effectId: EffectId)
 
     import EffectError.*
 
@@ -1064,7 +1074,7 @@ trait CardanoLiaison(
                 s"Unexpected rollout effect with effectId = $effectId, check the integrity of effects."
             case UnexpectedInitializationEffect(effectId) =>
                 s"Unexpected initialization effect with effectId = $effectId, check the integrity of effects and the initialization tx."
-            case MissingFallback(effectId) =>
+            case FallbackNotFound(effectId) =>
                 s"Impossible: a settlement/finalization effect ($effectId) without a fallback tx."
         }
 
