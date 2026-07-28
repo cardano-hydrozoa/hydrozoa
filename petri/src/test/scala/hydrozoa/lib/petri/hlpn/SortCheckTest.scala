@@ -107,7 +107,8 @@ class SortCheckTest extends AnyFunSuite:
     // the inscription's sort is accepted — exact membership is a marking invariant, not static. (The
     // product-into-class case is exercised by the RBR model; here both sorts are String classes.)
     test("an enumerated sub-domain accepts an inscription of a larger sort") {
-        val evenPeers = Sort.Class("EvenPeer", NonEmptySet.of("p0", "p2"), Sort.Discipline.Unordered)
+        val evenPeers =
+            Sort.Class("EvenPeer", NonEmptySet.of("p0", "p2"), Sort.Discipline.Unordered)
         val net = netWith(List(p), Guard.True, wp, placeDomain = evenPeers)
         assert(!SortCheck.errors(net).exists {
             case _: SortError.ArcDomainMismatch => true
