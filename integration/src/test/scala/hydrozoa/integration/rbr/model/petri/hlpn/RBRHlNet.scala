@@ -166,8 +166,8 @@ object RBRHlNet {
 
     /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
       * (Awaiting/Abstained carry 0), and a box never links to itself except the fully-tallied
-      * terminal box `(0, 0)`. Refines the `Key × Key × Status × Version` product on the Ballots
-      * place.
+      * terminal box `(0, 0)`. The reachability invariant the Ballots place preserves — its
+      * `Key × Key × Status × Version` domain over-approximates this.
       */
     def validBallots(nHeadPeers: Int, maxVersionMinor: Int): Set[Ballot] =
         val validStatusVersion: Set[(BallotStatus, BigInt)] =
@@ -187,11 +187,6 @@ object RBRHlNet {
       */
     def validOwners(nHeadPeers: Int): Set[(HeadPeerNumber, Key)] =
         (0 until nHeadPeers).map(i => HeadPeerNumber(i) -> BigInt(i + 1)).toSet
-
-    /** A flat color class whose carrier is an explicit listing of valid colors. */
-    private def enumerated[C](name: String, colors: Set[C])(using Order[C]): Sort[C] =
-        val cs = colors.toList
-        Sort.Class(name, NonEmptySet.of(cs.head, cs.tail*), Sort.Discipline.Unordered)
 
     /** Build the RBR net for the given head-peer count and minor-version bound.
       *
@@ -246,17 +241,14 @@ object RBRHlNet {
             Cbor.encode(left).mkString(",").compareTo(Cbor.encode(right).mkString(","))
         }
         val outputClass = Sort.Data[TransactionOutput]("Output")
-        // The Ballot domain is enumerated: its colors are exactly the structurally-valid tuples (a
-        // flat `Sort.Class` carrier), not the full `Key × Key × Status × Version` product — which
-        // over-approximates with self-links and non-Voted versions. The marking-key order is the
-        // structural product's; SortCheck accepts the componentwise (Prod-sorted) arc inscriptions
-        // against the narrower class (its carrier ⊆ the product), and `ColoredPlace.markingError`
-        // rejects any out-of-carrier color on firing.
-        given Order[Ballot] =
-            Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass))).order
-        given Order[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass).order
+        // Ballot is the full Key × Key × Status × Version product. The structural constraints (no
+        // self-link except the terminal (0,0), version meaningful only for Voted — see
+        // [[validBallots]]) are not a domain narrowing but a reachability invariant the transition
+        // inscriptions preserve from the valid M₀.
         val ballotSort: Sort[Ballot] =
-            enumerated("Ballot", validBallots(nHeadPeers, maxVersionMinor))
+            Sort.Prod(keyClass, Sort.Prod(keyClass, Sort.Prod(statusClass, versionClass)))
+        given Order[Ballot] = ballotSort.order
+        given Order[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass).order
         // Owner is the full Peer × Key product; the diagonal seed lives in the marking (read-only place).
         val ownerSort: Sort[(HeadPeerNumber, Key)] = Sort.Prod(peerClass, keyClass)
         // A committed obligation is (version, output): PayoutObligations holds one per candidate SEC.

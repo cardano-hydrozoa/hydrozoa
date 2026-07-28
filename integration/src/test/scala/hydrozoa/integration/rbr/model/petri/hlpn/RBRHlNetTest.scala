@@ -176,7 +176,9 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         )
     }
 
-    val _ = property("Ballot domain: the listing excludes self-links and non-Voted versions") = {
+    val _ = property(
+      "Ballot invariant (validBallots): excludes self-links and non-Voted versions"
+    ) = {
         val valid = RBRHlNet.validBallots(nHeadPeers = 3, maxVersionMinor = 2)
         allTrue(
           valid.contains(box(0, 0, Voted, 2)), // fully-tallied terminal box
@@ -194,11 +196,16 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
         )
     }
 
-    val _ = property("Ballots place rejects a malformed box: a self-link fails markingError") = {
+    val _ = property("Ballots domain is the full product: a self-link is a valid color") = {
         val place = net.placesMap(RBRPlaceId.Ballots)
         given Order[Any] = place.colorDomain.order
-        val bad = Multiset(place.marking.multiplicityMap.updated(box(1, 1, Voted, 1), SafeLong(1)))
-        allTrue(place.mark(bad).markingError.isDefined)
+        val selfLink =
+            Multiset(place.marking.multiplicityMap.updated(box(1, 1, Voted, 1), SafeLong(1)))
+        // Ballot widened to the full Key × Key × Status × Version product, so a self-link is no
+        // longer a domain violation; markingError does not reject it.
+        // TODO(reachability): replace the dropped carrier guard — a property that explores firings
+        // from the initial marking and asserts every reachable Ballots token ∈ validBallots.
+        allTrue(place.mark(selfLink).markingError.isEmpty)
     }
 
     val _ = property(
