@@ -41,13 +41,15 @@ import scalus.cardano.ledger.{Block as _, BlockHeader as _, Transaction, Transac
   * one address poll (steps 2–4) are made lazily — only on the branch that needs them — so a head
   * that is in sync makes exactly one Cardano query per pass.
   *
-  *   1. '''Due effects at the multisig address.''' If any polled utxo is a known effect input
-  *      (`state.effectInputs`), submit those direct actions — push the backbone forward
-  *      (`PushForwardMultisig` / `Rollout`), enter the silence period (`SilencePeriodNoop`), or
-  *      submit the now-valid competing fallback (`FallbackToRuleBased` action). A tip settlement
-  *      whose fallback has just become valid but has no competing next backbone is caught by the
-  *      `lastFallback` fallthrough and submitted the same way. This is the multisig-regime path —
-  *      the happy path plus the timing-driven fallback submission (not purely happy-path).
+  *   1. '''Due effects at the multisig address.''' For each polled utxo, look up both the
+  *      happy-path entry point (`state.happyPathSkeletonEntryPoints`) and the fallback that spends
+  *      it (`state.fallbackEffects`), keyed by the same contested treasury utxo. A treasury with a
+  *      backbone continuation resolves the 1/2/3 timing choice — push the backbone forward
+  *      (`PushForwardMultisig`), enter the silence period (`SilencePeriodNoop`), or submit the
+  *      now-valid competing fallback (`FallbackToRuleBased`); rollout inputs push their `Rollout`.
+  *      A tip treasury (a fallback with no competing next backbone) submits its fallback once
+  *      valid. This is the multisig-regime path — the happy path plus the timing-driven fallback
+  *      submission (not purely happy-path).
   *   2. '''Finalization reached''' (only when the target is `Finalized`). If the finalization tx is
   *      on L1, the head is settled for good — nothing to do.
   *   3. '''Rule-based treasury present.''' If the target anchor (treasury utxo / finalization tx)
@@ -159,19 +161,26 @@ object CardanoLiaison:
         /** L1 target state */
         targetState: TargetState,
 
-        /** Contains spent inputs mapping for all effects modulo the initialization tx, since
-          * usually it doesn't spend any utxos locked at the head's address, and even if this is the
-          * case, the initialization tx is handled separately.
+        /** Entry points into the happy-path skeleton, keyed by the L1 utxo whose appearance makes
+          * an effect due: each maps a spent input to the [[EffectId]] that consumes it (backbones
+          * by their treasury input, rollouts by their rollout input). Excludes the initialization
+          * tx, since it usually spends no utxo locked at the head's address and is handled
+          * separately.
           */
-        effectInputs: Map[TransactionInput, EffectId],
+        happyPathSkeletonEntryPoints: Map[TransactionInput, EffectId],
 
         /** This contains all effects, the whole fish skeleton, including the initialization tx, but
           * with no fallback txs, which are stored separately in [[fallbackEffects]]
           */
         happyPathEffects: TreeMap[EffectId, HappyPathEffect],
 
-        /** Fallback effects, indexed by the major version of block where they were created. */
-        fallbackEffects: Map[BlockVersion.Major, FallbackTx]
+        /** Fallback effects, keyed by the treasury utxo the fallback spends
+          * (`fallbackTx.treasurySpent.utxoId`) — the same contested treasury utxo a competing
+          * backbone consumes via [[happyPathSkeletonEntryPoints]]. This lets `mkDirectActions`
+          * resolve a treasury's happy continuation and its competing fallback with a single utxo
+          * key.
+          */
+        fallbackEffects: Map[TransactionInput, FallbackTx]
     )
 
     object State:
@@ -184,7 +193,7 @@ object CardanoLiaison:
         val empty: State =
             State(
               targetState = TargetState.Uninitialized,
-              effectInputs = Map.empty,
+              happyPathSkeletonEntryPoints = Map.empty,
               happyPathEffects = TreeMap.empty,
               fallbackEffects = Map.empty
             )
@@ -201,13 +210,13 @@ object CardanoLiaison:
               happyPathEffects = state.happyPathEffects
                   .updated(EffectId.initializationEffectId, eff.initializationTx),
               fallbackEffects =
-                  state.fallbackEffects.updated(BlockVersion.Major.zero, eff.fallbackTx)
+                  state.fallbackEffects.updated(eff.fallbackTx.treasurySpent.utxoId, eff.fallbackTx)
             )
 
         /** Apply a hard-confirmed *regular* stack's L1 effects — the pure transition shared by the
           * live path and [[recover]]. A minor-only stack carries no backbone, so `state` is
           * returned unchanged; otherwise the partition effects fold into
-          * `(effectInputs, happyPathEffects, fallbackEffects, targetState)`.
+          * `(happyPathSkeletonEntryPoints, happyPathEffects, fallbackEffects, targetState)`.
           */
         def applyRegularEffects(state: State, eff: StackEffects.HardConfirmed.Regular): State = {
             val parts = eff.partitions.toList
@@ -235,10 +244,10 @@ object CardanoLiaison:
                     backbones.map(b =>
                         mkHappyPathEffectInputsAndEffects(b, rolloutsFor(b, allRollouts))
                     )
-                val newEffectInputs = perBackbone.flatMap(_._1)
+                val newEntryPoints = perBackbone.flatMap(_._1)
                 val newHappyPathEffects = perBackbone.flatMap(_._2)
                 val newFallbackEffects =
-                    settlements.zip(fallbacks).map((s, f) => s.majorVersionProduced -> f)
+                    fallbacks.map(f => f.treasurySpent.utxoId -> f)
                 val newTarget: Option[TargetState] = finalization match {
                     case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
                     case None =>
@@ -247,7 +256,8 @@ object CardanoLiaison:
                         )
                 }
                 state.copy(
-                  effectInputs = state.effectInputs ++ newEffectInputs,
+                  happyPathSkeletonEntryPoints =
+                      state.happyPathSkeletonEntryPoints ++ newEntryPoints,
                   happyPathEffects = state.happyPathEffects ++ newHappyPathEffects,
                   fallbackEffects = state.fallbackEffects ++ newFallbackEffects,
                   targetState = newTarget.getOrElse(state.targetState)
@@ -339,7 +349,7 @@ object CardanoLiaison:
                         s"Finalized(txHash=${finalizationTxHash})"
                 }
 
-                val effectInputsStr = state.effectInputs
+                val entryPointsStr = state.happyPathSkeletonEntryPoints
                     .map { case (txIn, effectId) =>
                         s"  ${txIn} -> ${effectId}"
                     }
@@ -353,16 +363,16 @@ object CardanoLiaison:
                     .mkString("\n")
 
                 val fallbackEffectsStr = state.fallbackEffects
-                    .map { case (version, fallbackTx) =>
+                    .map { case (treasuryUtxo, fallbackTx) =>
                         val txHash = fallbackTx.tx.id
-                        s"  ${version} -> txHash=${txHash}"
+                        s"  ${treasuryUtxo} -> txHash=${txHash}"
                     }
                     .mkString("\n")
 
                 s"""State(
                    |  targetState: ${targetStateStr}
-                   |  effectInputs (${state.effectInputs.size} entries):
-                   |${effectInputsStr}
+                   |  happyPathSkeletonEntryPoints (${state.happyPathSkeletonEntryPoints.size} entries):
+                   |${entryPointsStr}
                    |  happyPathEffects (${state.happyPathEffects.size} entries):
                    |${happyPathEffectsStr}
                    |  fallbackEffects (${state.fallbackEffects.size} entries):
@@ -476,8 +486,8 @@ trait CardanoLiaison(
       * effects, so nothing is submittable. Once stack 0 is hard-confirmed,
       * [[StackEffects.HardConfirmed.Initial]] carries the slow-consensus-ratified init tx (the
       * round-2 Initial unlock) + the locally-derived fallback; [[State.applyInitialEffects]]
-      * instals them — the `Active` target, `EffectId.initializationEffectId`, and
-      * `fallbackEffects(Major.zero)` — so `runEffects` submits the correct init tx.
+      * instals them — the `Active` target, `EffectId.initializationEffectId`, and the initial
+      * fallback keyed by the treasury utxo it spends — so `runEffects` submits the correct init tx.
       *
       * As on the [[handleStackL1Effects]] (Regular) path, `eff`'s init tx + fallback bodies are
       * already MULTISIGNED — SlowConsensusActor aggregated the saturated round-1/round-2 Initial
@@ -496,16 +506,17 @@ trait CardanoLiaison(
 
     /** Learn a hard-confirmed stack's L1 effects into the submission state machine.
       *
-      * Translates [[StackEffects.HardConfirmed.Regular]] into the `(effectInputs, happyPathEffects,
-      * fallbackEffects, targetState)` shape the `runEffects` / `mkDirectActions` machinery
-      * consumes, so effects submit in dependency order (backbone first via `EffectId (major, 0)`,
-      * then its rollouts `(major, 1..n)`; competing fallback resolved by
-      * `fallbackEffects.get(major.decrement)`).
+      * Translates [[StackEffects.HardConfirmed.Regular]] into the
+      * `(happyPathSkeletonEntryPoints, happyPathEffects, fallbackEffects, targetState)` shape the
+      * `runEffects` / `mkDirectActions` machinery consumes, so effects submit in dependency order
+      * (backbone first via `EffectId (major, 0)`, then its rollouts `(major, 1..n)`; competing
+      * fallback resolved by the contested treasury utxo — see below).
       *
       * Backbones (settlements, then the optional finalization) are walked in stack/major order;
       * each contributes one `EffectId` family keyed by its `majorVersionProduced`. Fallbacks are
-      * keyed by their settlement's `majorVersionProduced`, so the NEXT settlement finds its
-      * competing fallback via `major.decrement`.
+      * keyed by the treasury utxo they spend (`treasurySpent.utxoId`) — the same utxo the NEXT
+      * settlement consumes — so `mkDirectActions` finds a treasury's happy continuation and its
+      * competing fallback under one key.
       *
       * NOT submitted here (intentional, per spec):
       *   - `evacCommit` — a dormant dispute-only record, never an immediate L1 tx (presented to the
@@ -631,38 +642,17 @@ trait CardanoLiaison(
                     )
 
                     // 3. Decide what to submit this cycle. See the decision schema in the class
-                    //    doc: (1) due direct actions, else a now-valid tip fallback; otherwise
-                    //    reconcile the target — (2) finalized, (3) rule-based treasury present →
-                    //    handoff, (4) resubmit the skeleton.
+                    //    doc: (1) due direct actions (incl. the tip fallback, resolved by utxo in
+                    //    `mkDirectActions`); otherwise reconcile the target — (2) finalized, (3)
+                    //    rule-based treasury present → handoff, (4) resubmit the skeleton.
                     actionsToSubmit <-
                         // (1) Effect inputs are on L1 — submit exactly those direct actions.
                         if dueActions.nonEmpty
                         then IO.pure(dueActions)
                         else
-                            for {
-
-                                _ <- tracer.traceWith(CardanoLiaisonEvent.NoActionsScheduled)
-
-                                // (1) A tip settlement's fallback that has just become valid (its
-                                // spent treasury is present and its start time has passed) still
-                                // needs submitting: the last settlement has no competing next
-                                // backbone to trigger it via `mkDirectAction`.
-                                lastFallback: Option[FallbackTx] = for {
-                                    maxKey <- state.fallbackEffects.keySet.maxOption
-                                    fallbackTx = state.fallbackEffects(maxKey)
-                                    if utxoIds.contains(
-                                      fallbackTx.treasurySpent.utxoId
-                                    ) && fallbackTx.fallbackTxStartTime.convert <= currentTime
-                                } yield fallbackTx
-
-                                ret <- lastFallback match {
-                                    case Some(fallback) =>
-                                        IO.pure(Seq(Action.FallbackToRuleBased(fallback)))
-                                    // Steps (2)/(3)/(4): nothing is due at the multisig address.
-                                    case None =>
-                                        reconcileTargetState(state, utxoIds, currentTime)
-                                }
-                            } yield ret
+                            // Steps (2)/(3)/(4): nothing is due at the multisig address.
+                            tracer.traceWith(CardanoLiaisonEvent.NoActionsScheduled) >>
+                                reconcileTargetState(state, utxoIds, currentTime)
 
                     // 4. Submit flattened txs for actions it there are some
                     _ <- IO.whenA(actionsToSubmit.nonEmpty) {
@@ -907,85 +897,71 @@ trait CardanoLiaison(
         state: State,
         utxosFound: Set[TransactionInput],
         currentTime: QuantizedInstant
-    ): Either[EffectError, Seq[DirectAction]] =
-        utxosFound
-            .map(state.effectInputs.get)
-            .filter(_.isDefined)
-            .map(_.get)
-            .toSeq
-            .sorted
-            .map(mkDirectAction(state, currentTime))
-            .sequence
+    ): Either[EffectError, Seq[DirectAction]] = {
+        // Happy-path entry points found on L1: contested backbones (their 1/2/3 choice against the
+        // competing fallback that spends the same treasury utxo) and rollout continuations. Sorted
+        // by EffectId so a backbone precedes its rollouts.
+        val entryPointActions: Either[EffectError, Seq[DirectAction]] =
+            utxosFound.toSeq
+                .flatMap(utxo => state.happyPathSkeletonEntryPoints.get(utxo).map(utxo -> _))
+                .sortBy(_._2)
+                .map(mkDirectAction(state, currentTime))
+                .sequence
+
+        // Tip fallbacks: a treasury utxo a fallback spends but no happy-path entry point claims —
+        // the last settlement's treasury, with no next backbone to contest it. Submit once its
+        // validity has started; before that we simply wait (no direct action).
+        val tipFallbackActions: Seq[DirectAction] =
+            utxosFound.toSeq
+                .filterNot(state.happyPathSkeletonEntryPoints.contains)
+                .flatMap(state.fallbackEffects.get)
+                .filter(_.fallbackTxStartTime.convert <= currentTime)
+                .sortBy(_.tx.id.toString)
+                .map(Action.FallbackToRuleBased(_))
+
+        entryPointActions.map(_ ++ tipFallbackActions)
+    }
 
     private def mkDirectAction(state: State, currentTime: QuantizedInstant)(
-        effectId: EffectId
+        entryPoint: (TransactionInput, EffectId)
     ): Either[EffectError, DirectAction] = {
         import Action.*
         import EffectError.*
 
+        val (utxo, effectId) = entryPoint
         effectId match {
-            // Backbone effect - settlement/finalization
-            // TODO: Can't be initialization tx though. If we want to allow
-            //   initialization txs to spend utxos from the same head address
-            //   we should address it somehow.
-            case backboneEffectId @ (versionMajor, 0) =>
-
-                // println(s"mkDirectAction: backboneEffectId: $backboneEffectId")
-
+            // Backbone effect — settlement/finalization contesting the treasury utxo `utxo`.
+            case backboneEffectId @ (_, 0) =>
                 val happyPathEffect = state.happyPathEffects(backboneEffectId)
-                val mbCompetingFallbackEffect = state.fallbackEffects.get(versionMajor.decrement)
-
-                // Invariant: there should be always one sensible outcome:
-                // - (1) either the settlement/finalization tx for block N+1 is valid
-                // - (2) or we are inside the silence period
-                // - (3) or the fallback tx for N is valid
-
-                mbCompetingFallbackEffect match {
-
-                    // This is the only correct case.
-                    // TODO: ensure this always holds by construction
+                // The competing fallback spends the very same treasury utxo as this backbone, so it
+                // is found under the same key.
+                state.fallbackEffects.get(utxo) match {
                     case Some(fallback) =>
                         for {
-                            happyPathTxTtl: QuantizedInstant <- happyPathEffect match {
+                            happyPathTxTtl <- happyPathEffect match {
                                 case tx: SettlementTx =>
-                                    Right {
-                                        val quantizedInstant: QuantizedInstant =
-                                            tx.settlementTxEndTime.convert
-                                        quantizedInstant
-                                    }
+                                    Right(tx.settlementTxEndTime.convert: QuantizedInstant)
                                 case tx: FinalizationTx =>
-                                    Right {
-                                        val quantizedInstant: QuantizedInstant =
-                                            tx.finalizationTxEndTime.convert
-                                        quantizedInstant
-                                    }
-                                // TODO: this should never happen
+                                    Right(tx.finalizationTxEndTime.convert: QuantizedInstant)
                                 case _: InitializationTx =>
                                     Left(UnexpectedInitializationEffect(backboneEffectId))
-                                case _: RolloutTx => Left(UnexpectedRolloutEffect(backboneEffectId))
+                                case _: RolloutTx =>
+                                    Left(UnexpectedRolloutEffect(backboneEffectId))
                             }
-
                             fallbackValidityStart = fallback.fallbackTxStartTime
-
-                            // _ = println(
-                            //  s"currentTime: $currentTime, happyPathTxTtl: $happyPathTxTtl, fallbackValidityStart: $fallbackValidityStart"
-                            // )
-
-                            // Choose between (1), (2), and (3)
-                            ret <- (
-                              currentTime,
-                              happyPathTxTtl,
-                              fallbackValidityStart
-                            ) match {
+                            // Invariant: exactly one of (1) the happy tx is still valid, (2) we are
+                            // inside the silence period, (3) the fallback is valid.
+                            ret <- (currentTime, happyPathTxTtl, fallbackValidityStart) match {
                                 // (1)
                                 case _ if currentTime < happyPathTxTtl =>
-                                    val effectTxs =
+                                    Right(
+                                      PushForwardMultisig(
                                         state.happyPathEffects
                                             .rangeFrom(backboneEffectId)
                                             .toSeq
                                             .map(_._2)
-                                    // println(s"effectTxs.size=${effectTxs.size}")
-                                    Right(PushForwardMultisig(effectTxs))
+                                      )
+                                    )
                                 // (2)
                                 case _
                                     if currentTime >= happyPathTxTtl && currentTime < fallbackValidityStart =>
@@ -998,12 +974,8 @@ trait CardanoLiaison(
                                     )
                                 // (3)
                                 case _ if currentTime >= fallbackValidityStart =>
-                                    Right(
-                                      FallbackToRuleBased(
-                                        mbCompetingFallbackEffect.get
-                                      )
-                                    )
-                                // Should never happen, indicates an error in validity range calculation
+                                    Right(FallbackToRuleBased(fallback))
+                                // Should never happen — the 1/2/3 windows fail to tile time.
                                 case _ =>
                                     Left(
                                       WrongValidityRange(
@@ -1015,20 +987,17 @@ trait CardanoLiaison(
                             }
                         } yield ret
 
-                    // This should not be possible -- every non-initialization tx has a competing fallback tx.
+                    // Should not be possible — every backbone's contested treasury has a fallback.
                     case None =>
-                        println("-------> mbCompetingFallbackEffect == None")
                         Left(MissingCompetingFallback(backboneEffectId))
                 }
 
-            // Rollout tx
+            // Rollout tx — the rollout chain from this rollout up to the next backbone.
             case rolloutTx @ (versionMajor, _) =>
-                // println(s"mkDirectAction: rolloutEffectId: $rolloutTx")
-
                 val nextBackboneTx = versionMajor.increment -> 0
-                val effectTxs =
-                    state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2)
-                Right(Rollout(effectTxs))
+                Right(
+                  Rollout(state.happyPathEffects.range(rolloutTx, nextBackboneTx).toSeq.map(_._2))
+                )
         }
     }
 
