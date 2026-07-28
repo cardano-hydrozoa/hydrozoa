@@ -115,8 +115,20 @@ docker run --rm -v "$PWD:/work" -w /work --user root \
 # writes docker-compose.yml, hydrozoa.sh, head/template/peer-private.template.json.local
 ```
 
-Set `blockfrostApiKey` in `head/template/peer-private.template.json.local`, then `source
-./hydrozoa.sh` (sets the `hydrozoa` alias + `HYDROZOA_HOME=./head/demo`).
+Then load the CLI alias and check you are on the version you expect:
+
+```bash
+source ./hydrozoa.sh   # sets the `hydrozoa` alias + HYDROZOA_HOME=./head/demo
+
+hydrozoa version       # verify the image you are running
+#   hydrozoa 0.1.1
+#   git:   v0.1.1
+#   built: 2026-07-28 14:00:37.834-0600
+```
+
+(The `git:` line is `git describe` provenance; a published image built from the `v0.1.1` tag reads a
+clean `v0.1.1`. A locally built image between releases shows the distance from the newest tag, e.g.
+`v0.1.0-10-gaa9d7c69`.)
 
 Need a version that isn't in the registry? Build it from this repo — see §3.
 
