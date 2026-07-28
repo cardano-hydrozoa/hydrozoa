@@ -15,7 +15,6 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.rulebased.RuleBasedRegimeManager
@@ -271,7 +270,7 @@ trait HeadMultisigRegimeManager(
         } yield ()
 
     // Idempotent: `Nil` from `getAndSet` means we've already handed off.
-    override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
+    override protected def onHandoffToRuleBased: IO[Unit] =
         nonClChildren.getAndSet(Nil).flatMap {
             case Nil => IO.unit
             case refs =>
@@ -375,7 +374,8 @@ object HeadMultisigRegimeManager {
             StackComposer, SlowConsensus
 
     /** Requests received by the multisig regime manager. */
-    type Request = PreStart.type | TerminatedChild | TerminatedDependency | HandoffToRuleBased
+    type Request =
+        PreStart.type | TerminatedChild | TerminatedDependency | HandoffToRuleBased.type
 
     type Children = Actors
 
@@ -392,9 +392,11 @@ object HeadMultisigRegimeManager {
 
     final case class TerminatedDependency(dependencyType: Dependencies, ref: NoSendActorRef[IO])
 
-    /** Sent by [[CardanoLiaison]] once a `FallbackToRuleBased` action has been dispatched. HMRM
-      * responds by gracefully stopping every multisig child except CL (which stays up to process
-      * refunds and finish rollouts) and spawning [[hydrozoa.rulebased.RuleBasedRegimeManager]].
+    /** Sent by [[CardanoLiaison]] once it observes the rule-based treasury on L1 (the head has
+      * fallen into the rule-based regime). A pure trigger — the rule-based side reads its version
+      * and status from the on-chain treasury utxo, not from any tx carried here. HMRM responds by
+      * gracefully stopping every multisig child except CL (which stays up to process refunds and
+      * finish rollouts) and spawning [[hydrozoa.rulebased.RuleBasedRegimeManager]].
       */
-    final case class HandoffToRuleBased(fallback: FallbackTx)
+    case object HandoffToRuleBased
 }

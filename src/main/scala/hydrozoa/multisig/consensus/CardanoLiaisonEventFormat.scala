@@ -40,7 +40,7 @@ object CardanoLiaisonEventFormat:
             case TargetUtxoStatus(targetId, true) =>
                 trace(s"target $targetId found, do nothing")
             case TargetUtxoStatus(targetId, false) =>
-                trace(s"no target $targetId found, submitting init action")
+                trace(s"target $targetId gone; probing rule-based treasury / init tx")
             case InitWindowElapsed(currentTime, endTime) =>
                 warn(
                   s"init tx validity window elapsed (currentTime=$currentTime >=" +
@@ -51,6 +51,12 @@ object CardanoLiaisonEventFormat:
                 trace(s"finalizationTx: hash=$hash known=$isKnown")
             case FinalizationTxQueryError(err) =>
                 error(s"error when getting finalization tx info: $err")
+            case InitTxStatus(hash, isKnown) =>
+                trace(s"initTx: hash=$hash known=$isKnown")
+            case InitTxQueryError(err) =>
+                error(s"error when getting init tx info: $err")
+            case RuleBasedTreasuryQueryError(err) =>
+                error(s"error when probing the rule-based treasury: $err")
             case ActionsDispatched(msgs, hasFallback) =>
                 val text = "Liaison's actions:" + msgs.map(m => s"\n\t- $m").mkString
                 if hasFallback then warn(text) else info(text)
