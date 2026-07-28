@@ -146,6 +146,22 @@ object CardanoLiaison:
         /** Final state of a head, represented by the transaction hash of the finalization tx. */
         case Finalized(finalizationTxHash: TransactionHash)
 
+    /** Thrown by [[State.applyRegularEffects]] when a learned backbone and the fallback for the
+      * treasury utxo it spends do not have disjoint validity windows (`happyPathTtl >
+      * fallbackValidityStart`) — a bad tx-timing config that would let both be valid on L1 at once.
+      * The live learn path traces [[CardanoLiaisonEvent.DisjointWindowViolation]] and re-raises to
+      * stop; on `recover` it fails boot.
+      */
+    final case class DisjointWindowViolation(
+        treasuryUtxo: TransactionInput,
+        happyPathTtl: QuantizedInstant,
+        fallbackValidityStart: QuantizedInstant
+    ) extends RuntimeException(
+          s"Disjoint-window invariant violated for treasury $treasuryUtxo: happy-path TTL " +
+              s"$happyPathTtl > fallback validity start $fallbackValidityStart — the " +
+              "settlement/finalization and its fallback would be valid on L1 at once (bad tx timing)."
+        )
+
     type HappyPathEffect = InitializationTx | SettlementTx | FinalizationTx | RolloutTx
 
     extension (effect: HappyPathEffect)
@@ -246,6 +262,13 @@ object CardanoLiaison:
                 val newHappyPathEffects = perBackbone.flatMap(_._2)
                 val newFallbackEffects =
                     fallbacks.map(f => f.treasurySpent.utxoId -> f)
+                // Fail loudly if a learned backbone and the fallback for the treasury it spends do
+                // not have disjoint validity windows (a bad tx-timing config), rather than silently
+                // producing an on-chain overlap that `mkDirectActions` would resolve at poll time.
+                requireDisjointValidityWindows(
+                  backbones,
+                  state.fallbackEffects ++ newFallbackEffects
+                )
                 val newTarget: Option[TargetState] = finalization match {
                     case Some(fin) => Some(TargetState.Finalized(fin.tx.id))
                     case None =>
@@ -336,6 +359,33 @@ object CardanoLiaison:
                     utxoIdAndEffect._1
                         -> effectId -> (effectId -> utxoIdAndEffect._2)
                 })
+
+        /** Learn-time check of the disjoint-validity-window invariant: for each newly-learned
+          * backbone, the fallback keyed at the treasury utxo the backbone spends must not open its
+          * window before the backbone's own window ends (`happyTtl <= fallbackStart`) — else both
+          * would be valid on L1 at once. The fallback is born with the block that produced the
+          * treasury, so it is already keyed here when the next backbone spending that treasury is
+          * learned. Throws [[DisjointWindowViolation]] on the first offending pair.
+          */
+        private def requireDisjointValidityWindows(
+            backbones: List[SettlementTx | FinalizationTx],
+            fallbacks: Map[TransactionInput, FallbackTx]
+        ): Unit =
+            backbones.foreach { backbone =>
+                fallbacks.get(backbone.treasurySpent.utxoId).foreach { fallback =>
+                    val happyTtl: QuantizedInstant = backbone match {
+                        case tx: SettlementTx   => tx.settlementTxEndTime.convert
+                        case tx: FinalizationTx => tx.finalizationTxEndTime.convert
+                    }
+                    val fallbackStart: QuantizedInstant = fallback.fallbackTxStartTime.convert
+                    if happyTtl > fallbackStart then
+                        throw DisjointWindowViolation(
+                          backbone.treasurySpent.utxoId,
+                          happyTtl,
+                          fallbackStart
+                        )
+                }
+            }
 
         extension (state: State)
             def prettyDump: String = {
@@ -571,7 +621,21 @@ trait CardanoLiaison(
                     hasFinalization
                   )
                 )
-                newState <- stateRef.updateAndGet(State.applyRegularEffects(_, eff))
+                // Single-threaded actor: get/compute/set is safe (no concurrent writer). A
+                // disjoint-window violation is traced and re-raised — the liaison stops rather than
+                // operating a head whose on-chain safety invariant is broken.
+                oldState <- stateRef.get
+                newState <- IO(State.applyRegularEffects(oldState, eff)).onError {
+                    case v: DisjointWindowViolation =>
+                        tracer.traceWith(
+                          CardanoLiaisonEvent.DisjointWindowViolation(
+                            v.treasuryUtxo.toString,
+                            v.happyPathTtl.toString,
+                            v.fallbackValidityStart.toString
+                          )
+                        )
+                }
+                _ <- stateRef.set(newState)
                 _ <- advanceNodeStatus(nodeStatusOf(newState.targetState))
                 _ <- tracer.traceWith(CardanoLiaisonEvent.StackEffectsState(newState.prettyDump))
             } yield ()
@@ -902,31 +966,36 @@ trait CardanoLiaison(
                   state.happyPathSkeletonEntryPoints.get(utxo),
                   state.fallbackEffects.get(utxo)
                 ) match {
-                    case (None, None)        => None // not one of our effect inputs
-                    case (entry, mbFallback) => Some(entry -> mbFallback)
+                    case (None, None)               => None // not one of our effect inputs
+                    case (mbEntryPoint, mbFallback) => Some((mbEntryPoint, mbFallback))
                 }
             }
             // Entry points (a backbone before its rollouts) in EffectId order; a treasury with only
             // a fallback (no entry point) has no ordering constraint and comes last.
-            .sortBy { case (entry, _) => (entry.isEmpty, entry) }
-            .traverse(mkDirectAction(state, currentTime))
+            .sortBy { case (mbEntryPoint, _) => (mbEntryPoint.isEmpty, mbEntryPoint) }
+            .traverse { case (mbEntryPoint, mbFallback) =>
+                mkDirectAction(state, currentTime)(mbEntryPoint, mbFallback)
+            }
             .map(_.flatten)
 
-    /** Decide the action for one on-chain effect input, given its happy-path entry point (`entry`)
-      * and/or the fallback that spends the same treasury utxo (`mbFallback`). The happy tx and its
+    /** Decide the action for one on-chain effect input, given its happy-path entry point
+      * (`mbEntryPoint`) and/or the fallback that spends the same treasury utxo (`mbFallback`). Both
+      * are `Option`: a rollout utxo has only an entry point, and a tip treasury (the last
+      * settlement's, with no next backbone learned yet) has only a fallback. The happy tx and its
       * fallback have disjoint validity windows separated by a silence period, so at most one is
       * ever submittable. Returns `None` when nothing is submittable right now — the silence period,
-      * or a treasury whose only spender is a fallback whose window has not opened yet.
+      * or a tip treasury whose fallback window has not opened yet.
       */
     private def mkDirectAction(state: State, currentTime: QuantizedInstant)(
-        entryAndFallback: (Option[EffectId], Option[FallbackTx])
+        mbEntryPoint: Option[EffectId],
+        mbFallback: Option[FallbackTx]
     ): Either[EffectError, Option[DirectAction]] = {
         import Action.*
         import EffectError.*
 
-        entryAndFallback match {
+        mbEntryPoint match {
             // Rollout continuation — the rollout chain from here up to the next backbone.
-            case (Some(rolloutId @ (versionMajor, index)), _) if index != 0 =>
+            case Some(rolloutId @ (versionMajor, index)) if index != 0 =>
                 val nextBackbone = versionMajor.increment -> 0
                 Right(
                   Some(
@@ -937,24 +1006,28 @@ trait CardanoLiaison(
             // A treasury with its happy continuation (settlement/finalization). Submit the happy tx
             // while its window is open, else the fallback once its (later, disjoint) window opens,
             // else nothing during the silence period between them.
-            case (Some(backboneId), None) =>
-                Left(MissingFallback(backboneId))
-            case (Some(backboneId), Some(fallback)) =>
-                happyPathEndTime(state.happyPathEffects(backboneId), backboneId).map { happyTtl =>
-                    val fallbackStart = fallback.fallbackTxStartTime
-                    if currentTime < happyTtl then
-                        Some(
-                          PushForwardMultisig(
-                            state.happyPathEffects.rangeFrom(backboneId).toSeq.map(_._2)
-                          )
-                        )
-                    else if currentTime >= fallbackStart then Some(FallbackToRuleBased(fallback))
-                    else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart))
+            case Some(backboneId) =>
+                mbFallback match {
+                    case None => Left(MissingFallback(backboneId))
+                    case Some(fallback) =>
+                        happyPathEndTime(state.happyPathEffects(backboneId), backboneId).map {
+                            happyTtl =>
+                                val fallbackStart = fallback.fallbackTxStartTime
+                                if currentTime < happyTtl then
+                                    Some(
+                                      PushForwardMultisig(
+                                        state.happyPathEffects.rangeFrom(backboneId).toSeq.map(_._2)
+                                      )
+                                    )
+                                else if currentTime >= fallbackStart then
+                                    Some(FallbackToRuleBased(fallback))
+                                else Some(SilencePeriodNoop(currentTime, happyTtl, fallbackStart))
+                        }
                 }
 
-            // A treasury whose only spender is a fallback (no next backbone learned yet). Submit it
-            // once its window opens.
-            case (None, mbFallback) =>
+            // A tip treasury whose only spender is a fallback (no next backbone learned yet). Submit
+            // it once its window opens.
+            case None =>
                 Right(
                   mbFallback
                       .filter(_.fallbackTxStartTime.convert <= currentTime)

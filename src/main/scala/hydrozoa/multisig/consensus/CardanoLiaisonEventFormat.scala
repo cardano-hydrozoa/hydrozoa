@@ -51,6 +51,12 @@ object CardanoLiaisonEventFormat:
                 trace(s"finalizationTx: hash=$hash known=$isKnown")
             case FinalizationTxQueryError(err) =>
                 error(s"error when getting finalization tx info: $err")
+            case DisjointWindowViolation(treasuryUtxo, happyPathTtl, fallbackValidityStart) =>
+                error(
+                  s"disjoint-window invariant violated for treasury $treasuryUtxo: happy-path TTL" +
+                      s" $happyPathTtl > fallback validity start $fallbackValidityStart — bad tx" +
+                      " timing; stopping the liaison"
+                )
             case InitTxStatus(hash, isKnown) =>
                 trace(s"initTx: hash=$hash known=$isKnown")
             case InitTxQueryError(err) =>
