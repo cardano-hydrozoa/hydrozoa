@@ -266,19 +266,19 @@ addCompilerPlugin("org.scalus" % "scalus-plugin" % scalusVersion cross CrossVers
 // Custom commands to format and lint all subprojects
 addCommandAlias(
   "fmtAll",
-  ";core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll"
+  ";cardanoOnchain/scalafmtAll ;petri/scalafmtAll ;core/scalafmtAll ;integration/scalafmtAll ;benchmark/scalafmtAll"
 )
 addCommandAlias(
   "fmtCheckAll",
-  ";core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll"
+  ";cardanoOnchain/scalafmtCheckAll ;petri/scalafmtCheckAll ;core/scalafmtCheckAll ;integration/scalafmtCheckAll ;benchmark/scalafmtCheckAll"
 )
 addCommandAlias(
   "lintAll",
-  ";core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
+  ";cardanoOnchain/scalafixAll ;petri/scalafixAll ;core/scalafixAll ;integration/scalafixAll ;benchmark/scalafixAll"
 )
 addCommandAlias(
   "lintCheckAll",
-  ";core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
+  ";cardanoOnchain/scalafixAll --check ;petri/scalafixAll --check ;core/scalafixAll --check ;integration/scalafixAll --check ;benchmark/scalafixAll --check"
 )
 
 // Test dependencies

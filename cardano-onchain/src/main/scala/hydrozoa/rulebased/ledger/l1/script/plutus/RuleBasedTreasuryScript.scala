@@ -139,8 +139,8 @@ object RuleBasedTreasuryValidator extends Validator {
 
     /** Finds the rule-based regime reference input — the one holding exactly one `headMp` token
       * with the HRWT CIP-67 prefix — and parses its inline datum. The token policy is the
-      * authentication: only the head multisig script can mint under `headMp`, and it mints
-      * exactly one HRWT.
+      * authentication: only the head multisig script can mint under `headMp`, and it mints exactly
+      * one HRWT.
       */
     def findRegimeReference(tx: TxInfo, headMp: PolicyId): RuleBasedRegimeDatum =
         tx.referenceInputs
@@ -150,8 +150,8 @@ object RuleBasedTreasuryValidator extends Validator {
                         tokens.toList match
                             case List.Cons(tokenNameAndAmount, tail) =>
                                 tail.isEmpty
-                                    && tokenNameAndAmount._2 == BigInt(1)
-                                    && tokenNameAndAmount._1.take(4) == cip67RegimeTokenPrefix
+                                && tokenNameAndAmount._2 == BigInt(1)
+                                && tokenNameAndAmount._1.take(4) == cip67RegimeTokenPrefix
                             case _ => false
                     case None => false
             )
@@ -242,8 +242,8 @@ object RuleBasedTreasuryValidator extends Validator {
                     // and the FallbackTx's default vote utxo is always Voted with the implicit
                     // commitment, so reaching Resolve with a non-Voted status indicates an
                     // upstream tally bug.
-                    case AwaitingVote(_) => fail(ResolveUnexpectedAwaitingVote)
-                    case Abstain         => fail(ResolveUnexpectedAbstain)
+                    case AwaitingVote(_)                 => fail(ResolveUnexpectedAwaitingVote)
+                    case Abstain                         => fail(ResolveUnexpectedAbstain)
                     case Voted(commitment, versionMinor) =>
                         // The only valid Resolve output is the unresolved input transitioned to
                         // this vote's commitment and minor version; check each field of the output
