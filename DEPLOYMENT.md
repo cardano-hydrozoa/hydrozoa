@@ -208,7 +208,7 @@ pipeline turns operator-authored files into the two runtime files each node need
                                       │
    deploy-scripts-and-g2-setup        │
    (head-0 wallet, Blockfrost)        │
-   └─ bootstrap/ref-utxos.json ─────┤  the on-chain reference UTxOs: treasury + dispute
+   └─ bootstrap/ref-utxos.json ───────┤  the on-chain reference UTxOs: treasury + dispute
                                       │  validators and the G2 setup ladder (falls back to the
                                       │  per-network default baked into the image)
                                       │
