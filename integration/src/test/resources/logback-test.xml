@@ -5,6 +5,11 @@
         <appender-ref ref="FILE"/>
     </root>
 
+    <!-- Testcontainers / docker-java are extremely verbose at DEBUG (HTTP wire logs). -->
+    <logger name="com.github.dockerjava" level="warn"/>
+    <logger name="org.testcontainers" level="info"/>
+    <logger name="tc" level="info"/>
+
     <!-- IMPORTANT
 
          Timestamps added by the logging framework

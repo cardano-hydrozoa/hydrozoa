@@ -6,23 +6,23 @@ import org.testcontainers.containers.wait.strategy.Wait
 import scala.concurrent.Await
 import scala.concurrent.duration.*
 import sttp.client4.*
-import sttp.model.{StatusCode, Uri}
+import sttp.model.StatusCode
 
 /** A Testcontainers-managed Yaci DevKit devnet.
   *
-  * Starts `bloxbean/yaci-cli`, creates and starts a fresh single-node devnet, waits until it
-  * reports `initialized`, and yields a [[DevKit]] handle bound to the container's mapped Blockfrost
-  * (8080) and admin (10000) ports.
+  * Runs `bloxbean/yaci-cli` with `create-node -o --start` as the container's main process (it
+  * blocks, keeping the container alive), waits until the admin API reports `initialized` and the
+  * Yaci Store (Blockfrost API) serves, and yields a [[DevKit]] handle bound to the container's
+  * mapped Blockfrost (8080) and admin (10000) ports.
   *
-  * NB: authored against the Yaci DevKit docs and unvalidated against a live Docker daemon here; the
-  * container lifecycle (idle `sleep infinity` image + `create-node -o --start` exec + status poll)
-  * may need tuning on first real run. Requires Docker on the host, so the suites using it are
-  * excluded from the default test run (see build.sbt).
+  * Requires Docker on the host, so the suites using it are excluded from the default test run (see
+  * build.sbt).
   */
 object YaciDevnet {
 
-    /** Yaci DevKit publishes no `latest` tag; pin the last non-beta release. */
-    val defaultImageTag: String = "0.11.0"
+    /** Yaci DevKit publishes no `latest` tag, and only `0.10.x` has a multi-arch manifest; pin it.
+      */
+    val defaultImageTag: String = "0.10.6"
 
     private val blockfrostPort = 8080
     private val adminPort = 10000
@@ -37,12 +37,25 @@ object YaciDevnet {
                 val c = GenericContainer(
                   dockerImage = s"bloxbean/yaci-cli:$imageTag",
                   exposedPorts = Seq(blockfrostPort, adminPort),
-                  // The image leaves the CLI idle (`sleep infinity`) with nothing bound on
-                  // 8080/10000 until a devnet is created, so a port-listening wait would hang;
-                  // emit a marker and gate on it instead. The devnet is created in `startDevnet`.
-                  command = Seq("sh", "-c", "echo yaci-devkit-up && sleep infinity"),
-                  waitStrategy = Wait.forLogMessage(".*yaci-devkit-up.*", 1),
+                  // `yaci_store_enabled` is what brings up the Blockfrost API on 8080; without it
+                  // only the node + admin API start. `native` mode matches the DevKit compose.
+                  env = Map(
+                    "yaci_store_enabled" -> "true",
+                    "yaci_cli_mode" -> "native",
+                    "yaci_store_mode" -> "native",
+                  ),
+                  command = Seq("create-node", "-o", "--start"),
+                  waitStrategy = Wait
+                      .forHttp("/local-cluster/api/admin/devnet/status")
+                      .forPort(adminPort)
+                      .forResponsePredicate(_.contains("initialized"))
+                      .withStartupTimeout(java.time.Duration.ofMillis(startupTimeout.toMillis)),
                 )
+                // The image's default CMD is `sleep infinity`; override the entrypoint to the CLI
+                // launcher so `command` above starts the devnet instead.
+                c.container.withCreateContainerCmdModifier { cmd =>
+                    val _ = cmd.withEntrypoint("/app/yaci-cli.sh")
+                }
                 c.start()
                 c
             })(c => IO.blocking(c.stop()))
@@ -51,43 +64,36 @@ object YaciDevnet {
                 val devKit = DevKit(
                   blockfrostApiBaseUri =
                       s"http://$host:${c.container.getMappedPort(blockfrostPort)}/api/v1",
-                  yaciApiBaseUri = Uri.unsafeParse(
+                  yaciApiBaseUri = sttp.model.Uri.unsafeParse(
                     s"http://$host:${c.container.getMappedPort(adminPort)}/local-cluster/api"
                   ),
                 )
-                startDevnet(c) *> awaitInitialized(devKit, startupTimeout).as(devKit)
+                awaitBlockfrost(devKit, startupTimeout).as(devKit)
             }
 
-    /** Create and start a fresh devnet inside the otherwise-idle CLI container. */
-    private def startDevnet(c: GenericContainer): IO[Unit] =
-        IO.blocking {
-            val res =
-                c.container.execInContainer("/app/yaci-cli.sh", "create-node", "-o", "--start")
-            if res.getExitCode != 0 then
-                throw new RuntimeException(
-                  s"yaci-cli create-node failed (exit ${res.getExitCode}): ${res.getStderr}"
-                )
-        }
-
-    /** Poll the admin `devnet/status` endpoint until it reports `initialized`. */
-    private def awaitInitialized(devKit: DevKit, timeout: FiniteDuration): IO[Unit] =
+    /** The container wait gates on the admin `initialized` status; the Yaci Store (which backend
+      * queries hit) comes up a few seconds later, so poll it before yielding the handle.
+      */
+    private def awaitBlockfrost(devKit: DevKit, timeout: FiniteDuration): IO[Unit] =
         def loop(remaining: FiniteDuration): IO[Unit] =
-            statusInitialized(devKit).flatMap {
+            blockfrostReady(devKit).flatMap {
                 case true => IO.unit
                 case false if remaining <= Duration.Zero =>
                     IO.raiseError(
-                      new RuntimeException(s"Yaci devnet not initialized within $timeout")
+                      new RuntimeException(s"Yaci Blockfrost API not ready within $timeout")
                     )
                 case false => IO.sleep(2.seconds) *> loop(remaining - 2.seconds)
             }
         loop(timeout)
 
-    private def statusInitialized(devKit: DevKit): IO[Boolean] =
+    private def blockfrostReady(devKit: DevKit): IO[Boolean] =
         IO.blocking {
             val resp = Await.result(
-              basicRequest.get(uri"${devKit.yaciApiBaseUri}/admin/devnet/status").send(backend),
-              10.seconds
+              basicRequest
+                  .get(sttp.model.Uri.unsafeParse(s"${devKit.blockfrostApiBaseUri}/blocks/latest"))
+                  .send(backend),
+              6.seconds
             )
-            resp.code == StatusCode.Ok && resp.body.fold(_ => false, _.contains("initialized"))
-        }
+            resp.code == StatusCode.Ok
+        }.handleError(_ => false)
 }
