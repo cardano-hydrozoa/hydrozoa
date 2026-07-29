@@ -10,33 +10,14 @@ import sttp.model.{StatusCode, Uri}
 
 given backend: sttp.client4.Backend[scala.concurrent.Future] = DefaultFutureBackend()
 
-object DevKit {
+/** Handle to a running Yaci DevKit devnet, holding its Blockfrost-compatible and admin API base
+  * URIs. Use [[DevKit.localhost]] for a manually-started devnet on the conventional dev ports, or a
+  * [[YaciDevnet]]-managed instance whose URIs point at the container's mapped ports.
+  */
+final case class DevKit(blockfrostApiBaseUri: String, yaciApiBaseUri: Uri) {
 
-    val yaciParams: ProtocolParams = ProtocolParams.fromBlockfrostJson(
-      this.getClass
-          .getResourceAsStream("/yaci-params.json")
-    )
-
-    val blockfrostApiBaseUri = "http://localhost:8080/api/v1"
-    val yaciApiBaseUri: Uri = uri"http://localhost:10000/local-cluster/api"
-
-    /** Partial response.
-      *
-      * @param slotLength
-      *   NB: in seconds!
-      * @param startTime
-      *   NB: in seconds!
-      * @param protocolMagic
-      */
-    case class DevnetInfo(
-        slotLength: Long,
-        startTime: Long,
-        protocolMagic: Int
-    )
-
-    def devnetInfo(): DevnetInfo =
-
-        // Obtain the cluster information
+    /** Partial `/admin/devnet` response. */
+    def devnetInfo(): DevKit.DevnetInfo =
         val request = basicRequest
             .get(uri"$yaciApiBaseUri/admin/devnet")
             .send(backend)
@@ -45,7 +26,7 @@ object DevKit {
                     resp.body match {
                         case Right(body) =>
                             val jobj = ujson.read(body, trace = false).obj
-                            DevnetInfo(
+                            DevKit.DevnetInfo(
                               slotLength = jobj.get("slotLength").get.num.longValue,
                               startTime = jobj.get("startTime").get.num.longValue,
                               protocolMagic = jobj.get("protocolMagic").get.num.intValue,
@@ -61,7 +42,6 @@ object DevKit {
                     )
                 }
             )
-
         Await.result(request, 10.seconds)
 
     def reset(timeout: FiniteDuration = 30.seconds): Unit = {
@@ -98,4 +78,33 @@ object DevKit {
 
         Await.result(request, timeout)
     }
+}
+
+object DevKit {
+
+    val yaciParams: ProtocolParams = ProtocolParams.fromBlockfrostJson(
+      this.getClass
+          .getResourceAsStream("/yaci-params.json")
+    )
+
+    /** Conventional dev ports of a manually-started (`yaci-devkit up`) local devnet. */
+    val defaultBlockfrostApiBaseUri: String = "http://localhost:8080/api/v1"
+    val defaultYaciApiBaseUri: Uri = uri"http://localhost:10000/local-cluster/api"
+
+    /** A [[DevKit]] bound to the conventional local dev ports. */
+    val localhost: DevKit = DevKit(defaultBlockfrostApiBaseUri, defaultYaciApiBaseUri)
+
+    /** Partial response.
+      *
+      * @param slotLength
+      *   NB: in seconds!
+      * @param startTime
+      *   NB: in seconds!
+      * @param protocolMagic
+      */
+    case class DevnetInfo(
+        slotLength: Long,
+        startTime: Long,
+        protocolMagic: Int
+    )
 }

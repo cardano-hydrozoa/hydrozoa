@@ -665,16 +665,20 @@ object MultiPeerHeadHarness:
           */
         enum Mode:
             case Mock
-            case Yaci(network: CardanoNetwork.Custom, url: String = DevKit.blockfrostApiBaseUri)
+            case Yaci(
+                network: CardanoNetwork.Custom,
+                url: String = DevKit.defaultBlockfrostApiBaseUri
+            )
 
-        /** The Yaci devnet's `Custom` network from a live `DevKit.devnetInfo` query: its slot
+        /** The Yaci devnet's `Custom` network from a live `devKit.devnetInfo` query: its slot
           * config (zeroTime/slotLength) and protocol magic, with the devnet protocol params. Call
-          * after `DevKit.reset()` so the slot anchor matches the fresh chain.
+          * after `devKit.reset()` so the slot anchor matches the fresh chain.
           */
         def yaciNetwork(
-            protocolParams: ProtocolParams = DevKit.yaciParams
+            devKit: DevKit = DevKit.localhost,
+            protocolParams: ProtocolParams = DevKit.yaciParams,
         ): IO[CardanoNetwork.Custom] =
-            IO.blocking(DevKit.devnetInfo()).map { info =>
+            IO.blocking(devKit.devnetInfo()).map { info =>
                 val cardanoInfo = CardanoInfo(
                   protocolParams = protocolParams,
                   network = Network.Testnet,

@@ -19,7 +19,6 @@ import hydrozoa.integration.stage1.Model.{BlockCycle, CurrentTime}
 import hydrozoa.integration.stage1.SuiteCardano.*
 import hydrozoa.integration.stage1.model.Deposits
 import hydrozoa.integration.yaci.DevKit
-import hydrozoa.integration.yaci.DevKit.devnetInfo
 import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, debug, info, trace}
 import hydrozoa.multisig.HeadMultisigRegimeManager
@@ -84,7 +83,7 @@ enum SuiteCardano:
         cardanoNetwork: CardanoNetwork
     )
     case Yaci(
-        url: CardanoBackendBlockfrost.URL = DevKit.blockfrostApiBaseUri,
+        url: CardanoBackendBlockfrost.URL = DevKit.defaultBlockfrostApiBaseUri,
         protocolParams: ProtocolParams
     )
     case Public(
@@ -150,9 +149,9 @@ case class Suite(
             case SuiteCardano.Yaci(url, protocolParams) =>
                 for {
                     _ <- run(log.info("Resetting Yaci..."))
-                    _ <- run(IO(DevKit.reset()))
+                    _ <- run(IO(DevKit.localhost.reset()))
                     _ <- run(log.info("Getting devnet info..."))
-                    devnetInfo <- run(IO(DevKit.devnetInfo()))
+                    devnetInfo <- run(IO(DevKit.localhost.devnetInfo()))
                     _ <- run(log.debug(s"devnetInfo: $devnetInfo"))
 
                     startTime = java.time.Instant.ofEpochSecond(devnetInfo.startTime)
@@ -167,13 +166,13 @@ case class Suite(
                     )
                     cardanoNetwork: CardanoNetwork.Custom = CardanoNetwork.Custom(
                       cardanoInfo,
-                      DevKit.devnetInfo().protocolMagic
+                      DevKit.localhost.devnetInfo().protocolMagic
                     )
                     testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, 1)
                     aliceAddress = testPeers.shelleyAddressFor(Alice)
 
                     _ <- run(log.info(s"Topping up Alice's address ${aliceAddress.toBech32.get}"))
-                    _ <- run(IO(DevKit.topup(aliceAddress, Coin(20_000_000_000L))))
+                    _ <- run(IO(DevKit.localhost.topup(aliceAddress, Coin(20_000_000_000L))))
 
                     backend = CardanoBackendBlockfrost.apply_(
                       Right((cardanoNetwork, url)),
@@ -441,7 +440,7 @@ case class Suite(
                     (
                       CardanoNetwork.Custom(
                         multiNodeConfig.headConfig.cardanoInfo,
-                        devnetInfo().protocolMagic
+                        DevKit.localhost.devnetInfo().protocolMagic
                       ),
                       url
                     )
