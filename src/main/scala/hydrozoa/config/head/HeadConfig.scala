@@ -307,16 +307,12 @@ object HeadConfig {
                 }
 
                 cardanoBackend <- EitherT.liftF(
-                  CardanoBackendBlockfrost
-                      .networkSelector(network, privateConfig.cardanoBackendUrl)
-                      .flatMap(blockfrostNetwork =>
-                          CardanoBackendBlockfrost(
-                            blockfrostNetwork,
-                            privateConfig.blockfrostApiKey,
-                            tracer = Slf4jTracer.sink
-                                .contramap(CardanoBackendEventFormat.humanFormat)
-                          )
-                      )
+                  CardanoBackendBlockfrost(
+                    network,
+                    privateConfig.cardanoBackendUrl,
+                    privateConfig.blockfrostApiKey,
+                    tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                  )
                 )
 
                 bootstrapConfig <- Bootstrap.fromJson(bootstrapConfigStr, cardanoBackend)

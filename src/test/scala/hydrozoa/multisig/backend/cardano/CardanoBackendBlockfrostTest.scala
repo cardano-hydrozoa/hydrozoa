@@ -3,7 +3,7 @@ package hydrozoa.multisig.backend.cardano
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import cats.syntax.contravariant.*
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import io.github.cdimascio.dotenv.Dotenv
@@ -105,7 +105,17 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
     test("Fetch some utxos, multi-page", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {
-                backend <- CardanoBackendBlockfrost(Left(CardanoNetwork.Preview), key, 1, tracer)
+                backend <- CardanoBackendBlockfrost(
+                  Left[
+                    StandardCardanoNetwork,
+                    (CardanoNetwork.Custom, CardanoBackendBlockfrost.URL)
+                  ](
+                    CardanoNetwork.Preview
+                  ),
+                  key,
+                  1,
+                  tracer
+                )
                 utxoSet <- backend.utxosAt(testAddress)
             } yield utxoSet
         )
