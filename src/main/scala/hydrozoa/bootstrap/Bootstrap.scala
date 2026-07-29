@@ -100,14 +100,15 @@ object Bootstrap:
             home.resolve("head-config").resolve("head-config.json")
     }
 
-    /** The scaffolded private-config template. `keygen-fleet` reads its `blockfrostApiKey` (to
-      * derive the network and to fill each peer's `private.json`); the build commands
-      * (`build-head-config`, `deploy-scripts-and-g2-setup`) fall back to it for the Cardano backend
-      * key when neither `--blockfrost-key` nor `$BLOCKFROST_API_KEY` is given — so the key set once
-      * in the template is the single source.
+    /** The scaffolded private-config template, under the head directory ([[homeOpt]]) so the whole
+      * workspace is self-contained. `keygen-fleet` reads its `blockfrostApiKey` (to derive the
+      * network and to fill each peer's `private.json`); the build commands (`build-head-config`,
+      * `deploy-scripts-and-g2-setup`) fall back to it for the Cardano backend key when neither
+      * `--blockfrost-key` nor `$BLOCKFROST_API_KEY` is given — so the key set once in the template
+      * is the single source.
       */
-    val defaultPrivateTemplate: Path =
-        Path.of("head/template/peer-private.template.json.local")
+    def defaultPrivateTemplate(home: Path): Path =
+        home.resolve("template").resolve("peer-private.template.json.local")
 
     private val blockfrostKeyRe = """"blockfrostApiKey"\s*:\s*"([^"]*)"""".r
 
@@ -577,7 +578,7 @@ end Bootstrap
   * Usage:
   * {{{
   *   hydrozoa keygen --roster nodes/roster.json --role head --ws-address ws://head-0:4001 \
-  *     --template head/template/peer-private.template.json.local --out nodes/head-0/private.json
+  *     --template head/demo/template/peer-private.template.json.local --out nodes/head-0/private.json
   * }}}
   */
 object GenerateKeyPair:
@@ -1078,6 +1079,7 @@ object BuildHeadConfig:
             buildHeadConfig(
               Bootstrap.HomeLayout.bootstrapDir(home),
               mbKey,
+              Bootstrap.defaultPrivateTemplate(home),
               Bootstrap.HomeLayout.headConfig(home)
             )
         )
@@ -1085,6 +1087,7 @@ object BuildHeadConfig:
     private def buildHeadConfig(
         bootstrapDir: Path,
         mbBlockfrostKey: Option[String],
+        template: Path,
         outPath: Path
     ): IO[ExitCode] =
         for {
@@ -1092,8 +1095,8 @@ object BuildHeadConfig:
             blockfrostKey <- mbBlockfrostKey.fold(
               logger.info(
                 "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
-                    s"${Bootstrap.defaultPrivateTemplate}"
-              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+                    s"$template"
+              ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
             bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir)
             cardanoNetwork = bootstrapConfig.cardanoNetwork
@@ -1278,17 +1281,16 @@ end InitBootstrapFiles
 object KeygenFleet:
     import GenerateKeyPair.Role
 
-    private val defaultTemplate = Bootstrap.defaultPrivateTemplate.toString
-
     private val headsArg: Opts[Int] = Opts.argument[Int]("heads")
     private val coilsArg: Opts[Int] = Opts.argument[Int]("coils")
     private val quorumArg: Opts[Int] = Opts.argument[Int]("coil-quorum")
-    private val templateOpt: Opts[Path] =
+    private val templateOpt: Opts[Option[Path]] =
         Opts.option[String](
           "template",
-          s"Private-config template to fill with each peer's keys (default $defaultTemplate)"
+          "Private-config template to fill with each peer's keys " +
+              "(default $HYDROZOA_HOME/template/peer-private.template.json.local)"
         ).map(Path.of(_))
-            .withDefault(Path.of(defaultTemplate))
+            .orNone
 
     /** The `keygen-fleet` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
@@ -1303,10 +1305,11 @@ object KeygenFleet:
         coils: Int,
         coilQuorum: Int,
         home: Path,
-        template: Path
+        mbTemplate: Option[Path]
     ): IO[ExitCode] = {
         val bootstrapDir = Bootstrap.HomeLayout.bootstrapDir(home)
         val rosterPath = Bootstrap.HomeLayout.roster(home)
+        val template = mbTemplate.getOrElse(Bootstrap.defaultPrivateTemplate(home))
         def privatePath(label: String): Path = Bootstrap.HomeLayout.privateConfig(home, label)
         for {
             _ <- IO.raiseWhen(heads < 1)(
