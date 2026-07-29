@@ -18,6 +18,7 @@ final case class NodePrivateConfig(
     override val adminPassword: String,
     override val httpHost: String,
     override val httpPort: String,
+    override val cardanoBackendUrl: Option[String] = None,
 ) extends NodePrivateConfig.Section {
     override transparent inline def nodePrivateConfig: NodePrivateConfig = this
 }
@@ -51,6 +52,11 @@ object NodePrivateConfig {
         def httpHost: String = nodePrivateConfig.httpHost
 
         def httpPort: String = nodePrivateConfig.httpPort
+
+        /** Blockfrost-compatible backend URL, required only for a `Custom` `cardanoNetwork` (e.g. a
+          * Yaci devnet); the standard networks derive their URL from the network itself.
+          */
+        def cardanoBackendUrl: Option[String] = nodePrivateConfig.cardanoBackendUrl
     }
 
     given nodePrivateConfigEncoder: Encoder[NodePrivateConfig] =
