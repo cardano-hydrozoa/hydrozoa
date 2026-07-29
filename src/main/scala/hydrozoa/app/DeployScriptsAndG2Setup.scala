@@ -178,15 +178,12 @@ object DeployScriptsAndG2Setup:
 
             reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
-            backend <- CardanoBackendBlockfrost
-                .networkSelector(cardanoNetwork, customBackendUrl)
-                .flatMap(selector =>
-                    CardanoBackendBlockfrost(
-                      selector,
-                      blockfrostKey,
-                      tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-                    )
-                )
+            backend <- CardanoBackendBlockfrost(
+              cardanoNetwork,
+              customBackendUrl,
+              blockfrostKey,
+              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+            )
 
             unresolved <- deploy(backend, wallet, reusedLadderInputs)
             _ <- IO.blocking {

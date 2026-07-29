@@ -177,6 +177,15 @@ object Bootstrap:
     enum BootstrapNetwork {
         case Standard(network: CardanoNetwork)
         case PendingCustom(blockfrostUrl: String, yaciAdminUrl: Option[String])
+
+        /** The [[CardanoNetwork]] for offline computations (demo head params, address tags) before
+          * a pending `Custom` is resolved: the standard network as-is, or Preview as the stand-in
+          * for a pending custom — a devnet is a testnet and uses Preview's 1s slots.
+          */
+        def offlineStandIn: CardanoNetwork = this match {
+            case Standard(network)   => network
+            case PendingCustom(_, _) => CardanoNetwork.Preview
+        }
     }
 
     object BootstrapNetwork {
@@ -1157,11 +1166,12 @@ object BuildHeadConfig:
             backendTracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             // A standard network derives its Blockfrost URL from the network; a Custom one uses the
             // URL resolved from `defaults.json`'s pending-custom marker (carried on the config).
-            backend <- CardanoBackendBlockfrost
-                .networkSelector(cardanoNetwork, bootstrapConfig.customBackendUrl)
-                .flatMap(selector =>
-                    CardanoBackendBlockfrost(selector, blockfrostKey, tracer = backendTracer)
-                )
+            backend <- CardanoBackendBlockfrost(
+              cardanoNetwork,
+              bootstrapConfig.customBackendUrl,
+              blockfrostKey,
+              tracer = backendTracer
+            )
             // Script reference utxos are carried in the bootstrap config as bare inputs; resolve
             // their outputs from the backend.
             scriptReferenceUtxos <- {
@@ -1283,10 +1293,7 @@ object InitBootstrapFiles:
         // Standard networks compute their demo head params against their own slot config; a pending
         // Custom network has none offline, so it borrows Preview's (a 1s-slot testnet). The demo
         // params are operator-adjustable and a Yaci devnet uses the same 1s slots.
-        val network: CardanoNetwork = bootstrapNetwork match {
-            case BootstrapNetwork.Standard(n)         => n
-            case BootstrapNetwork.PendingCustom(_, _) => CardanoNetwork.Preview
-        }
+        val network: CardanoNetwork = bootstrapNetwork.offlineStandIn
         for {
             rosterStr <- IO.blocking(Files.readString(rosterPath))
             roster <- IO.fromEither(parser.decode[Bootstrap.Membership](rosterStr))
@@ -1511,10 +1518,7 @@ object PrintHeadZeroAddress:
             )
             // A pending Custom network isn't resolved offline; a shelley address only depends on the
             // testnet/mainnet tag, and a custom devnet is a testnet — so Preview stands in here.
-            network = bootstrapNetwork match {
-                case Bootstrap.BootstrapNetwork.Standard(n)         => n
-                case Bootstrap.BootstrapNetwork.PendingCustom(_, _) => CardanoNetwork.Preview
-            }
+            network = bootstrapNetwork.offlineStandIn
             address <- IO.fromOption(
               headZero.verificationKey.shelleyAddress()(using network).toBech32.toOption
             )(RuntimeException("could not render head peer 0's address as bech32"))

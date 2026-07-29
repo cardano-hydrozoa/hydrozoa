@@ -737,12 +737,26 @@ object CardanoBackendBlockfrost:
     ): IO[CardanoBackendBlockfrost] =
         IO.delay(apply_(network, apiKey, pageSize, tracer))
 
+    /** Build a backend for a [[CardanoNetwork]] directly: a standard network derives its own
+      * Blockfrost URL; a `Custom` one uses `cardanoBackendUrl` (failing if it is absent). Folds the
+      * network→selector resolution so callers need not thread the internal `Either` selector.
+      */
+    def apply(
+        network: CardanoNetwork,
+        cardanoBackendUrl: Option[URL],
+        apiKey: ApiKey,
+        tracer: ContraTracer[IO, CardanoBackendEvent]
+    ): IO[CardanoBackendBlockfrost] =
+        networkSelector(network, cardanoBackendUrl).flatMap(selector =>
+            apply(selector, apiKey, tracer = tracer)
+        )
+
     /** Resolve a [[CardanoNetwork]] into the selector [[apply]] expects, sourcing a `Custom`
       * network's Blockfrost URL from the peer's private-config `cardanoBackendUrl`. Fails when a
       * `Custom` network has no configured URL — the standard networks derive their URL from the
       * network itself.
       */
-    def networkSelector(
+    private def networkSelector(
         network: CardanoNetwork,
         cardanoBackendUrl: Option[URL]
     ): IO[Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)]] =
