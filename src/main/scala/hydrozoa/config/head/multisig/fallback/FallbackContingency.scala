@@ -171,8 +171,10 @@ object FallbackContingency {
         // Serialized size of ADA-only utxo at the base address (with staking and payment credentials)
         val adaOnlyBaseAddressUtxoBytes: PositiveInt = PositiveInt.unsafeApply(67)
 
-        // Max serialized size of a ballot box (with/without vote)
-        val maxBallotBoxBytes: PositiveInt = PositiveInt.unsafeApply(155)
+        // Max serialized size of a ballot box; the Voted box (48-byte KZG commitment + versionMinor)
+        // is the largest — measured 183 bytes at worst-case versionMinor. The box is funded at
+        // exactly this minAda, so undersizing it makes a ratcheted output unable to preserve value.
+        val maxBallotBoxBytes: PositiveInt = PositiveInt.unsafeApply(200)
 
         // Max serialized size of a rule-based treasury utxo when there are no L2 liabilities
         // (see TreasuryOutputSizeTest)

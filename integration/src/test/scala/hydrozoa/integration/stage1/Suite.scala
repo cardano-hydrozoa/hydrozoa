@@ -526,9 +526,9 @@ case class Suite(
                   // signal. Stage 1 doesn't exercise fallback-to-rule-based (single-peer / happy
                   // path only), so the ref is a required-but-inert construction parameter.
                   mrmSelfStub <- system.actorOf(
-                    new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased] {
+                    new Actor[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type] {
                         override def receive
-                            : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased] =
+                            : Receive[IO, HeadMultisigRegimeManager.HandoffToRuleBased.type] =
                             _ => IO.unit
                     }
                   )

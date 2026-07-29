@@ -1,6 +1,7 @@
 # Direnv
 .direnv
 .pre-commit-config.yaml
+.envrc.local
 
 # Scala
 .bsp/
@@ -36,6 +37,7 @@ target/
 # AI
 .claude/
 /CLAUDE.local.md
+.worktrees
 
 # The head working directory: scaffolded template.local (real Blockfrost key), generated rosters,
 # private configs + signing keys, head-config — all per-deployment, never commit.
