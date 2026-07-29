@@ -296,7 +296,7 @@ inThisBuild(
   List(
     // Release version — drives the Docker image tag, `hydrozoa.BuildInfo.version`, and `GET
     // /version`. Bump here for a release (see RELEASE.md), then tag `v<version>`.
-    version := "0.1.0",
+    version := "0.1.1",
     scalaVersion := "3.3.7",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision

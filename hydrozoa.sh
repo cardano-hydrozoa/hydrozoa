@@ -1,13 +1,15 @@
 # Source this to get the `hydrozoa` Docker CLI alias, so you don't retype the docker run flags:
 #
-#     export BLOCKFROST_API_KEY=preview…      # your key (a secret — not stored here)
 #     source ./hydrozoa.sh
 #     hydrozoa keygen-fleet 2 4 2
 #     hydrozoa build-head-config
 #
+# The Blockfrost key comes from head/template/peer-private.template.json.local (`blockfrostApiKey`);
+# `export BLOCKFROST_API_KEY=preview…` before sourcing overrides it for the chain-querying commands.
+#
 # Override the version or head directory before sourcing (or edit the defaults below). HYDROZOA_HOME
 # is the one head directory the CLI and `docker compose` (DEPLOYMENT.md §4) both read.
-: "${HYDROZOA_VERSION:=0.1.0}"      # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
+: "${HYDROZOA_VERSION:=0.1.1}"      # published image tag (ghcr.io/cardano-hydrozoa/hydrozoa)
 : "${HYDROZOA_HOME:=./head/demo}"  # head directory
 export HYDROZOA_VERSION HYDROZOA_HOME
 

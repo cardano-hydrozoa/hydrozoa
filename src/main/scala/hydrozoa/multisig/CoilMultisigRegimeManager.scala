@@ -13,7 +13,6 @@ import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.consensus.peer.PeerId
 import hydrozoa.multisig.consensus.peer.PeerId.{Coil, Head}
 import hydrozoa.multisig.consensus.transport.{CoilTransport, RemoteHubProxy}
-import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.rulebased.RuleBasedRegimeManager
@@ -159,7 +158,7 @@ trait CoilMultisigRegimeManager(
       * `RuleBasedActor.Dispute.handleCoil`).
       */
     // Idempotent — mirrors HMRM.onHandoffToRuleBased.
-    override protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit] =
+    override protected def onHandoffToRuleBased: IO[Unit] =
         nonClChildren.getAndSet(Nil).flatMap {
             case Nil => IO.unit
             case refs =>
