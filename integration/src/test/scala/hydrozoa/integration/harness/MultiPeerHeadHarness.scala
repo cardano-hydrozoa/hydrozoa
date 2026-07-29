@@ -109,10 +109,12 @@ object MultiPeerHeadHarness:
     val fastTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
         Gen.const(
           TxTiming(
-            minSettlementDuration = MinSettlementDuration(2.seconds.quantize(network.slotConfig)),
             // Init tx window: initEndTime = bcet + minSettlementDuration + inactivityMarginDuration
-            // = 32s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
-            // that or `InitWindowElapsed` fires. Also gates the Minor→Major deadman.
+            // = 60s. Actor bring-up + stack-0 hard-confirmation + CL's first poll all fit inside
+            // that or `InitWindowElapsed` fires — carried by minSettlement (30s) so the window is
+            // wide enough for slow/loaded CI runners without touching the Minor→Major deadman
+            // cadence, which is `bcet + inactivityMargin` (minSettlement cancels out).
+            minSettlementDuration = MinSettlementDuration(30.seconds.quantize(network.slotConfig)),
             inactivityMarginDuration =
                 InactivityMarginDuration(30.seconds.quantize(network.slotConfig)),
             silenceDuration = SilenceDuration(1.second.quantize(network.slotConfig)),

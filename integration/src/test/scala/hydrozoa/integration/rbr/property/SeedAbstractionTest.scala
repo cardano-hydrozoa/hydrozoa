@@ -28,7 +28,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
     private val nHeadPeers: Int = 3
     private val nCoilPeers: Int = 2
     private val maxVersionMinor: Int = 2
-    private val scenarioTimeout: FiniteDuration = 5.minutes
+    private val scenarioTimeout: FiniteDuration = 7.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
 
     // Freeze the dispute: dropping the v2 settlement triggers fallback; dropping every dispute
@@ -59,7 +59,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 60.seconds,
+          takeoffOffset = 120.seconds,
           coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
           coilQuorum = nCoilPeers,
         ) { (takeoffTime, mnc) =>

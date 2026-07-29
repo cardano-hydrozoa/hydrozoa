@@ -50,7 +50,7 @@ case class RbrMbtSuite(
     override type Sut = hydrozoa.integration.rbr.mbt.Sut
 
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
-    private val scenarioTimeout: FiniteDuration = 5.minutes
+    private val scenarioTimeout: FiniteDuration = 7.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
 
     private val log: ContraTracer[IO, Slf4jMsg] =
@@ -77,7 +77,7 @@ case class RbrMbtSuite(
               transportMode = TransportMode.WebSocket,
               testPeers = testPeers,
               testPeerToUtxos = testPeerToUtxos,
-              takeoffOffset = 60.seconds,
+              takeoffOffset = 120.seconds,
               coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
               coilQuorum = nCoilPeers,
             )

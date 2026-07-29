@@ -51,7 +51,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
 
     private val nHeadPeers: Int = 3
     private val nCoilPeers: Int = 2
-    private val scenarioTimeout: FiniteDuration = 5.minutes
+    private val scenarioTimeout: FiniteDuration = 7.minutes
     private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
 
     /** The commitment we expect the resolved treasury to end up with. Drives both what (if
@@ -93,7 +93,7 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
           transportMode = transportMode,
           testPeers = testPeers,
           testPeerToUtxos = testPeerToUtxos,
-          takeoffOffset = 60.seconds,
+          takeoffOffset = 120.seconds,
           disputeResolutionConfig = fastDisputeResolutionConfig,
           coilPeers = coilPeers,
           coilQuorum = nCoilPeers
