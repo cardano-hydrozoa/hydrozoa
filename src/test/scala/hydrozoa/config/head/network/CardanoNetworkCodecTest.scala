@@ -4,6 +4,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.given
 import io.circe.Json
 import io.circe.syntax.*
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, ProtocolParams, ProtocolVersion}
 
 /** Shape and round-trip coverage for the [[CardanoNetwork]] JSON codec.
@@ -63,6 +64,29 @@ class CardanoNetworkCodecTest extends AnyFunSuite:
         assert(
           badVersion.as[ProtocolVersion].isLeft,
           s"expected a Left for major=0, got ${badVersion.as[ProtocolVersion]}"
+        )
+    }
+
+    test("Network Other round-trips through JSON, pinning the {Other:{v}} shape") {
+        // A valid Other(5) must still round-trip through the Try-wrapped decoder, and this pins the
+        // discriminator shape the malformed fixture below reuses — so a shape drift fails here
+        // rather than letting that fixture decode to a Left for the wrong reason.
+        val validOther: Network = Network.Other(5)
+        val encoded = validOther.asJson
+        assert(
+          encoded.hcursor.downField("Other").downField("v").as[Int] == Right(5) &&
+              encoded.as[Network] == Right(validOther),
+          s"Other(5) must round-trip through {Other:{v}}; got ${encoded.noSpaces}"
+        )
+    }
+
+    test("a malformed Network Other decodes to a Left, not a thrown exception") {
+        // Network.Other requires its byte in 2..15; a derived decoder would let that require throw.
+        // The total decoder must surface an out-of-range byte as a DecodingFailure (a Left) instead.
+        val malformed = Json.obj("Other" -> Json.obj("v" -> Json.fromInt(42)))
+        assert(
+          malformed.as[Network].isLeft,
+          s"expected a Left for an out-of-range Other byte, got ${malformed.as[Network]}"
         )
     }
 

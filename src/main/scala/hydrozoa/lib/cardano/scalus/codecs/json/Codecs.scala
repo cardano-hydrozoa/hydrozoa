@@ -100,7 +100,18 @@ object Codecs {
 
     given networkEncoder: Encoder[Network] = deriveEncoder[Network]
 
-    given networkDecoder: Decoder[Network] = deriveDecoder[Network]
+    /** `Network.Other` `require`s its byte in 2..15, so — like [[protocolVersionDecoder]] — the
+      * derived decoder is wrapped in `Try` to stay total instead of throwing the constructor
+      * `require` on an out-of-range network byte (e.g. `{"Other":{"v":42}}`).
+      */
+    given networkDecoder: Decoder[Network] = {
+        val derived = deriveDecoder[Network]
+        Decoder.instance(c =>
+            Try(derived(c)).toEither.left
+                .map(e => DecodingFailure(s"Invalid Network: ${e.getMessage}", c.history))
+                .flatten
+        )
+    }
 
     given slotConfigEncoder: Encoder[SlotConfig] = deriveEncoder[SlotConfig]
 
