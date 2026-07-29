@@ -1,21 +1,25 @@
-# A 4-head-peer Hydrozoa head on a local Yaci devnet, for the e2e L2-propagation test (WI-004).
+# A 4-head-peer Hydrozoa head for the e2e L2-propagation test (WI-004): 4 head peers, each a single
+# hydrozoa node running the built-in EUTXO L2 ledger in-process, all publishing their user/admin
+# HTTP API (host 8080-8083). (The production docker-compose.yml is a different shape: 2 head + 4
+# coil on Blockfrost.io.)
 #
-# Topology: one `yaci` service (a Cardano devnet exposing a Blockfrost-compatible API + an admin
-# API) plus 4 head peers, each a single hydrozoa node running the built-in EUTXO L2 ledger
-# in-process. All four publish their user/admin HTTP API (host 8080-8083). Unlike the standard
-# docker-compose.yml (2 head + 4 coil, on Blockfrost.io), every peer here targets the in-compose
-# Yaci via `cardanoBackendUrl = http://yaci:8080/api/v1` (baked into each private.json by
-# `keygen-fleet --blockfrost-url http://yaci:8080/api/v1`).
+# Two modes:
+#   - preprod (default):  `docker compose -f … up`
+#       heads run against a standard network via real Blockfrost — no Yaci container. Generate the
+#       configs with `keygen-fleet --cardano-network preprod` + a preprod Blockfrost key.
+#   - Yaci devnet:        `docker compose -f … --profile yaci up`
+#       adds a local Yaci devnet; every peer targets it in-mesh at http://yaci:8080/api/v1 (baked
+#       into each private.json by `keygen-fleet --blockfrost-url http://yaci:8080/api/v1`).
 #
-# Two URL contexts (see design.md §6):
+# Yaci URL contexts (see design.md §6):
 #   - in-compose (containers → Yaci):  http://yaci:8080/api/v1   (the mesh service name)
-#   - host-side (the CLI generation steps + DevKit.topup → Yaci):
+#   - host-side (CLI generation steps + DevKit.topup → Yaci):
 #       Blockfrost  http://localhost:18080/api/v1   (host 18080; heads own 8080-8083)
 #       admin       http://localhost:10000/local-cluster/api
 #
-# Bring-up is driven by the WI-004 test (host-side): start `yaci`, run keygen-fleet (custom) →
-# DevKit.topup head-0 → deploy-scripts → build-head-config against the host URLs, then bring up the
-# 4 heads. HYDROZOA_IMAGE overrides the hydrozoa image (default: a locally built one).
+# WI-004 drives bring-up host-side: (Yaci mode) start `yaci`, create the devnet, run keygen-fleet →
+# DevKit.topup head-0 → deploy-scripts → build-head-config, then bring up the 4 heads. HYDROZOA_IMAGE
+# overrides the hydrozoa image; HYDROZOA_HOME the configs dir.
 
 name: hydrozoa-yaci
 
@@ -27,12 +31,14 @@ networks:
 
 services:
   ## ------------------------------------------------------------------ Yaci devnet (Blockfrost API)
+  # Only started under the `yaci` profile (`--profile yaci`); the default `up` is preprod-only.
   # Yaci DevKit's yaci-cli container boots idle (`sleep infinity`); the devnet is created by driving
   # the CLI into it, which the WI-004 test does after `up` and before the heads (block/slot time set
   # here for a fast wall-clock test):
   #   docker compose -f … exec yaci /app/yaci-cli.sh create-node -o --start --block-time 1 --slot-length 1
   # The Docker devnet is fixed to protocolMagic 42 / Testnet. Blockfrost API on 8080, admin on 10000.
   yaci:
+    profiles: ["yaci"]
     image: bloxbean/yaci-cli:0.10.6 # bump to the tag you run (local checkout: 0.12.0-beta6)
     entrypoint: [sleep, infinity]
     ports:
@@ -49,7 +55,9 @@ services:
       JAVA_OPTS: -Xmx1g -Xms256m
     command: ["serve", "/configs/head-config.json", "/configs/private.json"]
     networks: [mesh]
-    depends_on: [yaci]
+    # Reach real Blockfrost (preprod mode); the embedded DNS still resolves mesh names (yaci, head-N).
+    # No `depends_on: yaci` — preprod mode runs without it, and WI-004 sequences Yaci-mode bring-up.
+    dns: [8.8.8.8, 8.8.4.4]
     stop_grace_period: 120s
     restart: on-failure
     ports:
