@@ -235,7 +235,8 @@ lazy val integration: Project = (project in file("integration"))
       Test / testOptions += Tests.Exclude(
         Seq(
           "hydrozoa.integration.stage1.Stage1PropertiesYaci",
-          "hydrozoa.integration.yaci.YaciDevnetSmokeTest"
+          "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
+          "hydrozoa.integration.yaci.YaciDeployProbe"
         )
       ),
       // test dependencies
