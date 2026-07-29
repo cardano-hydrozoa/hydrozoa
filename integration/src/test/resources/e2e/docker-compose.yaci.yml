@@ -5,11 +5,13 @@
 #
 # Two modes:
 #   - preprod (default):  `docker compose -f … up`
-#       heads run against a standard network via real Blockfrost — no Yaci container. Generate the
-#       configs with `keygen-fleet --cardano-network preprod` + a preprod Blockfrost key.
+#       heads run against a standard network via real Blockfrost — no Yaci container. Set a preprod
+#       `blockfrostApiKey` in the peer-private template, then run `keygen-fleet` (it derives the
+#       network from the template).
 #   - Yaci devnet:        `docker compose -f … --profile yaci up`
-#       adds a local Yaci devnet; every peer targets it in-mesh at http://yaci:8080/api/v1 (baked
-#       into each private.json by `keygen-fleet --blockfrost-url http://yaci:8080/api/v1`).
+#       adds a local Yaci devnet; every peer targets it in-mesh at http://yaci:8080/api/v1. Set
+#       `cardanoBackendUrl: http://yaci:8080/api/v1` in the template, then run `keygen-fleet` (an
+#       explicit cardanoBackendUrl marks the network Custom).
 #
 # Yaci URL contexts (see design.md §6):
 #   - in-compose (containers → Yaci):  http://yaci:8080/api/v1   (the mesh service name)
