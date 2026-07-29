@@ -1,11 +1,13 @@
 package hydrozoa.integration.rbr.model.petri.hlpn
 
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.BallotStatus.{Abstained, Awaiting, Voted}
-import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId, committedOutputs}
+import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet.{Ballot, BallotStatus, RBRPlaceId, RBRTransitionId}
 import hydrozoa.lib.collection.Multiset
 import hydrozoa.lib.petri.hlpn.*
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.{Prop, Properties}
+import scalus.cardano.address.Address
+import scalus.cardano.ledger.{Coin, TransactionOutput, Value}
 import spire.algebra.Order
 import spire.math.SafeLong
 
@@ -18,9 +20,27 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
     private val (peer0, peer1, peer2) =
         (HeadPeerNumber(0), HeadPeerNumber(1), HeadPeerNumber(2))
 
+    private val payoutAddress: Address =
+        Address.fromBech32("addr_test1wqt2v8zcpjldyu2zcwz3yuu8p4wpk0hzaqwthh23qgs5xgg7266qn")
+
+    /** Version `v` commits `max(1, v)` distinct outputs, distinguished by lovelace so tokens stay
+      * distinct; a higher version carries a bigger evacuation batch.
+      */
+    private def committedOutputs(versionMinor: Int): List[TransactionOutput] =
+        (1 to versionMinor.max(1)).toList.map { j =>
+            TransactionOutput(
+              payoutAddress,
+              Value(Coin((versionMinor.toLong * 100 + j) * 1_000_000L))
+            )
+        }
+
+    // Candidate SEC versions 1 and 2, keyed by version — the net's PayoutObligations/VotableVersions seed.
+    private val committedObligations: Map[BigInt, List[TransactionOutput]] =
+        List(1, 2).map(v => BigInt(v) -> committedOutputs(v)).toMap
+
     // n = 3 peers → boxes (0,(1,(Voted,0))) public, (1,(2,·)), (2,(3,·)), (3,(0,·)) for peers 0..2
     private def net =
-        RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
+        RBRHlNet(nHeadPeers = 3, committedObligations).toOption.get
 
     private type Net = HlNet[RBRPlaceId, RBRTransitionId, Any]
 
@@ -171,7 +191,7 @@ object RBRHlNetTest extends Properties("RBRHlNet"):
     val _ = property(
       "empty committedObligations: assembles well-sorted, PayoutObligations/VotableVersions empty"
     ) = {
-        val emptyNet = RBRHlNet(nHeadPeers = 3, Nil).toOption.get
+        val emptyNet = RBRHlNet(nHeadPeers = 3, Map.empty).toOption.get
         allTrue(
           SortCheck.errors(emptyNet).isEmpty,
           emptyNet.placesMap(RBRPlaceId.PayoutObligations).marking.multiplicityMap.isEmpty,
