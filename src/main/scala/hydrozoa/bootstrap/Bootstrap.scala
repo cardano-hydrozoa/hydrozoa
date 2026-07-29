@@ -1429,38 +1429,43 @@ object KeygenFleet:
         } yield exit
     }
 
-    /** Derive the target network from the template. A `blockfrostApiKey` with a `preview…` /
-      * `preprod…` / `mainnet…` prefix picks a standard network; otherwise the template's
-      * `cardanoBackendUrl` (+ optional `yaciAdminUrl`) marks a pending custom network, resolved
-      * live at build-head-config time.
+    /** Derive the target network from the template. An explicit `cardanoBackendUrl` (+ optional
+      * `yaciAdminUrl`) marks a pending custom network, resolved live at build-head-config time, and
+      * **takes precedence** over the `blockfrostApiKey` — so a Yaci wiring works even if the
+      * scaffold's default `preview…` key is left in place. Otherwise the key's `preview…` /
+      * `preprod…` / `mainnet…` prefix picks a standard network.
       */
     private def deriveNetwork(template: Path): IO[BootstrapNetwork] =
         for {
             content <- IO.blocking(Files.readString(template))
-            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
-              new IllegalArgumentException(s"no blockfrostApiKey found in $template")
-            )
-            bootstrapNetwork <-
-                if key.startsWith("preview") then
-                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preview))
-                else if key.startsWith("preprod") then
-                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preprod))
-                else if key.startsWith("mainnet") then
-                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Mainnet))
-                else
-                    for {
-                        json <- IO.fromEither(parser.parse(content))
-                        blockfrostUrl <- IO.fromOption(
-                          json.hcursor.get[Option[String]]("cardanoBackendUrl").toOption.flatten
-                        )(
-                          new IllegalArgumentException(
-                            s"cannot derive the network from $template: blockfrostApiKey is not a " +
-                                "standard preview…/preprod…/mainnet… key and no cardanoBackendUrl is set"
-                          )
-                        )
-                        yaciAdminUrl =
-                            json.hcursor.get[Option[String]]("yaciAdminUrl").toOption.flatten
-                    } yield BootstrapNetwork.PendingCustom(blockfrostUrl, yaciAdminUrl)
+            json <- IO.fromEither(parser.parse(content))
+            cardanoBackendUrl =
+                json.hcursor.get[Option[String]]("cardanoBackendUrl").toOption.flatten
+            bootstrapNetwork <- cardanoBackendUrl match {
+                case Some(blockfrostUrl) =>
+                    val yaciAdminUrl =
+                        json.hcursor.get[Option[String]]("yaciAdminUrl").toOption.flatten
+                    IO.pure(BootstrapNetwork.PendingCustom(blockfrostUrl, yaciAdminUrl))
+                case None =>
+                    IO.fromOption(json.hcursor.get[String]("blockfrostApiKey").toOption)(
+                      new IllegalArgumentException(s"no blockfrostApiKey found in $template")
+                    ).flatMap { key =>
+                        if key.startsWith("preview") then
+                            IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preview))
+                        else if key.startsWith("preprod") then
+                            IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preprod))
+                        else if key.startsWith("mainnet") then
+                            IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Mainnet))
+                        else
+                            IO.raiseError(
+                              new IllegalArgumentException(
+                                s"cannot derive the network from $template: blockfrostApiKey is not " +
+                                    "a standard preview…/preprod…/mainnet… key, and no " +
+                                    "cardanoBackendUrl is set for a custom network"
+                              )
+                            )
+                    }
+            }
         } yield bootstrapNetwork
 
 end KeygenFleet

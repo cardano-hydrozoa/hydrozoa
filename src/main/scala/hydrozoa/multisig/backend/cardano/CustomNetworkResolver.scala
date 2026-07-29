@@ -2,6 +2,10 @@ package hydrozoa.multisig.backend.cardano
 
 import cats.effect.IO
 import hydrozoa.config.head.network.CardanoNetwork
+import java.net.URI
+import java.net.http.HttpResponse.BodyHandlers
+import java.net.http.{HttpClient, HttpRequest}
+import java.time.Duration
 import scala.concurrent.ExecutionContext
 import scalus.cardano.address.Network
 import scalus.cardano.ledger.{CardanoInfo, SlotConfig}
@@ -20,6 +24,9 @@ import scalus.cardano.node.BlockfrostProvider
 object CustomNetworkResolver {
 
     private given ExecutionContext = ExecutionContext.global
+
+    private val connectTimeout = Duration.ofSeconds(10)
+    private val requestTimeout = Duration.ofSeconds(30)
 
     /** Build a [[CardanoNetwork.Custom]] by querying a running Blockfrost-compatible backend.
       *
@@ -51,7 +58,13 @@ object CustomNetworkResolver {
     ): IO[CardanoNetwork.Custom] =
         for {
             devnet <- fetchYaciDevnetInfo(adminUrl)
-            slotConfig = SlotConfig(devnet.startTime * 1000L, 0L, devnet.slotLength * 1000L)
+            // slotLength is seconds as a Double (a devnet may use a sub-second slot, e.g. 0.5); scale
+            // to milliseconds *before* truncating so a fractional slot length is not rounded to 0.
+            slotConfig = SlotConfig(
+              devnet.startTime * 1000L,
+              0L,
+              (devnet.slotLengthSeconds * 1000).toLong
+            )
             provider <- IO.fromFuture(
               IO(BlockfrostProvider.create(apiKey, blockfrostUrl, Network.Testnet, slotConfig))
             )
@@ -63,6 +76,9 @@ object CustomNetworkResolver {
     ): IO[CardanoNetwork.Custom] =
         for {
             // `create` needs a slot config to fetch params; `/genesis` then supplies the real one.
+            // This assumes a Shelley-at-genesis network (zeroSlot = 0, zeroTime = systemStart), which
+            // holds for a Yaci-style devnet; a Byron-prefixed network (real preprod/mainnet) has a
+            // later Shelley start and should use its standard `CardanoNetwork`, not `Custom`.
             bootstrap <- IO.fromFuture(
               IO(
                 BlockfrostProvider.create(
@@ -78,20 +94,28 @@ object CustomNetworkResolver {
                 if genesis.networkMagic.toLong == CardanoNetwork.Mainnet.protocolMagic then
                     Network.Mainnet
                 else Network.Testnet
-            slotConfig = SlotConfig(genesis.systemStart * 1000L, 0L, genesis.slotLength * 1000L)
+            slotConfig = SlotConfig(
+              zeroTime = genesis.systemStart * 1000L,
+              zeroSlot = 0L,
+              slotLength = genesis.slotLength * 1000L,
+              epochLength = genesis.epochLength
+            )
             cardanoInfo = CardanoInfo(bootstrap.cardanoInfo.protocolParams, network, slotConfig)
         } yield CardanoNetwork.Custom(cardanoInfo, genesis.networkMagic.toLong)
 
-    private final case class YaciDevnetInfo(startTime: Long, slotLength: Long, protocolMagic: Int)
+    private final case class YaciDevnetInfo(
+        startTime: Long,
+        slotLengthSeconds: Double,
+        protocolMagic: Int
+    )
 
     /** `GET {adminUrl}/admin/devnet` → the running Yaci devnet's slot timing + protocol magic. */
     private def fetchYaciDevnetInfo(adminUrl: String): IO[YaciDevnetInfo] =
         IO.blocking {
-            val uri = java.net.URI.create(s"${adminUrl.stripSuffix("/")}/admin/devnet")
-            val client = java.net.http.HttpClient.newHttpClient()
-            val request = java.net.http.HttpRequest.newBuilder(uri).GET().build()
-            val response =
-                client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            val uri = URI.create(s"${adminUrl.stripSuffix("/")}/admin/devnet")
+            val client = HttpClient.newBuilder().connectTimeout(connectTimeout).build()
+            val request = HttpRequest.newBuilder(uri).timeout(requestTimeout).GET().build()
+            val response = client.send(request, BodyHandlers.ofString())
             if response.statusCode() != 200 then
                 throw RuntimeException(
                   s"Yaci admin GET $uri failed: ${response.statusCode()} ${response.body()}"
@@ -99,7 +123,7 @@ object CustomNetworkResolver {
             val json = ujson.read(response.body())
             YaciDevnetInfo(
               startTime = json("startTime").num.toLong,
-              slotLength = json("slotLength").num.toLong,
+              slotLengthSeconds = json("slotLength").num,
               protocolMagic = json("protocolMagic").num.toInt
             )
         }
