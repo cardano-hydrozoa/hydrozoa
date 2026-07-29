@@ -15,17 +15,10 @@ object RemoteL2LedgerEventFormat:
                 info(s"Connecting to WebSocket at $uri")
             case Connected(uri) =>
                 info(s"Successfully connected to $uri")
-            case ConnectionError(attempt, backoff, cause) =>
+            case Unavailable(uri, cause) =>
                 LogEvent(
                   Level.Warn,
-                  s"Connection error (attempt ${attempt + 1}), reconnecting after $backoff",
-                  cause = Some(cause),
-                  routingKey = Some("RemoteL2Ledger")
-                )
-            case ReconnectionAttemptFailed(cause) =>
-                LogEvent(
-                  Level.Debug,
-                  s"Reconnection attempt failed, will retry: ${cause.getMessage}",
+                  s"Remote L2 ledger at $uri is unavailable; try again later",
                   cause = Some(cause),
                   routingKey = Some("RemoteL2Ledger")
                 )

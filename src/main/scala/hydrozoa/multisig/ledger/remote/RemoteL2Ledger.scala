@@ -2,44 +2,54 @@ package hydrozoa.multisig.ledger.remote
 
 import cats.Monad
 import cats.data.EitherT
-import cats.effect.{Async, IO, Temporal}
+import cats.effect.std.Mutex
+import cats.effect.{Async, IO, Ref, Resource}
+import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError}
-import hydrozoa.multisig.ledger.remote
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Request, Response}
+import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request, Response}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.Codec
 import io.circe.parser.*
 import io.circe.syntax.*
 import org.http4s.Uri
-import org.http4s.client.websocket.{WSConnectionHighLevel, WSFrame, WSRequest}
+import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
 import scalus.uplc.builtin.ByteString
 
-/** A remote L2Ledger implementation that communicates with a black-box ledger over WebSocket.
+/** A remote L2Ledger implementation that talks to a black-box ledger over a single, long-lived
+  * WebSocket connection, one synchronous request/response at a time.
   *
-  * This implementation uses synchronous request-response communication: each request blocks until
-  * the corresponding response is received from the remote ledger.
-  *
-  * Includes automatic reconnection logic with exponential backoff when the connection is lost.
+  * Every request shares one connection (one JDK `HttpClient`), serialized by [[mutex]] so
+  * concurrent callers never interleave frames on the socket. Opening a fresh client + connection
+  * per request — as an earlier version did — leaks a selector thread and file descriptors each time
+  * (the JDK `HttpClient` is reclaimed only on GC), and exhausts the process's file-descriptor limit
+  * under load. The connection is opened lazily on first use and transparently reopened once if it
+  * has dropped; when the remote ledger cannot be reached, a request fails with an [[L2LedgerError]]
+  * ("try again later") that flows through the normal error channel, rather than blocking forever or
+  * crashing the node.
   *
   * @param wsUri
-  *   The WebSocket URI for reconnection
+  *   The WebSocket URI of the remote ledger
+  * @param wsClient
+  *   The shared WebSocket client (one JDK `HttpClient`), reused across all connections
+  * @param mutex
+  *   Serializes request/response exchanges over the one shared connection
   * @param connRef
-  *   A reference to the current WebSocket connection (None if not yet connected)
-  * @param maxRetries
-  *   Maximum number of reconnection attempts
-  * @param initialBackoff
-  *   Initial backoff duration between retries (default: 1 second)
+  *   The current connection and its finalizer (None when not connected)
+  * @param requestTimeout
+  *   Upper bound on one request/response exchange before the connection is dropped
   */
 class RemoteL2Ledger private (
     wsUri: Uri,
-    initialBackoff: FiniteDuration,
-    maxBackoff: FiniteDuration,
+    wsClient: WSClient[IO],
+    mutex: Mutex[IO],
+    connRef: Ref[IO, Option[Conn]],
+    requestTimeout: FiniteDuration,
     config: RemoteL2Ledger.Config,
     tracer: ContraTracer[IO, RemoteL2LedgerEvent]
 ) extends L2Ledger[IO] {
@@ -49,85 +59,106 @@ class RemoteL2Ledger private (
 
     given CardanoNetwork.Section = config.cardanoNetwork
 
-    /** Execute an operation with automatic reconnection on failure.
-      *
-      * Opens a fresh connection per attempt via [[Resource.use]], ensuring the connection is always
-      * closed regardless of outcome. Retries infinitely with exponential backoff capped at
-      * maxBackoff.
+    /** Returned when the remote ledger is unreachable — a calm, retryable error, not a crash. */
+    private val unavailable: L2LedgerError =
+        L2LedgerError("remote L2 ledger unavailable, try again later")
+
+    /** Run [[use]] against the shared connection, opening it if needed and reopening it once if the
+      * first attempt fails on a broken connection. Serialized by [[mutex]] so concurrent callers
+      * never interleave frames. A connection failure becomes `Left(unavailable)`; a successful
+      * exchange is passed through untouched, so a valid response carrying an application-level
+      * error is left for the caller to interpret (it is not mistaken for connection loss).
       */
-    private def withReconnect[A](
-        operation: WSConnectionHighLevel[IO] => IO[A],
-        attempt: Int = 0
-    ): IO[A] = {
-        val run = for {
-            _ <- tracer.traceWith(Connecting(wsUri))
-            wsClient <- JdkWSClient.simple[IO]
-            result <- wsClient.connectHighLevel(WSRequest(wsUri)).use { conn =>
-                tracer.traceWith(Connected(wsUri)) >> operation(conn)
-            }
-        } yield result
-
-        run.handleErrorWith { error =>
-            val calculatedBackoffSeconds = initialBackoff.toSeconds * Math.pow(2, attempt).toLong
-            val backoffDuration =
-                if calculatedBackoffSeconds.seconds > maxBackoff then maxBackoff
-                else calculatedBackoffSeconds.seconds
-            for {
-                _ <- tracer.traceWith(ConnectionError(attempt, backoffDuration, error))
-                _ <- Temporal[IO].sleep(backoffDuration)
-                result <- withReconnect(operation, attempt + 1)
-            } yield result
+    private def withConnection[A](
+        use: WSConnectionHighLevel[IO] => IO[A]
+    ): IO[Either[L2LedgerError, A]] =
+        mutex.lock.surround {
+            def go(reopened: Boolean): IO[Either[L2LedgerError, A]] =
+                acquire.flatMap {
+                    case Left(err) => IO.pure(Left(err))
+                    case Right(conn) =>
+                        use(conn.connection).attempt.flatMap {
+                            case Right(a) => IO.pure(Right(a))
+                            case Left(err) =>
+                                drop(conn) >> {
+                                    if reopened then
+                                        tracer
+                                            .traceWith(Unavailable(wsUri, err))
+                                            .as(Left(unavailable))
+                                    else go(reopened = true)
+                                }
+                        }
+                }
+            go(reopened = false)
         }
-    }
 
-    /** Send a request to the remote ledger and wait for the synchronous response
+    /** The current connection, opening (and caching) a new one if none is live. */
+    private def acquire: IO[Either[L2LedgerError, Conn]] =
+        connRef.get.flatMap {
+            case Some(conn) => IO.pure(Right(conn))
+            case None       => open
+        }
+
+    /** Open a connection, cache it, and trace the outcome; a failure to connect is reported as
+      * unavailable rather than raised.
+      */
+    private def open: IO[Either[L2LedgerError, Conn]] =
+        tracer.traceWith(Connecting(wsUri)) >>
+            wsClient.connectHighLevel(WSRequest(wsUri)).allocated.attempt.flatMap {
+                case Right((connection, release)) =>
+                    val conn = Conn(connection, release)
+                    connRef.set(Some(conn)) >> tracer.traceWith(Connected(wsUri)).as(Right(conn))
+                case Left(err) =>
+                    tracer.traceWith(Unavailable(wsUri, err)).as(Left(unavailable))
+            }
+
+    /** Discard a connection believed broken: clear it from the cache (if still current) and release
+      * its resources, ignoring any close error.
+      */
+    private def drop(conn: Conn): IO[Unit] =
+        connRef.update {
+            case Some(current) if current eq conn => None
+            case other                            => other
+        } >> conn.release.attempt.void
+
+    /** Send a request to the remote ledger and wait for the synchronous response.
       *
-      * Connection errors are handled by withReconnect (infinite retry). Only L2 ledger errors
-      * (decode failures, Response.Failure) are returned as Left(L2LedgerError).
+      * Connection loss surfaces as `Left(unavailable)` via [[withConnection]]. Response-level
+      * errors (decode failures, `Response.Failure`) come back as `Left(L2LedgerError)` too, but
+      * leave the connection intact.
       */
     private def sendRequest(
         request: Request
-    ): EitherT[IO, L2LedgerError, Response.Success] = {
+    ): EitherT[IO, L2LedgerError, Response.Success] =
         EitherT {
-            withReconnect { conn =>
-                for {
-                    // Send request
-                    message <- IO.pure(request.asJson.noSpaces)
+            withConnection { conn =>
+                val message = request.asJson.noSpaces
+                val exchange = for {
                     _ <- tracer.traceWith(Sending(message))
                     _ <- conn.send(WSFrame.Text(message))
-
-                    // Wait for response (synchronous)
                     responseText <- conn.receiveStream
                         .collect { case WSFrame.Text(text, _) => text }
                         .head
                         .compile
                         .lastOrError
-
                     _ <- tracer.traceWith(Received(responseText))
-
-                    // Decode response
-                    ret <- decode[Response](responseText) match {
+                } yield responseText
+                // Bound the exchange so a silent remote can't wedge the shared connection (and, with
+                // it, every other request): on timeout the exchange fails, the connection is dropped,
+                // and the request comes back as unavailable.
+                exchange.timeout(requestTimeout)
+            }.map {
+                case Left(err) => Left(err)
+                case Right(responseText) =>
+                    decode[Response](responseText) match {
                         case Left(err) =>
-                            IO.pure(
-                              Left(
-                                L2LedgerError(
-                                  s"Failed to decode response: ${err.getMessage}"
-                                )
-                              )
-                            )
-                        case Right(response) =>
-                            response match {
-                                case s: Response.Success => IO.pure(Right(s))
-                                case f: Response.Failure =>
-                                    IO.pure(
-                                      Left(L2LedgerError(s"Internal L2 failure: ${f.message}"))
-                                    )
-                            }
+                            Left(L2LedgerError(s"Failed to decode response: ${err.getMessage}"))
+                        case Right(s: Response.Success) => Right(s)
+                        case Right(f: Response.Failure) =>
+                            Left(L2LedgerError(s"Internal L2 failure: ${f.message}"))
                     }
-                } yield ret
             }
         }
-    }
 
     override def sendRegisterDeposit(
         req: L2LedgerCommand.RegisterDeposit
@@ -175,6 +206,9 @@ class RemoteL2Ledger private (
 
 object RemoteL2Ledger {
     type Config = CardanoNetwork.Section
+
+    /** A live WebSocket connection paired with the finalizer that closes it. */
+    private final case class Conn(connection: WSConnectionHighLevel[IO], release: IO[Unit])
 
     /** Request types sent to the remote L2 ledger */
     sealed trait Request
@@ -240,27 +274,34 @@ object RemoteL2Ledger {
         final case class Failure(message: String) extends Response
     }
 
-    /** Create a RemoteL2Ledger with automatic connection and reconnection management
+    /** Create a RemoteL2Ledger as a [[Resource]] that owns one shared WebSocket client for its
+      * whole lifetime; the release step closes any open connection.
       *
-      * The connection is established lazily on first use and automatically reconnected if lost.
-      * Connection attempts retry infinitely with exponential backoff capped at maxBackoff.
-      * {policyIdHex}.{assetNameHex}
+      * The connection is opened lazily on first use, reused across all requests, and transparently
+      * reopened if it drops. When the remote ledger is unreachable, requests fail with a retryable
+      * [[L2LedgerError]] instead of blocking or crashing.
+      *
       * @param wsUri
       *   The WebSocket URI (e.g., "ws://localhost:9000/l2-ledger")
-      * @param initialBackoff
-      *   Initial backoff duration between retries (default: 1 second)
-      * @param maxBackoff
-      *   Maximum backoff duration cap for exponential backoff (default: 30 seconds)
+      * @param requestTimeout
+      *   How long one request/response exchange may take before the connection is dropped and the
+      *   request reported unavailable (default: 30 seconds)
       * @return
-      *   A RemoteL2Ledger instance that manages its own connections
+      *   A RemoteL2Ledger scoped to the returned Resource
       */
     def create(
         wsUri: String,
         config: Config,
         tracer: ContraTracer[IO, RemoteL2LedgerEvent],
-        initialBackoff: FiniteDuration = 1.second,
-        maxBackoff: FiniteDuration = 30.seconds,
-    ): IO[RemoteL2Ledger] =
-        IO.fromEither(Uri.fromString(wsUri))
-            .map(uri => new RemoteL2Ledger(uri, initialBackoff, maxBackoff, config, tracer))
+        requestTimeout: FiniteDuration = 30.seconds,
+    ): Resource[IO, RemoteL2Ledger] =
+        for {
+            uri <- Resource.eval(IO.fromEither(Uri.fromString(wsUri)))
+            // One HttpClient for the whole lifetime — reused across every connection.
+            wsClient <- Resource.eval(JdkWSClient.simple[IO])
+            connRef <- Resource.make(Ref[IO].of(Option.empty[Conn]))(ref =>
+                ref.get.flatMap(_.traverse_(_.release.attempt.void))
+            )
+            mutex <- Resource.eval(Mutex[IO])
+        } yield new RemoteL2Ledger(uri, wsClient, mutex, connRef, requestTimeout, config, tracer)
 }

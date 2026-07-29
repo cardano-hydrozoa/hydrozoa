@@ -221,12 +221,10 @@ object Serve {
                 )
                 for {
                     _ <- Resource.eval(log.info(s"L2 ledger: remote at $wsUri"))
-                    ledger <- Resource.eval(
-                      RemoteL2Ledger.create(
-                        wsUri = wsUri,
-                        config = nodeConfig,
-                        tracer = tracer,
-                      )
+                    ledger <- RemoteL2Ledger.create(
+                      wsUri = wsUri,
+                      config = nodeConfig,
+                      tracer = tracer,
                     )
                 } yield (ledger, Option.empty[EutxoL2LedgerReader[IO]])
         }
