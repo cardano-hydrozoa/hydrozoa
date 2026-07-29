@@ -26,8 +26,9 @@ import scala.util.Try
 import scalus.cardano.address.{Address, ShelleyAddress}
 import scalus.cardano.ledger
 import scalus.cardano.ledger.*
-import scalus.cardano.node.BlockfrostProvider
+import scalus.cardano.node.{BlockfrostProvider, BlockfrostProviderPlatform}
 import scalus.uplc.builtin.{ByteString, Data}
+import sttp.client4.Backend
 
 /** Cardano backend to use with Blockfrost-compatible API. Currently, uses both BloxBeans's
   * [[BackendServive]] and Scalus' [[BlockfrostProvider]] for protocol parameters handle.
@@ -711,11 +712,12 @@ object CardanoBackendBlockfrost:
 
                     }
                 case Right(custom, customBaseUrl) =>
-                    BlockfrostProvider.create(
-                      apiKey = apiKey,
-                      baseUrl = customBaseUrl,
-                      network = custom.network,
-                      slotConfig = custom.cardanoInfo.slotConfig
+                    // Reuse the already-resolved CardanoInfo (params + network + slot config) instead
+                    // of re-fetching params via `create`, so the backend cannot diverge from the
+                    // CardanoInfo pinned into the head-config, and one HTTP round-trip is saved.
+                    given Backend[Future] = BlockfrostProviderPlatform.defaultBackend
+                    Future.successful(
+                      new BlockfrostProvider(apiKey, customBaseUrl, 5, custom.cardanoInfo)
                     )
             }
 
