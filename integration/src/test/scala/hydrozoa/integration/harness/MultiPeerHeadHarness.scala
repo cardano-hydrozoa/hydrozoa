@@ -18,6 +18,7 @@ import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, gen
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.config.{ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -329,6 +330,9 @@ object MultiPeerHeadHarness:
             fastDisputeResolutionConfig,
         coilPeers: CoilPeers = CoilPeers.empty,
         coilQuorum: Int = 0,
+        // Real on-chain script references (deployed on a Yaci devnet); `None` fabricates them,
+        // which only works against the mock backend.
+        scriptReferenceUtxos: Option[ScriptReferenceUtxos] = None,
     ): PropertyM[IO, (Option[Instant], MultiNodeConfig)] =
         for {
             takeoffTime <- PropertyM.run(
@@ -352,6 +356,8 @@ object MultiPeerHeadHarness:
                             )
                           )
                         ),
+                        generateScriptReferenceUtxos = scriptReferenceUtxos
+                            .fold(defaultScriptRefsGen)(refs => ReaderT.liftF(Gen.const(refs))),
                         coilPeers = coilPeers,
                       ),
                       generateInitialBlock = (bootstrap, funding) =>
