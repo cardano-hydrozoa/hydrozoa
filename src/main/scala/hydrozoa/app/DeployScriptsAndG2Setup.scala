@@ -10,7 +10,7 @@ import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CustomNetworkResolver}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DeploymentTx, SetupLadder}
@@ -81,6 +81,19 @@ object DeployScriptsAndG2Setup:
         ).map(Path.of(_))
             .orNone
 
+    private val blockfrostUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "blockfrost-url",
+          "Blockfrost-compatible API base URL for a custom network (e.g. a Yaci devnet); when set, " +
+              "the target network is resolved from it instead of the Blockfrost key's prefix"
+        ).orNone
+
+    private val yaciAdminUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "yaci-admin-url",
+          "Yaci admin API base URL, for a custom Yaci devnet's dynamic slot config"
+        ).orNone
+
     /** The `deploy-scripts-and-g2-setup` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
@@ -89,21 +102,31 @@ object DeployScriptsAndG2Setup:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (Bootstrap.homeOpt, walletOpt, blockfrostKeyOpt, ladderRefsOpt).mapN(
-          (home, walletOverride, mbKey, ladder) =>
-              deployScriptsAndG2Setup(
-                walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
-                mbKey,
-                ladder,
-                Bootstrap.HomeLayout.refUtxos(home)
-              )
+        (
+          Bootstrap.homeOpt,
+          walletOpt,
+          blockfrostKeyOpt,
+          ladderRefsOpt,
+          blockfrostUrlOpt,
+          yaciAdminUrlOpt
+        ).mapN((home, walletOverride, mbKey, ladder, blockfrostUrl, yaciAdminUrl) =>
+            deployScriptsAndG2Setup(
+              walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
+              mbKey,
+              ladder,
+              Bootstrap.HomeLayout.refUtxos(home),
+              blockfrostUrl,
+              yaciAdminUrl
+            )
         )
 
     private def deployScriptsAndG2Setup(
         walletPath: Path,
         mbBlockfrostKey: Option[String],
         ladderRefsPath: Option[Path],
-        outPath: Path
+        outPath: Path,
+        blockfrostUrl: Option[String],
+        yaciAdminUrl: Option[String]
     ): IO[ExitCode] =
         for {
             // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
@@ -113,24 +136,41 @@ object DeployScriptsAndG2Setup:
                     s"${Bootstrap.defaultPrivateTemplate}"
               ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
             )(IO.pure)
-            cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
-              networkOfBlockfrostKey(blockfrostKey)
-            )
+            // A `--blockfrost-url` selects a custom network, resolved live from it; otherwise the
+            // target network is derived from the Blockfrost key's prefix (the standard networks only).
+            networkAndUrl <- blockfrostUrl match {
+                case Some(url) =>
+                    CustomNetworkResolver
+                        .resolve(url, yaciAdminUrl, blockfrostKey)
+                        .map(custom => (custom: CardanoNetwork, Some(url)))
+                case None =>
+                    IO.fromEither(networkOfBlockfrostKey(blockfrostKey))
+                        .map(n => (n: CardanoNetwork, Option.empty[String]))
+            }
+            (cardanoNetwork, customBackendUrl) = networkAndUrl
             exit <- {
                 given CardanoNetwork.Section = cardanoNetwork
-                deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
+                deployOn(
+                  cardanoNetwork,
+                  customBackendUrl,
+                  walletPath,
+                  blockfrostKey,
+                  ladderRefsPath,
+                  outPath
+                )
             }
         } yield exit
 
     private def deployOn(
-        cardanoNetwork: StandardCardanoNetwork,
+        cardanoNetwork: CardanoNetwork,
+        customBackendUrl: Option[String],
         walletPath: Path,
         blockfrostKey: String,
         ladderRefsPath: Option[Path],
         outPath: Path
     )(using CardanoNetwork.Section): IO[ExitCode] = {
         for {
-            _ <- log.info(s"Target network (from the Blockfrost key): $cardanoNetwork")
+            _ <- log.info(s"Target network: $cardanoNetwork")
 
             wallet <- readWallet(walletPath)
             address = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
@@ -138,11 +178,15 @@ object DeployScriptsAndG2Setup:
 
             reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
-            backend <- CardanoBackendBlockfrost(
-              Left(cardanoNetwork),
-              blockfrostKey,
-              tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-            )
+            backend <- CardanoBackendBlockfrost
+                .networkSelector(cardanoNetwork, customBackendUrl)
+                .flatMap(selector =>
+                    CardanoBackendBlockfrost(
+                      selector,
+                      blockfrostKey,
+                      tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
+                    )
+                )
 
             utxosMap <- backend
                 .utxosAt(address)

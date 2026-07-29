@@ -75,7 +75,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
                 .as[Bootstrap.BootstrapDefaults]
                 .fold(e => fail(s"decode failed: $e"), identity)
         assert(
-          decoded.cardanoNetwork == network &&
+          decoded.cardanoNetwork == Bootstrap.BootstrapNetwork.Standard(network) &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
               decoded.blockZeroStartTime.isEmpty
@@ -117,7 +117,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
             |}""".stripMargin
         )
 
-        val config = Bootstrap.readBootstrapDir(dir).unsafeRunSync()
+        val config = Bootstrap.readBootstrapDir(dir, "").unsafeRunSync()
         assert(
           config.cardanoNetwork == CardanoNetwork.Preview &&
               config.headParams.coilQuorum == 2 &&
@@ -150,7 +150,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           coilQuorum = coilQuorum
         )
         Bootstrap.BootstrapDefaults(
-          cardanoNetwork = network,
+          cardanoNetwork = Bootstrap.BootstrapNetwork.Standard(network),
           headParams = headParams,
           initialEquityContributions =
               Map(HeadPeerNumber(0) -> Coin.ada(100), HeadPeerNumber(1) -> Coin.zero),

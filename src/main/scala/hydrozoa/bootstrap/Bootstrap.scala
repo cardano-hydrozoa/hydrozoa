@@ -14,7 +14,7 @@ import hydrozoa.config.head.multisig.fallback.FallbackContingency.mkFallbackCont
 import hydrozoa.config.head.multisig.settlement.SettlementConfig
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.{HeadParameters, L2LedgerKind}
 import hydrozoa.config.head.peers.{HeadPeerData, HeadPeers}
 import hydrozoa.config.head.rulebased.dispute.DisputeResolutionConfig
@@ -25,7 +25,7 @@ import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Logging, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.lib.number.PositiveInt
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CustomNetworkResolver}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber.given
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects, BlockHeader}
@@ -165,6 +165,44 @@ object Bootstrap:
             deriveDecoder[BootstrapHeadParams]
     }
 
+    /** How `defaults.json` records the target L1 network before build-time resolution. A standard
+      * network is fully known offline; a `PendingCustom` one carries only the URLs needed to
+      * resolve its [[CardanoNetwork.Custom]] `CardanoInfo` **live** at [[BuildHeadConfig]] time, so
+      * template assembly ([[InitBootstrapFiles]] / keygen-fleet) never has to reach a running
+      * backend.
+      */
+    enum BootstrapNetwork {
+        case Standard(network: CardanoNetwork)
+        case PendingCustom(blockfrostUrl: String, yaciAdminUrl: Option[String])
+    }
+
+    object BootstrapNetwork {
+
+        /** A standard network encodes as its bare `CardanoNetwork` form (`"preview"`, …); a pending
+          * custom one as `{ "customBackend": { "blockfrostUrl": …, "yaciAdminUrl": … } }`.
+          */
+        given Encoder[BootstrapNetwork] = Encoder.instance {
+            case Standard(network) => network.asJson
+            case PendingCustom(blockfrostUrl, yaciAdminUrl) =>
+                Json.obj(
+                  "customBackend" -> Json.obj(
+                    "blockfrostUrl" -> blockfrostUrl.asJson,
+                    "yaciAdminUrl" -> yaciAdminUrl.asJson
+                  )
+                )
+        }
+
+        given Decoder[BootstrapNetwork] = Decoder.instance { c =>
+            val customBackend = c.downField("customBackend")
+            if customBackend.succeeded then
+                for {
+                    blockfrostUrl <- customBackend.downField("blockfrostUrl").as[String]
+                    yaciAdminUrl <- customBackend.downField("yaciAdminUrl").as[Option[String]]
+                } yield PendingCustom(blockfrostUrl, yaciAdminUrl)
+            else c.as[CardanoNetwork].map(Standard(_))
+        }
+    }
+
     /** Assembly-time defaults (`defaults.json`): everything the head needs that is neither peer
       * topology (the roster), script references, nor the opening L2 state — the L1 network, the
       * head protocol parameters, the per-peer equity contributions, and (optionally) the block-zero
@@ -173,7 +211,7 @@ object Bootstrap:
       * [[BuildHeadConfig]] anchors the initial block to wall-clock at build time.
       */
     final case class BootstrapDefaults(
-        cardanoNetwork: CardanoNetwork,
+        cardanoNetwork: BootstrapNetwork,
         headParams: BootstrapHeadParams,
         initialEquityContributions: Map[HeadPeerNumber, Coin],
         blockZeroStartTime: Option[BlockCreationStartTime],
@@ -236,7 +274,10 @@ object Bootstrap:
         initialL2State: List[L2Output],
         initialEquityContributions: Map[HeadPeerNumber, Coin],
         blockZeroStartTime: Option[BlockCreationStartTime],
-        blockZeroEndTime: Option[BlockCreationEndTime]
+        blockZeroEndTime: Option[BlockCreationEndTime],
+        // The Blockfrost backend URL for a `Custom` network, resolved from `defaults.json`'s
+        // pending-custom marker; `None` for a standard network (whose URL is network-derived).
+        customBackendUrl: Option[String] = None
     )
 
     /** The bootstrap directory's file names — the operator-facing inputs [[readBootstrapDir]]
@@ -255,7 +296,7 @@ object Bootstrap:
       * decoded with it in scope. A missing `ref-utxos.json` falls back to the committed default for
       * the network ([[BootstrapDir.defaultRefUtxosDir]]).
       */
-    def readBootstrapDir(dir: Path): IO[BootstrapConfig] = {
+    def readBootstrapDir(dir: Path, blockfrostApiKey: String): IO[BootstrapConfig] = {
         def readJson(path: Path): IO[Json] =
             IO.blocking(Files.readString(path))
                 .flatMap(s => IO.fromEither(parser.parse(s)))
@@ -263,7 +304,20 @@ object Bootstrap:
             rosterJson <- readJson(dir.resolve(BootstrapDir.roster))
             roster <- IO.fromEither(rosterJson.as[Membership])
             defaultsJson <- readJson(dir.resolve(BootstrapDir.defaults))
-            network <- IO.fromEither(defaultsJson.hcursor.get[CardanoNetwork]("cardanoNetwork"))
+            // A `Custom` network is stored as a pending marker (URLs only, so template assembly
+            // stays offline); resolve its CardanoInfo live now, at build time.
+            bootstrapNetwork <- IO.fromEither(
+              defaultsJson.hcursor.get[BootstrapNetwork]("cardanoNetwork")
+            )
+            resolved <- bootstrapNetwork match {
+                case BootstrapNetwork.Standard(n) =>
+                    IO.pure((n, Option.empty[String]))
+                case BootstrapNetwork.PendingCustom(blockfrostUrl, yaciAdminUrl) =>
+                    CustomNetworkResolver
+                        .resolve(blockfrostUrl, yaciAdminUrl, blockfrostApiKey)
+                        .map(custom => (custom: CardanoNetwork, Some(blockfrostUrl)))
+            }
+            (network, customBackendUrl) = resolved
             defaults <- {
                 given CardanoNetwork.Section = network
                 IO.fromEither(defaultsJson.as[BootstrapDefaults])
@@ -273,7 +327,7 @@ object Bootstrap:
             refUtxosJson <- readRefUtxosJson(dir, network)
             refUtxos <- IO.fromEither(refUtxosJson.as[ScriptReferenceUtxos.Unresolved])
         } yield BootstrapConfig(
-          cardanoNetwork = defaults.cardanoNetwork,
+          cardanoNetwork = network,
           headParams = defaults.headParams,
           headPeers = roster.headPeers,
           coilPeers = roster.coilPeers,
@@ -281,7 +335,8 @@ object Bootstrap:
           initialL2State = l2State,
           initialEquityContributions = defaults.initialEquityContributions,
           blockZeroStartTime = defaults.blockZeroStartTime,
-          blockZeroEndTime = defaults.blockZeroEndTime
+          blockZeroEndTime = defaults.blockZeroEndTime,
+          customBackendUrl = customBackendUrl
         )
     }
 
@@ -918,14 +973,9 @@ object Migrate:
                 )
 
             wallet = nodeConfig.ownWallet
-            cardanoNetwork: StandardCardanoNetwork =
-                nodeConfig.cardanoNetwork match {
-                    case n: StandardCardanoNetwork => n
-                    case _ =>
-                        throw new IllegalStateException(
-                          "Migrate requires a standard Cardano network in the head config"
-                        )
-                }
+            // A Custom (e.g. Yaci) network works too — the head-config carries a fully-resolved
+            // network, and Migrate only needs its address `Network` and slot config.
+            cardanoNetwork: CardanoNetwork = nodeConfig.cardanoNetwork
             peerAddress = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- log.info(s"Peer address: ${peerAddress.toBech32.get}")
 
@@ -1095,7 +1145,7 @@ object BuildHeadConfig:
                     s"${Bootstrap.defaultPrivateTemplate}"
               ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
             )(IO.pure)
-            bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir)
+            bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir, blockfrostKey)
             cardanoNetwork = bootstrapConfig.cardanoNetwork
             // Fail fast on a key/network mismatch — a Blockfrost key only works on its own
             // network, and a mismatch otherwise surfaces as an opaque 403 mid-build (the usual
@@ -1112,15 +1162,13 @@ object BuildHeadConfig:
                   s"coil quorum ${bootstrapConfig.headParams.coilQuorum}"
             )
             backendTracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-            // Blockfrost only serves the standard networks.
-            backend <- cardanoNetwork match {
-                case n: StandardCardanoNetwork =>
-                    CardanoBackendBlockfrost(Left(n), blockfrostKey, tracer = backendTracer)
-                case CardanoNetwork.Custom(_, _) =>
-                    IO.raiseError(
-                      RuntimeException("The Blockfrost backend does not support a Custom network")
-                    )
-            }
+            // A standard network derives its Blockfrost URL from the network; a Custom one uses the
+            // URL resolved from `defaults.json`'s pending-custom marker (carried on the config).
+            backend <- CardanoBackendBlockfrost
+                .networkSelector(cardanoNetwork, bootstrapConfig.customBackendUrl)
+                .flatMap(selector =>
+                    CardanoBackendBlockfrost(selector, blockfrostKey, tracer = backendTracer)
+                )
             // Script reference utxos are carried in the bootstrap config as bare inputs; resolve
             // their outputs from the backend.
             scriptReferenceUtxos <- {
@@ -1174,6 +1222,7 @@ end BuildHeadConfig
   * }}}
   */
 object InitBootstrapFiles:
+    import Bootstrap.BootstrapNetwork
 
     private val logger = Logging.loggerIO("hydrozoa.bootstrap.InitBootstrapFiles")
 
@@ -1186,16 +1235,41 @@ object InitBootstrapFiles:
     private val coilQuorumOpt: Opts[Option[Int]] =
         Opts.option[Int]("coil-quorum", "Coil quorum (default: a simple majority of coil peers)")
             .orNone
-    private val cardanoNetworkOpt: Opts[CardanoNetwork] =
+    private val blockfrostUrlOpt: Opts[Option[String]] =
         Opts.option[String](
-          "cardano-network",
-          "Target network: preview | preprod | mainnet (default preview)"
-        ).mapValidated {
-            case "preview" => Validated.validNel(CardanoNetwork.Preview)
-            case "preprod" => Validated.validNel(CardanoNetwork.Preprod)
-            case "mainnet" => Validated.validNel(CardanoNetwork.Mainnet)
-            case other     => Validated.invalidNel(s"unknown network: $other")
-        }.withDefault(CardanoNetwork.Preview)
+          "blockfrost-url",
+          "Blockfrost-compatible API base URL for a `custom` network (e.g. a Yaci devnet)"
+        ).orNone
+
+    private val yaciAdminUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "yaci-admin-url",
+          "Yaci admin API base URL, for a `custom` Yaci devnet's dynamic slot config"
+        ).orNone
+
+    private val cardanoNetworkOpt: Opts[BootstrapNetwork] =
+        (
+          Opts.option[String](
+            "cardano-network",
+            "Target network: preview | preprod | mainnet | custom (default preview)"
+          ).withDefault("preview"),
+          blockfrostUrlOpt,
+          yaciAdminUrlOpt
+        ).mapN((name, blockfrostUrl, yaciAdminUrl) => (name, blockfrostUrl, yaciAdminUrl))
+            .mapValidated {
+                case ("preview", _, _) =>
+                    Validated.validNel(BootstrapNetwork.Standard(CardanoNetwork.Preview))
+                case ("preprod", _, _) =>
+                    Validated.validNel(BootstrapNetwork.Standard(CardanoNetwork.Preprod))
+                case ("mainnet", _, _) =>
+                    Validated.validNel(BootstrapNetwork.Standard(CardanoNetwork.Mainnet))
+                case ("custom", Some(url), yaciAdmin) =>
+                    Validated.validNel(BootstrapNetwork.PendingCustom(url, yaciAdmin))
+                case ("custom", None, _) =>
+                    Validated.invalidNel("a custom cardano-network requires --blockfrost-url")
+                case (other, _, _) =>
+                    Validated.invalidNel(s"unknown network: $other")
+            }
 
     /** The `init-bootstrap-files` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
@@ -1211,8 +1285,15 @@ object InitBootstrapFiles:
         rosterPath: Path,
         outDir: Path,
         coilQuorumOverride: Option[Int],
-        network: CardanoNetwork
+        bootstrapNetwork: BootstrapNetwork
     ): IO[ExitCode] =
+        // Standard networks compute their demo head params against their own slot config; a pending
+        // Custom network has none offline, so it borrows Preview's (a 1s-slot testnet). The demo
+        // params are operator-adjustable and a Yaci devnet uses the same 1s slots.
+        val network: CardanoNetwork = bootstrapNetwork match {
+            case BootstrapNetwork.Standard(n)         => n
+            case BootstrapNetwork.PendingCustom(_, _) => CardanoNetwork.Preview
+        }
         for {
             rosterStr <- IO.blocking(Files.readString(rosterPath))
             roster <- IO.fromEither(parser.decode[Bootstrap.Membership](rosterStr))
@@ -1234,7 +1315,7 @@ object InitBootstrapFiles:
             equity = roster.headPeers.indices
                 .map(i => HeadPeerNumber(i) -> (if i == 0 then Coin.ada(100) else Coin.zero))
                 .toMap
-            defaults = Bootstrap.BootstrapDefaults(network, headParams, equity, None, None)
+            defaults = Bootstrap.BootstrapDefaults(bootstrapNetwork, headParams, equity, None, None)
             defaultsJson = {
                 given CardanoNetwork.Section = network
                 defaults.asJson.deepDropNullValues
@@ -1260,7 +1341,7 @@ object InitBootstrapFiles:
                 )
             }
             _ <- logger.info(
-              s"Wrote ${Bootstrap.BootstrapDir.defaults} (network=$network, " +
+              s"Wrote ${Bootstrap.BootstrapDir.defaults} (network=$bootstrapNetwork, " +
                   s"coilQuorum=$coilQuorum) and an ${Bootstrap.BootstrapDir.l2CardanoEutxo} " +
                   s"template (${l2State.size} head-peer entries) to $outDir"
             )
@@ -1277,6 +1358,7 @@ end InitBootstrapFiles
   */
 object KeygenFleet:
     import GenerateKeyPair.Role
+    import Bootstrap.BootstrapNetwork
 
     private val defaultTemplate = Bootstrap.defaultPrivateTemplate.toString
 
@@ -1353,22 +1435,39 @@ object KeygenFleet:
         } yield exit
     }
 
-    /** Derive the target network from the template's `blockfrostApiKey` prefix (as the justfile
-      * did) — the key's `preview…` / `preprod…` / `mainnet…` prefix picks the network.
+    /** Derive the target network from the template. A `blockfrostApiKey` with a `preview…` /
+      * `preprod…` / `mainnet…` prefix picks a standard network; otherwise the template's
+      * `cardanoBackendUrl` (+ optional `yaciAdminUrl`) marks a pending custom network, resolved
+      * live at build-head-config time.
       */
-    private def deriveNetwork(template: Path): IO[CardanoNetwork] =
-        Bootstrap.blockfrostKeyFrom(template).flatMap { key =>
-            if key.startsWith("preview") then IO.pure(CardanoNetwork.Preview)
-            else if key.startsWith("preprod") then IO.pure(CardanoNetwork.Preprod)
-            else if key.startsWith("mainnet") then IO.pure(CardanoNetwork.Mainnet)
-            else
-                IO.raiseError(
-                  new IllegalArgumentException(
-                    s"cannot derive the network from blockfrostApiKey in $template " +
-                        "(expected a preview…/preprod…/mainnet… key)"
-                  )
-                )
-        }
+    private def deriveNetwork(template: Path): IO[BootstrapNetwork] =
+        for {
+            content <- IO.blocking(Files.readString(template))
+            key <- IO.fromOption(blockfrostKeyRe.findFirstMatchIn(content).map(_.group(1)))(
+              new IllegalArgumentException(s"no blockfrostApiKey found in $template")
+            )
+            bootstrapNetwork <-
+                if key.startsWith("preview") then
+                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preview))
+                else if key.startsWith("preprod") then
+                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Preprod))
+                else if key.startsWith("mainnet") then
+                    IO.pure(BootstrapNetwork.Standard(CardanoNetwork.Mainnet))
+                else
+                    for {
+                        json <- IO.fromEither(parser.parse(content))
+                        blockfrostUrl <- IO.fromOption(
+                          json.hcursor.get[Option[String]]("cardanoBackendUrl").toOption.flatten
+                        )(
+                          new IllegalArgumentException(
+                            s"cannot derive the network from $template: blockfrostApiKey is not a " +
+                                "standard preview…/preprod…/mainnet… key and no cardanoBackendUrl is set"
+                          )
+                        )
+                        yaciAdminUrl =
+                            json.hcursor.get[Option[String]]("yaciAdminUrl").toOption.flatten
+                    } yield BootstrapNetwork.PendingCustom(blockfrostUrl, yaciAdminUrl)
+        } yield bootstrapNetwork
 
 end KeygenFleet
 
@@ -1408,7 +1507,15 @@ object PrintHeadZeroAddress:
               Files.readString(dir.resolve(Bootstrap.BootstrapDir.defaults))
             )
             defaultsJson <- IO.fromEither(parser.parse(defaultsStr))
-            network <- IO.fromEither(defaultsJson.hcursor.get[CardanoNetwork]("cardanoNetwork"))
+            bootstrapNetwork <- IO.fromEither(
+              defaultsJson.hcursor.get[Bootstrap.BootstrapNetwork]("cardanoNetwork")
+            )
+            // A pending Custom network isn't resolved offline; a shelley address only depends on the
+            // testnet/mainnet tag, and a custom devnet is a testnet — so Preview stands in here.
+            network = bootstrapNetwork match {
+                case Bootstrap.BootstrapNetwork.Standard(n)         => n
+                case Bootstrap.BootstrapNetwork.PendingCustom(_, _) => CardanoNetwork.Preview
+            }
             address <- IO.fromOption(
               headZero.verificationKey.shelleyAddress()(using network).toBech32.toOption
             )(RuntimeException("could not render head peer 0's address as bech32"))
