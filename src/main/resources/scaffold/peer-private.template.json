@@ -18,6 +18,8 @@
     }
   },
   "blockfrostApiKey": "preview00000000000000000000000000000000",
+  "cardanoBackendUrl": null,
+  "yaciAdminUrl": null,
   "remoteLedgerUri": "ws://127.0.0.1:3001/ws",
   "adminUsername": "admin",
   "adminPassword": "welcome",
