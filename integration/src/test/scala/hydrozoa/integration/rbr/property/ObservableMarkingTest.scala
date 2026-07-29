@@ -7,7 +7,7 @@ import org.scalacheck.{Prop, Properties}
 
 object ObservableMarkingTest extends Properties("ObservableMarking"):
 
-    private def net = RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
+    private def net = RBRHlNet(nHeadPeers = 3, RbrSeed.committedObligations(2)).toOption.get
 
     // Deterministic example assertions checked once (no generators).
     private def allTrue(conds: Boolean*): Prop = Prop.all(conds.map(Prop.propBoolean)*)

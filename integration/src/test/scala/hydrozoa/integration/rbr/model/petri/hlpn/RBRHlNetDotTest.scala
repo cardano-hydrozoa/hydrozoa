@@ -2,15 +2,31 @@ package hydrozoa.integration.rbr.model.petri.hlpn
 
 import java.nio.file.{Files, Path}
 import org.scalacheck.{Prop, Properties}
+import scalus.cardano.address.Address
+import scalus.cardano.ledger.{Coin, TransactionOutput, Value}
 
 /** Renders the RBR net as DOT — the whole net to `target/rbr-net.dot` and one diagram per
   * transition under `target/rbr-net/` (see `just graphviz`) — and sanity-checks the output.
   */
 object RBRHlNetDotTest extends Properties("RBRHlNetDot"):
 
+    private val payoutAddress: Address =
+        Address.fromBech32("addr_test1wqt2v8zcpjldyu2zcwz3yuu8p4wpk0hzaqwthh23qgs5xgg7266qn")
+
+    // A representative seed: versions 1 and 2, version 2 carrying a two-output evacuation batch.
+    private val committedObligations: Map[BigInt, List[TransactionOutput]] =
+        List(1, 2).map { v =>
+            BigInt(v) -> (1 to v).toList.map { j =>
+                TransactionOutput(
+                  payoutAddress,
+                  Value(Coin((v.toLong * 100 + j) * 1_000_000L))
+                )
+            }
+        }.toMap
+
     val _ = property("RBRHlNetDot renders the RBR net, whole and per transition") = {
         val net =
-            RBRHlNet(nHeadPeers = 3, RBRHlNet.committedObligations(2)).toOption.get
+            RBRHlNet(nHeadPeers = 3, committedObligations).toOption.get
 
         // whole net (dense) — one file
         val whole = Path.of("target", "rbr-net.dot")

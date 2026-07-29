@@ -130,7 +130,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
               )
             )
             alpha = ObservableMarking.alpha(
-              RBRHlNet(nHeadPeers, RBRHlNet.committedObligations(maxVersionMinor)).toOption.get
+              RBRHlNet(nHeadPeers, RbrSeed.committedObligations(maxVersionMinor)).toOption.get
             )
             _ <- assertWith(
               alpha == beta,

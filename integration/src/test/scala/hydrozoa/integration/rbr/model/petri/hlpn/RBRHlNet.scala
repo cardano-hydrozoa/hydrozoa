@@ -10,8 +10,7 @@ import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder as SetupLadderScri
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{Key, Link}
 import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
 import scala.collection.immutable.SortedMap
-import scalus.cardano.address.Address
-import scalus.cardano.ledger.{Coin, TransactionOutput, Value}
+import scalus.cardano.ledger.TransactionOutput
 import scalus.serialization.cbor.Cbor
 import spire.algebra.Order
 import spire.math.SafeLong
@@ -145,28 +144,6 @@ object RBRHlNet {
         evacuationOutput: PlaceRef[RBRPlaceId, (BigInt, TransactionOutput)],
     )
 
-    /** The scenario's committed obligations for a SEC version: `max(1, versionMinor)` distinct
-      * outputs (so a higher version carries a bigger evacuation batch), each distinguished by
-      * lovelace amount so tokens are distinct. Shared by the net's seed and tests.
-      */
-    def committedOutputs(versionMinor: Int): List[TransactionOutput] =
-        (1 to versionMinor.max(1)).toList.map { j =>
-            TransactionOutput(
-              payoutAddress,
-              Value(Coin((versionMinor.toLong * 100 + j) * 1_000_000L))
-            )
-        }
-
-    /** The scenario's committed obligations across candidate SEC versions `1..maxVersionMinor`,
-      * keyed by version — the standard `PayoutObligations` seed passed to [[apply]], shared with
-      * tests. An empty list (no candidate versions) is a valid, empty seed.
-      */
-    def committedObligations(maxVersionMinor: Int): List[(BigInt, TransactionOutput)] =
-        (1 to maxVersionMinor).toList.flatMap(v => committedOutputs(v).map(BigInt(v) -> _))
-
-    private val payoutAddress: Address =
-        Address.fromBech32("addr_test1wqt2v8zcpjldyu2zcwz3yuu8p4wpk0hzaqwthh23qgs5xgg7266qn")
-
     /** The listing of structurally-valid ballot colors: version is meaningful only for `Voted`
       * (Awaiting/Abstained carry 0), and a box never links to itself except the fully-tallied
       * terminal box `(0, 0)`. The reachability invariant the Ballots place preserves — its
@@ -204,13 +181,14 @@ object RBRHlNet {
       * `(i+1, (i+2 | 0 for the last, (Awaiting, 0)))`.
       *
       * `committedObligations` seeds `PayoutObligations` with the `(version, output)` payout tokens
-      * of each candidate SEC (see [[committedObligations]]), and `VotableVersions` with their
-      * distinct versions. `Output` is intensional, so an empty list is a valid, empty seed (a head
-      * with nothing to evacuate or vote on).
+      * of each candidate SEC, and `VotableVersions` with their distinct versions. `Output` is
+      * intensional, so an empty list is a valid, empty seed (a head with nothing to evacuate or
+      * vote on).
       */
     def apply(
+        // TODO: a strictly-positive count — retype to a positive Int type.
         nHeadPeers: Int,
-        committedObligations: List[(BigInt, TransactionOutput)],
+        committedObligations: Map[BigInt, List[TransactionOutput]],
     ): ValidatedNel[NetBuilder.Error, HlNet[RBRPlaceId, RBRTransitionId, Any]] = {
         import RBRPlaceId.*
 
@@ -226,7 +204,7 @@ object RBRHlNet {
           Sort.Discipline.Linear
         )
         val peers: List[HeadPeerNumber] = (0 until nHeadPeers).map(HeadPeerNumber(_)).toList
-        val votableVersions: Set[BigInt] = committedObligations.map(_._1).toSet
+        val votableVersions: Set[BigInt] = committedObligations.keySet
         // The G2 setup-ladder rungs, one reference utxo per rung (`SetupLadder.rungCount`); rung i
         // covers 2^i evacuations. Colored by rung index so the model holds one token per on-chain
         // rung; Evacuation references one. Fixed on-chain constant, so an enumerated class (like
@@ -332,7 +310,9 @@ object RBRHlNet {
         // Every candidate SEC's committed obligation is present but inert (the kzg-hiding abstraction);
         // only the resolved version's is ever drained. ResolvedVersion / EvacuationOutput start empty.
         val initialObligations: MultiSet[(BigInt, TransactionOutput)] =
-            bagOf(committedObligations.map(_ -> 1)*)
+            bagOf(committedObligations.toSeq.flatMap { case (v, outs) =>
+                outs.map(o => (v, o) -> 1)
+            }*)
         val noVersions: MultiSet[BigInt] = bagOf[BigInt]()
         val noOutputs: MultiSet[(BigInt, TransactionOutput)] = bagOf[(BigInt, TransactionOutput)]()
 

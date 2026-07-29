@@ -7,7 +7,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
-import hydrozoa.integration.rbr.property.ObservableMarking
+import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
 import hydrozoa.integration.stage4.Model
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
@@ -25,7 +25,7 @@ import org.scalacheck.{Gen, Prop, PropertyM}
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{TransactionInput, Utxos}
+import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxos}
 import test.{SeedPhrase, TestPeers}
 
 /** RBR fallback→evacuation as a `ModelBasedSuite` (stage4-style).
@@ -228,9 +228,10 @@ case class RbrMbtSuite(
       * `obligationCount` committed outputs and drive it through the dispute to full evacuation.
       */
     private def alphaTerminal(obligationCount: Int): ObservableMarking =
-        val obligations = (1 to maxVersionMinor).toList.flatMap { v =>
-            RBRHlNet.committedOutputs(obligationCount).map(BigInt(v) -> _)
-        }
+        val obligations: Map[BigInt, List[TransactionOutput]] =
+            (1 to maxVersionMinor)
+                .map(v => BigInt(v) -> RbrSeed.committedOutputs(obligationCount))
+                .toMap
         val seed = RBRHlNet(nHeadPeers, obligations).toOption.get
         ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
