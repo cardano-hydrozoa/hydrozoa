@@ -12,8 +12,8 @@ import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
 import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
-import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.CardanoNetwork.cardanoNetworkDecoder
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.head.peers.HeadPeers.headPeersDecoder
@@ -306,18 +306,17 @@ object HeadConfig {
                     io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
                 }
 
-                blockfrostNetwork = network match {
-                    case n: StandardCardanoNetwork => Left(n)
-                    // TODO: need a blockfrost url here
-                    case custom: Custom => Right((custom, ??? : CardanoBackendBlockfrost.URL))
-                }
-
                 cardanoBackend <- EitherT.liftF(
-                  CardanoBackendBlockfrost(
-                    blockfrostNetwork,
-                    privateConfig.blockfrostApiKey,
-                    tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
-                  )
+                  CardanoBackendBlockfrost
+                      .networkSelector(network, privateConfig.cardanoBackendUrl)
+                      .flatMap(blockfrostNetwork =>
+                          CardanoBackendBlockfrost(
+                            blockfrostNetwork,
+                            privateConfig.blockfrostApiKey,
+                            tracer = Slf4jTracer.sink
+                                .contramap(CardanoBackendEventFormat.humanFormat)
+                          )
+                      )
                 )
 
                 bootstrapConfig <- Bootstrap.fromJson(bootstrapConfigStr, cardanoBackend)

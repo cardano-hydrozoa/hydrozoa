@@ -13,6 +13,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackendMock, MockState}
 import io.circe.syntax.*
 import monocle.syntax.all.{as as _, *}
 import org.scalacheck.Properties
+import scalus.cardano.ledger.CardanoInfo
+import test.TestPeersSpec
 
 object ConfigurationCodecTest extends Properties("Configuration Codec Properties") {
     import MultiNodeConfig.*
@@ -104,4 +106,13 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
           _ <- dummyPrivateConfigRoundTrip
       } yield true
     )
+
+    // A Custom (devnet) network must survive the full round-trip too, which pins that the
+    // CardanoInfo/ProtocolParams codec round-trips inside a real HeadConfig — not just standalone.
+    // runDefault's spec is hardcoded to Preprod, so drive a Custom-pinned spec explicitly.
+    val customNetworkSpec: TestPeersSpec =
+        TestPeersSpec.default.copy(network = CardanoNetwork.Custom(CardanoInfo.preview, 42L))
+
+    val _ = property("Custom-network headConfig round trips") =
+        runWithSpec(customNetworkSpec)(headConfigRoundTrip)
 }

@@ -737,6 +737,30 @@ object CardanoBackendBlockfrost:
     ): IO[CardanoBackendBlockfrost] =
         IO.delay(apply_(network, apiKey, pageSize, tracer))
 
+    /** Resolve a [[CardanoNetwork]] into the selector [[apply]] expects, sourcing a `Custom`
+      * network's Blockfrost URL from the peer's private-config `cardanoBackendUrl`. Fails when a
+      * `Custom` network has no configured URL — the standard networks derive their URL from the
+      * network itself.
+      */
+    def networkSelector(
+        network: CardanoNetwork,
+        cardanoBackendUrl: Option[URL]
+    ): IO[Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)]] =
+        network match {
+            case standard: StandardCardanoNetwork => IO.pure(Left(standard))
+            case custom: CardanoNetwork.Custom =>
+                cardanoBackendUrl match {
+                    case Some(url) => IO.pure(Right((custom, url)))
+                    case None =>
+                        IO.raiseError(
+                          IllegalStateException(
+                            "a Custom cardanoNetwork requires cardanoBackendUrl in the peer's " +
+                                "private config"
+                          )
+                        )
+                }
+        }
+
     extension (self: StandardCardanoNetwork)
         def baseUrl: URL = self match {
             case _: CardanoNetwork.Mainnet.type => BlockfrostProvider.mainnetUrl
