@@ -274,6 +274,25 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 
 ---
 
+## E2E: 4-node Docker propagation (CI-excluded)
+
+`integration/src/test/scala/hydrozoa/integration/e2e/DockerPropagationTest.scala` is a third, **black-box** level that sits outside the `ModelBasedSuite` framework. Instead of wiring actors in-process, it stands up **four real head-peer containers** on a local **Yaci** devnet via `docker compose`, forms a head through the shipped artifacts (the packaged image, the mesh, the user HTTP API), submits an L2 transaction to head-0 over HTTP, and asserts it propagates to every peer's L2 ledger.
+
+- **What it exercises that the stages can't.** The actual deployment path end to end: `docker compose`, four distinct node identities reaching consensus over the real WS mesh, the packaged image, and the custom-network (Yaci) config flow (`keygen-fleet` → `topup` → `deploy-scripts-and-g2-setup` → `build-head-config` → `serve`). Stage 1/4 are in-process and never touch the image, compose, or the HTTP surface.
+- **How it drives bring-up.** It shells out to the staged `hydrozoa` launcher and `docker compose`, and reuses the existing Yaci admin client (`integration/.../yaci/DevKit.scala`) for `topup`/`devnetInfo`, plus the server DTOs (`ApiDto`, `SubmissionClient`) for submit + polling. Convergence — the same utxo/feed entry appearing on all four peers — *is* the propagation assertion; on failure it dumps each container's logs.
+- **Why it's CI-excluded.** It is minutes-long and needs Docker + a Yaci container + the built image. Its FQN is in `Tests.Exclude(...)` in `build.sbt` (survives even `integration/testOnly *`), exactly like `Stage1PropertiesYaci`.
+- **How to run.**
+
+```bash
+just integration-e2e-docker   # builds the image (Docker/publishLocal), stages the launcher, runs the suite
+# equivalently, after `just docker-image` + `just stage`:
+sbt "integration/testOnly hydrozoa.integration.e2e.DockerPropagationTest"
+```
+
+Design and rationale: `docs/local/integration/design.md` (+ `phases.md`). A stray `testOnly *` that reaches the suite without Docker or the staged launcher **cancels** (not fails) via `assume`.
+
+---
+
 ## Choosing Where to Add a Test
 
 | Goal                                                                          | Stage     |
@@ -286,6 +305,7 @@ The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a fe
 | Cross-peer codec / framing / batch-cursor regression                            | Stage 4 (WebSocket mode) |
 | L2 ledger correctness under reordering                                         | Stage 4   |
 | L1-side fee / validity-interval / treasury-rotation regression                  | Stage 1 (Yaci/Blockfrost) |
+| Black-box propagation across the packaged image + `docker compose` + HTTP API   | E2E (Docker, CI-excluded) |
 
 A scenario that needs **both** real L1 and slow-cycle multi-peer consensus does not yet have a home — that's the "stage 4 against Yaci" path. The harness already supports the swap (`CardanoBackend[IO]` is the only L1 dependency); only `propEffectsLanded`'s `(attempts, sleep)` budget needs widening.
 

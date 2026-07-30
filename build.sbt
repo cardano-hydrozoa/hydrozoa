@@ -229,12 +229,23 @@ lazy val integration: Project = (project in file("integration"))
     .settings(
       // Compile / mainClass := Some("hydrozoa.demo.Workload"),
       publish / skip := true,
-      // Yaci suite requires a running Yaci DevKit instance; exclude from default test run.
-      // Run explicitly with: integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci
-      // NB: using * with testOnly still respects the excluded tests
-      Test / testOptions += Tests.Exclude(
-        Seq("hydrozoa.integration.stage1.Stage1PropertiesYaci")
-      ),
+      // Heavy suites needing external infra (a running Yaci DevKit; Docker + the built image),
+      // excluded from the default test run. sbt's Tests.Exclude filters a suite out even when it is
+      // named explicitly by `testOnly <FQN>`, so the exclusion is lifted when
+      // HYDROZOA_INCLUDE_HEAVY_TESTS=1 is set — that is how the `just` recipes run one by FQN:
+      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …Stage1PropertiesYaci"   (just integration-yaci)
+      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …DockerPropagationTest"  (just integration-e2e-docker)
+      Test / testOptions ++=
+          (if (sys.env.get("HYDROZOA_INCLUDE_HEAVY_TESTS").contains("1")) Seq.empty
+           else
+               Seq(
+                 Tests.Exclude(
+                   Seq(
+                     "hydrozoa.integration.stage1.Stage1PropertiesYaci",
+                     "hydrozoa.integration.e2e.DockerPropagationTest"
+                   )
+                 )
+               )),
       // test dependencies
       libraryDependencies ++= Seq(
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
