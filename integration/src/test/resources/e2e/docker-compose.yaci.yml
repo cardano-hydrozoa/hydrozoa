@@ -43,6 +43,13 @@ services:
     profiles: ["yaci"]
     image: bloxbean/yaci-cli:0.10.6 # bump to the tag you run (local checkout: 0.12.0-beta6)
     entrypoint: [sleep, infinity]
+    # create-node only starts the yaci-store (the Blockfrost-compatible API on 8080) when the store
+    # is enabled. The full DevKit sets these in config/env; this bare yaci-cli container must set
+    # them itself, and the exec'd create-node inherits them. Without this the node runs but nothing
+    # serves /api/v1, and the host-side deploy-scripts/build-head-config (and the heads) get no L1.
+    environment:
+      yaci_store_enabled: "true"
+      yaci_store_mode: native
     ports:
       - "18080:8080" # store / Blockfrost-compatible API (host 18080 — heads own 8080-8083)
       - "10000:10000" # local-cluster / admin API (DevKit.topup / reset / devnetInfo)

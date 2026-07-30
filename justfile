@@ -79,7 +79,7 @@ integration:
 integration-yaci:
   #!/usr/bin/env bash
   trap 'just notify "integration-yaci"' EXIT
-  sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
 # Yaci suites that spin up their own devnet via Testcontainers (require Docker).
 # Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
@@ -95,6 +95,14 @@ integration-yaci-docker:
   trap 'just notify "integration-yaci-docker"' EXIT
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
+
+# Heavy 4-node Docker e2e L2-propagation test (Yaci devnet): builds the image, stages the launcher,
+# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See
+# docs/local/integration/design.md.
+integration-e2e-docker:
+  #!/usr/bin/env bash
+  trap 'just notify "integration-e2e-docker"' EXIT
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.DockerPropagationTest"
 
 # Recompile and export the on-chain script blueprint to src/main/resources/hydrozoa/scripts/plutus.json.
 export:

@@ -138,8 +138,10 @@ object SubmitL2Transaction:
     /** Build the unsigned zero-fee L2 tx: the selected input, the destination output, change back
       * to the sender when nonzero, and the mandatory L2 head-label metadata (the headId pin; no
       * outputs bound for L1).
+      *
+      * Package-private so the e2e propagation suite builds the same tx it submits over HTTP.
       */
-    private def buildTx(
+    private[hydrozoa] def buildTx(
         headId: HeadId,
         input: TransactionInput,
         output: TransactionOutput,
@@ -179,8 +181,12 @@ object SubmitL2Transaction:
     /** Parse one `GET /l2/cardano-eutxo/utxos/{address}` entry back into scalus types.
       * Datum-bearing utxos are accepted for display but their datum is not reconstructed — the
       * input reference is what the tx spends.
+      *
+      * Package-private so the e2e propagation suite picks the utxo to spend from the same response.
       */
-    private def parseUtxoView(view: L2UtxoView): Either[String, (TransactionInput, Babbage)] =
+    private[hydrozoa] def parseUtxoView(
+        view: L2UtxoView
+    ): Either[String, (TransactionInput, Babbage)] =
         for {
             txId <- Try(TransactionHash.fromHex(view.input.transaction_id)).toEither.left
                 .map(e => s"bad transaction_id: ${e.getMessage}")
