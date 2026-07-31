@@ -5,7 +5,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputD
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{Destination, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
@@ -101,17 +101,62 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // Response codecs
-    given responseSuccessEncoder: Encoder[Response.Success] = deriveEncoder
-    given responseSuccessDecoder(using CardanoNetwork.Section): Decoder[Response.Success] =
-        deriveDecoder
+    // Response codecs. Each response is a single-key object tagging the variant (encoder and decoder
+    // agree on the tag). Applied/Duplicate carry `commandNumber` plus only the effects the answered
+    // command produces: `evacuationDiffs` / `payouts` are omitted when empty and default to empty on
+    // decode (RegisterDeposit produces neither; ApplyDepositDecisions no payouts).
+    private def encodeEffects(
+        commandNumber: L2CommandNumber,
+        evacuationDiffs: Vector[EvacuationDiff],
+        payouts: Vector[Payout.Obligation]
+    ): io.circe.Json =
+        io.circe.Json.fromFields(
+          List("commandNumber" -> commandNumber.asJson) ++
+              (if evacuationDiffs.nonEmpty then List("evacuationDiffs" -> evacuationDiffs.asJson)
+               else Nil) ++
+              (if payouts.nonEmpty then List("payouts" -> payouts.asJson) else Nil)
+        )
 
-    given responseFailureEncoder: Encoder[Response.Failure] = deriveEncoder
-    given responseFailureDecoder: Decoder[Response.Failure] = deriveDecoder
+    private def decodeEffects(using
+        CardanoNetwork.Section
+    )(
+        c: io.circe.HCursor
+    ): Decoder.Result[(L2CommandNumber, Vector[EvacuationDiff], Vector[Payout.Obligation])] =
+        for {
+            cn <- c.downField("commandNumber").as[L2CommandNumber]
+            diffs <- c.getOrElse[Vector[EvacuationDiff]]("evacuationDiffs")(Vector.empty)
+            payouts <- c.getOrElse[Vector[Payout.Obligation]]("payouts")(Vector.empty)
+        } yield (cn, diffs, payouts)
+
+    given appliedEncoder: Encoder[Response.Applied] =
+        a => encodeEffects(a.commandNumber, a.evacuationDiffs, a.payouts)
+    given appliedDecoder(using CardanoNetwork.Section): Decoder[Response.Applied] =
+        Decoder.instance(c =>
+            decodeEffects(c).map { case (cn, diffs, payouts) =>
+                Response.Applied(cn, diffs, payouts)
+            }
+        )
+
+    given duplicateEncoder: Encoder[Response.Duplicate] =
+        d => encodeEffects(d.commandNumber, d.evacuationDiffs, d.payouts)
+    given duplicateDecoder(using CardanoNetwork.Section): Decoder[Response.Duplicate] =
+        Decoder.instance(c =>
+            decodeEffects(c).map { case (cn, diffs, payouts) =>
+                Response.Duplicate(cn, diffs, payouts)
+            }
+        )
+
+    given outOfOrderEncoder: Encoder[Response.OutOfOrder] = deriveEncoder
+    given outOfOrderDecoder: Decoder[Response.OutOfOrder] = deriveDecoder
+
+    given rejectedEncoder: Encoder[Response.Rejected] = deriveEncoder
+    given rejectedDecoder: Decoder[Response.Rejected] = deriveDecoder
 
     given responseEncoder: Encoder[Response] = {
-        case s: Response.Success => s.asJson
-        case e: Response.Failure => e.asJson
+        case r: Response.Applied    => io.circe.Json.obj("Applied" -> r.asJson)
+        case r: Response.Duplicate  => io.circe.Json.obj("Duplicate" -> r.asJson)
+        case r: Response.OutOfOrder => io.circe.Json.obj("OutOfOrder" -> r.asJson)
+        case r: Response.Rejected   => io.circe.Json.obj("Rejected" -> r.asJson)
     }
 
     given responseDecoder(using CardanoNetwork.Section): Decoder[Response] = Decoder.instance { c =>
@@ -121,10 +166,10 @@ object RemoteL2LedgerCodecs {
               io.circe.DecodingFailure("Response must have exactly one field", c.history)
             )
             .flatMap {
-                case "Success" =>
-                    c.downField("Success").as[Response.Success]
-                case "Failure" =>
-                    c.downField("Failure").as[Response.Failure]
+                case "Applied"    => c.downField("Applied").as[Response.Applied]
+                case "Duplicate"  => c.downField("Duplicate").as[Response.Duplicate]
+                case "OutOfOrder" => c.downField("OutOfOrder").as[Response.OutOfOrder]
+                case "Rejected"   => c.downField("Rejected").as[Response.Rejected]
                 case other =>
                     Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
             }
