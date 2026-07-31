@@ -15,7 +15,7 @@ import hydrozoa.multisig.consensus.limiter.Limiter
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.transport.{HubTransport, PeerTransport, RemoteCoilProxy, RemotePeerProxy}
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.l2.L2Ledger
+import hydrozoa.multisig.ledger.l2.{L2Ledger, L2Screener}
 import hydrozoa.multisig.persistence.Persistence
 import hydrozoa.rulebased.RuleBasedRegimeManager
 
@@ -23,6 +23,7 @@ trait HeadMultisigRegimeManager(
     config: NodeConfig,
     cardanoBackend: CardanoBackend[IO],
     l2Ledger: L2Ledger[IO],
+    l2Screener: L2Screener[IO],
     persistence: Persistence[IO],
     override protected val tracer: ContraTracer[IO, HeadRegimeManagerEvent],
     peerTransport: ActorContext[IO, Request, Any] => PeerTransport,
@@ -67,7 +68,7 @@ trait HeadMultisigRegimeManager(
               RequestSequencer(
                 config,
                 pendingConnections,
-                l2Ledger,
+                l2Screener,
                 tracers.eventSequencer,
                 persistence
               )
@@ -341,6 +342,7 @@ object HeadMultisigRegimeManager {
         config: NodeConfig,
         cardanoBackend: CardanoBackend[IO],
         virtualLedger: L2Ledger[IO],
+        l2Screener: L2Screener[IO],
         persistence: Persistence[IO],
         tracer: ContraTracer[IO, HeadRegimeManagerEvent],
         peerTransport: Resource[IO, ActorContext[IO, Request, Any] => PeerTransport],
@@ -356,6 +358,7 @@ object HeadMultisigRegimeManager {
                   config,
                   cardanoBackend,
                   virtualLedger,
+                  l2Screener,
                   persistence,
                   tracer,
                   peerFactory,

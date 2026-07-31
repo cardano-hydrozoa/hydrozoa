@@ -31,7 +31,8 @@ import hydrozoa.multisig.ledger.l1.deposits.map.{DepositsMap, DepositsMapEvent}
 import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
-import hydrozoa.multisig.ledger.l2.{L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
@@ -73,9 +74,10 @@ final case class JointLedger(
 
     private def executeL2Command(
         state: JointLedger.Producing,
-        command: L2LedgerCommand.Real
+        commandNumber: L2CommandNumber,
+        command: L2LedgerCommand
     ): IO[L2LedgerState] = for {
-        either <- runL2Command(state, command)
+        either <- state.runL2Command(l2Ledger, commandNumber, command)
         ret <- either match {
             case Left(err) =>
                 tracer.traceWith(JointLedgerEvent.L2CommandFailed(err)) *>
@@ -83,12 +85,6 @@ final case class JointLedger(
             case Right(ret) => IO.pure(ret)
         }
     } yield ret
-
-    private def runL2Command(
-        state: JointLedger.Producing,
-        command: L2LedgerCommand.Real
-    ): IO[Either[L2LedgerError, L2LedgerState]] =
-        state.runL2CommandReal(l2Ledger, command)
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -198,12 +194,17 @@ final case class JointLedger(
 
     private def invalidateRequest(
         requestId: RequestId,
-        e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError
+        e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError,
+        advanceTo: Option[L2CommandNumber] = None
     ): IO[Unit] =
         for {
             oldState <- unsafeGetProducing
             currentBlockNum = oldState.nextBlockNumber
-            newState = oldState
+            // A rejection *after* the L2 command was sent (`advanceTo = Some`) must still advance the
+            // command number: the ledger consumed it on the reject, so JointLedger stays in
+            // lock-step. A rejection *before* any command was sent (parse / timing) advances nothing.
+            advanced = advanceTo.fold(oldState)(oldState.setCommandNumber)
+            newState = advanced
                 .focus(_.userRequestState.requests)
                 .modify(_.appended((requestId, Invalid)))
             _ <- state.set(newState)
@@ -285,17 +286,20 @@ final case class JointLedger(
                           refundDestination = refundTx.refundDestination,
                           l2Payload = l2Payload
                         )
+                        val assigned = p.commandNumber.increment
                         for {
-                            res <- runL2Command(p, l2Command)
+                            res <- p.runL2Command(l2Ledger, assigned, l2Command)
                             _ <- res match {
-                                // FIXME: Should we distinguish between genuine L2 failures and things like
-                                // network errors?
-                                case Left(e) => invalidateRequest(requestId, e)
+                                // A `Left` here is a deterministic ledger rejection (not a transport
+                                // failure — those retry through), so soft-invalidate uniformly and
+                                // advance the command number the ledger consumed on the reject.
+                                case Left(e) => invalidateRequest(requestId, e, Some(assigned))
                                 case Right(newL2State) =>
                                     for {
                                         _ <- state.set(
                                           p.setDeposits(newDeposits)
                                               .setL2LedgerState(newL2State)
+                                              .setCommandNumber(assigned)
                                               .focus(_.userRequestState.requests)
                                               .modify(_.appended((requestId, Valid)))
                                               .focus(_.userRequestState.postDatedRefundTxs)
@@ -344,14 +348,16 @@ final case class JointLedger(
                       l2Payload = l2Payload
                     )
 
+                val assigned = p.commandNumber.increment
                 for {
-                    res <- runL2Command(p, l2Command)
+                    res <- p.runL2Command(l2Ledger, assigned, l2Command)
                     _ <- res match {
-                        case Left(e) => invalidateRequest(requestId, e)
+                        case Left(e) => invalidateRequest(requestId, e, Some(assigned))
                         case Right(newL2State) =>
                             for {
                                 _ <- state.set(
                                   p.setL2LedgerState(newL2State)
+                                      .setCommandNumber(assigned)
                                       .focus(_.userRequestState.requests)
                                       .modify(_.appended((requestId, Valid)))
                                 )
@@ -481,18 +487,21 @@ final case class JointLedger(
                   rejectedDeposits = decisions.rejected.requestIds
                 )
 
+            // The command number the deposit-decisions command takes when this block issues it
+            // (regular/major only); the number is carried unchanged when no command is issued.
+            assigned = p.commandNumber.increment
+
             // Block header
             headerRes: (JointLedger.Producing, BlockHeader.Intermediate, Seq[EvacuationDiff]) <-
                 if decisions.absorbed.isEmpty && blockWithdrawnUtxos.isEmpty
                 then
                     val evacDiffs = p.l2LedgerState.diffs
                     for {
-                        newL2State <-
-                            if decisions.rejected.isEmpty then IO.pure(p.l2LedgerState)
-                            else executeL2Command(p, depositRequestDecisions)
-
-                        // `evacDiffs` are surfaced to the slow side via `BlockResult`.
-                        newJLState = p.setL2LedgerState(newL2State)
+                        newJLState <-
+                            if decisions.rejected.isEmpty then IO.pure(p)
+                            else
+                                executeL2Command(p, assigned, depositRequestDecisions)
+                                    .map(s => p.setL2LedgerState(s).setCommandNumber(assigned))
 
                         headerIntermediate <- previousHeader.nextHeaderIntermediate(
                           bhTracer,
@@ -506,9 +515,9 @@ final case class JointLedger(
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
-                        newL2State <- executeL2Command(p, depositRequestDecisions)
+                        newL2State <- executeL2Command(p, assigned, depositRequestDecisions)
                         evacDiffs = newL2State.diffs
-                        newJLState = p.setL2LedgerState(newL2State)
+                        newJLState = p.setL2LedgerState(newL2State).setCommandNumber(assigned)
 
                         headerIntermediate <- previousHeader.nextHeaderMajor(bhTracer)(
                           txTiming,
@@ -688,16 +697,18 @@ final case class JointLedger(
         blockResult: BlockResult
     ): IO[WriteBatch] =
         for {
-            deposits <- state.get.map(_.deposits)
+            st <- state.get
+            deposits = st.deposits
+            // JointLedger assigns command numbers and has already applied this block's commands (it
+            // is the sole, single-message-at-a-time L2 driver), so its own command number now
+            // reflects this block; record it so recover can co-anchor the L2 ledger to the fast
+            // anchor via restoreTo.
+            commandNumber = st.commandNumber
             // The high-water is cumulative: extend the previous block's map (blocks are contiguous
             // and never pruned below the fast anchor, so the predecessor entry is always present
             // once past the first block).
             priorHighWater <- previousBlockHighWater(brief.blockNum)
             highWater = ReplayCursors.mergeHighWater(priorHighWater, brief.requests.map(_._1))
-            // The L2 ledger has already committed this block's commands (JL is its sole, single-
-            // message-at-a-time driver), so its command number now reflects this block; record it
-            // so recover can co-anchor the L2 ledger to the fast anchor via restoreTo.
-            commandNumber <- l2Ledger.currentCommandNumber
         } yield {
             val bundle = WriteBatch.start
                 .put(StoreKey.BlockResult(brief.blockNum))(blockResult.persisted)
@@ -871,7 +882,7 @@ object JointLedger {
 
     /** Failure registering a deposit into the fast-side L1 deposits map — either the deposit tx
       * fails to parse, or its submission deadline doesn't match the one expected from its
-      * validity-end. Rejected via `invalidateRequest` (stringified into the L2 proxy error), never
+      * validity-end. Rejected via `invalidateRequest` (stringified into the L2LedgerError), never
       * raised, so it need not extend `Throwable`.
       */
     sealed trait DepositLedgerError
@@ -932,12 +943,19 @@ object JointLedger {
 
         /** The fast side's L1 deposits map. */
         def deposits: DepositsMap
+
+        /** The L2 command number of the last command evaluated — applied *or* rejected (the
+          * coordination index / fast-side recovery anchor). JointLedger assigns it; the L2 ledger
+          * validates and adopts it.
+          */
+        def commandNumber: L2CommandNumber
     }
 
     object State {
         def initialize(config: Config): Done = Done(
           previousBlockHeader = config.initialBlock.blockBrief.header,
           deposits = DepositsMap.empty,
+          commandNumber = L2CommandNumber.zero,
         )
 
         /** Reconstruct the passive [[Done]] state after a crash and co-anchor the L2 ledger to the
@@ -964,8 +982,7 @@ object JointLedger {
                 case Some(blockNum) =>
                     for {
                         done <- doneAt(persistence, blockNum)
-                        commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
-                        _ <- l2Ledger.restoreTo(commandNumber).value.flatMap(IO.fromEither)
+                        _ <- l2Ledger.restoreTo(done.commandNumber).value.flatMap(IO.fromEither)
                     } yield Some(done)
 
         /** The store-only half of [[recover]]: rebuild `Done(previousBlockHeader, deposits)` from
@@ -994,12 +1011,14 @@ object JointLedger {
             for {
                 brief <- persistence.getOrFail(JournalKey.Block(blockNum))
                 deposits <- persistence.getOrFail(StoreKey.DepositMap)
-            } yield Done(brief.payload.header, deposits)
+                commandNumber <- persistence.getOrFail(StoreKey.L2CommandNumber(blockNum))
+            } yield Done(brief.payload.header, deposits, commandNumber)
     }
 
     final case class Done private[JointLedger] (
         override val previousBlockHeader: BlockHeader,
         override val deposits: DepositsMap,
+        override val commandNumber: L2CommandNumber,
     ) extends State {
         def setDeposits(newDeposits: DepositsMap): Done =
             this.focus(_.deposits).replace(newDeposits)
@@ -1015,7 +1034,8 @@ object JointLedger {
                   deposits,
                   l2LedgerState,
                   startTime,
-                  userRequestState
+                  userRequestState,
+                  commandNumber
                 )
             case _ =>
                 throw new RuntimeException(
@@ -1030,18 +1050,20 @@ object JointLedger {
         override val deposits: DepositsMap,
         l2LedgerState: L2LedgerState,
         BlockCreationStartTime: BlockCreationStartTime,
-        userRequestState: UserRequestState
+        userRequestState: UserRequestState,
+        override val commandNumber: L2CommandNumber,
     ) extends State {
         val nextBlockNumber: BlockNumber.BlockNumber = previousBlockHeader.blockNum.increment
 
         transparent inline def competingFallbackTxTime: FallbackTxStartTime =
             previousBlockHeader.fallbackTxStartTime
 
-        def runL2CommandReal[F[_], T](
+        def runL2Command[F[_], T](
             l2Ledger: L2Ledger[F],
-            command: L2LedgerCommand.Real
+            commandNumber: L2CommandNumber,
+            command: L2LedgerCommand
         ): F[Either[L2LedgerError, L2LedgerState]] = {
-            val action = l2Ledger.L2LedgerAction.fromL2LedgerCommandReal(command)
+            val action = l2Ledger.L2LedgerAction.fromL2LedgerCommand(commandNumber, command)
             action.run(l2LedgerState)
         }
 
@@ -1051,7 +1073,10 @@ object JointLedger {
         def setL2LedgerState(newL2State: L2LedgerState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
 
+        def setCommandNumber(newCommandNumber: L2CommandNumber): Producing =
+            this.focus(_.commandNumber).replace(newCommandNumber)
+
         def done(newBlockHeader: BlockHeader): Done =
-            Done(newBlockHeader, deposits)
+            Done(newBlockHeader, deposits, commandNumber)
     }
 }

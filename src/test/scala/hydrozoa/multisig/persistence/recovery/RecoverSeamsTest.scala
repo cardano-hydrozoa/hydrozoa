@@ -75,16 +75,21 @@ class RecoverSeamsTest extends AnyFunSuite:
         }
     }
 
-    test("JointLedger.recoverState rebuilds Done from the fastBlockMark block brief + deposits") {
+    test(
+      "JointLedger.recoverState rebuilds Done from the fastBlockMark block brief + deposits + " +
+          "L2 command number"
+    ) {
         withStore { p =>
             for
                 brief <- blockBrief(4)
                 _ <- p.put(JournalKey.Block(BlockNumber(4)))(JournalValue(stamp, brief))
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
+                _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(4)))(L2CommandNumber(7L))
                 done <- JointLedger.State.recoverState(p, Some(BlockNumber(4)))
             yield assert(
               done.exists(d =>
                   d.previousBlockHeader == brief.header && d.deposits == DepositsMap.empty
+                      && d.commandNumber == L2CommandNumber(7L)
               )
             )
         }
@@ -97,7 +102,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // Advance the live ledger past the crash boundary (to command number 3).
                 _ <- (1 to 3).toList.traverse_(i =>
-                    ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                    ledger
+                        .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                 )
                 // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
@@ -105,7 +111,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 done <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
-                anchored <- ledger.currentCommandNumber
+                anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(done.isDefined && anchored == L2CommandNumber(2L))
         }
     }
@@ -120,7 +126,8 @@ class RecoverSeamsTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // Advance the live ledger past the crash boundary (to command number 3).
                 _ <- (1 to 3).toList.traverse_(i =>
-                    ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                    ledger
+                        .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                 )
                 // Crash boundary: fastBlockMark = block 2 (max BlockResult), recorded at L2 command
                 // number 2. The header is read from the Block journal (present inbound on any peer),
@@ -130,7 +137,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- p.put(StoreKey.DepositMap)(DepositsMap.empty)
                 _ <- p.put(StoreKey.L2CommandNumber(BlockNumber(2)))(L2CommandNumber(2L))
                 recovered <- JointLedger.State.recover(p, ledger, Some(BlockNumber(2)))
-                anchored <- ledger.currentCommandNumber
+                anchored <- ledger.peekState.map(_.commandNumber)
             yield assert(
               recovered.exists(d =>
                   d.previousBlockHeader == brief.header && d.deposits == DepositsMap.empty

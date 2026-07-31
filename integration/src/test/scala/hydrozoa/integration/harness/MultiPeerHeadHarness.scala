@@ -1031,6 +1031,7 @@ object MultiPeerHeadHarness:
                           nodeConfig,
                           cardanoBackend,
                           l2Ledger,
+                          l2Ledger,
                           persistence,
                           mrmTracer,
                           peerFactory,
