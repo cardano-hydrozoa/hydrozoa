@@ -58,7 +58,8 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                 for
                     ledger <- EutxoL2Ledger(config, store)
                     _ <- (1 to total).toList.traverseVoid(i =>
-                        ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                        ledger
+                            .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                     )
                     // A second ledger over the same on-disk store, rebuilt purely from snapshot+log.
                     restored <- EutxoL2Ledger(config, store)
@@ -78,10 +79,32 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                 for
                     ledger <- EutxoL2Ledger(config, store)
                     _ <- (1 to 3).toList.traverseVoid(i =>
-                        ledger.sendApplyDepositDecisions(noop(i)).value.flatMap(IO.fromEither)
+                        ledger
+                            .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                     )
                     result <- ledger.restoreTo(L2CommandNumber(99)).value
                 yield assert(result.isLeft)
+            }
+        }
+    }
+
+    test(
+      "on-disk getTip falls back to the highest persisted command on a tip-less (legacy) store"
+    ) {
+        run {
+            freshStore.use { store =>
+                for
+                    // Log entries written with no tip entry — a store from before the tip was tracked.
+                    _ <- store.appendLog(L2CommandNumber(1L), noop(1))
+                    _ <- store.appendLog(L2CommandNumber(2L), noop(2))
+                    derived <- store.getTip
+                    // restoreTo the derived tip succeeds instead of being rejected as beyond-tip.
+                    ledger <- EutxoL2Ledger(config, store)
+                    _ <- ledger.restoreTo(L2CommandNumber(2L)).value.flatMap(IO.fromEither)
+                    s <- ledger.peekState
+                yield assert(
+                  derived.contains(L2CommandNumber(2L)) && s.commandNumber == L2CommandNumber(2L)
+                )
             }
         }
     }
@@ -96,9 +119,9 @@ class RocksDbL2StoreTest extends AnyFunSuite:
     }
 
     test("real-command codec round-trips every tag") {
-        import L2StoreCodecs.realCommandCodec
-        val command: L2LedgerCommand.Real = noop(7)
-        val decoded = io.circe.parser.decode[L2LedgerCommand.Real](command.asJson.noSpaces)
+        import L2StoreCodecs.commandCodec
+        val command: L2LedgerCommand = noop(7)
+        val decoded = io.circe.parser.decode[L2LedgerCommand](command.asJson.noSpaces)
         assert(decoded == Right(command))
     }
 

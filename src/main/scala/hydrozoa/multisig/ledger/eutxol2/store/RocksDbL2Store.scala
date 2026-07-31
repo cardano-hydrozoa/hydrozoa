@@ -1,7 +1,7 @@
 package hydrozoa.multisig.ledger.eutxol2.store
 
 import cats.effect.{IO, Resource}
-import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.{realCommandCodec, snapshotCodec}
+import hydrozoa.multisig.ledger.eutxol2.store.L2StoreCodecs.{commandCodec, snapshotCodec}
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
@@ -17,7 +17,7 @@ import scala.jdk.CollectionConverters.*
   * non-negative, so big-endian byte order coincides with numeric order, and RocksDB's lexicographic
   * iteration is command-number order):
   *
-  *   - **L2Log** — `commandNumber -> ` JSON of the applied [[L2LedgerCommand.Real]].
+  *   - **L2Log** — `commandNumber -> ` JSON of the applied [[L2LedgerCommand]].
   *   - **L2Snapshot** — `commandNumber -> ` JSON of the [[L2Snapshot]].
   *
   * Values are the store-local JSON of [[L2StoreCodecs]] (UTF-8). This DB is wholly separate from
@@ -26,6 +26,7 @@ import scala.jdk.CollectionConverters.*
   */
 final class RocksDbL2Store private (
     db: RocksDB,
+    metaCf: ColumnFamilyHandle,
     logCf: ColumnFamilyHandle,
     snapshotCf: ColumnFamilyHandle,
     writeOptions: WriteOptions,
@@ -34,7 +35,7 @@ final class RocksDbL2Store private (
 
     import RocksDbL2Store.{keyToCommandNumber, commandNumberToKey}
 
-    def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand.Real): IO[Unit] =
+    def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
         IO.blocking(db.put(logCf, writeOptions, commandNumberToKey(commandNumber), encode(command)))
 
     def putSnapshot(commandNumber: L2CommandNumber, snapshot: L2Snapshot): IO[Unit] =
@@ -58,13 +59,13 @@ final class RocksDbL2Store private (
     def logRange(
         fromExclusive: L2CommandNumber,
         toInclusive: L2CommandNumber
-    ): IO[List[L2LedgerCommand.Real]] =
+    ): IO[List[L2LedgerCommand]] =
         IO.blocking {
             val it = db.newIterator(logCf, readOptions)
             try
                 // Seek to the first key >= fromExclusive, then drop the boundary key itself.
                 it.seek(commandNumberToKey(fromExclusive))
-                val out = List.newBuilder[L2LedgerCommand.Real]
+                val out = List.newBuilder[L2LedgerCommand]
                 var continue = true
                 while continue && it.isValid do
                     val commandNumber = keyToCommandNumber(it.key())
@@ -72,9 +73,39 @@ final class RocksDbL2Store private (
                         continue = false
                     else
                         if Ordering[L2CommandNumber].gt(commandNumber, fromExclusive) then
-                            out += decode[L2LedgerCommand.Real](it.value())
+                            out += decode[L2LedgerCommand](it.value())
                         it.next()
                 out.result()
+            finally it.close()
+        }
+
+    def putTip(commandNumber: L2CommandNumber): IO[Unit] =
+        IO.blocking(
+          db.put(metaCf, writeOptions, RocksDbL2Store.TipKey, commandNumberToKey(commandNumber))
+        )
+
+    def getTip: IO[Option[L2CommandNumber]] =
+        IO.blocking(
+          Option(db.get(metaCf, readOptions, RocksDbL2Store.TipKey)).map(keyToCommandNumber)
+        ).flatMap {
+            case some @ Some(_) => IO.pure(some)
+            // Legacy/tip-less store: derive the tip from the highest persisted command number.
+            case None =>
+                for
+                    logMax <- highestKey(logCf)
+                    snapMax <- highestKey(snapshotCf)
+                yield (logMax.toList ++ snapMax.toList).maxOption
+        }
+
+    /** The greatest command-number key in `cf`, or None if empty — used to derive the tip on a
+      * legacy store written before the tip entry existed.
+      */
+    private def highestKey(cf: ColumnFamilyHandle): IO[Option[L2CommandNumber]] =
+        IO.blocking {
+            val it = db.newIterator(cf, readOptions)
+            try
+                it.seekToLast()
+                if it.isValid then Some(keyToCommandNumber(it.key())) else None
             finally it.close()
         }
 
@@ -92,6 +123,9 @@ object RocksDbL2Store:
     private val LogCfName = "L2Log".getBytes("UTF-8")
     private val SnapshotCfName = "L2Snapshot".getBytes("UTF-8")
 
+    /** Fixed key of the single recovery-tip entry, held in the default column family. */
+    private val TipKey = "tip".getBytes("UTF-8")
+
     /** Open (creating if absent) the L2 store at `path`. The returned `Resource` closes the DB and
       * releases every native handle on completion.
       */
@@ -108,17 +142,18 @@ object RocksDbL2Store:
             writeOptions <- autoCloseable(new WriteOptions())
             readOptions <- autoCloseable(new ReadOptions())
             opened <- openDb(path, dbOpts, cfOpts)
-            (db, logCf, snapshotCf) = opened
-        yield new RocksDbL2Store(db, logCf, snapshotCf, writeOptions, readOptions)
+            (db, metaCf, logCf, snapshotCf) = opened
+        yield new RocksDbL2Store(db, metaCf, logCf, snapshotCf, writeOptions, readOptions)
 
     private def openDb(
         path: Path,
         dbOpts: DBOptions,
         cfOpts: ColumnFamilyOptions
-    ): Resource[IO, (RocksDB, ColumnFamilyHandle, ColumnFamilyHandle)] =
+    ): Resource[IO, (RocksDB, ColumnFamilyHandle, ColumnFamilyHandle, ColumnFamilyHandle)] =
         Resource
             .make(IO.blocking {
-                // RocksDB requires the default CF be opened; its handle is closed but never exposed.
+                // RocksDB requires the default CF be opened; its handle (handles(0)) is exposed as
+                // metaCf and holds the single recovery-tip entry.
                 val descriptors = new JArrayList[ColumnFamilyDescriptor]()
                 descriptors.add(new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts))
                 descriptors.add(new ColumnFamilyDescriptor(LogCfName, cfOpts))
@@ -134,7 +169,8 @@ object RocksDbL2Store:
                 }
             }
             // handles: [default, L2Log, L2Snapshot] — positional with the descriptor order above.
-            .map { case (db, handles) => (db, handles(1), handles(2)) }
+            // The default CF (handles(0)) holds the single recovery-tip entry.
+            .map { case (db, handles) => (db, handles(0), handles(1), handles(2)) }
 
     /** 8-byte big-endian key; for non-negative command numbers this orders numerically. */
     private def commandNumberToKey(commandNumber: L2CommandNumber): Array[Byte] =

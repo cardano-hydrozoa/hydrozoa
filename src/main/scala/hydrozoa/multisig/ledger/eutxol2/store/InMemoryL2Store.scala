@@ -14,19 +14,21 @@ object InMemoryL2Store:
     /** Build a fresh in-memory store. */
     def create: IO[L2Store[IO]] =
         for
-            log <- Ref.of[IO, TreeMap[L2CommandNumber, L2LedgerCommand.Real]](TreeMap.empty)
+            log <- Ref.of[IO, TreeMap[L2CommandNumber, L2LedgerCommand]](TreeMap.empty)
             snapshots <- Ref.of[IO, TreeMap[L2CommandNumber, L2Snapshot]](TreeMap.empty)
-        yield new Impl(log, snapshots)
+            tip <- Ref.of[IO, Option[L2CommandNumber]](None)
+        yield new Impl(log, snapshots, tip)
 
     /** Resource form, for parity with the RocksDB factory; the release is a no-op. */
     def open: Resource[IO, L2Store[IO]] = Resource.eval(create)
 
     private final class Impl(
-        log: Ref[IO, TreeMap[L2CommandNumber, L2LedgerCommand.Real]],
-        snapshots: Ref[IO, TreeMap[L2CommandNumber, L2Snapshot]]
+        log: Ref[IO, TreeMap[L2CommandNumber, L2LedgerCommand]],
+        snapshots: Ref[IO, TreeMap[L2CommandNumber, L2Snapshot]],
+        tip: Ref[IO, Option[L2CommandNumber]]
     ) extends L2Store[IO]:
 
-        def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand.Real): IO[Unit] =
+        def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
             log.update(_.updated(commandNumber, command))
 
         def putSnapshot(commandNumber: L2CommandNumber, snapshot: L2Snapshot): IO[Unit] =
@@ -40,7 +42,20 @@ object InMemoryL2Store:
         def logRange(
             fromExclusive: L2CommandNumber,
             toInclusive: L2CommandNumber
-        ): IO[List[L2LedgerCommand.Real]] =
+        ): IO[List[L2LedgerCommand]] =
             log.get.map(
               _.rangeFrom(fromExclusive).rangeTo(toInclusive).removed(fromExclusive).values.toList
             )
+
+        def putTip(commandNumber: L2CommandNumber): IO[Unit] = tip.set(Some(commandNumber))
+
+        def getTip: IO[Option[L2CommandNumber]] =
+            tip.get.flatMap {
+                case some @ Some(_) => IO.pure(some)
+                // Legacy/tip-less store: derive the tip from the highest persisted command number.
+                case None =>
+                    for
+                        l <- log.get
+                        s <- snapshots.get
+                    yield (l.lastOption.map(_._1).toList ++ s.lastOption.map(_._1).toList).maxOption
+            }

@@ -13,8 +13,8 @@ import scalus.cardano.ledger.{Utxo, Utxos}
 import scalus.uplc.builtin.ByteString
 
 /** JSON codecs for the values the RocksDB [[RocksDbL2Store]] persists: the logged
-  * [[L2LedgerCommand.Real]] (the log) and the [[L2Snapshot]] (the restore accelerator). The
-  * in-memory store needs none of this; these exist only for the on-disk byte form (§R2b).
+  * [[L2LedgerCommand]] (the log) and the [[L2Snapshot]] (the restore accelerator). The in-memory
+  * store needs none of this; these exist only for the on-disk byte form (§R2b).
   *
   * These are deliberately *store-local* and not the codecs `L2LedgerCommand` exports for the
   * SugarRush wire: those encode `Destination` as a lossy object, so they do not round-trip (see the
@@ -50,7 +50,7 @@ object L2StoreCodecs:
         cborHexCodec[L2Genesis]
     }
 
-    // -- L2LedgerCommand.Real (the log value) --------------------------------
+    // -- L2LedgerCommand (the log value) --------------------------------
 
     private given Codec[L2LedgerCommand.RegisterDeposit] = deriveCodec
     private given Codec[L2LedgerCommand.ApplyDepositDecisions] = deriveCodec
@@ -60,7 +60,7 @@ object L2StoreCodecs:
     private val ApplyDepositDecisionsTag = "ApplyDepositDecisions"
     private val ApplyTransactionTag = "ApplyTransaction"
 
-    given realCommandCodec: Codec[L2LedgerCommand.Real] = Codec.from(
+    given commandCodec: Codec[L2LedgerCommand] = Codec.from(
       Decoder.instance(c =>
           c.keys
               .flatMap(_.headOption)
