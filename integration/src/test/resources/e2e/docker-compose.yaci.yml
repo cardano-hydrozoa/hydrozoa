@@ -1,4 +1,4 @@
-# A 4-head-peer Hydrozoa head for the e2e L2-propagation test (WI-004): 4 head peers, each a single
+# A 4-head-peer Hydrozoa head for the e2e L2-propagation test (DockerPropagationTest): 4 head peers, each a single
 # hydrozoa node running the built-in EUTXO L2 ledger in-process, all publishing their user/admin
 # HTTP API (host 8080-8083). (The production docker-compose.yml is a different shape: 2 head + 4
 # coil on Blockfrost.io.)
@@ -19,7 +19,7 @@
 #       Blockfrost  http://localhost:18080/api/v1   (host 18080; heads own 8080-8083)
 #       admin       http://localhost:10000/local-cluster/api
 #
-# WI-004 drives bring-up host-side: (Yaci mode) start `yaci`, create the devnet, run keygen-fleet →
+# The e2e test drives bring-up host-side: (Yaci mode) start `yaci`, create the devnet, run keygen-fleet →
 # DevKit.topup head-0 → deploy-scripts → build-head-config, then bring up the 4 heads. HYDROZOA_IMAGE
 # overrides the hydrozoa image; HYDROZOA_HOME the configs dir.
 
@@ -35,7 +35,7 @@ services:
   ## ------------------------------------------------------------------ Yaci devnet (Blockfrost API)
   # Only started under the `yaci` profile (`--profile yaci`); the default `up` is preprod-only.
   # Yaci DevKit's yaci-cli container boots idle (`sleep infinity`); the devnet is created by driving
-  # the CLI into it, which the WI-004 test does after `up` and before the heads (block/slot time set
+  # the CLI into it, which the e2e test does after `up` and before the heads (block/slot time set
   # here for a fast wall-clock test):
   #   docker compose -f … exec yaci /app/yaci-cli.sh create-node -o --start --block-time 1 --slot-length 1
   # The Docker devnet is fixed to protocolMagic 42 / Testnet. Blockfrost API on 8080, admin on 10000.
@@ -65,7 +65,7 @@ services:
     command: ["serve", "/configs/head-config.json", "/configs/private.json"]
     networks: [mesh]
     # Reach real Blockfrost (preprod mode); the embedded DNS still resolves mesh names (yaci, head-N).
-    # No `depends_on: yaci` — preprod mode runs without it, and WI-004 sequences Yaci-mode bring-up.
+    # No `depends_on: yaci` — preprod mode runs without it, and the e2e test sequences Yaci-mode bring-up.
     dns: [8.8.8.8, 8.8.4.4]
     stop_grace_period: 120s
     restart: on-failure

@@ -97,8 +97,8 @@ integration-yaci-docker:
   sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 # Heavy 4-node Docker e2e L2-propagation test (Yaci devnet): builds the image, stages the launcher,
-# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See
-# docs/local/integration/design.md.
+# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See the
+# E2E section of docs/spec/integration-stages.md.
 integration-e2e-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker"' EXIT
