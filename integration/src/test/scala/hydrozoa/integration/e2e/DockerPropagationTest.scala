@@ -11,12 +11,13 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.consensus.UserRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.server.ApiDto.{L2TxKindView, L2TxSummaryView, L2UtxoView, given}
+import hydrozoa.multisig.server.ApiDto.{L2TxSummaryView, L2UtxoView, RequestIdView, mkRequestIdView, given}
 import hydrozoa.multisig.server.SubmissionClient
 import io.circe.Json
 import io.circe.parser.parse
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import java.util.Comparator
 import org.http4s.Uri
 import org.http4s.circe.CirceEntityDecoder.*
 import org.http4s.client.Client
@@ -33,7 +34,7 @@ import scalus.uplc.builtin.ByteString
   * devnet, form a head, then submit an L2 transaction to head-0 over HTTP and assert it propagates
   * to every peer's L2 ledger. Unlike the in-process `MultiPeerHeadHarness`, this drives the shipped
   * artifacts black-box — the packaged image, `docker compose`, the mesh, the HTTP API, and L2
-  * consensus across four distinct identities. See `docs/local/integration/design.md`.
+  * consensus across four distinct identities. See the E2E section of `docs/integration-stages.md`.
   *
   * It is **heavy** (minutes-long, needs Docker + a Yaci container + the built image) and is
   * **hard-excluded from CI** via `Tests.Exclude` in `build.sbt`, exactly like `Stage1PropertiesYaci`.
@@ -53,12 +54,10 @@ import scalus.uplc.builtin.ByteString
   *
   * URL split (the containers and the host reach the same Yaci at different addresses): the peers
   * reach it in-mesh at `http://yaci:8080` (written into each `private.json` via the template's
-  * `cardanoBackendUrl`), while the host-side generation steps (`deploy-scripts`, `build-head-config`)
-  * reach it at Yaci's host-mapped ports (`localhost:18080` / `localhost:10000`). Because
-  * `keygen-fleet` copies the one template URL into both the peers' `private.json` and
-  * `defaults.json`'s pending-custom marker, this test keeps the template on the mesh URL and rewrites
-  * only the `defaults.json` marker to the host ports before the host-side build steps
-  * ([[rewriteDefaultsMarkerToHost]]).
+  * `cardanoBackendUrl`), while the host-side generation steps reach it at Yaci's host-mapped ports
+  * (`localhost:18080` / `localhost:10000`). The template keeps the in-mesh URL, and the host-side
+  * `deploy-scripts` / `build-head-config` are passed the host URLs via `--blockfrost-url` /
+  * `--yaci-admin-url`, which override the in-mesh URL in `defaults.json`'s pending-custom marker.
   */
 class DockerPropagationTest extends AnyFunSuite:
 
@@ -77,7 +76,8 @@ class DockerPropagationTest extends AnyFunSuite:
     }
 
     /** Create a throwaway head workspace, run the whole scenario against a fresh client, and always
-      * tear the compose project down; on failure, dump each container's logs and keep the workspace.
+      * tear the compose project down. On success the workspace is deleted; on failure it is kept
+      * (and each container's logs dumped) for debugging.
       */
     private def program: IO[Unit] =
         makeHome.flatMap { home =>
@@ -88,6 +88,7 @@ class DockerPropagationTest extends AnyFunSuite:
                             dumpLogs(home).attempt.void
                     )
                     .guarantee(compose(home, "down", "-v", "--remove-orphans").attempt.void)
+                    <* deleteRecursively(home).attempt.void
             }
         }
 
@@ -120,7 +121,6 @@ class DockerPropagationTest extends AnyFunSuite:
               "--template",
               templatePath(home).toString
             )
-            _ <- rewriteDefaultsMarkerToHost(home)
 
             head0Funding <- cliCapture("head-zero-address", "--home", home.toString)
                 .flatMap(out =>
@@ -130,6 +130,11 @@ class DockerPropagationTest extends AnyFunSuite:
                 )
             _ <- log(s"topping up head-0 ($head0Funding) with ${TopupLovelace / 1_000_000L} ADA…")
             _ <- IO.blocking(DevKit.topup(parseShelley(head0Funding), Coin(TopupLovelace)))
+            // Wait until the store has indexed the topup — deploy-scripts fetches head-0's utxos
+            // once and hard-fails if none are present yet.
+            _ <- pollUntil("head-0's funds to be indexed", 2.minutes, 3.seconds)(
+              yaciAddressFunded(client, head0Funding)
+            )
 
             _ <- log("deploy-scripts-and-g2-setup…")
             _ <- cli(
@@ -143,7 +148,15 @@ class DockerPropagationTest extends AnyFunSuite:
             )
 
             _ <- log("build-head-config…")
-            _ <- cli("build-head-config", "--home", home.toString)
+            _ <- cli(
+              "build-head-config",
+              "--home",
+              home.toString,
+              "--blockfrost-url",
+              HostBlockfrostUrl,
+              "--yaci-admin-url",
+              HostYaciAdminUrl
+            )
 
             _ <- log("docker compose up the four head peers…")
             _ <- compose(home, (Seq("up", "-d") ++ headServices)*)
@@ -206,20 +219,21 @@ class DockerPropagationTest extends AnyFunSuite:
             signed = demo0.wallet.signTx(tx)
             txIdHex = signed.id.toHex
             _ <- log(s"submitting L2 tx $txIdHex ($SendAda ADA head-0 → head-1) to head-0…")
-            _ <- SubmissionClient
+            requestId <- SubmissionClient
                 .http(client, headUri(0))
                 .submit(
                   UserRequest.TransactionRequest(
                     TransactionRequestBody(ByteString.fromArray(signed.toCbor))
                   )
                 )
+            expectedRequest = mkRequestIdView(requestId)
 
             _ <- log("polling all four peers for the propagated utxo…")
             _ <- pollUntil(s"utxo $txIdHex at head-1 on every peer", ConvergeTimeout, 3.seconds)(
               allPeersShowUtxo(client, head1Bech32, txIdHex)
             )
-            _ <- pollUntil("the tx in every peer's /transactions feed", ConvergeTimeout, 3.seconds)(
-              allPeersShowTransaction(client)
+            _ <- pollUntil("our tx in every peer's /transactions feed", ConvergeTimeout, 3.seconds)(
+              allPeersShowTransaction(client, expectedRequest)
             )
         } yield ()
 
@@ -232,6 +246,14 @@ class DockerPropagationTest extends AnyFunSuite:
         client.get(Uri.unsafeFromString(s"$HostBlockfrostUrl/epochs/latest/parameters"))(r =>
             IO.pure(r.status.isSuccess)
         )
+
+    /** The store has indexed funds for `addr` once its Blockfrost utxos endpoint returns a non-empty
+      * list (404 while the address is still unseen raises and is retried by the caller's poll).
+      */
+    private def yaciAddressFunded(client: Client[IO], addr: String): IO[Boolean] =
+        client
+            .expect[List[Json]](Uri.unsafeFromString(s"$HostBlockfrostUrl/addresses/$addr/utxos"))
+            .map(_.nonEmpty)
 
     /** `GET /ready` returns 200 on every peer (head initialized and active). */
     private def allReady(client: Client[IO]): IO[Boolean] =
@@ -249,15 +271,17 @@ class DockerPropagationTest extends AnyFunSuite:
             )
             .map(_.forall(_.exists(_.input.transaction_id == txIdHex)))
 
-    /** Every peer's `GET /l2/cardano-eutxo/transactions` feed carries a `transaction` entry. */
-    private def allPeersShowTransaction(client: Client[IO]): IO[Boolean] =
+    /** Every peer's `GET /l2/cardano-eutxo/transactions` feed carries the entry for our submitted
+      * request — matched by its request id, so the check is specific to the tx we sent.
+      */
+    private def allPeersShowTransaction(client: Client[IO], request: RequestIdView): IO[Boolean] =
         peerIndices
             .traverse(i =>
                 client.expect[List[L2TxSummaryView]](
                   (headUri(i) / "l2" / "cardano-eutxo" / "transactions").withQueryParam("count", 50)
                 )
             )
-            .map(_.forall(_.exists(_.kind == L2TxKindView.Transaction)))
+            .map(_.forall(_.exists(_.requestId == request)))
 
     // ---- config authoring --------------------------------------------------------------------
 
@@ -279,29 +303,6 @@ class DockerPropagationTest extends AnyFunSuite:
             Files.writeString(path, patched.spaces2)
             ()
         }
-
-    /** Point `defaults.json`'s pending-custom marker at Yaci's host-mapped ports, so the host-side
-      * `deploy-scripts` / `build-head-config` resolve the custom `CardanoInfo` from the host while the
-      * peers keep the in-mesh URL in their `private.json` (see the class doc's URL-split note).
-      */
-    private def rewriteDefaultsMarkerToHost(home: Path): IO[Unit] =
-        IO.blocking {
-            val path = home.resolve("bootstrap").resolve("defaults.json")
-            val json = parse(Files.readString(path))
-                .fold(e => throw RuntimeException(s"bad defaults.json: $e"), identity)
-            val patched = json.deepMerge(
-              Json.obj(
-                "cardanoNetwork" -> Json.obj(
-                  "customBackend" -> Json.obj(
-                    "blockfrostUrl" -> Json.fromString(HostBlockfrostUrl),
-                    "yaciAdminUrl" -> Json.fromString(HostYaciAdminUrl)
-                  )
-                )
-              )
-            )
-            Files.writeString(path, patched.spaces2)
-            ()
-        } *> log("rewrote defaults.json's custom-backend marker to Yaci's host-mapped ports")
 
     // ---- process orchestration ---------------------------------------------------------------
 
@@ -426,6 +427,16 @@ class DockerPropagationTest extends AnyFunSuite:
     private def log(msg: String): IO[Unit] = IO.println(s"$Tag $msg")
 
     private def makeHome: IO[Path] = IO.blocking(Files.createTempDirectory("hydrozoa-e2e"))
+
+    /** Best-effort recursive delete (deepest-first) of the throwaway workspace. */
+    private def deleteRecursively(dir: Path): IO[Unit] =
+        IO.blocking {
+            if Files.exists(dir) then {
+                val walk = Files.walk(dir)
+                try walk.sorted(Comparator.reverseOrder()).forEach(p => Files.delete(p))
+                finally walk.close()
+            }
+        }
 
 end DockerPropagationTest
 

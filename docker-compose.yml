@@ -40,6 +40,25 @@ x-hydrozoa: &hydrozoa
   restart: on-failure
 
 services:
+  ## ------------------------------------------------------- Yaci devnet (optional local L1)
+  # Only started under the `yaci` profile (`docker compose --profile yaci …`); the default `up`
+  # targets a public testnet via Blockfrost. For local dev/testing you can run the head against a
+  # local Yaci devnet instead — see DEPLOYMENT.md "Running against a local Yaci DevKit". The idle
+  # yaci-cli container boots with `sleep infinity`; the devnet is created by driving the CLI into it:
+  #   docker compose --profile yaci exec -d yaci /app/yaci-cli.sh create-node -o --start
+  # yaci_store_enabled makes create-node also bring up the Blockfrost-compatible API on 8080.
+  yaci:
+    profiles: ["yaci"]
+    image: bloxbean/yaci-cli:0.10.6
+    entrypoint: [sleep, infinity]
+    environment:
+      yaci_store_enabled: "true"
+      yaci_store_mode: native
+    ports:
+      - "18080:8080"   # store / Blockfrost-compatible API (host 18080 — head-0/1 own 8080/8081)
+      - "10000:10000"  # local-cluster / admin API (topup / devnet info)
+    networks: [mesh]
+
   ## ---------------------------------------------------------- head peers (publish the HTTP API)
 
   head-0:

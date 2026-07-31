@@ -41,7 +41,7 @@ services:
   # The Docker devnet is fixed to protocolMagic 42 / Testnet. Blockfrost API on 8080, admin on 10000.
   yaci:
     profiles: ["yaci"]
-    image: bloxbean/yaci-cli:0.10.6 # bump to the tag you run (local checkout: 0.12.0-beta6)
+    image: bloxbean/yaci-cli:0.10.6 # the validated tag; the store API is enabled via `environment` below
     entrypoint: [sleep, infinity]
     # create-node only starts the yaci-store (the Blockfrost-compatible API on 8080) when the store
     # is enabled. The full DevKit sets these in config/env; this bare yaci-cli container must set
@@ -57,7 +57,7 @@ services:
 
   ## ------------------------------------------------------------------ head peers (publish HTTP API)
   head-0: &head
-    image: ${HYDROZOA_IMAGE:-cardano-hydrozoa/hydrozoa:0.1.0}
+    image: ${HYDROZOA_IMAGE:-cardano-hydrozoa/hydrozoa:0.1.1}
     # root: the image's non-root user cannot write the RocksDB stores / logs under /opt/docker.
     user: root
     environment:
