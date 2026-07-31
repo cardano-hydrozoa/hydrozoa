@@ -58,16 +58,15 @@ object Destination {
 sealed trait L2LedgerCommand
 
 object L2LedgerCommand {
-    sealed trait Real extends L2LedgerCommand
 
     export RegisterDeposit.given
     export ApplyDepositDecisions.given
     export ApplyTransaction.given
 
-    /** The deposit-screening request ([[L2Ledger.sendScreenDeposit]]): [[RegisterDeposit]] minus
-      * the consensus-assigned `requestId` / `blockNumber` / `blockCreationStartTime` — those do not
-      * exist yet at screening time. Deliberately not a [[Real]] command: screening is a stateless
-      * query, never logged or replayed.
+    /** The deposit-screening request ([[L2Screener.screenDeposit]]): [[RegisterDeposit]] minus the
+      * consensus-assigned `requestId` / `blockNumber` / `blockCreationStartTime` — those do not
+      * exist yet at screening time. Deliberately not an [[L2LedgerCommand]] (a state-mutating,
+      * command-numbered command): screening is a stateless query, never logged or replayed.
       */
     final case class ScreenDeposit(
         depositId: TransactionInput,
@@ -86,7 +85,7 @@ object L2LedgerCommand {
         depositL2Value: Value,
         refundDestination: Destination,
         l2Payload: ByteString
-    ) extends L2LedgerCommand.Real
+    ) extends L2LedgerCommand
 
     object RegisterDeposit {
 
@@ -123,7 +122,7 @@ object L2LedgerCommand {
         blockCreationEndTime: PosixTime,
         absorbedDeposits: List[RequestId],
         rejectedDeposits: List[RequestId]
-    ) extends L2LedgerCommand.Real
+    ) extends L2LedgerCommand
 
     object ApplyDepositDecisions {
         given Codec[L2LedgerCommand.ApplyDepositDecisions] = {
@@ -140,7 +139,7 @@ object L2LedgerCommand {
         blockNumber: BlockNumber,
         blockCreationStartTime: PosixTime,
         l2Payload: ByteString
-    ) extends L2LedgerCommand.Real
+    ) extends L2LedgerCommand
 
     object ApplyTransaction {
         import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object

@@ -5,7 +5,6 @@ import cats.data.*
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import scalus.uplc.builtin.ByteString
 
 private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
 // See: "Kendo" from the test library
@@ -80,19 +79,27 @@ trait L2Ledger[F[_]] {
       *   Either an error blob if the request could not be applied, or unit on success.
       */
     def sendRegisterDeposit(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.RegisterDeposit
     ): EitherT[F, L2LedgerError, Unit]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       *
+      * Infallible by construction: a deposit decision has no per-request verdict — it merges
+      * already-registered, already-validated deposits, so it always applies. Its only failure modes
+      * (a decision for an unregistered deposit; an absorbed output that should have been rejected
+      * at registration) are JointLedger-side invariant violations, which an implementation
+      * fail-stops on (a `raise` in `F`), never a `Left`. See
+      * `docs/l2-ledger-command-coordination.md`.
+      *
       * @return
-      *   Either an error blob if the request could not be applied, or a vector of evacuation diffs
-      *   on success.
+      *   the evacuation diffs the absorbed deposits produce.
       */
     def sendApplyDepositDecisions(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
+    ): F[Vector[EvacuationDiff]]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#l2-events
@@ -101,38 +108,16 @@ trait L2Ledger[F[_]] {
       *   the JointLedger's evacuation map and a vector of payout obligations.
       */
     def sendApplyTransaction(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
-      * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
-      * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
-      * transaction has no L1 screening stage: it self-authenticates through its own witnesses, so
-      * this is the whole of its screening. Conservative: only definite, stateless failures;
-      * stateful checks (balance, inputs, completeness) stay at submission.
-      */
-    def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
-
-    /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
-      * Hydrozoa's deposit L1 screening (the l2Payload pin check + the accept-by check) has passed.
-      * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
-      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
-      * `l2Payload` outputs.
-      */
-    def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
-
-    /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per
-      * successful state-mutating command (the "real" commands), so the consumer (JointLedger) can
-      * read it right after a commit and record which commandNumber that block corresponds to.
-      * Genesis is [[L2CommandNumber.zero]].
-      */
-    def currentCommandNumber: F[L2CommandNumber]
-
     /** Reconstruct the committed L2 state as of `commandNumber`, from the ledger's own durable
-      * record (`(initial state, commandNumber)`; see `design/recovery-implementation-plan.md` R2b).
-      * After this the ledger's [[currentCommandNumber]] equals `commandNumber`. Used only on
-      * crash-recovery boot. Implementations that do not persist (e.g. a remote black box that owns
-      * its own recovery) may leave this unsupported.
+      * record (`(initial state, commandNumber)`; see `docs/l2-ledger-command-coordination.md`).
+      * After this the ledger is positioned at `commandNumber`. Used only on crash-recovery boot.
+      * JointLedger owns and persists the authoritative command number, so the ledger exposes no
+      * read-back query. Implementations that do not persist (e.g. a remote black box that owns its
+      * own recovery) may make this a no-op.
       */
     def restoreTo(commandNumber: L2CommandNumber): EitherT[F, L2LedgerError, Unit]
 
@@ -150,30 +135,36 @@ trait L2Ledger[F[_]] {
                 this.unLedgerAction.run(state).value
         }
 
-        def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
-            case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDeposit(e)
-            case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransaction(e)
+        def fromL2LedgerCommand(
+            commandNumber: L2CommandNumber,
+            e: L2LedgerCommand
+        ): L2LedgerAction.Real = e match {
+            case e: L2LedgerCommand.RegisterDeposit => fromRegisterDeposit(commandNumber, e)
+            case e: L2LedgerCommand.ApplyDepositDecisions =>
+                fromApplyDepositDecisions(commandNumber, e)
+            case e: L2LedgerCommand.ApplyTransaction => fromApplyTransaction(commandNumber, e)
         }
 
         private def fromRegisterDeposit(
+            commandNumber: L2CommandNumber,
             req: L2LedgerCommand.RegisterDeposit
         ): L2LedgerAction.Real =
             L2LedgerAction.Real(
               Kleisli(ledgerState =>
                   for {
-                      _ <- sendRegisterDeposit(req)
+                      _ <- sendRegisterDeposit(commandNumber, req)
                   } yield ledgerState
               )
             )
 
         private def fromApplyDepositDecisions(
+            commandNumber: L2CommandNumber,
             req: L2LedgerCommand.ApplyDepositDecisions
         ): L2LedgerAction.Real =
             L2LedgerAction.Real(
               Kleisli(ledgerState =>
                   for {
-                      resDiffs <- sendApplyDepositDecisions(req)
+                      resDiffs <- EitherT.liftF(sendApplyDepositDecisions(commandNumber, req))
                       newState = L2LedgerState(
                         ledgerState.diffs ++ resDiffs,
                         ledgerState.payouts,
@@ -184,11 +175,12 @@ trait L2Ledger[F[_]] {
             )
 
         private def fromApplyTransaction(
+            commandNumber: L2CommandNumber,
             req: L2LedgerCommand.ApplyTransaction
         ): L2LedgerAction.Real = L2LedgerAction.Real(
           Kleisli(ledgerState =>
               for {
-                  res <- sendApplyTransaction(req)
+                  res <- sendApplyTransaction(commandNumber, req)
                   // All of this tx's payouts share its requestId — the ledger-agnostic provenance
                   // tag for withdrawal-effect tracking (works for any L2 ledger backend).
                   newState = L2LedgerState(
