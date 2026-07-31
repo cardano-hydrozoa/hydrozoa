@@ -76,10 +76,36 @@ class BootstrapMembershipTest extends AnyFunSuite {
                 .as[Bootstrap.BootstrapDefaults]
                 .fold(e => fail(s"decode failed: $e"), identity)
         assert(
-          decoded.cardanoNetwork == Bootstrap.BootstrapNetwork.Standard(network) &&
+          decoded.cardanoNetwork == Bootstrap.BootstrapNetwork
+              .Known(CardanoNetwork.Preview, None) &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
               decoded.blockZeroStartTime.isEmpty
+        )
+    }
+
+    test("BootstrapNetwork round-trips each shape (bare Known, Known+url, Custom)") {
+        def roundTrip(n: Bootstrap.BootstrapNetwork): Bootstrap.BootstrapNetwork =
+            n.asJson.deepDropNullValues
+                .as[Bootstrap.BootstrapNetwork]
+                .fold(e => fail(s"decode failed for $n: $e"), identity)
+
+        val known = Bootstrap.BootstrapNetwork.Known(CardanoNetwork.Mainnet, None)
+        val knownWithUrl = Bootstrap.BootstrapNetwork
+            .Known(CardanoNetwork.Mainnet, Some("https://bf.internal/api/v1"))
+        val customYaci = Bootstrap.BootstrapNetwork
+            .Custom("http://yaci:8080/api/v1", Some("http://yaci:10000/local-cluster/api"))
+        val customNoYaci = Bootstrap.BootstrapNetwork.Custom("http://yaci:8080/api/v1", None)
+        assert(
+          // A Known network with no override encodes as its bare string; with one, as an object.
+          known.asJson == Json.fromString("mainnet") &&
+              roundTrip(known) == known &&
+              roundTrip(knownWithUrl) == knownWithUrl &&
+              // A Custom network encodes under `customBackend`; a dropped yaciAdminUrl → None.
+              roundTrip(customYaci) == customYaci &&
+              roundTrip(customNoYaci) == customNoYaci &&
+              // An unknown network name in the slot is rejected (not silently treated as custom).
+              Json.fromString("devnet").as[Bootstrap.BootstrapNetwork].isLeft
         )
     }
 
@@ -152,7 +178,7 @@ class BootstrapMembershipTest extends AnyFunSuite {
           coilQuorum = coilQuorum
         )
         Bootstrap.BootstrapDefaults(
-          cardanoNetwork = Bootstrap.BootstrapNetwork.Standard(network),
+          cardanoNetwork = Bootstrap.BootstrapNetwork.Known(CardanoNetwork.Preview, None),
           headParams = headParams,
           initialEquityContributions =
               Map(HeadPeerNumber(0) -> Coin.ada(100), HeadPeerNumber(1) -> Coin.zero),

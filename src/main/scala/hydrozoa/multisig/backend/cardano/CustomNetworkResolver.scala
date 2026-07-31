@@ -45,11 +45,38 @@ object CustomNetworkResolver {
         blockfrostUrl: String,
         yaciAdminUrl: Option[String] = None,
         apiKey: String = ""
-    ): IO[CardanoNetwork.Custom] =
-        yaciAdminUrl match {
-            case Some(adminUrl) => resolveViaYaciAdmin(blockfrostUrl, adminUrl, apiKey)
-            case None           => resolveViaGenesis(blockfrostUrl, apiKey)
+    ): IO[CardanoNetwork.Custom] = {
+        // Normalize a trailing slash so the sub-clients don't build `…/api/v1//epochs`.
+        val url = blockfrostUrl.stripSuffix("/")
+        val resolved = yaciAdminUrl match {
+            case Some(adminUrl) => resolveViaYaciAdmin(url, adminUrl, apiKey)
+            case None           => resolveViaGenesis(url, apiKey)
         }
+        resolved.flatMap(rejectStandardMagic)
+    }
+
+    /** A backend that reports a standard network's magic must be configured as that standard
+      * network (`cardanoNetwork: preview|preprod|mainnet` + `cardanoBackendUrl`), not left unset (a
+      * bare Custom): only the baked-in [[CardanoInfo]] carries the correct (Byron-aware) slot
+      * geometry and address tag. Devnet magics (e.g. Yaci's 42) are unaffected.
+      */
+    private def rejectStandardMagic(custom: CardanoNetwork.Custom): IO[CardanoNetwork.Custom] = {
+        val standard = List(CardanoNetwork.Mainnet, CardanoNetwork.Preprod, CardanoNetwork.Preview)
+            .find(_.protocolMagic == custom.protocolMagic)
+        standard match {
+            case Some(net) =>
+                val name = net.toString.toLowerCase
+                IO.raiseError(
+                  IllegalStateException(
+                    s"the backend reports $name's network magic (${custom.protocolMagic}); set " +
+                        s"cardanoNetwork: $name with your endpoint as cardanoBackendUrl instead of " +
+                        "leaving the network unset, so the correct baked-in parameters and slot " +
+                        "config are used"
+                  )
+                )
+            case None => IO.pure(custom)
+        }
+    }
 
     private def resolveViaYaciAdmin(
         blockfrostUrl: String,
@@ -68,7 +95,7 @@ object CustomNetworkResolver {
             provider <- IO.fromFuture(
               IO(BlockfrostProvider.create(apiKey, blockfrostUrl, Network.Testnet, slotConfig))
             )
-        } yield CardanoNetwork.Custom(provider.cardanoInfo, devnet.protocolMagic.toLong)
+        } yield CardanoNetwork.Custom(provider.cardanoInfo, devnet.protocolMagic)
 
     private def resolveViaGenesis(
         blockfrostUrl: String,
@@ -106,7 +133,7 @@ object CustomNetworkResolver {
     private final case class YaciDevnetInfo(
         startTime: Long,
         slotLengthSeconds: Double,
-        protocolMagic: Int
+        protocolMagic: Long
     )
 
     /** `GET {adminUrl}/admin/devnet` → the running Yaci devnet's slot timing + protocol magic. */
@@ -124,7 +151,7 @@ object CustomNetworkResolver {
             YaciDevnetInfo(
               startTime = json("startTime").num.toLong,
               slotLengthSeconds = json("slotLength").num,
-              protocolMagic = json("protocolMagic").num.toInt
+              protocolMagic = json("protocolMagic").num.toLong
             )
         }
 }

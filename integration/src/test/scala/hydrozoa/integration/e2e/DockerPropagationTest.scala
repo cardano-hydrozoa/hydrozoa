@@ -15,6 +15,7 @@ import hydrozoa.multisig.server.ApiDto.{L2TxSummaryView, L2UtxoView, RequestIdVi
 import hydrozoa.multisig.server.SubmissionClient
 import io.circe.Json
 import io.circe.parser.parse
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.Comparator
@@ -37,8 +38,9 @@ import scalus.uplc.builtin.ByteString
   * consensus across four distinct identities. See the E2E section of `docs/integration-stages.md`.
   *
   * It is **heavy** (minutes-long, needs Docker + a Yaci container + the built image) and is
-  * **hard-excluded from CI** via `Tests.Exclude` in `build.sbt`, exactly like `Stage1PropertiesYaci`.
-  * Run it with `just integration-e2e-docker`, which builds the image, stages the launcher, then:
+  * **hard-excluded from CI** via `Tests.Exclude` in `build.sbt`, exactly like
+  * `Stage1PropertiesYaci`. Run it with `just integration-e2e-docker`, which builds the image,
+  * stages the launcher, then:
   * {{{
   *   sbt "integration/testOnly hydrozoa.integration.e2e.DockerPropagationTest"
   * }}}
@@ -162,16 +164,18 @@ class DockerPropagationTest extends AnyFunSuite:
             _ <- compose(home, (Seq("up", "-d") ++ headServices)*)
 
             _ <- log("waiting for /ready on all four peers (head must initialize on L1 first)…")
-            _ <- pollUntil("all four peers to become ready", ReadyTimeout, 5.seconds)(allReady(client))
+            _ <- pollUntil("all four peers to become ready", ReadyTimeout, 5.seconds)(
+              allReady(client)
+            )
 
             _ <- submitAndAssertPropagation(home, client)
             _ <- log("propagation confirmed on all four peers ✓")
         } yield ()
 
     /** Build the same zero-fee L2 tx `submit-l2-tx` would (spend head-0's opening output, send
-      * [[SendAda]] to head-1), submit it to head-0, then poll every peer until the resulting utxo and
-      * feed entry appear everywhere. Loads head-0's wallet/headId/network offline, plus head-1's
-      * wallet for the destination address.
+      * [[SendAda]] to head-1), submit it to head-0, then poll every peer until the resulting utxo
+      * and feed entry appear everywhere. Loads head-0's wallet/headId/network offline, plus
+      * head-1's wallet for the destination address.
       */
     private def submitAndAssertPropagation(home: Path, client: Client[IO]): IO[Unit] =
         for {
@@ -247,8 +251,9 @@ class DockerPropagationTest extends AnyFunSuite:
             IO.pure(r.status.isSuccess)
         )
 
-    /** The store has indexed funds for `addr` once its Blockfrost utxos endpoint returns a non-empty
-      * list (404 while the address is still unseen raises and is retried by the caller's poll).
+    /** The store has indexed funds for `addr` once its Blockfrost utxos endpoint returns a
+      * non-empty list (404 while the address is still unseen raises and is retried by the caller's
+      * poll).
       */
     private def yaciAddressFunded(client: Client[IO], addr: String): IO[Boolean] =
         client
@@ -285,8 +290,8 @@ class DockerPropagationTest extends AnyFunSuite:
 
     // ---- config authoring --------------------------------------------------------------------
 
-    /** Write the peer-private template `keygen-fleet` fills, from the packaged scaffold template with
-      * only the two Yaci URL fields overridden to the in-mesh addresses the containers use.
+    /** Write the peer-private template `keygen-fleet` fills, from the packaged scaffold template
+      * with only the two Yaci URL fields overridden to the in-mesh addresses the containers use.
       */
     private def writePrivateTemplate(home: Path): IO[Unit] =
         IO.blocking {
@@ -353,9 +358,9 @@ class DockerPropagationTest extends AnyFunSuite:
     /** Run a staged-launcher subcommand from the repo root, failing on a non-zero exit.
       *
       * `BLOCKFROST_API_KEY` is set so `deploy-scripts` / `build-head-config` take the key from the
-      * env instead of falling back to reading the default `head/template/…json.local` (absent here);
-      * a keyless Yaci devnet ignores the value, and `--blockfrost-url` (not the key's prefix) selects
-      * the Custom network.
+      * env instead of falling back to reading the default `head/template/…json.local` (absent
+      * here); a keyless Yaci devnet ignores the value, and `--blockfrost-url` (not the key's
+      * prefix) selects the Custom network.
       */
     private def cli(args: String*): IO[Unit] =
         runProcess(
@@ -373,7 +378,7 @@ class DockerPropagationTest extends AnyFunSuite:
 
     private def runProcess(
         cmd: Seq[String],
-        cwd: Option[java.io.File],
+        cwd: Option[File],
         extraEnv: Seq[(String, String)]
     ): IO[Unit] =
         IO.blocking {
@@ -391,7 +396,8 @@ class DockerPropagationTest extends AnyFunSuite:
 
     private def runProcessLenient(cmd: Seq[String], extraEnv: Seq[(String, String)]): IO[Unit] =
         IO.blocking {
-            val code = Process(cmd, None, extraEnv*).!(ProcessLogger(line => println(s"$Tag $line")))
+            val code =
+                Process(cmd, None, extraEnv*).!(ProcessLogger(line => println(s"$Tag $line")))
             if code != 0 then println(s"$Tag (non-fatal) exit $code: ${cmd.mkString(" ")}")
         }
 
@@ -487,16 +493,24 @@ object DockerPropagationTest:
     private lazy val repoRoot: Path =
         var dir = Paths.get("").toAbsolutePath
         while dir != null && !Files.exists(dir.resolve("build.sbt")) do dir = dir.getParent
-        if dir == null then throw RuntimeException("could not locate the repo root (no build.sbt above cwd)")
+        if dir == null then
+            throw RuntimeException("could not locate the repo root (no build.sbt above cwd)")
         dir
 
     private lazy val launcher: Path =
-        repoRoot.resolve("target").resolve("universal").resolve("stage").resolve("bin").resolve("hydrozoa")
+        repoRoot
+            .resolve("target")
+            .resolve("universal")
+            .resolve("stage")
+            .resolve("bin")
+            .resolve("hydrozoa")
 
     private lazy val composeFile: Path =
         val url = getClass.getResource("/e2e/docker-compose.yaci.yml")
         if url == null then
-            throw RuntimeException("resource /e2e/docker-compose.yaci.yml is not on the test classpath")
+            throw RuntimeException(
+              "resource /e2e/docker-compose.yaci.yml is not on the test classpath"
+            )
         Paths.get(url.toURI)
 
     private def parseShelley(bech32: String): ShelleyAddress =

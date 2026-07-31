@@ -6,11 +6,11 @@ import cats.syntax.all.*
 import com.monovore.decline.{Command, Opts}
 import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.ScriptReferenceUtxos.given
-import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
+import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat, CustomNetworkResolver}
+import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfrost, CardanoBackendEventFormat}
 import hydrozoa.multisig.consensus.peer.PeerWallet
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.rulebased.ledger.l1.script.plutus.{DeploymentTx, SetupLadder}
@@ -44,9 +44,9 @@ import scalus.uplc.builtin.ByteString
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
-  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`, and
-  * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
-  * `mainnet…`).
+  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`; the
+  * target network is read from `defaults.json` (what keygen-fleet recorded — the same source
+  * build-head-config uses), with `--blockfrost-url` / `--yaci-admin-url` as host-side overrides.
   */
 object DeployScriptsAndG2Setup:
 
@@ -84,14 +84,14 @@ object DeployScriptsAndG2Setup:
     private val blockfrostUrlOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-url",
-          "Blockfrost-compatible API base URL for a custom network (e.g. a Yaci devnet); when set, " +
-              "the target network is resolved from it instead of the Blockfrost key's prefix"
+          "Host-side Blockfrost API base URL override (e.g. a Yaci devnet's host-mapped port); " +
+              "overrides the URL recorded in defaults.json"
         ).orNone
 
     private val yaciAdminUrlOpt: Opts[Option[String]] =
         Opts.option[String](
           "yaci-admin-url",
-          "Yaci admin API base URL, for a custom Yaci devnet's dynamic slot config"
+          "Host-side Yaci admin API base URL override, for a Yaci devnet's dynamic slot config"
         ).orNone
 
     /** The `deploy-scripts-and-g2-setup` subcommand. */
@@ -112,6 +112,7 @@ object DeployScriptsAndG2Setup:
         ).mapN((home, walletOverride, mbKey, ladder, blockfrostUrl, yaciAdminUrl) =>
             deployScriptsAndG2Setup(
               walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
+              Bootstrap.HomeLayout.bootstrapDir(home).resolve(Bootstrap.BootstrapDir.defaults),
               mbKey,
               Bootstrap.defaultPrivateTemplate(home),
               ladder,
@@ -123,6 +124,7 @@ object DeployScriptsAndG2Setup:
 
     private def deployScriptsAndG2Setup(
         walletPath: Path,
+        defaultsPath: Path,
         mbBlockfrostKey: Option[String],
         template: Path,
         ladderRefsPath: Option[Path],
@@ -138,18 +140,29 @@ object DeployScriptsAndG2Setup:
                     s"$template"
               ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
-            // A `--blockfrost-url` selects a custom network, resolved live from it; otherwise the
-            // target network is derived from the Blockfrost key's prefix (the standard networks only).
-            networkAndUrl <- blockfrostUrl match {
-                case Some(url) =>
-                    CustomNetworkResolver
-                        .resolve(url, yaciAdminUrl, blockfrostKey)
-                        .map(custom => (custom: CardanoNetwork, Some(url)))
-                case None =>
-                    IO.fromEither(networkOfBlockfrostKey(blockfrostKey))
-                        .map(n => (n: CardanoNetwork, Option.empty[String]))
-            }
+            // The target network is what keygen-fleet recorded in defaults.json — the same source
+            // build-head-config reads — so the two never diverge. --blockfrost-url / --yaci-admin-url
+            // are host-side overrides (e.g. a Yaci devnet's host-mapped port); the key only
+            // authenticates the backend.
+            bootstrapNetwork <- Bootstrap.readBootstrapNetwork(defaultsPath)
+            networkAndUrl <- Bootstrap.resolveNetwork(
+              bootstrapNetwork,
+              blockfrostUrl,
+              yaciAdminUrl,
+              blockfrostKey
+            )
             (cardanoNetwork, customBackendUrl) = networkAndUrl
+            // Fail fast on a key/network mismatch (a stale $BLOCKFROST_API_KEY) before the expensive
+            // on-chain deployment — skipped when a custom endpoint is used, as build-head-config does.
+            _ <- IO.raiseWhen(
+              customBackendUrl.isEmpty && !Bootstrap
+                  .keyMatchesNetwork(blockfrostKey, cardanoNetwork)
+            )(
+              RuntimeException(
+                s"the Blockfrost key does not match the target network ($cardanoNetwork) — stale " +
+                    "$BLOCKFROST_API_KEY export?"
+              )
+            )
             exit <- {
                 given CardanoNetwork.Section = cardanoNetwork
                 deployOn(
@@ -309,19 +322,6 @@ object DeployScriptsAndG2Setup:
           disputeResolutionScriptInput = disputeTx.deployedUtxos.head,
           setupLadderInputs = ladderInputs
         )
-
-    /** Derive the target network from the Blockfrost key's network prefix. */
-    private def networkOfBlockfrostKey(key: String): Either[Throwable, StandardCardanoNetwork] =
-        if key.startsWith("preview") then Right(CardanoNetwork.Preview)
-        else if key.startsWith("preprod") then Right(CardanoNetwork.Preprod)
-        else if key.startsWith("mainnet") then Right(CardanoNetwork.Mainnet)
-        else
-            Left(
-              RuntimeException(
-                "cannot derive the network from the Blockfrost key: expected a preview…/preprod…/" +
-                    "mainnet… project key"
-              )
-            )
 
     /** The cexplorer host for the target network. */
     private def explorerHost(using network: CardanoNetwork.Section): String =
