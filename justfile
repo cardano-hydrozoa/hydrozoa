@@ -198,8 +198,8 @@ integration-yaci:
   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
 # Heavy 4-node Docker e2e L2-propagation test (Yaci devnet): builds the image, stages the launcher,
-# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See
-# docs/local/integration/design.md.
+# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See the
+# E2E section of docs/integration-stages.md.
 integration-e2e-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker"' EXIT
