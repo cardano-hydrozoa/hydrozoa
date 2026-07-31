@@ -308,7 +308,12 @@ object Bootstrap:
       * decoded with it in scope. A missing `ref-utxos.json` falls back to the committed default for
       * the network ([[BootstrapDir.defaultRefUtxosDir]]).
       */
-    def readBootstrapDir(dir: Path, blockfrostApiKey: String): IO[BootstrapConfig] = {
+    def readBootstrapDir(
+        dir: Path,
+        blockfrostApiKey: String,
+        blockfrostUrlOverride: Option[String] = None,
+        yaciAdminUrlOverride: Option[String] = None
+    ): IO[BootstrapConfig] = {
         def readJson(path: Path): IO[Json] =
             IO.blocking(Files.readString(path))
                 .flatMap(s => IO.fromEither(parser.parse(s)))
@@ -324,7 +329,11 @@ object Bootstrap:
             resolved <- bootstrapNetwork match {
                 case BootstrapNetwork.Standard(n) =>
                     IO.pure((n, Option.empty[String]))
-                case BootstrapNetwork.PendingCustom(blockfrostUrl, yaciAdminUrl) =>
+                case BootstrapNetwork.PendingCustom(markerBlockfrostUrl, markerYaciAdminUrl) =>
+                    // Overrides let a host-side build reach Yaci at its host-mapped port while the
+                    // marker (copied into the nodes' private configs) keeps the in-mesh URL.
+                    val blockfrostUrl = blockfrostUrlOverride.getOrElse(markerBlockfrostUrl)
+                    val yaciAdminUrl = yaciAdminUrlOverride.orElse(markerYaciAdminUrl)
                     CustomNetworkResolver
                         .resolve(blockfrostUrl, yaciAdminUrl, blockfrostApiKey)
                         .map(custom => (custom: CardanoNetwork, Some(blockfrostUrl)))
@@ -1116,6 +1125,21 @@ object BuildHeadConfig:
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
         ).orNone
 
+    private val blockfrostUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "blockfrost-url",
+          "Blockfrost-compatible API base URL for a custom (Yaci) network — overrides the URL in " +
+              "defaults.json's pending-custom marker, so a host-side build can reach Yaci at its " +
+              "host-mapped port while the nodes keep the in-mesh URL in their private configs"
+        ).orNone
+
+    private val yaciAdminUrlOpt: Opts[Option[String]] =
+        Opts.option[String](
+          "yaci-admin-url",
+          "Yaci admin API base URL — overrides the marker's, for a custom Yaci devnet's dynamic " +
+              "slot config"
+        ).orNone
+
     /** The `build-head-config` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
@@ -1124,19 +1148,24 @@ object BuildHeadConfig:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (Bootstrap.homeOpt, blockfrostKeyOpt).mapN((home, mbKey) =>
-            buildHeadConfig(
-              Bootstrap.HomeLayout.bootstrapDir(home),
-              mbKey,
-              Bootstrap.defaultPrivateTemplate(home),
-              Bootstrap.HomeLayout.headConfig(home)
-            )
+        (Bootstrap.homeOpt, blockfrostKeyOpt, blockfrostUrlOpt, yaciAdminUrlOpt).mapN(
+          (home, mbKey, mbUrl, mbAdminUrl) =>
+              buildHeadConfig(
+                Bootstrap.HomeLayout.bootstrapDir(home),
+                mbKey,
+                Bootstrap.defaultPrivateTemplate(home),
+                mbUrl,
+                mbAdminUrl,
+                Bootstrap.HomeLayout.headConfig(home)
+              )
         )
 
     private def buildHeadConfig(
         bootstrapDir: Path,
         mbBlockfrostKey: Option[String],
         template: Path,
+        mbBlockfrostUrl: Option[String],
+        mbYaciAdminUrl: Option[String],
         outPath: Path
     ): IO[ExitCode] =
         for {
@@ -1147,7 +1176,12 @@ object BuildHeadConfig:
                     s"$template"
               ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
-            bootstrapConfig <- Bootstrap.readBootstrapDir(bootstrapDir, blockfrostKey)
+            bootstrapConfig <- Bootstrap.readBootstrapDir(
+              bootstrapDir,
+              blockfrostKey,
+              mbBlockfrostUrl,
+              mbYaciAdminUrl
+            )
             cardanoNetwork = bootstrapConfig.cardanoNetwork
             // Fail fast on a key/network mismatch — a Blockfrost key only works on its own
             // network, and a mismatch otherwise surfaces as an opaque 403 mid-build (the usual

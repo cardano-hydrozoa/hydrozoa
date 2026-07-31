@@ -185,6 +185,11 @@ whichever matches the build you made.
 
 ## 4. Configuration
 
+> **L1 backend.** The flow below targets a **public testnet via Blockfrost** (Preview / Preprod).
+> To run against a **local Yaci DevKit** devnet instead — no Blockfrost key, no funded wallet,
+> hermetic and repeatable — see [§7](#7-alternative-l1-a-local-yaci-devkit-devtesting); only a few
+> steps differ.
+
 Everything a node reads comes from two files:
 
 **(a) Shared `head-config.json`** — identical on every node. It embeds
@@ -612,3 +617,93 @@ pushing the happy path while `evacuate` submits the fallback. Wipe the persisted
 
 > The composition defaults to the `:latest` image; `evacuate` works once a release that includes it
 > is `:latest`. Pin a specific build any time with `HYDROZOA_VERSION` (or a full `HYDROZOA_IMAGE`).
+---
+
+## 7. Alternative L1: a local Yaci DevKit (dev/testing)
+
+The flow in §4–§6 targets a **public testnet via Blockfrost**. For local development and testing you
+can instead run the head against a **local [Yaci DevKit](https://devkit.yaci.xyz/) devnet** — no
+Blockfrost key, no funded testnet wallet, hermetic and repeatable. `docker-compose.yml` ships a
+`yaci` **profile** for exactly this (a `bloxbean/yaci-cli` container on the `mesh` network serving a
+Blockfrost-compatible store API plus the admin API). This is the same custom-network path the e2e
+propagation suite drives
+(`integration/src/test/scala/hydrozoa/integration/e2e/DockerPropagationTest.scala`).
+
+Only the steps that **differ** from §4–§5 are shown; `keygen-fleet`, the demo (§6), and teardown are
+otherwise identical.
+
+### URL split — read this first
+
+The nodes and the host reach the same Yaci at **different addresses**:
+
+| Who | Store / Blockfrost API | Admin API |
+|---|---|---|
+| **containers** (in-mesh) | `http://yaci:8080/api/v1` | — |
+| **host** (CLI generation steps) | `http://localhost:18080/api/v1` | `http://localhost:10000/local-cluster/api` |
+
+So the peers' `cardanoBackendUrl` is the **in-mesh** URL, while the host-side `deploy-scripts` and
+`build-head-config` are given the **host** URLs via `--blockfrost-url` / `--yaci-admin-url` (which
+override the in-mesh URL that `keygen-fleet` wrote into `defaults.json`).
+
+### Step 1 — start Yaci and create the devnet
+
+```bash
+docker compose --profile yaci up -d yaci
+# create + start a fast (1s-block) devnet; the compose sets yaci_store_enabled so create-node also
+# brings up the Blockfrost API on 8080:
+docker compose --profile yaci exec -d yaci /app/yaci-cli.sh create-node -o --start --block-time 1 --slot-length 1
+# wait until the store serves protocol params:
+until curl -sf http://localhost:18080/api/v1/epochs/latest/parameters >/dev/null; do sleep 2; done
+echo "yaci ready"
+```
+
+### Step 2 — template: point at Yaci (replaces the Blockfrost key)
+
+In `head/template/peer-private.template.json.local` (§4 Step 1) set the **in-mesh** backend URL — its
+presence marks the network **Custom**; leave the placeholder `blockfrostApiKey` as-is (it is ignored
+for a custom network):
+
+```json
+"cardanoBackendUrl": "http://yaci:8080/api/v1",
+```
+
+Then run `keygen-fleet` as in §4 Step 2 (`just keygen-fleet 2 4 2`) — it writes a pending-custom
+marker into `defaults.json` and the in-mesh URL into every `private.json`.
+
+### Step 3 — fund head peer 0 via Yaci topup (no faucet)
+
+Yaci has no faucet; top up head-0's address straight through the admin API:
+
+```bash
+ADDR=$(just head-zero-address)                          # head peer 0's bech32 address
+curl -X POST http://localhost:10000/local-cluster/api/addresses/topup \
+     -H 'Content-Type: application/json' \
+     -d "{\"address\":\"$ADDR\",\"adaAmount\":100000}"  # bump if build-head-config reports a shortfall
+```
+
+### Step 4 — deploy scripts + build the head config, pointed at Yaci
+
+Run these **host-side** (the staged launcher, or the `hydrozoa` docker alias with host networking) so
+`localhost:…` reaches Yaci's host-mapped ports, passing both URLs:
+
+```bash
+hydrozoa deploy-scripts-and-g2-setup \
+    --blockfrost-url http://localhost:18080/api/v1 \
+    --yaci-admin-url http://localhost:10000/local-cluster/api
+hydrozoa build-head-config \
+    --blockfrost-url http://localhost:18080/api/v1 \
+    --yaci-admin-url http://localhost:10000/local-cluster/api
+```
+
+(`--blockfrost-url` / `--yaci-admin-url` on `build-head-config` mirror `deploy-scripts` and override
+the in-mesh marker so the host-side build reaches Yaci at its host-mapped port; the nodes keep the
+in-mesh URL from Step 2.)
+
+### Step 5 — run the head against Yaci
+
+```bash
+docker compose --profile yaci up -d           # keeps the yaci container in the project
+```
+
+The head initializes on the devnet; §6's submit / deposit / query commands work unchanged. Tear down
+with `docker compose --profile yaci down -v`.

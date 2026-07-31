@@ -289,7 +289,7 @@ just integration-e2e-docker   # builds the image (Docker/publishLocal), stages t
 sbt "integration/testOnly hydrozoa.integration.e2e.DockerPropagationTest"
 ```
 
-Design and rationale: `docs/local/integration/design.md` (+ `phases.md`). A stray `testOnly *` that reaches the suite without Docker or the staged launcher **cancels** (not fails) via `assume`.
+A stray `testOnly *` that reaches the suite without Docker or the staged launcher **cancels** (not fails) via `cancel(...)`, so it stays green.
 
 ---
 
