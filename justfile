@@ -202,7 +202,7 @@ integration-yaci:
 integration-yaci-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-yaci-docker"' EXIT
-  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.* hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
 
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"

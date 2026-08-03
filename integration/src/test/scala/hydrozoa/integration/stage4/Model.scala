@@ -4,6 +4,7 @@ import cats.MonadThrow
 import cats.data.StateT
 import cats.syntax.all.*
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
+import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend
 import hydrozoa.integration.stage4.Commands.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
@@ -20,6 +21,7 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.FiniteDuration
 import scalus.cardano.ledger.{TransactionInput, Utxos}
 import scalus.uplc.builtin.ByteString
+import test.TestPeers
 
 object Model {
 
@@ -29,6 +31,16 @@ object Model {
           */
         absorptionSlack: FiniteDuration,
         meanInterArrivalTimes: Map[HeadPeerNumber, FiniteDuration],
+        /** The (seed-derived) test peers used by this run. Kept in `Params` so `sutResource` — which
+          * only receives `State` — can pass them into the harness; matters for the Yaci-backed
+          * MBT, where `testPeers` is built lazily from the devnet's `Custom` network and can't be
+          * hardcoded at suite-construction time.
+          */
+        testPeers: TestPeers,
+        /** L1 backend selector for the harness. Defaults to `Mock`; the Yaci-backed MBT overrides
+          * with `Mode.Yaci(network, blockfrostUrl)` derived from the devnet.
+          */
+        cardanoBackendMode: CardanoBackend.Mode = CardanoBackend.Mode.Mock,
         /** Coil follower node configs (each hubbed by head 0). Empty for a pure-head run. */
         coilNodeConfigs: List[NodeConfig] = List.empty,
     )

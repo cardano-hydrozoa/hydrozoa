@@ -5,10 +5,12 @@ import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.integration.harness.MultiPeerHeadHarness
+import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
 import hydrozoa.integration.stage4.Model
+import hydrozoa.integration.yaci.{DevKit, YaciDevnet, YaciSetup}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent
@@ -26,7 +28,8 @@ import scala.collection.immutable.Queue
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxos}
-import test.{SeedPhrase, TestPeers}
+import scalus.testing.yaci.YaciConfig
+import test.{SeedPhrase, TestPeerName, TestPeers}
 
 /** RBR fallback→evacuation as a `ModelBasedSuite` (stage4-style).
   *
@@ -43,13 +46,17 @@ case class RbrMbtSuite(
     nCoilPeers: Int = 2,
     maxVersionMinor: Int = 2,
     nCommands: Int = 4,
+    /** L1 backend for the run. `Mock` uses the in-memory `CardanoBackendMock` with fabricated
+      * `yaciTestSauceGenesis` UTxOs. `Yaci` acquires a shared Testcontainers-managed devnet, resets
+      * + redeploys per iteration, and runs the harness against real Blockfrost.
+      */
+    backendSpec: RbrMbtSuite.BackendSpec = RbrMbtSuite.BackendSpec.Mock,
 ) extends ModelBasedSuite:
 
-    override type Env = Unit
+    override type Env = RbrMbtSuite.RbrMbtEnv
     override type State = Model.ModelState
     override type Sut = hydrozoa.integration.rbr.mbt.Sut
 
-    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preprod
     private val scenarioTimeout: FiniteDuration = 7.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
 
@@ -63,37 +70,81 @@ case class RbrMbtSuite(
     override def commandGenTweaker: [A] => Gen[A] => Gen[A] =
         [A] => (g: Gen[A]) => Gen.resize(nCommands, g)
 
-    override def initEnv: PropertyM[IO, Unit] = PropertyM.run(IO.unit)
+    override def initEnv: PropertyM[IO, RbrMbtSuite.RbrMbtEnv] = backendSpec match {
+        case RbrMbtSuite.BackendSpec.Mock =>
+            PropertyM.run(IO.pure(RbrMbtSuite.RbrMbtEnv.Mock))
+        case RbrMbtSuite.BackendSpec.Yaci(cfg) =>
+            // Singleton container: first call warms it, every subsequent iteration reuses.
+            PropertyM.run(YaciDevnet.acquireShared(cfg).map(RbrMbtSuite.RbrMbtEnv.Yaci.apply))
+    }
 
     override def canStartupNewSut(): Boolean = true
 
-    private val testPeers: TestPeers =
-        TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
+    override def genInitialState(env: RbrMbtSuite.RbrMbtEnv): PropertyM[IO, Model.ModelState] =
+        env match {
+            case RbrMbtSuite.RbrMbtEnv.Mock =>
+                val network = CardanoNetwork.Preprod
+                val testPeers = TestPeers(SeedPhrase.Yaci, network, nHeadPeers, nCoilPeers)
+                val testPeerToUtxos = yaciTestSauceGenesis(network.network)(testPeers)
+                MultiPeerHeadHarness
+                    .genDisputeMnc(
+                      transportMode = TransportMode.WebSocket,
+                      testPeers = testPeers,
+                      testPeerToUtxos = testPeerToUtxos,
+                      takeoffOffset = 120.seconds,
+                      coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
+                      coilQuorum = nCoilPeers,
+                    )
+                    .map { case (takeoffTime, mnc) =>
+                        mkModelState(
+                          config = mnc,
+                          takeoffTime = takeoffTime,
+                          testPeers = testPeers,
+                          testPeerToUtxos = testPeerToUtxos,
+                          cardanoBackendMode = HarnessCardanoBackend.Mode.Mock,
+                        )
+                    }
 
-    override def genInitialState(env: Unit): PropertyM[IO, Model.ModelState] =
-        val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
-        MultiPeerHeadHarness
-            .genDisputeMnc(
-              transportMode = TransportMode.WebSocket,
-              testPeers = testPeers,
-              testPeerToUtxos = testPeerToUtxos,
-              takeoffOffset = 120.seconds,
-              coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
-              coilQuorum = nCoilPeers,
-            )
-            .map { case (takeoffTime, mnc) => mkModelState(mnc, takeoffTime) }
+            case RbrMbtSuite.RbrMbtEnv.Yaci(devKit) =>
+                for {
+                    _ <- PropertyM.run(
+                      log.info("Resetting Yaci devnet + redeploying scripts for a new iteration")
+                    )
+                    _ <- PropertyM.run(IO.blocking(devKit.reset()))
+                    ready <- PropertyM.run(YaciSetup.prepare(devKit, nHeadPeers, nCoilPeers))
+                    takeoffAndMnc <- MultiPeerHeadHarness.genDisputeMnc(
+                      transportMode = TransportMode.WebSocket,
+                      testPeers = ready.testPeers,
+                      testPeerToUtxos = ready.genesisByPeer,
+                      takeoffOffset = 120.seconds,
+                      scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
+                      coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
+                      coilQuorum = nCoilPeers,
+                    )
+                    (takeoffTime, mnc) = takeoffAndMnc
+                } yield mkModelState(
+                  config = mnc,
+                  takeoffTime = takeoffTime,
+                  testPeers = ready.testPeers,
+                  testPeerToUtxos = ready.genesisByPeer,
+                  cardanoBackendMode = HarnessCardanoBackend.Mode
+                      .Yaci(ready.network, devKit.blockfrostApiBaseUri),
+                )
+        }
 
     /** Build the stage4 `ModelState` from a generated dispute `MultiNodeConfig` (mirrors
-      * `Stage4Suite.genInitialState`'s post-config construction).
+      * `Stage4Suite.genInitialState`'s post-config construction). `testPeers` and
+      * `testPeerToUtxos` come from the caller (they differ between the Mock and Yaci backend
+      * paths — Mock fabricates from `yaciTestSauceGenesis`, Yaci queries the real devnet).
       */
     private def mkModelState(
         config: MultiNodeConfig,
         takeoffTime: Option[java.time.Instant],
+        testPeers: TestPeers,
+        testPeerToUtxos: Map[TestPeerName, Utxos],
+        cardanoBackendMode: HarnessCardanoBackend.Mode,
     ): Model.ModelState =
-        val preinitPeerUtxosL1 =
-            yaciTestSauceGenesis(cardanoNetwork.network)(testPeers).map { case (k, v) =>
-                k.headPeerNumber -> v
-            }
+        val preinitPeerUtxosL1 = testPeerToUtxos.map { case (k, v) => k.headPeerNumber -> v }
         val coilNodeConfigs = config.mkCoilNodeConfigs(testPeers.coilWallets)
         val initTx = config.headConfig.initializationTx.tx
         val spentInputs = initTx.body.value.inputs.toSet
@@ -101,7 +152,7 @@ case class RbrMbtSuite(
         val peers = config.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
         val peerUtxosL1 = peers.map { pn =>
             val peerAddr = config.addressOf(pn)
-            val survived: Utxos = preinitPeerUtxosL1(pn) -- spentInputs
+            val survived: Utxos = preinitPeerUtxosL1.getOrElse(pn, Map.empty) -- spentInputs
             val newOutputs: Utxos = initOutputsList
                 .filter((out, _) => out.address.asInstanceOf[ShelleyAddress] == peerAddr)
                 .map((out, ix) => TransactionInput(initTx.id, ix) -> out)
@@ -113,6 +164,8 @@ case class RbrMbtSuite(
             multiNodeConfig = config,
             absorptionSlack = 60.seconds,
             meanInterArrivalTimes = peers.map(pn => pn -> 12.seconds).toMap,
+            testPeers = testPeers,
+            cardanoBackendMode = cardanoBackendMode,
             coilNodeConfigs = coilNodeConfigs,
           ),
           preinitPeerUtxosL1 = preinitPeerUtxosL1,
@@ -137,7 +190,7 @@ case class RbrMbtSuite(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
               multiNodeConfig = state.params.multiNodeConfig,
-              testPeers = testPeers,
+              testPeers = state.params.testPeers,
               takeoffTime = state.takeoffTime,
               tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+|
                   observerTracer(
@@ -156,6 +209,7 @@ case class RbrMbtSuite(
                             .map(_ && etx.transactionFamily == "SettlementTx"),
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId),
                   ),
+              cardanoBackendMode = state.params.cardanoBackendMode,
             )
             // Force block/major production so deposits settle and (post-arming) fallback trips.
             _ <- Resource.make(
@@ -281,3 +335,23 @@ case class RbrMbtSuite(
             case MultiPeerHeadHarness.Event.Head(peerNum, evt) => onEvent(PeerId.Head(peerNum))(evt)
             case MultiPeerHeadHarness.Event.Coil(coilNum, evt) => onEvent(PeerId.Coil(coilNum))(evt)
         }
+
+object RbrMbtSuite:
+
+    /** L1 backend selector. `Mock` runs in-memory. `Yaci` runs against a real Testcontainers-managed
+      * devnet — one JVM-wide container (see [[YaciDevnet.acquireShared]]), reset + redeployed per
+      * ScalaCheck iteration. The `YaciConfig` selects the container's config
+      * (image tag, log enable, container reuse) — see `scalus.testing.yaci.YaciConfig`.
+      */
+    enum BackendSpec:
+        case Mock
+        case Yaci(config: YaciConfig = YaciConfig())
+
+    /** Per-iteration environment threaded from [[RbrMbtSuite.initEnv]] to
+      * [[RbrMbtSuite.genInitialState]]. `Mock` carries no state (the suite reconstructs `TestPeers`
+      * from the fixed Preprod network). `Yaci` carries the shared devnet handle so the iteration
+      * can `reset()` it and run [[YaciSetup.prepare]] before generating the config.
+      */
+    enum RbrMbtEnv:
+        case Mock
+        case Yaci(devKit: DevKit)

@@ -26,15 +26,31 @@ object YaciDevnet {
             .make(IO.blocking(YaciContainer.acquire(config))) { _ =>
                 IO.blocking(YaciContainer.release())
             }
-            .evalMap { c =>
-                // Bloxbean's URL helpers hardcode `localhost` and include a trailing `/`; strip
-                // the slash so `DevKit`'s string-interp URL builders don't produce `//`.
-                val devKit = DevKit(
-                  blockfrostApiBaseUri = c.getYaciStoreApiUrl.stripSuffix("/"),
-                  yaciApiBaseUri = Uri.unsafeParse(c.getLocalClusterApiUrl.stripSuffix("/")),
-                )
-                awaitBlockfrost(devKit, startupTimeout).as(devKit)
-            }
+            .evalMap(mkDevKit(_, startupTimeout))
+
+    /** Acquire a shared JVM-wide devnet [[DevKit]] without a release hook. Intended for callers
+      * whose driver can't compose a `Resource` across iterations — the ScalaCheck-driven MBT
+      * suites, whose `initEnv: PropertyM[IO, Env]` returns a bare `Env` (no bracket). `scalus`'
+      * [[YaciContainer]] is a JVM-wide singleton, so every call returns the same container; the
+      * testcontainers Ryuk sidecar reaps it at JVM exit.
+      */
+    def acquireShared(
+        config: YaciConfig = YaciConfig(),
+        startupTimeout: FiniteDuration = 3.minutes,
+    ): IO[DevKit] =
+        IO.blocking(YaciContainer.acquire(config)).flatMap(mkDevKit(_, startupTimeout))
+
+    private def mkDevKit(
+        c: com.bloxbean.cardano.yaci.test.YaciCardanoContainer,
+        startupTimeout: FiniteDuration,
+    ): IO[DevKit] =
+        // Bloxbean's URL helpers hardcode `localhost` and include a trailing `/`; strip the slash
+        // so `DevKit`'s string-interp URL builders don't produce `//`.
+        val devKit = DevKit(
+          blockfrostApiBaseUri = c.getYaciStoreApiUrl.stripSuffix("/"),
+          yaciApiBaseUri = Uri.unsafeParse(c.getLocalClusterApiUrl.stripSuffix("/")),
+        )
+        awaitBlockfrost(devKit, startupTimeout).as(devKit)
 
     /** Bloxbean's `start()` gates on the admin API; the Yaci Store (Blockfrost) comes up a few
       * seconds later, so poll it before yielding the handle.

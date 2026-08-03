@@ -237,7 +237,8 @@ lazy val integration: Project = (project in file("integration"))
           "hydrozoa.integration.stage1.Stage1PropertiesYaci",
           "hydrozoa.integration.yaci.YaciDevnetSmokeTest",
           "hydrozoa.integration.yaci.YaciSetupProbe",
-          "hydrozoa.integration.yaci.YaciMultiPeerProbe"
+          "hydrozoa.integration.yaci.YaciMultiPeerProbe",
+          "hydrozoa.integration.rbr.mbt.RbrMbtPropertiesYaci"
         )
       ),
       // test dependencies
