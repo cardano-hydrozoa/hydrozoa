@@ -30,6 +30,7 @@ import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_
 import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
+import hydrozoa.rulebased.ledger.l1.script.plutus.DeploymentTx
 import hydrozoa.multisig.persistence.{BackendStore, Cf, ConsensusStoreReader, InMemoryBackendStore, Persistence, PersistenceEvent, PersistenceEventFormat}
 import hydrozoa.multisig.server.{HydrozoaHttpEvent, HydrozoaHttpEventFormat, HydrozoaRoutes, HydrozoaServer, SubmissionClient}
 import hydrozoa.multisig.{CoilMultisigRegimeManager, CoilMultisigRegimeManagerEventFormat, CoilRegimeManagerEvent, HeadMultisigRegimeManager, HeadMultisigRegimeManagerEventFormat, HeadRegimeManagerEvent, NodeStatus}
@@ -710,8 +711,10 @@ object MultiPeerHeadHarness:
                 case Mode.Yaci(network, url) =>
                     // Blockfrost has no "all UTxOs" query, so scope the snapshot to the addresses
                     // that hold head-relevant UTxOs: the pre-init peer wallets (from
-                    // `preinitPeerUtxosL1`) plus the treasury + dispute script addresses. That
-                    // matches the mock backend's whole-ledger view for the head's slice.
+                    // `preinitPeerUtxosL1`), the treasury + dispute script addresses (where head
+                    // funds and open disputes sit), and the deploy-time burn address (where the
+                    // treasury + dispute reference scripts and the G2 setup ladder rungs live).
+                    // That matches the mock backend's whole-ledger view for the head's slice.
                     val peerAddresses = preinitPeerUtxosL1.values
                         .flatMap(_.values.map(_.address))
                         .collect { case a: ShelleyAddress => a }
@@ -720,13 +723,14 @@ object MultiPeerHeadHarness:
                     val scriptAddresses = List(
                       HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
                       HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
+                      DeploymentTx.mkBurnAddress(cardanoInfo.network),
                     )
                     mkYaci(network, url, peerAddresses ++ scriptAddresses, tracer)
 
         /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
           * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
-          * caller supplies (peer wallets + treasury/dispute script addresses — see the `Mode.Yaci`
-          * branch of [[mk]] for the composition).
+          * caller supplies (peer wallets + treasury/dispute script addresses + deploy burn
+          * address — see the `Mode.Yaci` branch of [[mk]] for the composition).
           */
         def mkYaci(
             network: CardanoNetwork.Custom,
