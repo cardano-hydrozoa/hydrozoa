@@ -197,6 +197,13 @@ integration-yaci:
   trap 'just notify "integration-yaci"' EXIT
   sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
+# Yaci suites that spin up their own devnet via Testcontainers (require Docker).
+# Bypasses the build.sbt Tests.Exclude that keeps these out of `just integration`.
+integration-yaci-docker:
+  #!/usr/bin/env bash
+  trap 'just notify "integration-yaci-docker"' EXIT
+  sbt "; set integration/Test/testOptions := Seq() ; integration/testOnly hydrozoa.integration.yaci.*"
+
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 

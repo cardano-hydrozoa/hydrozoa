@@ -37,3 +37,41 @@ jobs:
         env:
           JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
         run: nix develop --command just integration-fast
+
+      # The bloxbean/yaci-cli image is ~578 MB and dominates the yaci-suite runtime on a
+      # cold runner (~3.5 min pull). Cache the tarball keyed on build.sbt so any bump of
+      # testcontainers / scalus-testkit / bloxbean invalidates it, but everything else
+      # rides on the last cached image (via restore-keys). Testcontainers picks up the
+      # loaded image transparently — no shim required.
+      - name: Cache Yaci DevKit image
+        id: yaci-image-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/docker-images/yaci-cli.tar
+          key: docker-yaci-cli-${{ hashFiles('**/build.sbt') }}
+          restore-keys: docker-yaci-cli-
+
+      - name: Load cached Yaci DevKit image
+        run: |
+          tarball="$HOME/.cache/docker-images/yaci-cli.tar"
+          if [ -f "$tarball" ]; then
+            docker load -i "$tarball"
+          else
+            echo "No cached image tarball — testcontainers will pull on demand."
+          fi
+
+      - name: Yaci integration tests (Docker)
+        env:
+          JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
+        run: nix develop --command just integration-yaci-docker
+
+      - name: Save Yaci DevKit image to cache
+        if: steps.yaci-image-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.cache/docker-images
+          image=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^bloxbean/yaci-cli:' | head -n1)
+          if [ -z "$image" ]; then
+            echo "No bloxbean/yaci-cli image found after the test run — nothing to cache." >&2
+            exit 0
+          fi
+          docker save "$image" -o ~/.cache/docker-images/yaci-cli.tar
