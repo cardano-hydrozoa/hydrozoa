@@ -244,8 +244,23 @@ lazy val integration: Project = (project in file("integration"))
       libraryDependencies ++= Seq(
         "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
         "org.typelevel" %% "cats-effect" % "3.6.3" % Test,
-        // Spins up the Yaci DevKit devnet container for the Yaci-backed integration suites.
-        "com.dimafeng" %% "testcontainers-scala-core" % "0.44.1" % Test
+        // Bloxbean's `yaci-cardano-test:0.1.0` (transitively via scalus-testkit) pins
+        // testcontainers-java to 1.17.6 → docker-java 3.2.13 → Docker Engine API 1.32, which
+        // modern rootless dockerd (>=API 1.40) refuses. Declare a newer testcontainers directly
+        // so `YaciCardanoContainer.start` can talk to the daemon.
+        "org.testcontainers" % "testcontainers" % "1.21.3" % Test
+      ),
+      // testcontainers' `DockerClientProviderStrategy.getClientForConfig` unconditionally forces
+      // the shaded docker-java `apiVersion` to `VERSION_1_32` whenever the config resolves to
+      // `UNKNOWN_VERSION` (a compat fallback for pre-1.24 daemons). Modern rootless dockerd
+      // rejects `/v1.32/*` because its `MinAPIVersion` is 1.40. Setting the `api.version` system
+      // property makes the config non-UNKNOWN, so the strategy skips the fallback and negotiates
+      // properly. Must be forked so the property reaches the strategy static-init.
+      Test / fork := true,
+      Test / javaOptions ++= Seq(
+        "--enable-native-access=ALL-UNNAMED",
+        "--sun-misc-unsafe-memory-access=allow",
+        "-Dapi.version=1.44"
       )
     )
 

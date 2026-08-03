@@ -86,6 +86,12 @@ object Stage1PropertiesL1Mock extends YetAnotherProperties("Integration Stage 1 
 /** The Yaci runner has only some of the properties which are worth running on Yaci, see property
   * descriptions in the [[Stage1PropertiesL1Mock]]. To run this suite you need a Yaci devkit up and
   * running.
+  *
+  * TODO: drop the manually-started devkit prerequisite by acquiring one via
+  * [[hydrozoa.integration.yaci.YaciDevnet.resource]] (a `Resource[IO, DevKit]` that brackets
+  * `scalus.testing.yaci.YaciContainer` acquire/release, shared with the multi-peer probes), and
+  * drive `Yaci(...)` from the resulting `DevKit` instead of `DevKit.localhost`. Gate on Docker in
+  * the same build.sbt exclusion as the other yaci suites.
   */
 object Stage1PropertiesYaci extends YetAnotherProperties("Integration Stage 1 with Yaci"):
 
