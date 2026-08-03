@@ -18,7 +18,7 @@ import hydrozoa.config.head.{HeadConfig, InitParamsType, generateHeadConfig, gen
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.{RateLimits, generateNodeOperationMultisigConfig}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.config.{ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
+import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos, generateScriptReferenceUtxos as defaultScriptRefsGen}
 import hydrozoa.integration.yaci.DevKit
 import hydrozoa.lib.cardano.scalus.QuantizedTime.{QuantizedFiniteDuration, quantize}
 import hydrozoa.lib.logging.{ContraTracer, LogEvent, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -708,23 +708,25 @@ object MultiPeerHeadHarness:
             mode match
                 case Mode.Mock => mkMock(preinitPeerUtxosL1, scriptReferenceUtxos, cardanoInfo)
                 case Mode.Yaci(network, url) =>
-                    // The pre-init UTxOs live at the peer wallet addresses; use them to scope the
-                    // snapshot (Blockfrost has no "all UTxOs" query).
+                    // Blockfrost has no "all UTxOs" query, so scope the snapshot to the addresses
+                    // that hold head-relevant UTxOs: the pre-init peer wallets (from
+                    // `preinitPeerUtxosL1`) plus the treasury + dispute script addresses. That
+                    // matches the mock backend's whole-ledger view for the head's slice.
                     val peerAddresses = preinitPeerUtxosL1.values
                         .flatMap(_.values.map(_.address))
                         .collect { case a: ShelleyAddress => a }
                         .toList
                         .distinct
-                    mkYaci(network, url, peerAddresses, tracer)
+                    val scriptAddresses = List(
+                      HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
+                      HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
+                    )
+                    mkYaci(network, url, peerAddresses ++ scriptAddresses, tracer)
 
         /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
-          * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each known peer
-          * address.
-          *
-          * TODO: the snapshot must also cover the treasury + dispute script addresses to match the
-          * mock's whole-ledger snapshot; that needs the Yaci config-gen path to deploy those
-          * scripts and seed genesis on-chain (`DevKit.reset`/`topup` + `DeployScriptsAndG2Setup`) —
-          * the next increment.
+          * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
+          * caller supplies (peer wallets + treasury/dispute script addresses — see the `Mode.Yaci`
+          * branch of [[mk]] for the composition).
           */
         def mkYaci(
             network: CardanoNetwork.Custom,
