@@ -23,6 +23,11 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
 
     private val evacuationDatum = RbrDatumSentinels.inline("evacuation")
 
+    // TODO: L2 tx coverage. This generator only submits L1 deposits; stage4's `genL2TxCommand`
+    // (stage4/Generator.scala) is not wired in. Mix it into the picker via `Gen.frequency`
+    // alongside `genRegisterDepositCommand` (mirroring stage4/Generator.scala's ~10:1 weighting)
+    // so pre-fallback runs also exercise the submissionClient + L2 ledger path.
+
     override def genNextCommand(state: ModelState): PropertyM[IO, AnyCommand[ModelState, Sut]] =
         PropertyM.pick(
           for

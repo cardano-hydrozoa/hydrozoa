@@ -3,10 +3,7 @@ package hydrozoa.rulebased.ledger.l1
 import scalus.cardano.ledger.DatumOption
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.{
-  ByteString,
-  Data
-}
+import scalus.uplc.builtin.{ByteString, Data}
 
 /** Content-based sentinel datums used by the test-only `RBRClassifier` to bucket L1 UTxOs by role.
   *

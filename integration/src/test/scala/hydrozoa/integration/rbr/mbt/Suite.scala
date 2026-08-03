@@ -169,6 +169,14 @@ case class RbrMbtSuite(
           settlementFirewallArmed,
         )
 
+    // TODO: refund-path sibling suite. The current flow awaits every registered deposit before
+    // arming the firewall, so `registeredDeposits ≡ committedByFallback` and the cardano-liaison
+    // refund path (deposits still pending at fallback get refunded to the originating peer's L1
+    // address) is never exercised. Add a sibling `ModelBasedSuite` that arms the firewall while
+    // deposits are in flight; split `registeredDeposits` into `committedByFallback` +
+    // `pendingAtFallback` and assert (a) alpha with `initial + committedByFallback` matches beta
+    // on the treasury side, and (b) each `pendingAtFallback` deposit's L1 utxo reappears at the
+    // originating peer's address.
     override def beforeFinalize(lastState: Model.ModelState, sut: Sut): IO[Prop] =
         val depositUtxos = lastState.registeredDeposits.values.map(_.depositProduced).toSet
         for
