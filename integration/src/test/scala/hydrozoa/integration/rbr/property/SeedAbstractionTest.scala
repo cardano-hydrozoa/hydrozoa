@@ -77,8 +77,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
 
     private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
-            _ <- step1a_submitBootstrapRequest
-            _ <- step1b_startPeriodicRequestLoop
+            _ <- step1_startPeriodicRequestLoop
             _ <- step2_awaitFallbackToRuleBasedHandoff
             _ <- step3_assertSeedAbstraction
         yield true
@@ -89,13 +88,7 @@ object SeedAbstractionTest extends MultiPeerDisputeProperties("RBR Seed Abstract
         periodicRequestFiber: Ref[IO, Option[FiberIO[Nothing]]],
     )
 
-    private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
-        for
-            ctx <- ask
-            _ <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
-        yield ()
-
-    private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
+    private def step1_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
         for
             ctx <- ask
             fiber <- lift(
