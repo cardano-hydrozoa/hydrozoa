@@ -5,13 +5,11 @@ import hydrozoa.integration.rbr.mbt.SutCommands.given
 import hydrozoa.integration.stage4.CommandGenerators
 import hydrozoa.integration.stage4.Commands.given
 import hydrozoa.integration.stage4.Model.{ModelState, given}
+import hydrozoa.rulebased.ledger.l1.RbrDatumSentinels
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty
 import org.scalacheck.{Gen, PropertyM}
 import scala.concurrent.duration.*
-import scalus.cardano.ledger.DatumOption.Inline
-import scalus.uplc.builtin.ByteString
-import scalus.uplc.builtin.Data.toData
 
 /** Pre-fallback generator: submit L1 deposits (reusing stage4's `genRegisterDepositCommand`, which
   * builds a real signed deposit tx from the peer's L1 funding). Each deposit's L2 outputs carry the
@@ -23,8 +21,7 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
 
     private given (AnyCommand[ModelState, Sut] => Pretty) = c => Pretty(_ => c.toString)
 
-    // Same inline-datum sentinel the initial evacuation map carries (InitializationParametersGen).
-    private val evacuationDatum = Some(Inline(toData(ByteString.fromString("evacuation"))))
+    private val evacuationDatum = RbrDatumSentinels.inline("evacuation")
 
     override def genNextCommand(state: ModelState): PropertyM[IO, AnyCommand[ModelState, Sut]] =
         PropertyM.pick(
