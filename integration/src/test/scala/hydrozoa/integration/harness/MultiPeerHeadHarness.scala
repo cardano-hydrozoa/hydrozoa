@@ -729,8 +729,8 @@ object MultiPeerHeadHarness:
 
         /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
           * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
-          * caller supplies (peer wallets + treasury/dispute script addresses + deploy burn
-          * address — see the `Mode.Yaci` branch of [[mk]] for the composition).
+          * caller supplies (peer wallets + treasury/dispute script addresses + deploy burn address
+          * — see the `Mode.Yaci` branch of [[mk]] for the composition).
           */
         def mkYaci(
             network: CardanoNetwork.Custom,
