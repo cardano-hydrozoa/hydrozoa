@@ -29,11 +29,12 @@ object YaciSetup {
         genesisByPeer: Map[TestPeerName, Utxos],
     )
 
-    private val genesisFunding: Coin = Coin(100_000_000_000L) // 100k ADA per head peer
+    private val genesisFunding: Coin = Coin(100_000_000_000L) // 100k ADA per peer
 
-    /** Reset the devnet, fund the head peers, deploy the treasury/dispute/G2 reference scripts
-      * (from head peer 0's wallet — its post-deploy change stays as genesis funding), resolve them,
-      * and query each head peer's funded genesis UTxOs.
+    /** Reset the devnet, fund every head + coil peer, deploy the treasury/dispute/G2 reference
+      * scripts (from head peer 0's wallet — its post-deploy change stays as genesis funding),
+      * resolve them, and query each funded peer's genesis UTxOs. Coil peers are funded too because
+      * coil-side RBAs need ADA-only wallet UTxOs for collateral (see `yaciTestSauceGenesis`).
       */
     def prepare(devKit: DevKit, nHeadPeers: Int, nCoilPeers: Int = 0): IO[Ready] =
         MultiPeerHeadHarness.CardanoBackend.yaciNetwork(devKit).flatMap { network =>
@@ -44,16 +45,18 @@ object YaciSetup {
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
             val headNames = List.tabulate(nHeadPeers)(TestPeerName.fromOrdinal)
+            val coilNames = List.tabulate(nCoilPeers)(i => TestPeerName.fromOrdinal(nHeadPeers + i))
+            val allNames = headNames ++ coilNames
             def addrOf(n: TestPeerName): ShelleyAddress = testPeers.shelleyAddressFor(n)
             for {
-                _ <- headNames.traverse_(n => IO.blocking(devKit.topup(addrOf(n), genesisFunding)))
-                _ <- headNames.traverse_(n => awaitFunded(backend, addrOf(n)))
+                _ <- allNames.traverse_(n => IO.blocking(devKit.topup(addrOf(n), genesisFunding)))
+                _ <- allNames.traverse_(n => awaitFunded(backend, addrOf(n)))
                 unresolved <- DeployScriptsAndG2Setup.deploy(
                   backend,
                   testPeers.walletFor(headNames.head)
                 )
                 resolved <- unresolved.resolve(backend).flatMap(IO.fromEither)
-                genesis <- headNames
+                genesis <- allNames
                     .traverse(n => backend.utxosAt(addrOf(n)).flatMap(IO.fromEither).map(n -> _))
             } yield Ready(network, testPeers, backend, resolved, genesis.toMap)
         }

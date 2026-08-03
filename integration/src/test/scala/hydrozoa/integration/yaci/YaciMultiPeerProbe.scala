@@ -7,6 +7,7 @@ import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport
 import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.multisig.backend.cardano.CardanoBackend as L1Backend
 import hydrozoa.multisig.consensus.RequestSequencer
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.PropertyM
 import scala.concurrent.duration.*
@@ -22,7 +23,8 @@ import test.{TestM, TestMFixedEnv}
   */
 object YaciMultiPeerProbe extends MultiPeerDisputeProperties("Yaci MultiPeer"):
 
-    private val nHeadPeers: Int = 2
+    private val nHeadPeers: Int = 3
+    private val nCoilPeers: Int = 3
 
     private final case class Ctx(
         harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -47,13 +49,15 @@ object YaciMultiPeerProbe extends MultiPeerDisputeProperties("Yaci MultiPeer"):
     private def resource: PropertyM[IO, Resource[IO, Ctx]] =
         for
             alloc <- PropertyM.run(YaciDevnet.resource().allocated)
-            ready <- PropertyM.run(YaciSetup.prepare(alloc._1, nHeadPeers))
+            ready <- PropertyM.run(YaciSetup.prepare(alloc._1, nHeadPeers, nCoilPeers))
             takeoffAndMnc <- MultiPeerHeadHarness.genDisputeMnc(
               transportMode = Transport.Mode.WebSocket,
               testPeers = ready.testPeers,
               testPeerToUtxos = ready.genesisByPeer,
               takeoffOffset = 120.seconds,
               scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
+              coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
+              coilQuorum = nCoilPeers,
             )
         yield
             val (takeoffTime, mnc) = takeoffAndMnc
