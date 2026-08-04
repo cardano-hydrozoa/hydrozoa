@@ -46,7 +46,7 @@ import scalus.uplc.builtin.ByteString
   * }}}
   *
   * The flow mirrors DEPLOYMENT.md §4→§6 against Yaci (custom network):
-  *   1. bring up the Yaci devnet (compose `yaci` profile) and create its node;
+  *   1. bring up the Yaci devnet (the `docker-compose.yaci.yml` overlay) and create its node;
   *   2. `keygen-fleet 4 0 0` — keys, roster, `defaults.json`, opening L2 state, per-peer configs;
   *   3. `topup` head peer 0 on Yaci (no faucet);
   *   4. `deploy-scripts-and-g2-setup` — deploy the treasury/dispute validators (+ G2 ladder);
@@ -56,10 +56,13 @@ import scalus.uplc.builtin.ByteString
   *
   * URL split (the containers and the host reach the same Yaci at different addresses): the peers
   * reach it in-mesh at `http://yaci:8080` (written into each `private.json` via the template's
-  * `cardanoBackendUrl`), while the host-side generation steps reach it at Yaci's host-mapped ports
-  * (`localhost:18080` / `localhost:10000`). The template keeps the in-mesh URL, and the host-side
-  * `deploy-scripts` / `build-head-config` are passed the host URLs via `--blockfrost-url` /
-  * `--yaci-admin-url`, which override the in-mesh URL in `defaults.json`'s pending-custom marker.
+  * `blockfrostApiUrl`), while the host-side generation steps reach it at Yaci's host-mapped port
+  * (`localhost:18080`) via `--blockfrost-url`, which overrides the in-mesh URL recorded in
+  * `defaults.json`.
+  *
+  * '''Incomplete:''' nothing yet writes the devnet's `CardanoInfo` into `defaults.json`, so this
+  * suite cannot form a head as written. The Yaci harness that produces it, and the rework of this
+  * suite onto the real `docker-compose.yml`, are tracked as WI-010 / WI-011.
   */
 class DockerPropagationTest extends AnyFunSuite:
 
@@ -96,7 +99,7 @@ class DockerPropagationTest extends AnyFunSuite:
 
     private def runScenario(home: Path, client: Client[IO]): IO[Unit] =
         for {
-            _ <- log(s"home=$home image=$image compose=$composeFile")
+            _ <- log(s"home=$home image=$image compose=${composeFiles.mkString(" + ")}")
             _ <- writePrivateTemplate(home)
 
             _ <- log("bringing up the Yaci devnet…")
@@ -144,9 +147,7 @@ class DockerPropagationTest extends AnyFunSuite:
               "--home",
               home.toString,
               "--blockfrost-url",
-              HostBlockfrostUrl,
-              "--yaci-admin-url",
-              HostYaciAdminUrl
+              HostBlockfrostUrl
             )
 
             _ <- log("build-head-config…")
@@ -155,9 +156,7 @@ class DockerPropagationTest extends AnyFunSuite:
               "--home",
               home.toString,
               "--blockfrost-url",
-              HostBlockfrostUrl,
-              "--yaci-admin-url",
-              HostYaciAdminUrl
+              HostBlockfrostUrl
             )
 
             _ <- log("docker compose up the four head peers…")
@@ -298,10 +297,7 @@ class DockerPropagationTest extends AnyFunSuite:
             val base = parse(readResource("/scaffold/peer-private.template.json"))
                 .fold(e => throw RuntimeException(s"bad scaffold template: $e"), identity)
             val patched = base.deepMerge(
-              Json.obj(
-                "cardanoBackendUrl" -> Json.fromString(MeshBlockfrostUrl),
-                "yaciAdminUrl" -> Json.fromString(MeshYaciAdminUrl)
-              )
+              Json.obj("blockfrostApiUrl" -> Json.fromString(MeshBlockfrostUrl))
             )
             val path = templatePath(home)
             Files.createDirectories(path.getParent)
@@ -349,8 +345,13 @@ class DockerPropagationTest extends AnyFunSuite:
     private def compose(home: Path, args: String*): IO[Unit] =
         runProcess(composeCmd(args*), cwd = None, extraEnv = composeEnv(home))
 
+    /** The shipped `docker-compose.yml` plus the Yaci overlay — the same pair, in the same order,
+      * that DEPLOYMENT.md tells an operator to run, so this suite exercises the real deployment
+      * rather than a test-only copy of it. `-p` isolates the run from an operator's own project.
+      */
     private def composeCmd(args: String*): Seq[String] =
-        Seq("docker", "compose", "-f", composeFile.toString, "--profile", "yaci") ++ args
+        Seq("docker", "compose", "-p", ComposeProject) ++
+            composeFiles.flatMap(f => Seq("-f", f.toString)) ++ args
 
     private def composeEnv(home: Path): Seq[(String, String)] =
         Seq("HYDROZOA_HOME" -> home.toString, "HYDROZOA_IMAGE" -> image)
@@ -451,13 +452,11 @@ object DockerPropagationTest:
     private val Tag = "[e2e]"
     private val HeadCount = 4
 
-    /** Yaci's host-mapped ports (`docker-compose.yaci.yml`): Blockfrost API 18080, admin 10000. */
+    /** Yaci's host-mapped Blockfrost port (`docker-compose.yaci.yml`). */
     private val HostBlockfrostUrl = "http://localhost:18080/api/v1"
-    private val HostYaciAdminUrl = "http://localhost:10000/local-cluster/api"
 
-    /** The in-mesh URLs the containers use (compose service name `yaci`). */
+    /** The in-mesh URL the containers use (compose service name `yaci`). */
     private val MeshBlockfrostUrl = "http://yaci:8080/api/v1"
-    private val MeshYaciAdminUrl = "http://yaci:10000/local-cluster/api"
 
     private val TopupLovelace = 100_000_000_000L // 100k ADA to head-0 on the devnet
     private val SendAda = 2L // ADA moved head-0 → head-1 on L2
@@ -505,13 +504,15 @@ object DockerPropagationTest:
             .resolve("bin")
             .resolve("hydrozoa")
 
-    private lazy val composeFile: Path =
-        val url = getClass.getResource("/e2e/docker-compose.yaci.yml")
-        if url == null then
-            throw RuntimeException(
-              "resource /e2e/docker-compose.yaci.yml is not on the test classpath"
-            )
-        Paths.get(url.toURI)
+    private val ComposeProject = "hydrozoa-e2e"
+
+    /** The real deployment file plus the Yaci overlay, both at the repo root. */
+    private lazy val composeFiles: List[Path] =
+        List("docker-compose.yml", "docker-compose.yaci.yml").map { name =>
+            val path = repoRoot.resolve(name)
+            if !Files.exists(path) then throw RuntimeException(s"$path is missing")
+            path
+        }
 
     private def parseShelley(bech32: String): ShelleyAddress =
         Address.fromBech32(bech32) match
