@@ -66,6 +66,29 @@ object CardanoNetwork {
         final def cardanoProtocolVersion: ProtocolVersion = cardanoProtocolParams.protocolVersion
     }
 
+    /** Reject a [[Custom]] network that reports one of the standard chains' protocol magic: such a
+      * chain must be configured as that standard network (`cardanoNetwork: preview|preprod|mainnet`
+      * plus a `blockfrostApiUrl` if a private endpoint serves it), because only the baked-in
+      * [[CardanoInfo]] carries the correct (Byron-aware) slot geometry and address tag. Devnet
+      * magics (e.g. Yaci's 42) are unaffected, as are the standard networks themselves.
+      */
+    def rejectStandardMagic(network: CardanoNetwork): Either[String, Unit] = network match {
+        case _: CardanoNetwork.Custom =>
+            List(CardanoNetwork.Mainnet, CardanoNetwork.Preprod, CardanoNetwork.Preview)
+                .find(_.protocolMagic == network.protocolMagic) match {
+                case None => Right(())
+                case Some(standard) =>
+                    val name = standard.toString.toLowerCase
+                    Left(
+                      s"the custom cardanoNetwork carries $name's network magic " +
+                          s"(${network.protocolMagic}); set cardanoNetwork: $name — with your " +
+                          "endpoint as blockfrostApiUrl if it is served privately — so the correct " +
+                          "baked-in parameters and slot config are used"
+                    )
+            }
+        case _ => Right(())
+    }
+
     extension [T <: TransactionOutput](self: T)
         def ensureMinAda(config: CardanoNetwork.Section): T =
             TransactionBuilder.ensureMinAda(self, config.cardanoProtocolParams).asInstanceOf[T]

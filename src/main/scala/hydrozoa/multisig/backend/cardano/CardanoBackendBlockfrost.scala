@@ -745,32 +745,32 @@ object CardanoBackendBlockfrost:
         IO.delay(apply_(network, apiKey, pageSize, tracer))
 
     /** Build a backend for a [[CardanoNetwork]] directly: a standard network derives its own
-      * Blockfrost URL; a `Custom` one uses `cardanoBackendUrl` (failing if it is absent). Folds the
+      * Blockfrost URL; a `Custom` one uses `blockfrostApiUrl` (failing if it is absent). Folds the
       * network→selector resolution so callers need not thread the internal `Either` selector.
       */
     def apply(
         network: CardanoNetwork,
-        cardanoBackendUrl: Option[URL],
+        blockfrostApiUrl: Option[URL],
         apiKey: ApiKey,
         tracer: ContraTracer[IO, CardanoBackendEvent]
     ): IO[CardanoBackendBlockfrost] =
-        networkSelector(network, cardanoBackendUrl).flatMap(selector =>
+        networkSelector(network, blockfrostApiUrl).flatMap(selector =>
             apply(selector, apiKey, tracer = tracer)
         )
 
-    /** Resolve a [[CardanoNetwork]] + optional `cardanoBackendUrl` into the selector [[apply]]
+    /** Resolve a [[CardanoNetwork]] + optional `blockfrostApiUrl` into the selector [[apply]]
       * expects. A standard network with no URL uses its own public Blockfrost endpoint; a standard
       * network *with* a URL is served from that private endpoint while keeping its baked-in
       * `CardanoInfo` (modeled as a `Custom` over the standard `CardanoInfo`, so params/slot/magic
       * are never re-fetched). A `Custom` network requires a URL and fails without one.
       */
-    private def networkSelector(
+    private[cardano] def networkSelector(
         network: CardanoNetwork,
-        cardanoBackendUrl: Option[URL]
+        blockfrostApiUrl: Option[URL]
     ): IO[Either[StandardCardanoNetwork, (CardanoNetwork.Custom, URL)]] =
         network match {
             case standard: StandardCardanoNetwork =>
-                cardanoBackendUrl match {
+                blockfrostApiUrl match {
                     case None      => IO.pure(Left(standard))
                     case Some(url) =>
                         // A standard chain served by a private Blockfrost endpoint: keep the
@@ -781,12 +781,12 @@ object CardanoBackendBlockfrost:
                         IO.pure(Right((custom, url)))
                 }
             case custom: CardanoNetwork.Custom =>
-                cardanoBackendUrl match {
+                blockfrostApiUrl match {
                     case Some(url) => IO.pure(Right((custom, url)))
                     case None =>
                         IO.raiseError(
                           IllegalStateException(
-                            "a Custom cardanoNetwork requires cardanoBackendUrl in the peer's " +
+                            "a Custom cardanoNetwork requires blockfrostApiUrl in the peer's " +
                                 "private config"
                           )
                         )

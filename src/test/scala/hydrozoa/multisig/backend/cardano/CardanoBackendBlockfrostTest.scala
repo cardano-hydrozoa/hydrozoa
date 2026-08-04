@@ -53,6 +53,41 @@ class CardanoBackendBlockfrostTest extends AnyFunSuite {
         )
         .asInstanceOf[ShelleyAddress]
 
+    // ---- endpoint selection (no network access) ----------------------------------------------
+
+    test("a standard network with no endpoint uses its own public Blockfrost") {
+        val selector =
+            CardanoBackendBlockfrost.networkSelector(CardanoNetwork.Preprod, None).unsafeRunSync()
+        assert(selector == Left(CardanoNetwork.Preprod))
+    }
+
+    test("a standard network served privately keeps its baked-in CardanoInfo") {
+        // The chain and the endpoint are independent: pointing preprod at a self-hosted
+        // Blockfrost-compatible backend must not re-derive its parameters or slot config — only
+        // the baked-in CardanoInfo has preprod's Byron-aware slot geometry.
+        val url = "https://bf.internal/api/v1"
+        val selector =
+            CardanoBackendBlockfrost
+                .networkSelector(CardanoNetwork.Preprod, Some(url))
+                .unsafeRunSync()
+        selector match {
+            case Right((custom, selectedUrl)) =>
+                assert(
+                  custom.cardanoInfo == CardanoNetwork.Preprod.cardanoInfo &&
+                      custom.protocolMagic == CardanoNetwork.Preprod.protocolMagic &&
+                      selectedUrl == url
+                )
+            case Left(other) => fail(s"expected the private endpoint to be selected, got $other")
+        }
+    }
+
+    test("a custom network without an endpoint is rejected") {
+        val custom = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
+        val result =
+            Try(CardanoBackendBlockfrost.networkSelector(custom, None).unsafeRunSync()).toEither
+        assert(result.isLeft, "a custom chain has no public Blockfrost to fall back to")
+    }
+
     test("Error gracefully when key and network mismatch", RequiresBlockfrostApiKey) {
         val ret = runWithKey(key =>
             for {

@@ -46,7 +46,7 @@ import scalus.uplc.builtin.ByteString
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
   * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`; the
   * target network is read from `defaults.json` (what keygen-fleet recorded — the same source
-  * build-head-config uses), with `--blockfrost-url` / `--yaci-admin-url` as host-side overrides.
+  * build-head-config uses), with `--blockfrost-url` as a host-side override.
   */
 object DeployScriptsAndG2Setup:
 
@@ -84,14 +84,8 @@ object DeployScriptsAndG2Setup:
     private val blockfrostUrlOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-url",
-          "Host-side Blockfrost API base URL override (e.g. a Yaci devnet's host-mapped port); " +
-              "overrides the URL recorded in defaults.json"
-        ).orNone
-
-    private val yaciAdminUrlOpt: Opts[Option[String]] =
-        Opts.option[String](
-          "yaci-admin-url",
-          "Host-side Yaci admin API base URL override, for a Yaci devnet's dynamic slot config"
+          "Host-side Blockfrost-compatible API base URL override (e.g. an in-mesh backend's " +
+              "host-mapped port); overrides the blockfrostApiUrl recorded in defaults.json"
         ).orNone
 
     /** The `deploy-scripts-and-g2-setup` subcommand. */
@@ -107,9 +101,8 @@ object DeployScriptsAndG2Setup:
           walletOpt,
           blockfrostKeyOpt,
           ladderRefsOpt,
-          blockfrostUrlOpt,
-          yaciAdminUrlOpt
-        ).mapN((home, walletOverride, mbKey, ladder, blockfrostUrl, yaciAdminUrl) =>
+          blockfrostUrlOpt
+        ).mapN((home, walletOverride, mbKey, ladder, blockfrostUrl) =>
             deployScriptsAndG2Setup(
               walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
               Bootstrap.HomeLayout.bootstrapDir(home).resolve(Bootstrap.BootstrapDir.defaults),
@@ -117,8 +110,7 @@ object DeployScriptsAndG2Setup:
               Bootstrap.defaultPrivateTemplate(home),
               ladder,
               Bootstrap.HomeLayout.refUtxos(home),
-              blockfrostUrl,
-              yaciAdminUrl
+              blockfrostUrl
             )
         )
 
@@ -129,8 +121,7 @@ object DeployScriptsAndG2Setup:
         template: Path,
         ladderRefsPath: Option[Path],
         outPath: Path,
-        blockfrostUrl: Option[String],
-        yaciAdminUrl: Option[String]
+        blockfrostUrlOverride: Option[String]
     ): IO[ExitCode] =
         for {
             // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
@@ -141,21 +132,16 @@ object DeployScriptsAndG2Setup:
               ) *> Bootstrap.blockfrostKeyFrom(template)
             )(IO.pure)
             // The target network is what keygen-fleet recorded in defaults.json — the same source
-            // build-head-config reads — so the two never diverge. --blockfrost-url / --yaci-admin-url
-            // are host-side overrides (e.g. a Yaci devnet's host-mapped port); the key only
-            // authenticates the backend.
+            // build-head-config reads — so the two never diverge. --blockfrost-url is a host-side
+            // override (e.g. an in-mesh backend's host-mapped port); the key only authenticates the
+            // backend.
             bootstrapNetwork <- Bootstrap.readBootstrapNetwork(defaultsPath)
-            networkAndUrl <- Bootstrap.resolveNetwork(
-              bootstrapNetwork,
-              blockfrostUrl,
-              yaciAdminUrl,
-              blockfrostKey
-            )
-            (cardanoNetwork, customBackendUrl) = networkAndUrl
+            cardanoNetwork = bootstrapNetwork.cardanoNetwork
+            blockfrostApiUrl = blockfrostUrlOverride.orElse(bootstrapNetwork.blockfrostApiUrl)
             // Fail fast on a key/network mismatch (a stale $BLOCKFROST_API_KEY) before the expensive
-            // on-chain deployment — skipped when a custom endpoint is used, as build-head-config does.
+            // on-chain deployment — skipped for a private endpoint, as build-head-config does.
             _ <- IO.raiseWhen(
-              customBackendUrl.isEmpty && !Bootstrap
+              blockfrostApiUrl.isEmpty && !Bootstrap
                   .keyMatchesNetwork(blockfrostKey, cardanoNetwork)
             )(
               RuntimeException(
@@ -167,7 +153,7 @@ object DeployScriptsAndG2Setup:
                 given CardanoNetwork.Section = cardanoNetwork
                 deployOn(
                   cardanoNetwork,
-                  customBackendUrl,
+                  blockfrostApiUrl,
                   walletPath,
                   blockfrostKey,
                   ladderRefsPath,
@@ -178,7 +164,7 @@ object DeployScriptsAndG2Setup:
 
     private def deployOn(
         cardanoNetwork: CardanoNetwork,
-        customBackendUrl: Option[String],
+        blockfrostApiUrl: Option[String],
         walletPath: Path,
         blockfrostKey: String,
         ladderRefsPath: Option[Path],
@@ -193,7 +179,7 @@ object DeployScriptsAndG2Setup:
 
             backend <- CardanoBackendBlockfrost(
               cardanoNetwork,
-              customBackendUrl,
+              blockfrostApiUrl,
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )

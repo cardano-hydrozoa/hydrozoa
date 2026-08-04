@@ -14,7 +14,7 @@ import io.circe.{Json, parser}
 import java.nio.file.Files
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.address.Address
-import scalus.cardano.ledger.{Coin, Value}
+import scalus.cardano.ledger.{CardanoInfo, Coin, Value}
 
 /** Pins the JSON field names + file names the bootstrap tooling reads. A successful decode proves
   * the field names (verificationKey / webSocketAddress / hubHeadPeerNumber / headPeers / coilPeers)
@@ -76,36 +76,56 @@ class BootstrapMembershipTest extends AnyFunSuite {
                 .as[Bootstrap.BootstrapDefaults]
                 .fold(e => fail(s"decode failed: $e"), identity)
         assert(
-          decoded.cardanoNetwork == Bootstrap.BootstrapNetwork
-              .Known(CardanoNetwork.Preview, None) &&
+          decoded.cardanoNetwork == CardanoNetwork.Preview &&
+              decoded.blockfrostApiUrl.isEmpty &&
               decoded.headParams.coilQuorum == 2 &&
               decoded.initialEquityContributions.size == 2 &&
               decoded.blockZeroStartTime.isEmpty
         )
     }
 
-    test("BootstrapNetwork round-trips each shape (bare Known, Known+url, Custom)") {
-        def roundTrip(n: Bootstrap.BootstrapNetwork): Bootstrap.BootstrapNetwork =
-            n.asJson.deepDropNullValues
-                .as[Bootstrap.BootstrapNetwork]
-                .fold(e => fail(s"decode failed for $n: $e"), identity)
+    test("defaults.json round-trips each supported chain/endpoint combination") {
+        // The chain and the endpoint serving it are independent fields; every combination below is
+        // a supported deployment (see DEPLOYMENT.md). A chain that is not one of the three standard
+        // ones carries its own complete CardanoInfo, so nothing has to be resolved at read time.
+        val privateUrl = "https://bf.internal/api/v1"
+        val devnet = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
 
-        val known = Bootstrap.BootstrapNetwork.Known(CardanoNetwork.Mainnet, None)
-        val knownWithUrl = Bootstrap.BootstrapNetwork
-            .Known(CardanoNetwork.Mainnet, Some("https://bf.internal/api/v1"))
-        val customYaci = Bootstrap.BootstrapNetwork
-            .Custom("http://yaci:8080/api/v1", Some("http://yaci:10000/local-cluster/api"))
-        val customNoYaci = Bootstrap.BootstrapNetwork.Custom("http://yaci:8080/api/v1", None)
+        def roundTrip(
+            network: CardanoNetwork,
+            blockfrostApiUrl: Option[String]
+        ): Bootstrap.BootstrapDefaults = {
+            given CardanoNetwork.Section = network
+            val defaults = mkDefaults(network, blockfrostApiUrl, coilQuorum = 2)
+            defaults.asJson.deepDropNullValues
+                .as[Bootstrap.BootstrapDefaults]
+                .fold(e => fail(s"decode failed for $network / $blockfrostApiUrl: $e"), identity)
+        }
+
+        // A standard chain on public blockfrost.io.
+        val public = roundTrip(CardanoNetwork.Mainnet, None)
+        // The same standard chain, served from a private endpoint: the baked-in CardanoInfo is
+        // kept, only the endpoint moves.
+        val privateEndpoint = roundTrip(CardanoNetwork.Mainnet, Some(privateUrl))
+        // A chain that is not one of the three standard ones, served from a private endpoint.
+        val custom = roundTrip(devnet, Some(privateUrl))
+
         assert(
-          // A Known network with no override encodes as its bare string; with one, as an object.
-          known.asJson == Json.fromString("mainnet") &&
-              roundTrip(known) == known &&
-              roundTrip(knownWithUrl) == knownWithUrl &&
-              // A Custom network encodes under `customBackend`; a dropped yaciAdminUrl → None.
-              roundTrip(customYaci) == customYaci &&
-              roundTrip(customNoYaci) == customNoYaci &&
-              // An unknown network name in the slot is rejected (not silently treated as custom).
-              Json.fromString("devnet").as[Bootstrap.BootstrapNetwork].isLeft
+          public.cardanoNetwork == CardanoNetwork.Mainnet && public.blockfrostApiUrl.isEmpty &&
+              privateEndpoint.cardanoNetwork == CardanoNetwork.Mainnet &&
+              privateEndpoint.blockfrostApiUrl.contains(privateUrl) &&
+              custom.cardanoNetwork == devnet &&
+              custom.blockfrostApiUrl.contains(privateUrl)
+        )
+    }
+
+    test("defaults.json encodes a standard chain as a bare name, alongside its endpoint") {
+        given CardanoNetwork.Section = CardanoNetwork.Preview
+        val url = "https://bf.internal/api/v1"
+        val json = mkDefaults(CardanoNetwork.Preview, Some(url), coilQuorum = 2).asJson
+        assert(
+          json.hcursor.get[String]("cardanoNetwork") == Right("preview") &&
+              json.hcursor.get[String]("blockfrostApiUrl") == Right(url)
         )
     }
 
@@ -144,9 +164,10 @@ class BootstrapMembershipTest extends AnyFunSuite {
             |}""".stripMargin
         )
 
-        val config = Bootstrap.readBootstrapDir(dir, "").unsafeRunSync()
+        val config = Bootstrap.readBootstrapDir(dir).unsafeRunSync()
         assert(
           config.cardanoNetwork == CardanoNetwork.Preview &&
+              config.blockfrostApiUrl.isEmpty &&
               config.headParams.coilQuorum == 2 &&
               config.headPeers.size == 1 &&
               config.initialEquityContributions.get(HeadPeerNumber(0)).contains(Coin.ada(100)) &&
@@ -164,11 +185,18 @@ class BootstrapMembershipTest extends AnyFunSuite {
         assert(decoded.value == output.value)
     }
 
-    /** The demo defaults [[InitBootstrapFiles]] writes: preview head parameters, head peer 0
-      * funding all equity, no pinned block-zero timing.
+    /** The demo defaults [[InitBootstrapFiles]] writes for Preview on public blockfrost.io. */
+    private def mkPreviewDefaults(coilQuorum: Int): Bootstrap.BootstrapDefaults =
+        mkDefaults(CardanoNetwork.Preview, blockfrostApiUrl = None, coilQuorum = coilQuorum)
+
+    /** The demo defaults [[InitBootstrapFiles]] writes: head parameters derived from the chain's
+      * own slot config, head peer 0 funding all equity, no pinned block-zero timing.
       */
-    private def mkPreviewDefaults(coilQuorum: Int): Bootstrap.BootstrapDefaults = {
-        val network = CardanoNetwork.Preview
+    private def mkDefaults(
+        network: CardanoNetwork,
+        blockfrostApiUrl: Option[String],
+        coilQuorum: Int
+    ): Bootstrap.BootstrapDefaults = {
         val headParams = Bootstrap.BootstrapHeadParams(
           txTiming = TxTiming.demo(network.slotConfig),
           fallbackContingency = network.mkFallbackContingencyWithDefaults(Coin.ada(3), Coin.ada(3)),
@@ -178,7 +206,8 @@ class BootstrapMembershipTest extends AnyFunSuite {
           coilQuorum = coilQuorum
         )
         Bootstrap.BootstrapDefaults(
-          cardanoNetwork = Bootstrap.BootstrapNetwork.Known(CardanoNetwork.Preview, None),
+          cardanoNetwork = network,
+          blockfrostApiUrl = blockfrostApiUrl,
           headParams = headParams,
           initialEquityContributions =
               Map(HeadPeerNumber(0) -> Coin.ada(100), HeadPeerNumber(1) -> Coin.zero),
