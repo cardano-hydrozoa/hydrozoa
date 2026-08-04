@@ -7,7 +7,7 @@ import cats.effect.{Async, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerResponse, RegisterDepositResponse}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
@@ -70,23 +70,49 @@ class RemoteL2Ledger private (
 
     given CardanoNetwork.Section = config.cardanoNetwork
 
-    override def sendRegisterDeposit(
+    override def registerDeposit(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.RegisterDeposit
-    ): IO[L2LedgerResponse] =
-        sendRequest(Request.RegisterDeposit(commandNumber, req))
+    ): IO[RegisterDepositResponse] =
+        sendRequest(Request.RegisterDeposit(commandNumber, req)).flatMap {
+            case r: L2LedgerResponse.Applied.RegisterDeposit => IO.pure(r)
+            case r: L2LedgerResponse.Rejected                => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder              => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze            => IO.pure(r)
+            case other                                       => unexpected("RegisterDeposit", other)
+        }
 
-    override def sendApplyDepositDecisions(
+    override def applyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): IO[L2LedgerResponse] =
-        sendRequest(Request.ApplyDepositDecisions(commandNumber, req))
+    ): IO[ApplyDepositDecisionsResponse] =
+        sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).flatMap {
+            case r: L2LedgerResponse.Applied.ApplyDepositDecisions => IO.pure(r)
+            case r: L2LedgerResponse.Rejected                      => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder                    => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze                  => IO.pure(r)
+            case other => unexpected("ApplyDepositDecisions", other)
+        }
 
-    override def sendApplyTransaction(
+    override def applyTransaction(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
-    ): IO[L2LedgerResponse] =
-        sendRequest(Request.ApplyTransaction(commandNumber, req))
+    ): IO[ApplyTransactionResponse] =
+        sendRequest(Request.ApplyTransaction(commandNumber, req)).flatMap {
+            case r: L2LedgerResponse.Applied.ApplyTransaction => IO.pure(r)
+            case r: L2LedgerResponse.Rejected                 => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder               => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze             => IO.pure(r)
+            case other => unexpected("ApplyTransaction", other)
+        }
+
+    /** A remote whose `Applied` variant does not match the command sent is a protocol violation
+      * (not one of the four verdicts), so it fail-stops rather than being returned.
+      */
+    private def unexpected(command: String, response: L2LedgerResponse): IO[Nothing] =
+        IO.raiseError(
+          L2LedgerError(s"remote L2 ledger answered $response for a $command command")
+        )
 
     /** A no-op: the remote black box owns its own recovery, so there is nothing to co-anchor here.
       * It must not fail — `JointLedger.State.recover` treats a `Left` as fatal, so returning an

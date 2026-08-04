@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
-import hydrozoa.multisig.ledger.l2.{AppliedEffects, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerResponse, L2LedgerState}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerInteractionState, L2LedgerResponse}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
@@ -84,9 +84,9 @@ final case class JointLedger(
         state: JointLedger.Producing,
         commandNumber: L2CommandNumber,
         decisions: L2LedgerCommand.ApplyDepositDecisions
-    ): IO[L2LedgerState] =
-        state.runL2Command(l2Ledger, commandNumber, decisions).flatMap {
-            case L2LedgerResponse.Applied(_, AppliedEffects.ApplyDepositDecisions(diffs)) =>
+    ): IO[L2LedgerInteractionState] =
+        l2Ledger.applyDepositDecisions(commandNumber, decisions).flatMap {
+            case L2LedgerResponse.Applied.ApplyDepositDecisions(_, diffs) =>
                 IO.pure(state.l2LedgerState.appendDecisionEffects(diffs))
             case other => panicOnL2Response(commandNumber, other)
         }
@@ -307,7 +307,7 @@ final case class JointLedger(
                         )
                         val assigned = p.commandNumber.increment
                         for {
-                            res <- p.runL2Command(l2Ledger, assigned, l2Command)
+                            res <- l2Ledger.registerDeposit(assigned, l2Command)
                             _ <- res match {
                                 // A `Rejected` here is a deterministic ledger rejection (not a
                                 // transport failure — those retry through), so invalidate the request
@@ -320,7 +320,7 @@ final case class JointLedger(
                                     )
                                 // RegisterDeposit produces no L2 ledger effects, so the accumulated
                                 // L2 state is unchanged; only the deposit map and request advance.
-                                case L2LedgerResponse.Applied(_, AppliedEffects.RegisterDeposit) =>
+                                case _: L2LedgerResponse.Applied.RegisterDeposit =>
                                     for {
                                         _ <- state.set(
                                           p.setDeposits(newDeposits)
@@ -376,14 +376,11 @@ final case class JointLedger(
 
                 val assigned = p.commandNumber.increment
                 for {
-                    res <- p.runL2Command(l2Ledger, assigned, l2Command)
+                    res <- l2Ledger.applyTransaction(assigned, l2Command)
                     _ <- res match {
                         case L2LedgerResponse.Rejected(_, reason) =>
                             invalidateRequest(requestId, L2LedgerError(reason), Some(assigned))
-                        case L2LedgerResponse.Applied(
-                              _,
-                              AppliedEffects.ApplyTransaction(diffs, payouts)
-                            ) =>
+                        case L2LedgerResponse.Applied.ApplyTransaction(_, diffs, payouts) =>
                             val newL2State =
                                 p.l2LedgerState.appendTransactionEffects(diffs, payouts, requestId)
                             for {
@@ -418,7 +415,7 @@ final case class JointLedger(
             )
             d <- unsafeGetDone
             newState = d.producing(
-              l2LedgerState = L2LedgerState.empty,
+              l2LedgerState = L2LedgerInteractionState.empty,
               startTime = blockCreationStartTime,
               userRequestState = UserRequestState(
                 requests = List.empty,
@@ -1061,7 +1058,7 @@ object JointLedger {
             this.focus(_.deposits).replace(newDeposits)
 
         def producing(
-            l2LedgerState: L2LedgerState,
+            l2LedgerState: L2LedgerInteractionState,
             startTime: BlockCreationStartTime,
             userRequestState: UserRequestState
         ): Producing = previousBlockHeader match {
@@ -1085,7 +1082,7 @@ object JointLedger {
     final case class Producing private[JointLedger] (
         override val previousBlockHeader: BlockHeader.NonFinal,
         override val deposits: DepositsMap,
-        l2LedgerState: L2LedgerState,
+        l2LedgerState: L2LedgerInteractionState,
         BlockCreationStartTime: BlockCreationStartTime,
         userRequestState: UserRequestState,
         override val commandNumber: L2CommandNumber,
@@ -1095,27 +1092,10 @@ object JointLedger {
         transparent inline def competingFallbackTxTime: FallbackTxStartTime =
             previousBlockHeader.fallbackTxStartTime
 
-        /** Drive one L2 command against `l2Ledger` at `commandNumber`, returning its total
-          * [[L2LedgerResponse]]. Dispatches on the command variant to the matching `send*`; the
-          * caller interprets the response (folding [[AppliedEffects]] into the [[L2LedgerState]],
-          * invalidating a user-request `Rejected`, or fail-stopping).
-          */
-        def runL2Command[F[_]](
-            l2Ledger: L2Ledger[F],
-            commandNumber: L2CommandNumber,
-            command: L2LedgerCommand
-        ): F[L2LedgerResponse] = command match
-            case c: L2LedgerCommand.RegisterDeposit =>
-                l2Ledger.sendRegisterDeposit(commandNumber, c)
-            case c: L2LedgerCommand.ApplyDepositDecisions =>
-                l2Ledger.sendApplyDepositDecisions(commandNumber, c)
-            case c: L2LedgerCommand.ApplyTransaction =>
-                l2Ledger.sendApplyTransaction(commandNumber, c)
-
         def setDeposits(newDeposits: DepositsMap): Producing =
             this.focus(_.deposits).replace(newDeposits)
 
-        def setL2LedgerState(newL2State: L2LedgerState): Producing =
+        def setL2LedgerState(newL2State: L2LedgerInteractionState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
 
         def setCommandNumber(newCommandNumber: L2CommandNumber): Producing =

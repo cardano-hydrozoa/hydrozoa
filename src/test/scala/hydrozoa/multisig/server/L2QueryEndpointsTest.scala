@@ -72,7 +72,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                     ledger <- EutxoL2Ledger(nodeConfig, store)
                     // Seed a small transaction log: three rejected-deposit decisions, blocks 1..3.
                     _ <- List(1, 2, 3).traverse_ { n =>
-                        ledger.sendApplyDepositDecisions(
+                        ledger.applyDepositDecisions(
                           L2CommandNumber(n.toLong),
                           rejectDecision(n, RequestId(0, n.toLong))
                         )

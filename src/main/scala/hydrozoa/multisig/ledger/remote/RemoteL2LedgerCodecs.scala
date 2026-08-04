@@ -5,7 +5,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputD
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{AppliedEffects, Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
@@ -100,18 +100,45 @@ object RemoteL2LedgerCodecs {
         }
     }
 
-    // AppliedEffects codec: a single-key object tagging the command variant (the doc's tagged form
-    // — RegisterDeposit → {}, ApplyDepositDecisions → { evacuationDiffs }, ApplyTransaction →
-    // { evacuationDiffs, payouts }). circe's sealed-trait derivation produces exactly that shape.
-    given appliedEffectsEncoder: Encoder[AppliedEffects] = deriveEncoder
-    given appliedEffectsDecoder(using CardanoNetwork.Section): Decoder[AppliedEffects] =
-        deriveDecoder
+    // Applied codecs: one concrete descendant per command. Each is a single-key object tagging the
+    // command; RegisterDeposit carries just the commandNumber, ApplyDepositDecisions adds the diffs,
+    // ApplyTransaction adds diffs + payouts.
+    import L2LedgerResponse.Applied
+    given registerDepositAppliedEncoder: Encoder[Applied.RegisterDeposit] = deriveEncoder
+    given registerDepositAppliedDecoder: Decoder[Applied.RegisterDeposit] = deriveDecoder
+    given applyDepositDecisionsAppliedEncoder: Encoder[Applied.ApplyDepositDecisions] =
+        deriveEncoder
+    given applyDepositDecisionsAppliedDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[Applied.ApplyDepositDecisions] = deriveDecoder
+    given applyTransactionAppliedEncoder: Encoder[Applied.ApplyTransaction] = deriveEncoder
+    given applyTransactionAppliedDecoder(using
+        CardanoNetwork.Section
+    ): Decoder[Applied.ApplyTransaction] = deriveDecoder
 
-    // Response codecs. Each response is a single-key object tagging the variant (encoder and decoder
-    // agree on the tag); Applied carries `commandNumber` plus the per-command tagged `effects`.
-    given appliedEncoder: Encoder[L2LedgerResponse.Applied] = deriveEncoder
-    given appliedDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse.Applied] =
-        deriveDecoder
+    given appliedEncoder: Encoder[Applied] = {
+        case a: Applied.RegisterDeposit => io.circe.Json.obj("RegisterDeposit" -> a.asJson)
+        case a: Applied.ApplyDepositDecisions =>
+            io.circe.Json.obj("ApplyDepositDecisions" -> a.asJson)
+        case a: Applied.ApplyTransaction => io.circe.Json.obj("ApplyTransaction" -> a.asJson)
+    }
+
+    given appliedDecoder(using CardanoNetwork.Section): Decoder[Applied] =
+        Decoder.instance { c =>
+            c.keys
+                .flatMap(_.headOption)
+                .toRight(io.circe.DecodingFailure("Applied must have exactly one field", c.history))
+                .flatMap {
+                    case "RegisterDeposit" =>
+                        c.downField("RegisterDeposit").as[Applied.RegisterDeposit]
+                    case "ApplyDepositDecisions" =>
+                        c.downField("ApplyDepositDecisions").as[Applied.ApplyDepositDecisions]
+                    case "ApplyTransaction" =>
+                        c.downField("ApplyTransaction").as[Applied.ApplyTransaction]
+                    case other =>
+                        Left(io.circe.DecodingFailure(s"Unknown Applied type: $other", c.history))
+                }
+        }
 
     given rejectedEncoder: Encoder[L2LedgerResponse.Rejected] = deriveEncoder
     given rejectedDecoder: Decoder[L2LedgerResponse.Rejected] = deriveDecoder
@@ -122,11 +149,12 @@ object RemoteL2LedgerCodecs {
     given ledgerFreezeEncoder: Encoder[L2LedgerResponse.LedgerFreeze] = deriveEncoder
     given ledgerFreezeDecoder: Decoder[L2LedgerResponse.LedgerFreeze] = deriveDecoder
 
+    // Each response is a single-key object tagging the outcome kind (Applied is itself nested).
     given responseEncoder: Encoder[L2LedgerResponse] = {
-        case r: L2LedgerResponse.Applied      => io.circe.Json.obj("Applied" -> r.asJson)
+        case a: L2LedgerResponse.Applied      => io.circe.Json.obj("Applied" -> a.asJson)
         case r: L2LedgerResponse.Rejected     => io.circe.Json.obj("Rejected" -> r.asJson)
-        case r: L2LedgerResponse.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> r.asJson)
-        case r: L2LedgerResponse.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> r.asJson)
+        case o: L2LedgerResponse.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> o.asJson)
+        case f: L2LedgerResponse.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> f.asJson)
     }
 
     given responseDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse] =

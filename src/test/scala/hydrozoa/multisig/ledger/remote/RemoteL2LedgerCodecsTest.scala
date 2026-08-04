@@ -4,14 +4,14 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
-import hydrozoa.multisig.ledger.l2.{AppliedEffects, L2CommandNumber, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.ByteString
 
 /** Round-trip tests for the `L2LedgerResponse` wire codec: every branch carries the command number,
-  * and `Applied` nests the per-command tagged `effects` (RegisterDeposit → none,
+  * and `Applied` has a concrete descendant per command (RegisterDeposit → none,
   * ApplyDepositDecisions → diffs, ApplyTransaction → diffs + payouts).
   */
 class RemoteL2LedgerCodecsTest extends AnyFunSuite:
@@ -29,25 +29,23 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
     private val diff: EvacuationDiff =
         EvacuationDiff.Delete(EvacuationKey(ByteString.fromArray(Array.fill[Byte](36)(1))).get)
 
-    test("Applied RegisterDeposit (no effects) round-trips and carries no diff/payout fields") {
-        val r = L2LedgerResponse.Applied(L2CommandNumber(7L), AppliedEffects.RegisterDeposit)
+    test("Applied.RegisterDeposit (no effects) round-trips and carries no diff/payout fields") {
+        val r = L2LedgerResponse.Applied.RegisterDeposit(L2CommandNumber(7L))
         val json = r.asJson.noSpaces
         assert(roundTrips(r) && !json.contains("evacuationDiffs") && !json.contains("payouts"))
     }
 
-    test("Applied ApplyDepositDecisions (diffs, no payouts) round-trips") {
-        val r = L2LedgerResponse.Applied(
-          L2CommandNumber(8L),
-          AppliedEffects.ApplyDepositDecisions(Vector(diff))
-        )
+    test("Applied.ApplyDepositDecisions (diffs, no payouts) round-trips") {
+        val r = L2LedgerResponse.Applied.ApplyDepositDecisions(L2CommandNumber(8L), Vector(diff))
         val json = r.asJson.noSpaces
         assert(roundTrips(r) && json.contains("evacuationDiffs") && !json.contains("payouts"))
     }
 
-    test("Applied ApplyTransaction (diffs + payouts) round-trips") {
-        val r = L2LedgerResponse.Applied(
+    test("Applied.ApplyTransaction (diffs + payouts) round-trips") {
+        val r = L2LedgerResponse.Applied.ApplyTransaction(
           L2CommandNumber(9L),
-          AppliedEffects.ApplyTransaction(Vector(diff), Vector.empty)
+          Vector(diff),
+          Vector.empty
         )
         val json = r.asJson.noSpaces
         assert(roundTrips(r) && json.contains("evacuationDiffs") && json.contains("payouts"))

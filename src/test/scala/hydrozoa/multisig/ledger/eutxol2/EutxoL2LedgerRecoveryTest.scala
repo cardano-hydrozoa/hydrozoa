@@ -120,7 +120,7 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
             store <- InMemoryL2Store.create
             ledger <- EutxoL2Ledger(config, store)
             _ <- (1 to count).toList.traverseVoid(i =>
-                expectApplied(ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i)))
+                expectApplied(ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i)))
             )
             finalState <- ledger.peekState
         yield Run(ledger, store, finalState)
@@ -131,9 +131,9 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 s0 <- ledger.peekState.map(_.commandNumber)
-                _ <- expectApplied(ledger.sendApplyDepositDecisions(L2CommandNumber(1L), noop(1)))
+                _ <- expectApplied(ledger.applyDepositDecisions(L2CommandNumber(1L), noop(1)))
                 s1 <- ledger.peekState.map(_.commandNumber)
-                _ <- expectApplied(ledger.sendApplyDepositDecisions(L2CommandNumber(2L), noop(2)))
+                _ <- expectApplied(ledger.applyDepositDecisions(L2CommandNumber(2L), noop(2)))
                 s2 <- ledger.peekState.map(_.commandNumber)
             yield assert(
               s0 == L2CommandNumber.zero && s1 == L2CommandNumber(1) && s2 == L2CommandNumber(2)
@@ -148,10 +148,10 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // Unknown compartment → Rejected (JointLedger would panic), tip advanced, frozen.
                 outcome <- ledger
-                    .sendApplyDepositDecisions(L2CommandNumber(1L), absorbingUnregistered(1))
+                    .applyDepositDecisions(L2CommandNumber(1L), absorbingUnregistered(1))
                 st <- ledger.peekState
                 // While frozen, any subsequent command is answered LedgerFreeze.
-                next <- ledger.sendApplyDepositDecisions(L2CommandNumber(2L), noop(2))
+                next <- ledger.applyDepositDecisions(L2CommandNumber(2L), noop(2))
             yield assert(
               outcome.isInstanceOf[L2LedgerResponse.Rejected]
                   && st.commandNumber == L2CommandNumber(1)
@@ -167,14 +167,14 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 // Freeze at command 1 (unknown compartment).
-                _ <- ledger.sendApplyDepositDecisions(L2CommandNumber(1L), absorbingUnregistered(1))
+                _ <- ledger.applyDepositDecisions(L2CommandNumber(1L), absorbingUnregistered(1))
                 // restoreTo the freeze point reconstructs the freeze...
                 atFreeze <- restoreFresh(store, L2CommandNumber(1L))
                 // ...restoreTo before it clears the freeze, and the ledger drives again.
                 fresh <- EutxoL2Ledger(config, store)
                 _ <- fresh.restoreTo(L2CommandNumber.zero).value.flatMap(IO.fromEither)
                 unfrozen <- fresh.peekState.map(_.frozenAt)
-                redriven <- fresh.sendApplyDepositDecisions(L2CommandNumber(1L), noop(1))
+                redriven <- fresh.applyDepositDecisions(L2CommandNumber(1L), noop(1))
             yield assert(
               atFreeze.frozenAt.contains(L2CommandNumber(1))
                   && unfrozen.isEmpty
@@ -260,10 +260,10 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // 1: applied. 2: rejected (unparseable tx) — advances the tip, writes no log entry.
                 // 3: applied — proving the index did not get stuck on the reject.
-                _ <- expectApplied(ledger.sendApplyDepositDecisions(L2CommandNumber(1L), noop(1)))
-                rejected <- ledger.sendApplyTransaction(L2CommandNumber(2L), rejectingTx)
+                _ <- expectApplied(ledger.applyDepositDecisions(L2CommandNumber(1L), noop(1)))
+                rejected <- ledger.applyTransaction(L2CommandNumber(2L), rejectingTx)
                 tipAfterReject <- ledger.peekState.map(_.commandNumber)
-                _ <- expectApplied(ledger.sendApplyDepositDecisions(L2CommandNumber(3L), noop(3)))
+                _ <- expectApplied(ledger.applyDepositDecisions(L2CommandNumber(3L), noop(3)))
                 tipAfter3 <- ledger.peekState.map(_.commandNumber)
                 // restoreTo beyond the durable tip (4 > 3) is rejected — checked before the gap
                 // restore below, which would regress the shared store's tip to 2.
@@ -291,10 +291,10 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 _ <- expectApplied(
-                  ledger.sendRegisterDeposit(L2CommandNumber(1L), registerDeposit(1, rid))
+                  ledger.registerDeposit(L2CommandNumber(1L), registerDeposit(1, rid))
                 )
                 _ <- expectApplied(
-                  ledger.sendApplyDepositDecisions(L2CommandNumber(2L), absorb(2, rid))
+                  ledger.applyDepositDecisions(L2CommandNumber(2L), absorb(2, rid))
                 )
                 live <- ledger.peekState
                 genesis = EutxoL2Ledger.State.genesis(config)
@@ -322,12 +322,12 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 store <- InMemoryL2Store.create
                 ledger <- EutxoL2Ledger(config, store)
                 _ <- expectApplied(
-                  ledger.sendRegisterDeposit(L2CommandNumber(1L), registerDeposit(1, rid))
+                  ledger.registerDeposit(L2CommandNumber(1L), registerDeposit(1, rid))
                 )
                 // Commit past the snapshot boundary so the pending deposit is baked into a snapshot.
                 _ <- (2 to boundary + 1).toList.traverse_(i =>
                     expectApplied(
-                      ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                      ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                     )
                 )
                 live <- ledger.peekState

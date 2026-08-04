@@ -102,7 +102,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // Advance the live ledger past the crash boundary (to command number 3).
                 _ <- (1 to 3).toList.traverse_(i =>
-                    ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                 )
                 // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
@@ -125,7 +125,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 ledger <- EutxoL2Ledger(config, store)
                 // Advance the live ledger past the crash boundary (to command number 3).
                 _ <- (1 to 3).toList.traverse_(i =>
-                    ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                    ledger.applyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                 )
                 // Crash boundary: fastBlockMark = block 2 (max BlockResult), recorded at L2 command
                 // number 2. The header is read from the Block journal (present inbound on any peer),

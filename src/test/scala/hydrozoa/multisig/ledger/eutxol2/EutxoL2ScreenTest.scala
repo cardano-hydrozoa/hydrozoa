@@ -131,14 +131,14 @@ class EutxoL2ScreenTest extends AnyFunSuite:
         )
     }
 
-    // A fresh ledger per test: sendRegisterDeposit goes through the command-number path, and a
+    // A fresh ledger per test: registerDeposit goes through the command-number path, and a
     // reject advances the tip — so a shared ledger would make later registrations out-of-order.
     private def freshLedger: EutxoL2Ledger = InMemoryL2Store.ledger(nodeConfig).unsafeRunSync()
 
-    test("sendRegisterDeposit rejects a spawned output below min-ada at registration (No)") {
+    test("registerDeposit rejects a spawned output below min-ada at registration (No)") {
         assert(
           freshLedger
-              .sendRegisterDeposit(
+              .registerDeposit(
                 L2CommandNumber(1L),
                 mkRegisterDeposit(subMinAdaValue, subMinAdaPayload)
               )
@@ -148,13 +148,13 @@ class EutxoL2ScreenTest extends AnyFunSuite:
     }
 
     test(
-      "sendRegisterDeposit rejects when spawned outputs exceed depositL2Value (cover, at registration)"
+      "registerDeposit rejects when spawned outputs exceed depositL2Value (cover, at registration)"
     ) {
         // l2Payload spawns 5 ADA; a 4-ADA deposit does not cover it, so registration must reject —
         // cover is authoritative at registration, not only at the (origin-peer, stub-for-remote) screen.
         assert(
           freshLedger
-              .sendRegisterDeposit(L2CommandNumber(1L), mkRegisterDeposit(Value.ada(4), l2Payload))
+              .registerDeposit(L2CommandNumber(1L), mkRegisterDeposit(Value.ada(4), l2Payload))
               .unsafeRunSync()
               .isInstanceOf[L2LedgerResponse.Rejected]
         )

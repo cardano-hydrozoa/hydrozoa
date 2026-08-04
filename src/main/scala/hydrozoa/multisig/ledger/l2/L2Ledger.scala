@@ -27,33 +27,35 @@ case class L2LedgerError(message: String) extends Throwable {
   *   `ApplyTransaction` share its `requestId`). Local-only provenance for withdrawal-effect
   *   tracking; never on the wire or on-chain.
   */
-final case class L2LedgerState private (
+final case class L2LedgerInteractionState private (
     diffs: Vector[EvacuationDiff],
     payouts: Vector[Payout.Obligation],
     payoutRequestIds: Vector[RequestId]
 ):
-    /** Fold in an [[AppliedEffects.ApplyDepositDecisions]]'s effects: append its evacuation diffs.
+    /** Fold in an [[L2LedgerResponse.Applied.ApplyDepositDecisions]]'s effects: append its
+      * evacuation diffs.
       */
-    def appendDecisionEffects(extraDiffs: Vector[EvacuationDiff]): L2LedgerState =
-        L2LedgerState(diffs ++ extraDiffs, payouts, payoutRequestIds)
+    def appendDecisionEffects(extraDiffs: Vector[EvacuationDiff]): L2LedgerInteractionState =
+        L2LedgerInteractionState(diffs ++ extraDiffs, payouts, payoutRequestIds)
 
-    /** Fold in an [[AppliedEffects.ApplyTransaction]]'s effects: append its diffs and payouts,
-      * tagging each payout with the producing `requestId` — the ledger-agnostic withdrawal-effect
-      * provenance (all payouts of one transaction share its request).
+    /** Fold in an [[L2LedgerResponse.Applied.ApplyTransaction]]'s effects: append its diffs and
+      * payouts, tagging each payout with the producing `requestId` — the ledger-agnostic
+      * withdrawal-effect provenance (all payouts of one transaction share its request).
       */
     def appendTransactionEffects(
         extraDiffs: Vector[EvacuationDiff],
         extraPayouts: Vector[Payout.Obligation],
         requestId: RequestId
-    ): L2LedgerState =
-        L2LedgerState(
+    ): L2LedgerInteractionState =
+        L2LedgerInteractionState(
           diffs ++ extraDiffs,
           payouts ++ extraPayouts,
           payoutRequestIds ++ Vector.fill(extraPayouts.length)(requestId)
         )
 
-object L2LedgerState:
-    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty, Vector.empty)
+object L2LedgerInteractionState:
+    def empty: L2LedgerInteractionState =
+        L2LedgerInteractionState(Vector.empty, Vector.empty, Vector.empty)
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
       * state. You _must_ begin with the empty state and evolve it with the `append*` methods
@@ -64,7 +66,7 @@ object L2LedgerState:
         payouts: Vector[Payout.Obligation],
         payoutRequestIds: Vector[RequestId]
     ) =
-        new L2LedgerState(diffs, payouts, payoutRequestIds)
+        new L2LedgerInteractionState(diffs, payouts, payoutRequestIds)
 
 /** A trait defining an interface to interact with a black-box ledger component (i.e., via the Joint
   * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
@@ -73,16 +75,18 @@ object L2LedgerState:
   * Every implementation must be deterministic: consensus feeds each peer's replica the same ordered
   * commands, so a non-deterministic ledger diverges across peers and breaks consensus.
   *
-  * Each `send*` returns a **total** [[L2LedgerResponse]]: an outcome (applied / rejected / desync /
-  * freeze) is always a response branch, never a raised exception. JointLedger interprets the branch
-  * — folding [[AppliedEffects]] into an [[L2LedgerState]] on `Applied`, invalidating the request on
-  * a user-command `Rejected`, and fail-stopping on `OutOfOrder` / `LedgerFreeze` / a rejected
+  * Each command method returns a **total** [[L2LedgerResponse]] — its own
+  * [[L2LedgerResponse.Applied]] descendant plus the three shared coordination branches (see the
+  * per-command `*Response` unions). An outcome (applied / rejected / desync / freeze) is always a
+  * response branch, never a raised exception. JointLedger interprets the branch — folding an
+  * `Applied` outcome's payload into an [[L2LedgerInteractionState]], invalidating the request on a
+  * user-command `Rejected`, and fail-stopping on `OutOfOrder` / `LedgerFreeze` / a rejected
   * decision. (A `RemoteL2Ledger` may still raise on a broken *transport* — an undecodable frame or
   * a command-number mismatch — which is a protocol violation, not one of the four verdicts.)
   *
   * NOTE:
-  *   - The constructor of [[L2LedgerState]] is private. The only way to construct a new state is
-  *     via [[L2LedgerState.empty]], evolved with its `append*` methods.
+  *   - The constructor of [[L2LedgerInteractionState]] is private. The only way to construct a new
+  *     state is via [[L2LedgerInteractionState.empty]], evolved with its `append*` methods.
   *   - Implementors of this trait only need to define the actual methods of sending the requests.
   *
   * @tparam F
@@ -95,14 +99,13 @@ trait L2Ledger[F[_]] {
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       * @return
-      *   the ledger's [[L2LedgerResponse]] — [[L2LedgerResponse.Applied]] with
-      *   [[AppliedEffects.RegisterDeposit]] (no effects) on success, or a
+      *   [[L2LedgerResponse.Applied.RegisterDeposit]] (no effects) on success, or a
       *   [[L2LedgerResponse.Rejected]] the caller invalidates the request on.
       */
-    def sendRegisterDeposit(
+    def registerDeposit(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.RegisterDeposit
-    ): F[L2LedgerResponse]
+    ): F[RegisterDepositResponse]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
@@ -116,26 +119,25 @@ trait L2Ledger[F[_]] {
       * `docs/l2-ledger-command-coordination.md`.
       *
       * @return
-      *   [[L2LedgerResponse.Applied]] with [[AppliedEffects.ApplyDepositDecisions]] (the evacuation
-      *   diffs the absorbed deposits produce), or a [[L2LedgerResponse.Rejected]] the caller panics
-      *   on.
+      *   [[L2LedgerResponse.Applied.ApplyDepositDecisions]] (the evacuation diffs the absorbed
+      *   deposits produce), or a [[L2LedgerResponse.Rejected]] the caller panics on.
       */
-    def sendApplyDepositDecisions(
+    def applyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): F[L2LedgerResponse]
+    ): F[ApplyDepositDecisionsResponse]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#l2-events
       * @return
-      *   [[L2LedgerResponse.Applied]] with [[AppliedEffects.ApplyTransaction]] (the evacuation
-      *   diffs to apply to the JointLedger's evacuation map plus the payout obligations), or a
+      *   [[L2LedgerResponse.Applied.ApplyTransaction]] (the evacuation diffs to apply to the
+      *   JointLedger's evacuation map plus the payout obligations), or a
       *   [[L2LedgerResponse.Rejected]] the caller invalidates the request on.
       */
-    def sendApplyTransaction(
+    def applyTransaction(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
-    ): F[L2LedgerResponse]
+    ): F[ApplyTransactionResponse]
 
     /** Reconstruct the committed L2 state as of `commandNumber`, from the ledger's own durable
       * record (`(initial state, commandNumber)`; see `docs/l2-ledger-command-coordination.md`).

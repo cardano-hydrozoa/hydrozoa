@@ -3,47 +3,43 @@ package hydrozoa.multisig.ledger.l2
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 
-/** The effects a successfully applied command produced, tagged per command — the command is known
-  * from the [[L2LedgerResponse.Applied]] `commandNumber` it rides on. See
-  * `docs/l2-ledger-command-coordination.md`.
-  */
-sealed trait AppliedEffects
-
-object AppliedEffects:
-
-    /** A `RegisterDeposit` produces no immediate ledger effects: the deposit's L2 utxos are spawned
-      * only later, when an `ApplyDepositDecisions` absorbs it.
-      */
-    case object RegisterDeposit extends AppliedEffects
-
-    /** An `ApplyDepositDecisions` produces the evacuation diffs of the deposits it absorbed. */
-    final case class ApplyDepositDecisions(evacuationDiffs: Vector[EvacuationDiff])
-        extends AppliedEffects
-
-    /** An `ApplyTransaction` produces the evacuation diffs of the changed utxo set plus the payout
-      * obligations the transaction withdrew.
-      */
-    final case class ApplyTransaction(
-        evacuationDiffs: Vector[EvacuationDiff],
-        payouts: Vector[Payout.Obligation]
-    ) extends AppliedEffects
-
-/** The ledger's **total** response to one command — the four-branch coordination contract (see
-  * `docs/l2-ledger-command-coordination.md`). Every branch echoes the command number it answers, so
-  * the caller correlates each response to the request it sent. There is no separate error channel:
-  * a rejection, a desync, and a freeze are all response branches, not exceptions.
+/** The ledger's **total** response to one command — the coordination contract (see
+  * `docs/l2-ledger-command-coordination.md`). Four outcome kinds; the [[Applied]] kind has a
+  * concrete descendant per command (its payload differs by command). Every branch echoes the
+  * command number it answers. There is no separate error channel: a rejection, a desync, and a
+  * freeze are all response branches, not exceptions.
   */
 sealed trait L2LedgerResponse:
     def commandNumber: L2CommandNumber
 
 object L2LedgerResponse:
 
-    /** The command applied at `commandNumber`; `effects` are typed per command (empty for
-      * `RegisterDeposit`). A lost-ack resend replays this from the ledger's cache, so the command
-      * still takes effect exactly once.
+    /** The command applied — a concrete descendant per command, since the applied payload differs.
+      * A lost-ack resend replays the ledger's cached response, so the command takes effect once.
       */
-    final case class Applied(commandNumber: L2CommandNumber, effects: AppliedEffects)
-        extends L2LedgerResponse
+    sealed trait Applied extends L2LedgerResponse
+
+    object Applied:
+
+        /** A `RegisterDeposit` applied: no immediate ledger effects (the deposit's L2 utxos are
+          * spawned only later, when an `ApplyDepositDecisions` absorbs it).
+          */
+        final case class RegisterDeposit(commandNumber: L2CommandNumber) extends Applied
+
+        /** An `ApplyDepositDecisions` applied: the evacuation diffs of the deposits it absorbed. */
+        final case class ApplyDepositDecisions(
+            commandNumber: L2CommandNumber,
+            evacuationDiffs: Vector[EvacuationDiff]
+        ) extends Applied
+
+        /** An `ApplyTransaction` applied: the evacuation diffs of the changed utxo set plus the
+          * payout obligations the transaction withdrew.
+          */
+        final case class ApplyTransaction(
+            commandNumber: L2CommandNumber,
+            evacuationDiffs: Vector[EvacuationDiff],
+            payouts: Vector[Payout.Obligation]
+        ) extends Applied
 
     /** A deterministic rejection — a real verdict, not a transport failure. `reason` is a free-form
       * message for now (the doc's typed per-command `RejectReason` is a later refinement). The
@@ -69,3 +65,19 @@ object L2LedgerResponse:
         commandNumber: L2CommandNumber,
         wrongDecisionCommandNumber: L2CommandNumber
     ) extends L2LedgerResponse
+
+/** The exact responses each command can produce: its own [[L2LedgerResponse.Applied]] descendant,
+  * plus the three shared coordination branches. Spelled out (not a type parameter) so each
+  * `L2Ledger` method states precisely what it returns.
+  */
+type RegisterDepositResponse =
+    L2LedgerResponse.Applied.RegisterDeposit | L2LedgerResponse.Rejected |
+        L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze
+
+type ApplyDepositDecisionsResponse =
+    L2LedgerResponse.Applied.ApplyDepositDecisions | L2LedgerResponse.Rejected |
+        L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze
+
+type ApplyTransactionResponse =
+    L2LedgerResponse.Applied.ApplyTransaction | L2LedgerResponse.Rejected |
+        L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze
