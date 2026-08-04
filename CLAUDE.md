@@ -57,7 +57,7 @@ sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ## Architecture
 
 ### Key Technologies
-- **Scala 3.3.6** with modern language features
+- **Scala 3.3.7** with modern language features
 - **Scalus**: Cardano Plutus integration and on-chain script compilation
 - **Cats Effect**: Functional effect system for IO operations
 - **Cats Actors**: Actor-based concurrency model
