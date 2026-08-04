@@ -435,7 +435,10 @@ class CardanoBackendBlockfrost private (
 
             redeemerInfo <- EitherT(txRedeemer(txHash, inputIx))
 
-            redeemerData <- EitherT(redeemerByHash(redeemerInfo.getDatumHash))
+            // The redeemer's Data is keyed by `redeemer_data_hash`, NOT `datum_hash` (the latter is
+            // Blockfrost's deprecated/renamed field; on the Yaci store it resolves to the spent
+            // input's datum instead, so `fromData[TreasuryRedeemer]` fails with "not a constructor").
+            redeemerData <- EitherT(redeemerByHash(redeemerInfo.getRedeemerDataHash))
 
             redeemer <- EitherT.fromOption[IO](
               opt = scala.util.Try {

@@ -114,6 +114,9 @@ case class RbrMbtSuite(
                       testPeers = ready.testPeers,
                       testPeerToUtxos = ready.genesisByPeer,
                       takeoffOffset = 10.seconds,
+                      // Longer deposit maturity so the CardanoLiaison poll can be slowed to 1s
+                      // (see yaciTxTiming) — the real yaci-store can't take the fast mock cadence.
+                      fastTxTiming = MultiPeerHeadHarness.yaciTxTiming,
                       scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
                       coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
                       coilQuorum = nCoilPeers,
@@ -209,8 +212,14 @@ case class RbrMbtSuite(
               cardanoBackendMode = state.params.cardanoBackendMode,
             )
             // Force block/major production so deposits settle and (post-arming) fallback trips.
+            // Stop kicking once fallback is dispatched: post-fallback the RBR flow runs
+            // autonomously, and continued kicks keep hard-confirming stacks that drive the
+            // CardanoLiaison's (ungated) `runEffects` polling into a store-hammering loop.
             _ <- Resource.make(
-              (MultiPeerHeadHarness.submitKickRequest(harness) >> IO.sleep(1.second)).foreverM.start
+              IO.race(
+                fallbackDispatched.get,
+                (MultiPeerHeadHarness.submitKickRequest(harness) >> IO.sleep(1.second)).foreverM,
+              ).start
             )(_.cancel)
         yield Sut(
           harness,
