@@ -63,7 +63,7 @@ dockerCommands := dockerCommands.value.flatMap {
     case other                => List(other)
 }
 
-val scalusVersion = "0.18.1"
+val scalusVersion = "1.0.0"
 val bloxbeanVersion = "0.7.1"
 val http4sVersion = "0.23.32"
 val tapirVersion = "1.13.25"
