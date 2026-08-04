@@ -35,15 +35,15 @@ final class RocksDbL2Store private (
 
     import RocksDbL2Store.{keyToCommandNumber, commandNumberToKey}
 
-    def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
+    override def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
         IO.blocking(db.put(logCf, writeOptions, commandNumberToKey(commandNumber), encode(command)))
 
-    def putSnapshot(commandNumber: L2CommandNumber, snapshot: L2Snapshot): IO[Unit] =
+    override def putSnapshot(commandNumber: L2CommandNumber, snapshot: L2Snapshot): IO[Unit] =
         IO.blocking(
           db.put(snapshotCf, writeOptions, commandNumberToKey(commandNumber), encode(snapshot))
         )
 
-    def latestSnapshotAtOrBefore(
+    override def latestSnapshotAtOrBefore(
         commandNumber: L2CommandNumber
     ): IO[Option[(L2CommandNumber, L2Snapshot)]] =
         IO.blocking {
@@ -56,7 +56,7 @@ final class RocksDbL2Store private (
             finally it.close()
         }
 
-    def logRange(
+    override def logRange(
         fromExclusive: L2CommandNumber,
         toInclusive: L2CommandNumber
     ): IO[List[L2LedgerCommand]] =
@@ -79,12 +79,12 @@ final class RocksDbL2Store private (
             finally it.close()
         }
 
-    def putTip(commandNumber: L2CommandNumber): IO[Unit] =
+    override def putTip(commandNumber: L2CommandNumber): IO[Unit] =
         IO.blocking(
           db.put(metaCf, writeOptions, RocksDbL2Store.TipKey, commandNumberToKey(commandNumber))
         )
 
-    def getTip: IO[Option[L2CommandNumber]] =
+    override def getTip: IO[Option[L2CommandNumber]] =
         IO.blocking(
           Option(db.get(metaCf, readOptions, RocksDbL2Store.TipKey)).map(keyToCommandNumber)
         ).flatMap {
@@ -97,7 +97,7 @@ final class RocksDbL2Store private (
                 yield (logMax.toList ++ snapMax.toList).maxOption
         }
 
-    def putFrozenAt(commandNumber: Option[L2CommandNumber]): IO[Unit] =
+    override def putFrozenAt(commandNumber: Option[L2CommandNumber]): IO[Unit] =
         IO.blocking {
             commandNumber match {
                 case Some(cn) =>
@@ -106,7 +106,7 @@ final class RocksDbL2Store private (
             }
         }
 
-    def getFrozenAt: IO[Option[L2CommandNumber]] =
+    override def getFrozenAt: IO[Option[L2CommandNumber]] =
         IO.blocking(
           Option(db.get(metaCf, readOptions, RocksDbL2Store.FrozenAtKey)).map(keyToCommandNumber)
         )

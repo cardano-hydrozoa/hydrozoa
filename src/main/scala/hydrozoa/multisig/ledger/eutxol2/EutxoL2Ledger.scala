@@ -9,7 +9,7 @@ import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
+import hydrozoa.multisig.ledger.eutxol2.store.{L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
@@ -96,12 +96,6 @@ object EutxoL2Ledger {
               commandNumber = L2CommandNumber.zero,
               frozenAt = None
             )
-
-    /** Build a ledger whose state lives only in memory (no recovery store). Convenience for callers
-      * that do not need crash recovery (e.g. pure model tests).
-      */
-    def apply(config: EutxoL2Ledger.Config): IO[EutxoL2Ledger] =
-        InMemoryL2Store.create.flatMap(store => apply(config, store))
 
     /** Build a ledger backed by `store` for crash recovery: each *applied* command appends to the
       * store's (sparse) log, and every [[L2Store.SnapshotInterval]]-th command number snapshots; a

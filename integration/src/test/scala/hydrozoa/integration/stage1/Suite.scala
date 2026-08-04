@@ -28,7 +28,8 @@ import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendBlockfro
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{BlockWeaver, CardanoLiaison, CardanoLiaisonEvent, CardanoLiaisonEventFormat, FastConsensusActor, FastConsensusActorEvent, FastConsensusActorEventFormat, RequestSequencer, StackComposer}
 import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockVersion}
-import hydrozoa.multisig.ledger.eutxol2.{EutxoL2Ledger, toUtxos}
+import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
+import hydrozoa.multisig.ledger.eutxol2.toUtxos
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.joint.{JointLedger, JointLedgerEventFormat}
 import hydrozoa.multisig.ledger.l1.tx.RawTx
@@ -563,7 +564,7 @@ case class Suite(
                     stackComposer = stackComposerStub,
                     headPeerLiaisons = List(),
                   )
-                  l2Ledger <- EutxoL2Ledger(nodeConfig)
+                  l2Ledger <- InMemoryL2Store.ledger(nodeConfig)
                   jointLedger <- system.actorOf(
                     JointLedger(
                       nodeConfig,

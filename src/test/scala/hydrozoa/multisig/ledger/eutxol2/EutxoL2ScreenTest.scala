@@ -5,6 +5,7 @@ import cats.effect.unsafe.implicits.global
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand}
@@ -30,7 +31,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
 
     private val nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-    private val ledger = EutxoL2Ledger(nodeConfig).unsafeRunSync()
+    private val ledger = InMemoryL2Store.ledger(nodeConfig).unsafeRunSync()
 
     private val garbage = ByteString.fromArray(Array[Byte](1, 2, 3))
 
@@ -132,7 +133,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
 
     // A fresh ledger per test: sendRegisterDeposit goes through the command-number path, and a
     // reject advances the tip — so a shared ledger would make later registrations out-of-order.
-    private def freshLedger: EutxoL2Ledger = EutxoL2Ledger(nodeConfig).unsafeRunSync()
+    private def freshLedger: EutxoL2Ledger = InMemoryL2Store.ledger(nodeConfig).unsafeRunSync()
 
     test("sendRegisterDeposit rejects a spawned output below min-ada at registration (No)") {
         assert(
