@@ -93,10 +93,11 @@ final case class JointLedger(
 
     /** Fail-stop on a command response JointLedger cannot accept at this site: a
       * [[L2LedgerResponse.OutOfOrder]] (desync), a [[L2LedgerResponse.LedgerFreeze]] (frozen
-      * ledger), an `ApplyDepositDecisions` [[L2LedgerResponse.Rejected]] (coordination bug), or an
-      * `Applied` whose effects do not match the command sent (a protocol violation). Traces and
-      * raises; never returns normally. A user-request `Rejected` is *not* routed here — it is
-      * invalidated at the call site.
+      * ledger), or an `ApplyDepositDecisions` [[L2LedgerResponse.Rejected]] (coordination bug).
+      * Traces and raises; never returns normally. A user-request `Rejected` is *not* routed here —
+      * it is invalidated at the call site. The per-command union return types preclude a mismatched
+      * `Applied` from reaching this handler; a wrong `Applied` variant fail-stops upstream in
+      * [[hydrozoa.multisig.ledger.remote.RemoteL2Ledger]].
       */
     private def panicOnL2Response(
         commandNumber: L2CommandNumber,
