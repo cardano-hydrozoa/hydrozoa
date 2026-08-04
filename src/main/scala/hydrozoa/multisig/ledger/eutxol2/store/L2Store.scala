@@ -67,5 +67,6 @@ trait L2Store[F[_]]:
 
 object L2Store:
     /** Write a full-state snapshot every this many commits (§R2b; tune later, not config-driven).
+      * TODO: make parameter?
       */
     val SnapshotInterval: Long = 100L
