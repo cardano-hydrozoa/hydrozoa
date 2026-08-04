@@ -53,8 +53,10 @@ object NodePrivateConfig {
 
         def httpPort: String = nodePrivateConfig.httpPort
 
-        /** Blockfrost-compatible backend URL, required only for a `Custom` `cardanoNetwork` (e.g. a
-          * Yaci devnet); the standard networks derive their URL from the network itself.
+        /** Blockfrost-compatible endpoint serving this node's `cardanoNetwork`. Optional for the
+          * standard networks, which derive their public URL from the network itself, and set when a
+          * private endpoint serves one of them; required for a `Custom` chain, which has no public
+          * endpoint to fall back on.
           */
         def blockfrostApiUrl: Option[String] = nodePrivateConfig.blockfrostApiUrl
     }

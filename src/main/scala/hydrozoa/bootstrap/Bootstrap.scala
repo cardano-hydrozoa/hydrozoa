@@ -326,6 +326,52 @@ object Bootstrap:
                 )
             }
 
+    /** `--cardano-network-file`: a file holding a serialized [[CardanoNetwork]], as
+      * `hydrozoa discover-network` prints it. Shared by `init-bootstrap-files` and `keygen-fleet`.
+      */
+    val cardanoNetworkFileOpt: Opts[Option[Path]] =
+        Opts.option[String](
+          "cardano-network-file",
+          "File holding the target chain as JSON (see `hydrozoa discover-network`) — for a chain " +
+              "that is not one of preview/preprod/mainnet"
+        ).map(Path.of(_))
+            .orNone
+
+    /** Resolve where the chain came from: a standard network's name, or a file holding a complete
+      * [[CardanoNetwork]].
+      */
+    def resolveChainSource(source: Either[String, Path]): IO[CardanoNetwork] =
+        source.fold(standardNetworkByName, readCardanoNetworkFile)
+
+    /** One of the three standard chains, by name. */
+    def standardNetworkByName(name: String): IO[StandardCardanoNetwork] = name match {
+        case "preview" => IO.pure(CardanoNetwork.Preview)
+        case "preprod" => IO.pure(CardanoNetwork.Preprod)
+        case "mainnet" => IO.pure(CardanoNetwork.Mainnet)
+        case other =>
+            IO.raiseError(
+              new IllegalArgumentException(
+                s"unknown cardano network \"$other\" (expected preview, preprod or mainnet)"
+              )
+            )
+    }
+
+    /** Read a chain description written by `hydrozoa discover-network`, refusing one that carries a
+      * standard chain's magic — that chain must be named, so its baked-in slot geometry is used.
+      */
+    def readCardanoNetworkFile(path: Path): IO[CardanoNetwork] =
+        for {
+            content <- IO.blocking(Files.readString(path))
+            json <- IO.fromEither(parser.parse(content))
+            network <- IO.fromEither(json.as[CardanoNetwork])
+            _ <- IO.fromEither(
+              CardanoNetwork
+                  .rejectStandardMagic(network)
+                  .left
+                  .map(m => new IllegalArgumentException(s"$path: $m"))
+            )
+        } yield network
+
     /** A Blockfrost project key starts with its network's name, so a standard network can be
       * checked against the key upfront; a custom network (or a private endpoint that need not
       * follow blockfrost.io's key prefixes) cannot, and skips the check. Shared by
@@ -958,7 +1004,7 @@ object Migrate:
                 )
 
             wallet = nodeConfig.ownWallet
-            // A Custom (e.g. Yaci) network works too — the head-config carries a fully-resolved
+            // A Custom network works too — the head-config carries a fully-resolved
             // network, and Migrate only needs its address `Network` and slot config.
             cardanoNetwork: CardanoNetwork = nodeConfig.cardanoNetwork
             peerAddress = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
@@ -1242,26 +1288,27 @@ object InitBootstrapFiles:
               "(self-hosted or otherwise) in place of public blockfrost.io"
         ).orNone
 
-    /** The chain and, independently, the endpoint serving it — the two axes of
-      * [[Bootstrap.BootstrapNetwork]]. `--blockfrost-url` applies to any chain.
+    /** Where the target chain comes from: one of the standard networks by name, or a file holding a
+      * serialized [[CardanoNetwork]] as `hydrozoa discover-network` prints it — the only way to
+      * name a chain that has no baked-in description. The endpoint serving it is the independent
+      * `--blockfrost-url` and applies to either.
       */
-    private val cardanoNetworkOpt: Opts[BootstrapNetwork] =
+    private val chainSourceOpt: Opts[Either[String, Path]] =
         (
           Opts.option[String](
             "cardano-network",
             "Target network: preview | preprod | mainnet (default preview)"
-          ).withDefault("preview"),
-          blockfrostUrlOpt
-        ).mapN((name, blockfrostUrl) => (name, blockfrostUrl))
+          ).orNone,
+          Bootstrap.cardanoNetworkFileOpt
+        ).mapN((name, file) => (name, file))
             .mapValidated {
-                case ("preview", url) =>
-                    Validated.validNel(BootstrapNetwork(CardanoNetwork.Preview, url))
-                case ("preprod", url) =>
-                    Validated.validNel(BootstrapNetwork(CardanoNetwork.Preprod, url))
-                case ("mainnet", url) =>
-                    Validated.validNel(BootstrapNetwork(CardanoNetwork.Mainnet, url))
-                case (other, _) =>
-                    Validated.invalidNel(s"unknown network: $other")
+                case (Some(_), Some(_)) =>
+                    Validated.invalidNel(
+                      "--cardano-network and --cardano-network-file are mutually exclusive"
+                    )
+                case (Some(name), None) => Validated.validNel(Left(name))
+                case (None, Some(file)) => Validated.validNel(Right(file))
+                case (None, None)       => Validated.validNel(Left("preview"))
             }
 
     /** The `init-bootstrap-files` subcommand. */
@@ -1272,7 +1319,19 @@ object InitBootstrapFiles:
         )(runOpts)
 
     private def runOpts: Opts[IO[ExitCode]] =
-        (rosterArg, outDirOpt, coilQuorumOpt, cardanoNetworkOpt).mapN(init)
+        (rosterArg, outDirOpt, coilQuorumOpt, chainSourceOpt, blockfrostUrlOpt).mapN(
+          (rosterPath, outDir, coilQuorum, chainSource, blockfrostApiUrl) =>
+              Bootstrap
+                  .resolveChainSource(chainSource)
+                  .flatMap(chain =>
+                      init(
+                        rosterPath,
+                        outDir,
+                        coilQuorum,
+                        BootstrapNetwork(chain, blockfrostApiUrl)
+                      )
+                  )
+        )
 
     private[bootstrap] def init(
         rosterPath: Path,
@@ -1376,14 +1435,24 @@ object KeygenFleet:
           name = "keygen-fleet",
           header =
               "Generate a whole head's keys + bootstrap files (keygen per peer, then init-bootstrap-files)"
-        )((headsArg, coilsArg, quorumArg, Bootstrap.homeOpt, templateOpt).mapN(run))
+        )(
+          (
+            headsArg,
+            coilsArg,
+            quorumArg,
+            Bootstrap.homeOpt,
+            templateOpt,
+            Bootstrap.cardanoNetworkFileOpt
+          ).mapN(run)
+        )
 
     private def run(
         heads: Int,
         coils: Int,
         coilQuorum: Int,
         home: Path,
-        mbTemplate: Option[Path]
+        mbTemplate: Option[Path],
+        cardanoNetworkFile: Option[Path]
     ): IO[ExitCode] = {
         val bootstrapDir = Bootstrap.HomeLayout.bootstrapDir(home)
         val rosterPath = Bootstrap.HomeLayout.roster(home)
@@ -1404,7 +1473,7 @@ object KeygenFleet:
                     "blockfrostApiKey in it"
               )
             )
-            network <- deriveNetwork(template)
+            network <- deriveNetwork(template, cardanoNetworkFile)
             _ <- IO.println(
               s"Generating a $heads-head / $coils-coil fleet on $network (coil quorum $coilQuorum)"
             )
@@ -1435,41 +1504,38 @@ object KeygenFleet:
     }
 
     /** Derive the target network from the template: an explicit `cardanoNetwork` name picks the
-      * chain, else the `blockfrostApiKey`'s `preview…`/`preprod…`/`mainnet…` prefix does.
-      * Independently, `blockfrostApiUrl` — if present — records the private endpoint serving that
-      * chain (e.g. mainnet via a self-hosted Blockfrost) in place of public blockfrost.io.
+      * chain, else the `blockfrostApiKey`'s `preview…`/`preprod…`/`mainnet…` prefix does. A
+      * `--cardano-network-file` outranks both — it is the only way to name a chain with no baked-in
+      * description. Independently, `blockfrostApiUrl` — if present — records the private endpoint
+      * serving that chain (e.g. mainnet via a self-hosted Blockfrost) in place of public
+      * blockfrost.io.
       */
-    private def deriveNetwork(template: Path): IO[BootstrapNetwork] =
+    private def deriveNetwork(
+        template: Path,
+        cardanoNetworkFile: Option[Path]
+    ): IO[BootstrapNetwork] =
         for {
             content <- IO.blocking(Files.readString(template))
             json <- IO.fromEither(parser.parse(content))
             // A present-but-wrong-typed field is a decode error, not silently "absent".
             blockfrostApiUrl <- IO.fromEither(json.hcursor.get[Option[String]]("blockfrostApiUrl"))
             cardanoNetwork <- IO.fromEither(json.hcursor.get[Option[String]]("cardanoNetwork"))
-            chain <- cardanoNetwork.fold(standardNetworkFromKey(json, template))(
-              standardNetworkByName(_, template)
-            )
+            chain <- cardanoNetworkFile.fold(
+              cardanoNetwork.fold(standardNetworkFromKey(json, template))(name =>
+                  Bootstrap
+                      .standardNetworkByName(name)
+                      .adaptError { case e: IllegalArgumentException =>
+                          new IllegalArgumentException(s"$template: ${e.getMessage}")
+                      }
+                      .widen[CardanoNetwork]
+              )
+            )(Bootstrap.readCardanoNetworkFile)
         } yield BootstrapNetwork(chain, blockfrostApiUrl)
-
-    /** Resolve an explicit `cardanoNetwork` name to one of the three standard chains. */
-    private def standardNetworkByName(name: String, template: Path): IO[StandardCardanoNetwork] =
-        name match {
-            case "preview" => IO.pure(CardanoNetwork.Preview)
-            case "preprod" => IO.pure(CardanoNetwork.Preprod)
-            case "mainnet" => IO.pure(CardanoNetwork.Mainnet)
-            case other =>
-                IO.raiseError(
-                  new IllegalArgumentException(
-                    s"""unknown cardanoNetwork "$other" in $template """ +
-                        "(expected preview, preprod or mainnet)"
-                  )
-                )
-        }
 
     /** Derive the standard chain from the Blockfrost key's `preview…`/`preprod…`/`mainnet…` prefix,
       * when the template names no `cardanoNetwork`.
       */
-    private def standardNetworkFromKey(json: Json, template: Path): IO[StandardCardanoNetwork] =
+    private def standardNetworkFromKey(json: Json, template: Path): IO[CardanoNetwork] =
         IO.fromOption(json.hcursor.get[String]("blockfrostApiKey").toOption)(
           new IllegalArgumentException(s"no blockfrostApiKey found in $template")
         ).flatMap { key =>

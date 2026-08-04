@@ -69,8 +69,8 @@ object CardanoNetwork {
     /** Reject a [[Custom]] network that reports one of the standard chains' protocol magic: such a
       * chain must be configured as that standard network (`cardanoNetwork: preview|preprod|mainnet`
       * plus a `blockfrostApiUrl` if a private endpoint serves it), because only the baked-in
-      * [[CardanoInfo]] carries the correct (Byron-aware) slot geometry and address tag. Devnet
-      * magics (e.g. Yaci's 42) are unaffected, as are the standard networks themselves.
+      * [[CardanoInfo]] carries the correct (Byron-aware) slot geometry and address tag. A chain
+      * with a magic of its own is unaffected, as are the standard networks themselves.
       */
     def rejectStandardMagic(network: CardanoNetwork): Either[String, Unit] = network match {
         case _: CardanoNetwork.Custom =>

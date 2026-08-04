@@ -176,6 +176,30 @@ class BootstrapMembershipTest extends AnyFunSuite {
         )
     }
 
+    test("readCardanoNetworkFile reads back what discover-network would have written") {
+        // The round trip an operator performs: `discover-network --out network.json`, then
+        // `--cardano-network-file network.json`.
+        val devnet = CardanoNetwork.Custom(CardanoInfo.preview, protocolMagic = 42L)
+        val path = Files.createTempFile("cardano-network", ".json")
+        Files.writeString(path, (devnet: CardanoNetwork).asJson.spaces2)
+        val read = Bootstrap.readCardanoNetworkFile(path).unsafeRunSync()
+        assert(read == devnet)
+    }
+
+    test("readCardanoNetworkFile refuses a chain wearing a standard chain's magic") {
+        // Only the baked-in CardanoInfo has preprod's Byron-aware slot geometry, so a `custom`
+        // block claiming preprod's magic must be rejected rather than quietly used.
+        val impostor =
+            CardanoNetwork.Custom(CardanoInfo.preview, CardanoNetwork.Preprod.protocolMagic)
+        val path = Files.createTempFile("cardano-network-impostor", ".json")
+        Files.writeString(path, (impostor: CardanoNetwork).asJson.spaces2)
+        val result = Bootstrap.readCardanoNetworkFile(path).attempt.unsafeRunSync()
+        assert(
+          result.left.exists(_.getMessage.contains("preprod")),
+          s"expected a rejection naming preprod, got: $result"
+        )
+    }
+
     test("L2Output round-trips through its CIP-0116 JSON") {
         val address =
             Address.fromBech32("addr_test1vrhh0xnmqlh5jpys4cqrj3vteje70r0swakm7q2w8nmcp3sh5wdk4")
