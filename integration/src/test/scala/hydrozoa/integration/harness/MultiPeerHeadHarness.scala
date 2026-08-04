@@ -200,14 +200,16 @@ object MultiPeerHeadHarness:
             case PeerId.Head(n) => s"head-$n"
             case PeerId.Coil(n) => s"coil-$n"
         Slf4jTracer.sink.contramap {
-            case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
+            case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
                 LogEvent
                     .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                    .warn(s"firewall DROPPED tx $hash")
-            case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
+                    .warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
                 LogEvent
                     .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                    .info(s"firewall passed tx $hash result=$result")
+                    .info(
+                      s"firewall passed tx ${etx.tx.id} family=${etx.transactionFamily} result=$result"
+                    )
         }
 
     /** The standard head-peer handle for the dispute-flow tests: each head peer exposes its
@@ -378,13 +380,18 @@ object MultiPeerHeadHarness:
                     generateNodeOperationEvacuationConfig = w =>
                         Gen.const(
                           NodeOperationEvacuationConfig(
-                            evacuationBotPollingPeriod = 100.millis,
+                            // Mock (no real script refs) polls fast; a real Yaci backend polls
+                            // every 1s so per-tick blockfrost probes don't overwhelm the yaci-store.
+                            evacuationBotPollingPeriod =
+                                if scriptReferenceUtxos.isDefined then 1.second else 100.millis,
                             ruleBasedWallet = w,
                           )
                         ),
                     generateNodeOperationMultisigConfig = hc =>
                         generateNodeOperationMultisigConfig(
-                          maxPollingPeriod = hc.maxCardanoLiaisonPollingPeriod / 2,
+                          maxPollingPeriod =
+                              if scriptReferenceUtxos.isDefined then 1.second
+                              else hc.maxCardanoLiaisonPollingPeriod / 2,
                           rateLimits = RateLimits(
                             softBlockMinPeriod = 500.millis,
                             hardStackMinPeriod = 250.millis,
@@ -678,16 +685,22 @@ object MultiPeerHeadHarness:
             )
 
         /** The Yaci devnet's `Custom` network from a live `devKit.devnetInfo` query: its slot
-          * config (zeroTime/slotLength) and protocol magic, with the devnet protocol params. Call
-          * after `devKit.reset()` so the slot anchor matches the fresh chain.
+          * config (zeroTime/slotLength) and protocol magic, with the devnet's live protocol params
+          * (incl. cost models — fetched from Blockfrost, not the bundled `DevKit.yaciParams`, so the
+          * tx builder's cost models match the image and Plutus txs don't fail
+          * `PPViewHashesDontMatch`). Call after `devKit.reset()` so the slot anchor matches the
+          * fresh chain. Pass `protocolParams` explicitly to override the live fetch.
           */
         def yaciNetwork(
             devKit: DevKit = DevKit.localhost,
-            protocolParams: ProtocolParams = DevKit.yaciParams,
+            protocolParams: Option[ProtocolParams] = None,
         ): IO[CardanoNetwork.Custom] =
-            IO.blocking(devKit.devnetInfo()).map { info =>
+            for {
+                info <- IO.blocking(devKit.devnetInfo())
+                params <- protocolParams.fold(IO.blocking(devKit.protocolParams()))(IO.pure)
+            } yield {
                 val cardanoInfo = CardanoInfo(
-                  protocolParams = protocolParams,
+                  protocolParams = params,
                   network = Network.Testnet,
                   slotConfig = SlotConfig(
                     zeroTime = java.time.Instant.ofEpochSecond(info.startTime).toEpochMilli,

@@ -10,6 +10,10 @@
     <logger name="org.testcontainers" level="info"/>
     <logger name="tc" level="info"/>
 
+    <!-- Bloxbean's Blockfrost client wire-logs every request at DEBUG (tens of thousands of
+         lines against a live Yaci devnet). -->
+    <logger name="com.bloxbean" level="warn"/>
+
     <!-- IMPORTANT
 
          Timestamps added by the logging framework

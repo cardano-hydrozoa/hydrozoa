@@ -51,12 +51,12 @@ final class FirewalledCardanoBackend(
         shouldDrop(etx).flatMap {
             case true =>
                 firewallTracer
-                    .traceWith(FirewalledCardanoBackendEvent.DroppedOutboundTx(etx.tx.id))
+                    .traceWith(FirewalledCardanoBackendEvent.DroppedOutboundTx(etx))
                     .as(Right(()))
             case false =>
                 underlying.submitTx(etx).flatTap { result =>
                     firewallTracer.traceWith(
-                      FirewalledCardanoBackendEvent.SubmittedTx(etx.tx.id, result)
+                      FirewalledCardanoBackendEvent.SubmittedTx(etx, result)
                     )
                 }
         }

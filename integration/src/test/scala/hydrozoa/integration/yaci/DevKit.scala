@@ -55,6 +55,32 @@ final case class DevKit(blockfrostApiBaseUri: String, yaciApiBaseUri: Uri) {
         Await.result(request, timeout)
     }
 
+    /** Fetch the running devnet's live protocol parameters (including cost models) from its
+      * Blockfrost `/epochs/parameters`. Prefer this over the bundled [[DevKit.yaciParams]] when
+      * building transactions against the devnet: the tx builder's cost models must match the
+      * image's, or every Plutus tx fails `PPViewHashesDontMatch` (script-integrity-hash mismatch).
+      */
+    def protocolParams(timeout: FiniteDuration = 10.seconds): ProtocolParams = {
+        val request = basicRequest
+            .get(Uri.unsafeParse(s"$blockfrostApiBaseUri/epochs/parameters"))
+            .send(backend)
+            .map(resp =>
+                resp.body match {
+                    case Right(body) =>
+                        ProtocolParams.fromBlockfrostJson(
+                          new java.io.ByteArrayInputStream(
+                            body.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+                          )
+                        )
+                    case Left(error) =>
+                        throw RuntimeException(
+                          s"Failed to fetch protocol params. Status: ${resp.code}, Body: $error"
+                        )
+                }
+            )
+        Await.result(request, timeout)
+    }
+
     def topup(
         address: ShelleyAddress,
         coins: Coin,

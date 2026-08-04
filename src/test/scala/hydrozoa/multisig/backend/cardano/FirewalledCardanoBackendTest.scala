@@ -32,8 +32,9 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
               s"expected no drop event, got $events",
             )
             assert(
-              events.collect { case s: FirewalledCardanoBackendEvent.SubmittedTx => s } ==
-                  List(FirewalledCardanoBackendEvent.SubmittedTx(Transaction.empty.id, result)),
+              events.collect { case s: FirewalledCardanoBackendEvent.SubmittedTx =>
+                  (s.tx.tx.id, s.tx.transactionFamily, s.result)
+              } == List((Transaction.empty.id, "RawTx", result)),
               s"expected one pass-through SubmittedTx recording the underlying result, got $events",
             )
         io.unsafeRunSync()
@@ -50,9 +51,12 @@ class FirewalledCardanoBackendTest extends AnyFunSuite:
         yield
             val _ = assert(result == Right(()), s"expected Right(()) short-circuit, got $result")
             assert(
-              events == List(
-                FirewalledCardanoBackendEvent.DroppedOutboundTx(Transaction.empty.id)
-              ),
+              events.map {
+                  case d: FirewalledCardanoBackendEvent.DroppedOutboundTx =>
+                      ("dropped", d.tx.tx.id, d.tx.transactionFamily)
+                  case s: FirewalledCardanoBackendEvent.SubmittedTx =>
+                      ("submitted", s.tx.tx.id, s.tx.transactionFamily)
+              } == List(("dropped", Transaction.empty.id, "RawTx")),
               s"expected exactly one DroppedOutboundTx (no SubmittedTx on the drop path), got $events",
             )
         io.unsafeRunSync()

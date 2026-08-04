@@ -107,16 +107,13 @@ case class RbrMbtSuite(
 
             case RbrMbtSuite.RbrMbtEnv.Yaci(devKit) =>
                 for {
-                    _ <- PropertyM.run(
-                      log.info("Resetting Yaci devnet + redeploying scripts for a new iteration")
-                    )
-                    _ <- PropertyM.run(IO.blocking(devKit.reset()))
+                    _ <- PropertyM.run(log.info("Deploying scripts on the Yaci devnet"))
                     ready <- PropertyM.run(YaciSetup.prepare(devKit, nHeadPeers, nCoilPeers))
                     takeoffAndMnc <- MultiPeerHeadHarness.genDisputeMnc(
                       transportMode = TransportMode.WebSocket,
                       testPeers = ready.testPeers,
                       testPeerToUtxos = ready.genesisByPeer,
-                      takeoffOffset = 120.seconds,
+                      takeoffOffset = 10.seconds,
                       scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
                       coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
                       coilQuorum = nCoilPeers,

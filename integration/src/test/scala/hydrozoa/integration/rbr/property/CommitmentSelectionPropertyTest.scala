@@ -318,14 +318,17 @@ object CommitmentSelectionPropertyTest extends Properties("RBR Commitment Select
         }
         val slf4jSink: ContraTracer[IO, FirewalledCardanoBackendEvent] =
             Slf4jTracer.sink.contramap {
-                case FirewalledCardanoBackendEvent.DroppedOutboundTx(hash) =>
+                case FirewalledCardanoBackendEvent.DroppedOutboundTx(etx) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .warn(s"firewall DROPPED tx $hash")
-                case FirewalledCardanoBackendEvent.SubmittedTx(hash, result) =>
+                        .warn(s"firewall DROPPED tx ${etx.tx.id} family=${etx.transactionFamily}")
+                case FirewalledCardanoBackendEvent.SubmittedTx(etx, result) =>
                     hydrozoa.lib.logging.LogEvent
                         .From(Map("peer" -> peerLabel), "FirewalledCardanoBackend")
-                        .info(s"firewall passed tx $hash result=$result")
+                        .info(
+                          s"firewall passed tx ${etx.tx.id} " +
+                              s"family=${etx.transactionFamily} result=$result"
+                        )
             }
         FirewalledCardanoBackend(
           underlying = underlying,
