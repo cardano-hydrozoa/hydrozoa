@@ -4,17 +4,15 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
-import hydrozoa.multisig.ledger.l2.L2CommandNumber
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
+import hydrozoa.multisig.ledger.l2.{AppliedEffects, L2CommandNumber, L2LedgerResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.uplc.builtin.ByteString
 
-/** Round-trip tests for the `RemoteL2Ledger.Response` wire codec: every branch carries the command
-  * number, and `Applied` omits empty effect fields on encode yet defaults them to empty on decode —
-  * i.e. the per-command shape (RegisterDeposit → none, ApplyDepositDecisions → diffs,
-  * ApplyTransaction → diffs + payouts).
+/** Round-trip tests for the `L2LedgerResponse` wire codec: every branch carries the command number,
+  * and `Applied` nests the per-command tagged `effects` (RegisterDeposit → none,
+  * ApplyDepositDecisions → diffs, ApplyTransaction → diffs + payouts).
   */
 class RemoteL2LedgerCodecsTest extends AnyFunSuite:
 
@@ -25,34 +23,44 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
 
     import RemoteL2LedgerCodecs.given
 
-    private def roundTrips(r: Response): Boolean =
-        io.circe.parser.decode[Response](r.asJson.noSpaces) == Right(r)
+    private def roundTrips(r: L2LedgerResponse): Boolean =
+        io.circe.parser.decode[L2LedgerResponse](r.asJson.noSpaces) == Right(r)
 
     private val diff: EvacuationDiff =
         EvacuationDiff.Delete(EvacuationKey(ByteString.fromArray(Array.fill[Byte](36)(1))).get)
 
-    test(
-      "Applied with no effects (RegisterDeposit shape) round-trips and omits the effect fields"
-    ) {
-        val r = Response.Applied(L2CommandNumber(7L), Vector.empty, Vector.empty)
+    test("Applied RegisterDeposit (no effects) round-trips and carries no diff/payout fields") {
+        val r = L2LedgerResponse.Applied(L2CommandNumber(7L), AppliedEffects.RegisterDeposit)
         val json = r.asJson.noSpaces
         assert(roundTrips(r) && !json.contains("evacuationDiffs") && !json.contains("payouts"))
     }
 
-    test("Applied with diffs but no payouts (ApplyDepositDecisions shape) round-trips") {
-        val r = Response.Applied(L2CommandNumber(8L), Vector(diff), Vector.empty)
+    test("Applied ApplyDepositDecisions (diffs, no payouts) round-trips") {
+        val r = L2LedgerResponse.Applied(
+          L2CommandNumber(8L),
+          AppliedEffects.ApplyDepositDecisions(Vector(diff))
+        )
         val json = r.asJson.noSpaces
         assert(roundTrips(r) && json.contains("evacuationDiffs") && !json.contains("payouts"))
     }
 
+    test("Applied ApplyTransaction (diffs + payouts) round-trips") {
+        val r = L2LedgerResponse.Applied(
+          L2CommandNumber(9L),
+          AppliedEffects.ApplyTransaction(Vector(diff), Vector.empty)
+        )
+        val json = r.asJson.noSpaces
+        assert(roundTrips(r) && json.contains("evacuationDiffs") && json.contains("payouts"))
+    }
+
     test("OutOfOrder carries the sent and the expected command number") {
-        assert(roundTrips(Response.OutOfOrder(L2CommandNumber(5L), L2CommandNumber(4L))))
+        assert(roundTrips(L2LedgerResponse.OutOfOrder(L2CommandNumber(5L), L2CommandNumber(4L))))
     }
 
     test("LedgerFreeze carries the command number and the freezing decision's number") {
-        assert(roundTrips(Response.LedgerFreeze(L2CommandNumber(9L), L2CommandNumber(4L))))
+        assert(roundTrips(L2LedgerResponse.LedgerFreeze(L2CommandNumber(9L), L2CommandNumber(4L))))
     }
 
     test("Rejected carries the command number") {
-        assert(roundTrips(Response.Rejected(L2CommandNumber(2L), "bad tx")))
+        assert(roundTrips(L2LedgerResponse.Rejected(L2CommandNumber(2L), "bad tx")))
     }

@@ -58,9 +58,7 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                 for
                     ledger <- EutxoL2Ledger(config, store)
                     _ <- (1 to total).toList.traverseVoid(i =>
-                        ledger
-                            .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
-                            .rethrowT
+                        ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                     )
                     // A second ledger over the same on-disk store, rebuilt purely from snapshot+log.
                     restored <- EutxoL2Ledger(config, store)
@@ -80,9 +78,7 @@ class RocksDbL2StoreTest extends AnyFunSuite:
                 for
                     ledger <- EutxoL2Ledger(config, store)
                     _ <- (1 to 3).toList.traverseVoid(i =>
-                        ledger
-                            .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
-                            .rethrowT
+                        ledger.sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
                     )
                     result <- ledger.restoreTo(L2CommandNumber(99)).value
                 yield assert(result.isLeft)

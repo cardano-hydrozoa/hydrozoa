@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
@@ -142,9 +142,8 @@ class EutxoL2ScreenTest extends AnyFunSuite:
                 L2CommandNumber(1L),
                 mkRegisterDeposit(subMinAdaValue, subMinAdaPayload)
               )
-              .value
               .unsafeRunSync()
-              .isLeft
+              .isInstanceOf[L2LedgerResponse.Rejected]
         )
     }
 
@@ -156,8 +155,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
         assert(
           freshLedger
               .sendRegisterDeposit(L2CommandNumber(1L), mkRegisterDeposit(Value.ada(4), l2Payload))
-              .value
               .unsafeRunSync()
-              .isLeft
+              .isInstanceOf[L2LedgerResponse.Rejected]
         )
     }

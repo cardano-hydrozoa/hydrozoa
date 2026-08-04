@@ -5,8 +5,7 @@ import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputD
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand}
-import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.Response
+import hydrozoa.multisig.ledger.l2.{AppliedEffects, Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder}
@@ -101,73 +100,52 @@ object RemoteL2LedgerCodecs {
         }
     }
 
+    // AppliedEffects codec: a single-key object tagging the command variant (the doc's tagged form
+    // — RegisterDeposit → {}, ApplyDepositDecisions → { evacuationDiffs }, ApplyTransaction →
+    // { evacuationDiffs, payouts }). circe's sealed-trait derivation produces exactly that shape.
+    given appliedEffectsEncoder: Encoder[AppliedEffects] = deriveEncoder
+    given appliedEffectsDecoder(using CardanoNetwork.Section): Decoder[AppliedEffects] =
+        deriveDecoder
+
     // Response codecs. Each response is a single-key object tagging the variant (encoder and decoder
-    // agree on the tag). Applied carries `commandNumber` plus only the effects the answered command
-    // produces: `evacuationDiffs` / `payouts` are omitted when empty and default to empty on decode
-    // (RegisterDeposit produces neither; ApplyDepositDecisions no payouts).
-    private def encodeEffects(
-        commandNumber: L2CommandNumber,
-        evacuationDiffs: Vector[EvacuationDiff],
-        payouts: Vector[Payout.Obligation]
-    ): io.circe.Json =
-        io.circe.Json.fromFields(
-          List("commandNumber" -> commandNumber.asJson) ++
-              (if evacuationDiffs.nonEmpty then List("evacuationDiffs" -> evacuationDiffs.asJson)
-               else Nil) ++
-              (if payouts.nonEmpty then List("payouts" -> payouts.asJson) else Nil)
-        )
+    // agree on the tag); Applied carries `commandNumber` plus the per-command tagged `effects`.
+    given appliedEncoder: Encoder[L2LedgerResponse.Applied] = deriveEncoder
+    given appliedDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse.Applied] =
+        deriveDecoder
 
-    private def decodeEffects(using
-        CardanoNetwork.Section
-    )(
-        c: io.circe.HCursor
-    ): Decoder.Result[(L2CommandNumber, Vector[EvacuationDiff], Vector[Payout.Obligation])] =
-        for {
-            cn <- c.downField("commandNumber").as[L2CommandNumber]
-            diffs <- c.getOrElse[Vector[EvacuationDiff]]("evacuationDiffs")(Vector.empty)
-            payouts <- c.getOrElse[Vector[Payout.Obligation]]("payouts")(Vector.empty)
-        } yield (cn, diffs, payouts)
+    given rejectedEncoder: Encoder[L2LedgerResponse.Rejected] = deriveEncoder
+    given rejectedDecoder: Decoder[L2LedgerResponse.Rejected] = deriveDecoder
 
-    given appliedEncoder: Encoder[Response.Applied] =
-        a => encodeEffects(a.commandNumber, a.evacuationDiffs, a.payouts)
-    given appliedDecoder(using CardanoNetwork.Section): Decoder[Response.Applied] =
-        Decoder.instance(c =>
-            decodeEffects(c).map { case (cn, diffs, payouts) =>
-                Response.Applied(cn, diffs, payouts)
-            }
-        )
+    given outOfOrderEncoder: Encoder[L2LedgerResponse.OutOfOrder] = deriveEncoder
+    given outOfOrderDecoder: Decoder[L2LedgerResponse.OutOfOrder] = deriveDecoder
 
-    given outOfOrderEncoder: Encoder[Response.OutOfOrder] = deriveEncoder
-    given outOfOrderDecoder: Decoder[Response.OutOfOrder] = deriveDecoder
+    given ledgerFreezeEncoder: Encoder[L2LedgerResponse.LedgerFreeze] = deriveEncoder
+    given ledgerFreezeDecoder: Decoder[L2LedgerResponse.LedgerFreeze] = deriveDecoder
 
-    given ledgerFreezeEncoder: Encoder[Response.LedgerFreeze] = deriveEncoder
-    given ledgerFreezeDecoder: Decoder[Response.LedgerFreeze] = deriveDecoder
-
-    given rejectedEncoder: Encoder[Response.Rejected] = deriveEncoder
-    given rejectedDecoder: Decoder[Response.Rejected] = deriveDecoder
-
-    given responseEncoder: Encoder[Response] = {
-        case r: Response.Applied      => io.circe.Json.obj("Applied" -> r.asJson)
-        case r: Response.Rejected     => io.circe.Json.obj("Rejected" -> r.asJson)
-        case r: Response.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> r.asJson)
-        case r: Response.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> r.asJson)
+    given responseEncoder: Encoder[L2LedgerResponse] = {
+        case r: L2LedgerResponse.Applied      => io.circe.Json.obj("Applied" -> r.asJson)
+        case r: L2LedgerResponse.Rejected     => io.circe.Json.obj("Rejected" -> r.asJson)
+        case r: L2LedgerResponse.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> r.asJson)
+        case r: L2LedgerResponse.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> r.asJson)
     }
 
-    given responseDecoder(using CardanoNetwork.Section): Decoder[Response] = Decoder.instance { c =>
-        c.keys
-            .flatMap(_.headOption)
-            .toRight(
-              io.circe.DecodingFailure("Response must have exactly one field", c.history)
-            )
-            .flatMap {
-                case "Applied"      => c.downField("Applied").as[Response.Applied]
-                case "Rejected"     => c.downField("Rejected").as[Response.Rejected]
-                case "OutOfOrder"   => c.downField("OutOfOrder").as[Response.OutOfOrder]
-                case "LedgerFreeze" => c.downField("LedgerFreeze").as[Response.LedgerFreeze]
-                case other =>
-                    Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
-            }
-    }
+    given responseDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse] =
+        Decoder.instance { c =>
+            c.keys
+                .flatMap(_.headOption)
+                .toRight(
+                  io.circe.DecodingFailure("Response must have exactly one field", c.history)
+                )
+                .flatMap {
+                    case "Applied"    => c.downField("Applied").as[L2LedgerResponse.Applied]
+                    case "Rejected"   => c.downField("Rejected").as[L2LedgerResponse.Rejected]
+                    case "OutOfOrder" => c.downField("OutOfOrder").as[L2LedgerResponse.OutOfOrder]
+                    case "LedgerFreeze" =>
+                        c.downField("LedgerFreeze").as[L2LedgerResponse.LedgerFreeze]
+                    case other =>
+                        Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
+                }
+        }
 
     // KeepRaw[TransactionOutput] CBOR-hex codec is hoisted into
     // `lib/cardano/scalus/codecs/json/Codecs.scala`; imported above.

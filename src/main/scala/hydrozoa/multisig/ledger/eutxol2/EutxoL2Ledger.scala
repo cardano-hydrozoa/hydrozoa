@@ -214,34 +214,25 @@ case class EutxoL2Ledger private (
           )
         )
 
-    /** Fail-stop unless `commandNumber` is the ledger's next expected number, then run `fresh` on
-      * the current state. Out of order is a desync, not a per-request verdict: fail-stop rather
-      * than let a driver treat it as a soft reject (which would advance JointLedger while the
-      * ledger tip stays put — a one-sided reverse desync). Mirrors the remote ledger's `OutOfOrder`
-      * → fail-stop. Unreachable while JointLedger drives strictly single-in-flight and in
-      * lock-step, but keeps the invariant self-checking if that ever breaks. Shared by the fallible
-      * ([[submit]]) and decision ([[submitDecision]]) command paths. A **frozen** ledger refuses
-      * every command here — the local analogue of the remote's `LedgerFreeze` reply.
+    /** Answer with a coordination response unless `commandNumber` is the ledger's next expected
+      * number, in which case run `fresh` on the current state. A **frozen** ledger answers
+      * [[L2LedgerResponse.LedgerFreeze]] to every command; an out-of-order number answers
+      * [[L2LedgerResponse.OutOfOrder]] (a desync, not a per-request verdict — JointLedger
+      * fail-stops on it). Unreachable while JointLedger drives strictly single-in-flight and in
+      * lock-step, but keeps the invariant self-checking if that ever breaks. Shared by the
+      * [[submit]] and [[submitDecision]] command paths.
       */
-    private def onFreshNumber[A](
+    private def onFreshNumber(
         commandNumber: L2CommandNumber
-    )(fresh: EutxoL2Ledger.State => IO[A]): IO[A] =
+    )(fresh: EutxoL2Ledger.State => IO[L2LedgerResponse]): IO[L2LedgerResponse] =
         state.get.flatMap { before =>
             before.frozenAt match
                 case Some(frozen) =>
-                    IO.raiseError(
-                      L2LedgerError(
-                        s"ledger frozen: decision $frozen could not be applied; refusing $commandNumber"
-                      )
-                    )
+                    IO.pure(L2LedgerResponse.LedgerFreeze(commandNumber, frozen))
                 case None =>
                     val expected = before.commandNumber.increment
                     if commandNumber != expected then
-                        IO.raiseError(
-                          L2LedgerError(
-                            s"command number $commandNumber out of order (expected $expected)"
-                          )
-                        )
+                        IO.pure(L2LedgerResponse.OutOfOrder(commandNumber, expected))
                     else fresh(before)
         }
 
@@ -254,37 +245,39 @@ case class EutxoL2Ledger private (
       * keeps the durable [[persist]] as a successful command's last step, so a post-apply failure
       * can never drift the ledger's number.
       */
-    private def submit[A](
+    private def submit(
         commandNumber: L2CommandNumber,
         command: L2LedgerCommand,
-        attempt: EutxoL2Ledger.State => Either[L2LedgerError, (EutxoL2Ledger.State, A)]
-    ): EitherT[IO, L2LedgerError, A] =
-        EitherT {
-            onFreshNumber(commandNumber) { before =>
-                attempt(before) match
-                    case Right((next, effects)) => persist(next, command).as(Right(effects))
-                    case Left(reject)           => rejectAndAdvance(commandNumber).as(Left(reject))
-            }
+        attempt: EutxoL2Ledger.State => Either[L2LedgerError, (EutxoL2Ledger.State, AppliedEffects)]
+    ): IO[L2LedgerResponse] =
+        onFreshNumber(commandNumber) { before =>
+            attempt(before) match
+                case Right((next, effects)) =>
+                    persist(next, command).as(L2LedgerResponse.Applied(commandNumber, effects))
+                case Left(reject) =>
+                    rejectAndAdvance(commandNumber)
+                        .as(L2LedgerResponse.Rejected(commandNumber, reject.message))
         }
 
     /** Like [[submit]] but for `ApplyDepositDecisions`: a rejection is not a per-request verdict
       * but a coordination bug (an unknown deposit compartment, or an internal merge error), so
       * instead of advancing the tip alone it **freezes** the ledger — every subsequent command then
-      * fail-stops ([[onFreshNumber]]) until [[restoreTo]] rewinds past the freeze. JointLedger
-      * panics on the returned `Left`. Deposits are validated at registration, so the applied path
-      * never fails on deposit *validity*.
+      * answers [[L2LedgerResponse.LedgerFreeze]] ([[onFreshNumber]]) until [[restoreTo]] rewinds
+      * past the freeze. JointLedger panics on the returned [[L2LedgerResponse.Rejected]]. Deposits
+      * are validated at registration, so the applied path never fails on deposit *validity*.
       */
-    private def submitDecision[A](
+    private def submitDecision(
         commandNumber: L2CommandNumber,
         command: L2LedgerCommand,
-        attempt: EutxoL2Ledger.State => Either[L2LedgerError, (EutxoL2Ledger.State, A)]
-    ): EitherT[IO, L2LedgerError, A] =
-        EitherT {
-            onFreshNumber(commandNumber) { before =>
-                attempt(before) match
-                    case Right((next, effects)) => persist(next, command).as(Right(effects))
-                    case Left(reject)           => rejectAndFreeze(commandNumber).as(Left(reject))
-            }
+        attempt: EutxoL2Ledger.State => Either[L2LedgerError, (EutxoL2Ledger.State, AppliedEffects)]
+    ): IO[L2LedgerResponse] =
+        onFreshNumber(commandNumber) { before =>
+            attempt(before) match
+                case Right((next, effects)) =>
+                    persist(next, command).as(L2LedgerResponse.Applied(commandNumber, effects))
+                case Left(reject) =>
+                    rejectAndFreeze(commandNumber)
+                        .as(L2LedgerResponse.Rejected(commandNumber, reject.message))
         }
 
     /** Advance the tip for a *rejected* fresh command — durably and in memory — without logging or
@@ -358,7 +351,7 @@ case class EutxoL2Ledger private (
     override def sendApplyTransaction(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
-    ): EitherT[IO, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])] =
+    ): IO[L2LedgerResponse] =
         submit(
           commandNumber,
           req,
@@ -393,13 +386,16 @@ case class EutxoL2Ledger private (
                       )
                       .left
                       .map(error => L2LedgerError(error.toString))
-              } yield (next, (adds ++ deletes, Vector.from(obligations)))
+              } yield (
+                next,
+                AppliedEffects.ApplyTransaction(adds ++ deletes, Vector.from(obligations))
+              )
         )
 
     override def sendRegisterDeposit(
         commandNumber: L2CommandNumber,
         req: RegisterDeposit
-    ): EitherT[IO, L2LedgerError, Unit] =
+    ): IO[L2LedgerResponse] =
         submit(
           commandNumber,
           req,
@@ -413,7 +409,7 @@ case class EutxoL2Ledger private (
                   _ <- validateDepositCover(l2Genesis, req.depositL2Value)
                   _ <- validateSpawnedOutputs(l2Genesis)
                   next <- applyMutation(commandNumber, before, req)
-              } yield (next, ())
+              } yield (next, AppliedEffects.RegisterDeposit)
         )
 
     /** The committed L2 utxos this address controls — a live filter over `activeUtxos`. Concurrent
@@ -522,7 +518,7 @@ case class EutxoL2Ledger private (
     override def sendApplyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
+    ): IO[L2LedgerResponse] =
         submitDecision(
           commandNumber,
           req,
@@ -549,6 +545,6 @@ case class EutxoL2Ledger private (
                               )
                       )
                       .leftMap(e => L2LedgerError(s"internal merge error: $e"))
-              } yield (next, diffs)
+              } yield (next, AppliedEffects.ApplyDepositDecisions(diffs))
         )
 }

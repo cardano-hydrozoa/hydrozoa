@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerState}
+import hydrozoa.multisig.ledger.l2.{AppliedEffects, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerResponse, L2LedgerState}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
@@ -72,9 +72,10 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
 
-    /** Drive an `ApplyDepositDecisions` command and **panic** if the ledger rejects it. Unlike a
-      * user request (register / apply-tx), whose rejection is a per-request verdict the caller
-      * soft-invalidates, a rejected deposit decision is a coordination bug (an unknown deposit
+    /** Drive an `ApplyDepositDecisions` command and fold its evacuation diffs into the L2 ledger
+      * state, **panicking** on any non-`Applied` response. Unlike a user request (register /
+      * apply-tx), whose [[L2LedgerResponse.Rejected]] is a per-request verdict the caller
+      * invalidates, a rejected deposit decision is a coordination bug (an unknown deposit
       * compartment, or an internal merge error) that also freezes the ledger — there is nothing to
       * invalidate, so the node fail-stops. Used only on the block-completion path
       * ([[mkBlockBriefIntermediate]]).
@@ -83,15 +84,26 @@ final case class JointLedger(
         state: JointLedger.Producing,
         commandNumber: L2CommandNumber,
         decisions: L2LedgerCommand.ApplyDepositDecisions
-    ): IO[L2LedgerState] = for {
-        either <- state.runL2Command(l2Ledger, commandNumber, decisions)
-        ret <- either match {
-            case Left(err) =>
-                tracer.traceWith(JointLedgerEvent.L2CommandFailed(err)) *>
-                    IO.raiseError(err)
-            case Right(ret) => IO.pure(ret)
+    ): IO[L2LedgerState] =
+        state.runL2Command(l2Ledger, commandNumber, decisions).flatMap {
+            case L2LedgerResponse.Applied(_, AppliedEffects.ApplyDepositDecisions(diffs)) =>
+                IO.pure(state.l2LedgerState.appendDecisionEffects(diffs))
+            case other => panicOnL2Response(commandNumber, other)
         }
-    } yield ret
+
+    /** Fail-stop on a command response JointLedger cannot accept at this site: a
+      * [[L2LedgerResponse.OutOfOrder]] (desync), a [[L2LedgerResponse.LedgerFreeze]] (frozen
+      * ledger), an `ApplyDepositDecisions` [[L2LedgerResponse.Rejected]] (coordination bug), or an
+      * `Applied` whose effects do not match the command sent (a protocol violation). Traces and
+      * raises; never returns normally. A user-request `Rejected` is *not* routed here — it is
+      * invalidated at the call site.
+      */
+    private def panicOnL2Response(
+        commandNumber: L2CommandNumber,
+        response: L2LedgerResponse
+    ): IO[Nothing] =
+        val err = L2LedgerError(s"L2 command $commandNumber could not be handled: $response")
+        tracer.traceWith(JointLedgerEvent.L2CommandFailed(err)) *> IO.raiseError(err)
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -297,15 +309,21 @@ final case class JointLedger(
                         for {
                             res <- p.runL2Command(l2Ledger, assigned, l2Command)
                             _ <- res match {
-                                // A `Left` here is a deterministic ledger rejection (not a transport
-                                // failure — those retry through), so soft-invalidate uniformly and
-                                // advance the command number the ledger consumed on the reject.
-                                case Left(e) => invalidateRequest(requestId, e, Some(assigned))
-                                case Right(newL2State) =>
+                                // A `Rejected` here is a deterministic ledger rejection (not a
+                                // transport failure — those retry through), so invalidate the request
+                                // and advance the command number the ledger consumed on the reject.
+                                case L2LedgerResponse.Rejected(_, reason) =>
+                                    invalidateRequest(
+                                      requestId,
+                                      L2LedgerError(reason),
+                                      Some(assigned)
+                                    )
+                                // RegisterDeposit produces no L2 ledger effects, so the accumulated
+                                // L2 state is unchanged; only the deposit map and request advance.
+                                case L2LedgerResponse.Applied(_, AppliedEffects.RegisterDeposit) =>
                                     for {
                                         _ <- state.set(
                                           p.setDeposits(newDeposits)
-                                              .setL2LedgerState(newL2State)
                                               .setCommandNumber(assigned)
                                               .focus(_.userRequestState.requests)
                                               .modify(_.appended((requestId, Valid)))
@@ -319,6 +337,7 @@ final case class JointLedger(
                                           )
                                         )
                                     } yield ()
+                                case other => panicOnL2Response(assigned, other)
                             }
                         } yield ()
                     }
@@ -359,8 +378,14 @@ final case class JointLedger(
                 for {
                     res <- p.runL2Command(l2Ledger, assigned, l2Command)
                     _ <- res match {
-                        case Left(e) => invalidateRequest(requestId, e, Some(assigned))
-                        case Right(newL2State) =>
+                        case L2LedgerResponse.Rejected(_, reason) =>
+                            invalidateRequest(requestId, L2LedgerError(reason), Some(assigned))
+                        case L2LedgerResponse.Applied(
+                              _,
+                              AppliedEffects.ApplyTransaction(diffs, payouts)
+                            ) =>
+                            val newL2State =
+                                p.l2LedgerState.appendTransactionEffects(diffs, payouts, requestId)
                             for {
                                 _ <- state.set(
                                   p.setL2LedgerState(newL2State)
@@ -375,6 +400,7 @@ final case class JointLedger(
                                   )
                                 )
                             } yield ()
+                        case other => panicOnL2Response(assigned, other)
                     }
                 } yield ()
             }
@@ -1069,14 +1095,22 @@ object JointLedger {
         transparent inline def competingFallbackTxTime: FallbackTxStartTime =
             previousBlockHeader.fallbackTxStartTime
 
-        def runL2Command[F[_], T](
+        /** Drive one L2 command against `l2Ledger` at `commandNumber`, returning its total
+          * [[L2LedgerResponse]]. Dispatches on the command variant to the matching `send*`; the
+          * caller interprets the response (folding [[AppliedEffects]] into the [[L2LedgerState]],
+          * invalidating a user-request `Rejected`, or fail-stopping).
+          */
+        def runL2Command[F[_]](
             l2Ledger: L2Ledger[F],
             commandNumber: L2CommandNumber,
             command: L2LedgerCommand
-        ): F[Either[L2LedgerError, L2LedgerState]] = {
-            val action = l2Ledger.L2LedgerAction.fromL2LedgerCommand(commandNumber, command)
-            action.run(l2LedgerState)
-        }
+        ): F[L2LedgerResponse] = command match
+            case c: L2LedgerCommand.RegisterDeposit =>
+                l2Ledger.sendRegisterDeposit(commandNumber, c)
+            case c: L2LedgerCommand.ApplyDepositDecisions =>
+                l2Ledger.sendApplyDepositDecisions(commandNumber, c)
+            case c: L2LedgerCommand.ApplyTransaction =>
+                l2Ledger.sendApplyTransaction(commandNumber, c)
 
         def setDeposits(newDeposits: DepositsMap): Producing =
             this.focus(_.deposits).replace(newDeposits)
