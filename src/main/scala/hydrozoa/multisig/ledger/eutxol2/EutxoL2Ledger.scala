@@ -116,7 +116,6 @@ case class EutxoL2Ledger private (
     private val state: Ref[IO, EutxoL2Ledger.State],
     private val store: L2Store[IO]
 ) extends L2Ledger[IO],
-      L2Screener[IO],
       EutxoL2LedgerReader[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
@@ -175,43 +174,6 @@ case class EutxoL2Ledger private (
                 .replace(newActiveUtxos)
                 .focus(_.commandNumber)
                 .replace(commandNumber)
-
-    /** The registration-time validity gate for a deposit's spawned L2 outputs: each must clear
-      * min-ada on its own — the same [[Payout.Obligation]] check absorption applies. Enforced on
-      * the live path in [[registerDeposit]] (authoritative) and [[screenDeposit]] (early), so a
-      * deposit that registers is guaranteed to absorb: a sub-min-ada output would otherwise fail
-      * only at absorption ([[applyDepositDecisions]]), which cannot reject, and wedge the block on
-      * every recovery re-drive. Deliberately *not* inside [[applyMutation]]: that is the single
-      * deterministic transition [[restoreTo]] re-folds over logged commands, and replay must
-      * reconstruct state, not re-litigate validity — re-validating a deposit an older binary logged
-      * without this gate (or under different min-ada params) would abort recovery. (Aggregate cover
-      * is the sibling [[validateDepositCover]] gate.)
-      */
-    private def validateSpawnedOutputs(l2Genesis: L2Genesis): Either[String, Unit] =
-        l2Genesis.asUtxos.values.toVector
-            .traverse(output => Payout.Obligation(output, config))
-            .map(_ => ())
-            .leftMap(e => s"deposit spawns an invalid L2 output: $e")
-
-    /** The value-conservation gate: a deposit's spawned L2 outputs must be covered by
-      * `depositL2Value` (the L1 value the treasury absorbs), so a deposit cannot mint L2 value —
-      * covered means the difference is non-negative in the coin and in every asset. Enforced on the
-      * live path in [[registerDeposit]] (authoritative — every peer, and the only enforcement for a
-      * remote-backed node whose [[screenDeposit]] is a stub) and [[screenDeposit]] (early); like
-      * [[validateSpawnedOutputs]] it is kept off [[applyMutation]], so [[restoreTo]] stays a pure
-      * reconstruction.
-      */
-    private def validateDepositCover(
-        l2Genesis: L2Genesis,
-        depositL2Value: Value
-    ): Either[String, Unit] =
-        val spawnedValue = Value.combine(l2Genesis.genesisObligations.map(_.l2OutputValue))
-        val diff = depositL2Value - spawnedValue
-        Either.cond(
-          diff.coin.value >= 0 && diff.assets.assets.values.forall(_.values.forall(_ >= 0)),
-          (),
-          s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value ($depositL2Value)"
-        )
 
     /** The gate shared by all three command methods: fail-stop unless `commandNumber` is the
       * ledger's next expected number. A **frozen** ledger yields a
@@ -278,37 +240,6 @@ case class EutxoL2Ledger private (
             store.putTip(next.commandNumber) >>
             state.set(next)
 
-    override def screenTx(l2Payload: ByteString): EitherT[IO, L2ScreenError, Unit] =
-        // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
-        // signatures over the tx id. All stateless; the stateful required-signers / balance / input
-        // checks stay at submission (an unsigned tx that slips past here is still rejected there by
-        // MissingKeyHashes).
-        EitherT.fromEither[IO](for {
-            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2ScreenError(_))
-            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2ScreenError(_))
-            _ <- HydrozoaTransactionMutator
-                .screenSignatures(config, l2Tx)
-                .left
-                .map(e => L2ScreenError(e.toString))
-        } yield ())
-
-    override def screenDeposit(
-        req: L2LedgerCommand.ScreenDeposit
-    ): EitherT[IO, L2ScreenError, Unit] =
-        EitherT.fromEither[IO](for {
-            // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger
-            // will spawn when the deposit is absorbed. Shares the decode with registration
-            // (fromDepositPayload), so nothing screened here can fail to register or absorb later.
-            l2Genesis <- Try(
-              L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
-            ).toEither.left.map(e => L2ScreenError(s"Invalid deposit transaction payload $e"))
-            // depositL2Value must cover the spawned outputs, and each output must clear min-ada on
-            // its own — the same two gates registration applies, so a screened deposit can be both
-            // registered and absorbed.
-            _ <- validateDepositCover(l2Genesis, req.depositL2Value).left.map(L2ScreenError(_))
-            _ <- validateSpawnedOutputs(l2Genesis).left.map(L2ScreenError(_))
-        } yield ())
-
     override def applyTransaction(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
@@ -371,8 +302,8 @@ case class EutxoL2Ledger private (
                     // Reject a deposit that fails value conservation (cover) or spawns a sub-min-ada
                     // output on the live path, before applyMutation — deliberately not inside
                     // applyMutation, so restoreTo's replay never re-litigates validity.
-                    _ <- validateDepositCover(l2Genesis, req.depositL2Value)
-                    _ <- validateSpawnedOutputs(l2Genesis)
+                    _ <- EutxoDepositGates.validateDepositCover(l2Genesis, req.depositL2Value)
+                    _ <- EutxoDepositGates.validateSpawnedOutputs(l2Genesis, config)
                     next <- applyMutation(commandNumber, before, req)
                 } yield next
                 attempt match

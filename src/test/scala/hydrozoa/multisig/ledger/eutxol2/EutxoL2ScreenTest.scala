@@ -31,7 +31,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
 
     private val nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-    private val ledger = InMemoryL2Store.ledger(nodeConfig).unsafeRunSync()
+    private val screener = EutxoL2Screener(nodeConfig)
 
     private val garbage = ByteString.fromArray(Array[Byte](1, 2, 3))
 
@@ -104,18 +104,18 @@ class EutxoL2ScreenTest extends AnyFunSuite:
         )
 
     test("screenTx rejects a malformed transaction payload (No)") {
-        assert(ledger.screenTx(garbage).value.unsafeRunSync().isLeft)
+        assert(screener.screenTx(garbage).value.unsafeRunSync().isLeft)
     }
 
     test("screenDeposit accepts when depositL2Value covers the l2Payload outputs (Yes)") {
         assert(
-          ledger.screenDeposit(mkScreenDeposit(Value.ada(5))).value.unsafeRunSync().isRight
+          screener.screenDeposit(mkScreenDeposit(Value.ada(5))).value.unsafeRunSync().isRight
         )
     }
 
     test("screenDeposit rejects when the l2Payload outputs exceed depositL2Value (No)") {
         assert(
-          ledger.screenDeposit(mkScreenDeposit(Value.ada(4))).value.unsafeRunSync().isLeft
+          screener.screenDeposit(mkScreenDeposit(Value.ada(4))).value.unsafeRunSync().isLeft
         )
     }
 
@@ -123,7 +123,7 @@ class EutxoL2ScreenTest extends AnyFunSuite:
       "screenDeposit rejects a spawned output below min-ada even when depositL2Value covers it (No)"
     ) {
         assert(
-          ledger
+          screener
               .screenDeposit(mkScreenDeposit(subMinAdaValue, payload = subMinAdaPayload))
               .value
               .unsafeRunSync()

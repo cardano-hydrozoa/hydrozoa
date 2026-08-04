@@ -25,6 +25,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerId, HeadPeerNum
 import hydrozoa.multisig.consensus.transport.*
 import hydrozoa.multisig.consensus.{CardanoLiaison, RequestSequencer}
 import hydrozoa.multisig.ledger.block.BlockVersion.Major.given_Conversion_Major_Int
+import hydrozoa.multisig.ledger.eutxol2.EutxoL2Screener
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, SettlementTx}
 import hydrozoa.multisig.persistence.rocksdb.RocksDbBackendStore
@@ -1031,7 +1032,7 @@ object MultiPeerHeadHarness:
                           nodeConfig,
                           cardanoBackend,
                           l2Ledger,
-                          l2Ledger,
+                          EutxoL2Screener(nodeConfig),
                           persistence,
                           mrmTracer,
                           peerFactory,
