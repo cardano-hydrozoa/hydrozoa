@@ -12,7 +12,6 @@ import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
 import io.circe.syntax.*
-import io.circe.{Codec, DecodingFailure, Json}
 import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
@@ -265,62 +264,6 @@ object RemoteL2Ledger {
             commandNumber: L2CommandNumber,
             command: L2LedgerCommand.ApplyTransaction
         ) extends Request
-
-        // Request codecs. Each request is a single-key object tagging the command variant, whose
-        // value carries the Hydrozoa-assigned `commandNumber` and the `command` payload.
-        given requestCodec: Codec[Request] = {
-            import L2LedgerCommand.given
-
-            def tagged(tag: String, commandNumber: L2CommandNumber, command: io.circe.Json): Json =
-                Json.obj(
-                  tag -> Json.obj(
-                    "commandNumber" -> commandNumber.asJson,
-                    "command" -> command
-                  )
-                )
-
-            Codec.from(
-              encodeA = {
-                  case Request.RegisterDeposit(cn, command) =>
-                      tagged("RegisterDeposit", cn, command.asJson)
-                  case Request.ApplyDepositDecisions(cn, command) =>
-                      tagged("ApplyDepositDecisions", cn, command.asJson)
-                  case Request.ApplyTransaction(cn, command) =>
-                      tagged("ApplyTransaction", cn, command.asJson)
-              },
-              decodeA = c =>
-                  c.keys
-                      .flatMap(_.headOption)
-                      .toRight(
-                        DecodingFailure("Request must have exactly one field", c.history)
-                      )
-                      .flatMap { tag =>
-                          val body = c.downField(tag)
-                          val cn = body.downField("commandNumber").as[L2CommandNumber]
-                          val command = body.downField("command")
-                          tag match {
-                              case "RegisterDeposit" =>
-                                  for {
-                                      n <- cn
-                                      cmd <- command.as[L2LedgerCommand.RegisterDeposit]
-                                  } yield Request.RegisterDeposit(n, cmd)
-                              case "ApplyDepositDecisions" =>
-                                  for {
-                                      n <- cn
-                                      cmd <- command.as[L2LedgerCommand.ApplyDepositDecisions]
-                                  } yield Request.ApplyDepositDecisions(n, cmd)
-                              case "ApplyTransaction" =>
-                                  for {
-                                      n <- cn
-                                      cmd <- command.as[L2LedgerCommand.ApplyTransaction]
-                                  } yield Request.ApplyTransaction(n, cmd)
-                              case other =>
-                                  Left(DecodingFailure(s"Unknown request type: $other", c.history))
-                          }
-                      }
-            )
-        }
-
     }
 
     /** Create a RemoteL2Ledger as a [[Resource]] owning one shared WebSocket client for its whole

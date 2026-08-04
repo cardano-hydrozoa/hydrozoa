@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
 import io.circe.generic.semiauto.*
 import io.circe.syntax.*
-import io.circe.{Decoder, Encoder}
+import io.circe.{Codec, Decoder, Encoder}
 import scalus.cardano.ledger.{AssetName, Coin, KeepRaw, MultiAsset, PolicyId, ScriptHash, TransactionOutput, Value}
 
 /** JSON codecs for RemoteL2Ledger WebSocket protocol */
@@ -174,6 +174,66 @@ object RemoteL2LedgerCodecs {
                         Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
                 }
         }
+
+    // Request codecs. Each request is a single-key object tagging the command variant, whose value
+    // carries the Hydrozoa-assigned `commandNumber` and the `command` payload.
+    import RemoteL2Ledger.Request
+    given requestCodec: Codec[Request] = {
+        def tagged(
+            tag: String,
+            commandNumber: L2CommandNumber,
+            command: io.circe.Json
+        ): io.circe.Json =
+            io.circe.Json.obj(
+              tag -> io.circe.Json.obj(
+                "commandNumber" -> commandNumber.asJson,
+                "command" -> command
+              )
+            )
+
+        Codec.from(
+          encodeA = {
+              case Request.RegisterDeposit(cn, command) =>
+                  tagged("RegisterDeposit", cn, command.asJson)
+              case Request.ApplyDepositDecisions(cn, command) =>
+                  tagged("ApplyDepositDecisions", cn, command.asJson)
+              case Request.ApplyTransaction(cn, command) =>
+                  tagged("ApplyTransaction", cn, command.asJson)
+          },
+          decodeA = c =>
+              c.keys
+                  .flatMap(_.headOption)
+                  .toRight(
+                    io.circe.DecodingFailure("Request must have exactly one field", c.history)
+                  )
+                  .flatMap { tag =>
+                      val body = c.downField(tag)
+                      val cn = body.downField("commandNumber").as[L2CommandNumber]
+                      val command = body.downField("command")
+                      tag match {
+                          case "RegisterDeposit" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.RegisterDeposit]
+                              } yield Request.RegisterDeposit(n, cmd)
+                          case "ApplyDepositDecisions" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.ApplyDepositDecisions]
+                              } yield Request.ApplyDepositDecisions(n, cmd)
+                          case "ApplyTransaction" =>
+                              for {
+                                  n <- cn
+                                  cmd <- command.as[L2LedgerCommand.ApplyTransaction]
+                              } yield Request.ApplyTransaction(n, cmd)
+                          case other =>
+                              Left(
+                                io.circe.DecodingFailure(s"Unknown request type: $other", c.history)
+                              )
+                      }
+                  }
+        )
+    }
 
     // KeepRaw[TransactionOutput] CBOR-hex codec is hoisted into
     // `lib/cardano/scalus/codecs/json/Codecs.scala`; imported above.
