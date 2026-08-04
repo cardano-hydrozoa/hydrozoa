@@ -72,12 +72,19 @@ final case class JointLedger(
     val state: Ref[IO, JointLedger.State] =
         Ref.unsafe[IO, JointLedger.State](JointLedger.State.initialize(config))
 
-    private def executeL2Command(
+    /** Drive an `ApplyDepositDecisions` command and **panic** if the ledger rejects it. Unlike a
+      * user request (register / apply-tx), whose rejection is a per-request verdict the caller
+      * soft-invalidates, a rejected deposit decision is a coordination bug (an unknown deposit
+      * compartment, or an internal merge error) that also freezes the ledger — there is nothing to
+      * invalidate, so the node fail-stops. Used only on the block-completion path
+      * ([[mkBlockBriefIntermediate]]).
+      */
+    private def applyDepositDecisionsOrPanic(
         state: JointLedger.Producing,
         commandNumber: L2CommandNumber,
-        command: L2LedgerCommand
+        decisions: L2LedgerCommand.ApplyDepositDecisions
     ): IO[L2LedgerState] = for {
-        either <- state.runL2Command(l2Ledger, commandNumber, command)
+        either <- state.runL2Command(l2Ledger, commandNumber, decisions)
         ret <- either match {
             case Left(err) =>
                 tracer.traceWith(JointLedgerEvent.L2CommandFailed(err)) *>
@@ -500,7 +507,7 @@ final case class JointLedger(
                         newJLState <-
                             if decisions.rejected.isEmpty then IO.pure(p)
                             else
-                                executeL2Command(p, assigned, depositRequestDecisions)
+                                applyDepositDecisionsOrPanic(p, assigned, depositRequestDecisions)
                                     .map(s => p.setL2LedgerState(s).setCommandNumber(assigned))
 
                         headerIntermediate <- previousHeader.nextHeaderIntermediate(
@@ -515,7 +522,11 @@ final case class JointLedger(
                     } yield (newJLState, headerIntermediate, evacDiffs)
                 else {
                     for {
-                        newL2State <- executeL2Command(p, assigned, depositRequestDecisions)
+                        newL2State <- applyDepositDecisionsOrPanic(
+                          p,
+                          assigned,
+                          depositRequestDecisions
+                        )
                         evacDiffs = newL2State.diffs
                         newJLState = p.setL2LedgerState(newL2State).setCommandNumber(assigned)
 

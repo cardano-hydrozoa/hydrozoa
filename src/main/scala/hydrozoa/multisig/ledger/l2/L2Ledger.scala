@@ -91,7 +91,7 @@ trait L2Ledger[F[_]] {
       * on a coordination bug (a decision for a deposit compartment the ledger never registered, or
       * an internal merge error). Such a failure returns a `Left` **and freezes the ledger**: every
       * subsequent command then fail-stops (a `raise` in `F`) until `restoreTo` rewinds past the
-      * freeze. JointLedger panics on the `Left` (via `executeL2Command`). See
+      * freeze. JointLedger panics on the `Left` (via `applyDepositDecisionsOrPanic`). See
       * `docs/l2-ledger-command-coordination.md`.
       *
       * @return
