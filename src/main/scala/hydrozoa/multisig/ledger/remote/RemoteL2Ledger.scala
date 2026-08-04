@@ -7,7 +7,7 @@ import cats.effect.{Async, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerResponse, RegisterDepositResponse}
+import hydrozoa.multisig.ledger.l2.{ApplyDepositDecisionsResponse, ApplyTransactionResponse, L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerResponse, RegisterDepositResponse, RestoreError}
 import hydrozoa.multisig.ledger.remote.RemoteL2Ledger.{Conn, Request}
 import hydrozoa.multisig.ledger.remote.RemoteL2LedgerEvent.*
 import io.circe.parser.*
@@ -16,6 +16,13 @@ import org.http4s.Uri
 import org.http4s.client.websocket.{WSClient, WSConnectionHighLevel, WSFrame, WSRequest}
 import org.http4s.jdkhttpclient.JdkWSClient
 import scala.concurrent.duration.*
+
+/** A broken-transport failure from a [[RemoteL2Ledger]] — an undecodable frame, a command-number
+  * echo mismatch, or a response whose `Applied`/`Rejected` variant does not match the command sent.
+  * A protocol violation, not one of the four verdicts, so it fail-stops (a raise) rather than being
+  * returned as a response.
+  */
+final case class RemoteL2LedgerError(message: String) extends RuntimeException(message)
 
 /** A remote [[L2Ledger]] that drives a black-box ledger over one long-lived WebSocket connection,
   * one synchronous request/response at a time.
@@ -74,11 +81,11 @@ class RemoteL2Ledger private (
         req: L2LedgerCommand.RegisterDeposit
     ): IO[RegisterDepositResponse] =
         sendRequest(Request.RegisterDeposit(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.RegisterDeposit => IO.pure(r)
-            case r: L2LedgerResponse.Rejected                => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder              => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze            => IO.pure(r)
-            case other                                       => unexpected("RegisterDeposit", other)
+            case r: L2LedgerResponse.Applied.RegisterDeposit  => IO.pure(r)
+            case r: L2LedgerResponse.Rejected.RegisterDeposit => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder               => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze             => IO.pure(r)
+            case other => unexpected("RegisterDeposit", other)
         }
 
     override def applyDepositDecisions(
@@ -86,10 +93,10 @@ class RemoteL2Ledger private (
         req: L2LedgerCommand.ApplyDepositDecisions
     ): IO[ApplyDepositDecisionsResponse] =
         sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.ApplyDepositDecisions => IO.pure(r)
-            case r: L2LedgerResponse.Rejected                      => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder                    => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze                  => IO.pure(r)
+            case r: L2LedgerResponse.Applied.ApplyDepositDecisions  => IO.pure(r)
+            case r: L2LedgerResponse.Rejected.ApplyDepositDecisions => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder                     => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze                   => IO.pure(r)
             case other => unexpected("ApplyDepositDecisions", other)
         }
 
@@ -98,10 +105,10 @@ class RemoteL2Ledger private (
         req: L2LedgerCommand.ApplyTransaction
     ): IO[ApplyTransactionResponse] =
         sendRequest(Request.ApplyTransaction(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.ApplyTransaction => IO.pure(r)
-            case r: L2LedgerResponse.Rejected                 => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder               => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze             => IO.pure(r)
+            case r: L2LedgerResponse.Applied.ApplyTransaction  => IO.pure(r)
+            case r: L2LedgerResponse.Rejected.ApplyTransaction => IO.pure(r)
+            case r: L2LedgerResponse.OutOfOrder                => IO.pure(r)
+            case r: L2LedgerResponse.LedgerFreeze              => IO.pure(r)
             case other => unexpected("ApplyTransaction", other)
         }
 
@@ -110,7 +117,7 @@ class RemoteL2Ledger private (
       */
     private def unexpected(command: String, response: L2LedgerResponse): IO[Nothing] =
         IO.raiseError(
-          L2LedgerError(s"remote L2 ledger answered $response for a $command command")
+          RemoteL2LedgerError(s"remote L2 ledger answered $response for a $command command")
         )
 
     /** A no-op: the remote black box owns its own recovery, so there is nothing to co-anchor here.
@@ -119,7 +126,7 @@ class RemoteL2Ledger private (
       * the restored JointLedger command number and the remote's own position surfaces on the next
       * command as [[L2LedgerResponse.OutOfOrder]], not here.
       */
-    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         EitherT.rightT(())
 
     /** Send a request and return the remote's total [[L2LedgerResponse]]. Transport failure is
@@ -136,13 +143,13 @@ class RemoteL2Ledger private (
             decode[L2LedgerResponse](text) match {
                 case Left(err) =>
                     IO.raiseError(
-                      L2LedgerError(
+                      RemoteL2LedgerError(
                         s"remote L2 ledger sent an undecodable response: ${err.getMessage}"
                       )
                     )
                 case Right(response) if response.commandNumber != request.commandNumber =>
                     IO.raiseError(
-                      L2LedgerError(
+                      RemoteL2LedgerError(
                         s"remote L2 ledger answered command ${response.commandNumber} " +
                             s"but we sent ${request.commandNumber}"
                       )

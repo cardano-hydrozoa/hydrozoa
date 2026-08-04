@@ -140,6 +140,15 @@ object RemoteL2LedgerCodecs {
                 }
         }
 
+    // Rejected is a per-command family; ApplyDepositDecisions carries a typed reason. circe's
+    // sealed-trait derivation nests both by variant name (same tagged shape as Applied).
+    given depositDecisionRejectReasonEncoder
+        : Encoder[L2LedgerResponse.DepositDecisionRejectReason] =
+        deriveEncoder
+    given depositDecisionRejectReasonDecoder
+        : Decoder[L2LedgerResponse.DepositDecisionRejectReason] =
+        deriveDecoder
+
     given rejectedEncoder: Encoder[L2LedgerResponse.Rejected] = deriveEncoder
     given rejectedDecoder: Decoder[L2LedgerResponse.Rejected] = deriveDecoder
 

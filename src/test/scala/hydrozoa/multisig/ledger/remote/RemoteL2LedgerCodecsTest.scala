@@ -3,7 +3,9 @@ package hydrozoa.multisig.ledger.remote
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
+import hydrozoa.multisig.ledger.l2.L2LedgerResponse.DepositDecisionRejectReason
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
@@ -59,6 +61,36 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
         assert(roundTrips(L2LedgerResponse.LedgerFreeze(L2CommandNumber(9L), L2CommandNumber(4L))))
     }
 
-    test("Rejected carries the command number") {
-        assert(roundTrips(L2LedgerResponse.Rejected(L2CommandNumber(2L), "bad tx")))
+    test("Rejected.RegisterDeposit (string reason) round-trips") {
+        assert(
+          roundTrips(L2LedgerResponse.Rejected.RegisterDeposit(L2CommandNumber(2L), "bad deposit"))
+        )
+    }
+
+    test("Rejected.ApplyTransaction (string reason) round-trips") {
+        assert(
+          roundTrips(L2LedgerResponse.Rejected.ApplyTransaction(L2CommandNumber(3L), "bad tx"))
+        )
+    }
+
+    test("Rejected.ApplyDepositDecisions with CompartmentNotFound (typed reason) round-trips") {
+        assert(
+          roundTrips(
+            L2LedgerResponse.Rejected.ApplyDepositDecisions(
+              L2CommandNumber(4L),
+              DepositDecisionRejectReason.CompartmentNotFound(RequestId(0, 9L))
+            )
+          )
+        )
+    }
+
+    test("Rejected.ApplyDepositDecisions with InternalLedgerError (typed reason) round-trips") {
+        assert(
+          roundTrips(
+            L2LedgerResponse.Rejected.ApplyDepositDecisions(
+              L2CommandNumber(5L),
+              DepositDecisionRejectReason.InternalLedgerError("merge failed")
+            )
+          )
+        )
     }

@@ -32,7 +32,7 @@ import hydrozoa.multisig.ledger.l1.tx.RefundTx
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import hydrozoa.multisig.ledger.l1.utxo.DepositUtxo
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
-import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerError, L2LedgerInteractionState, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2Ledger, L2LedgerCommand, L2LedgerInteractionState, L2LedgerResponse}
 import hydrozoa.multisig.persistence.recovery.ReplayCursors
 import hydrozoa.multisig.persistence.{DepositDecision, JournalKey, JournalValue, Markers, Persistence, RequestBlockEntry, StoreKey, WriteBatch}
 import monocle.Focus.focus
@@ -103,8 +103,9 @@ final case class JointLedger(
         commandNumber: L2CommandNumber,
         response: L2LedgerResponse
     ): IO[Nothing] =
-        val err = L2LedgerError(s"L2 command $commandNumber could not be handled: $response")
-        tracer.traceWith(JointLedgerEvent.L2CommandFailed(err)) *> IO.raiseError(err)
+        val message = s"L2 command $commandNumber could not be handled: $response"
+        tracer.traceWith(JointLedgerEvent.L2CommandFailed(message)) *>
+            IO.raiseError(new RuntimeException(message))
 
     private def getConnections: IO[Connections] = for {
         mConn <- this.connections.get
@@ -214,7 +215,7 @@ final case class JointLedger(
 
     private def invalidateRequest(
         requestId: RequestId,
-        e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | L2LedgerError,
+        e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
         advanceTo: Option[L2CommandNumber] = None
     ): IO[Unit] =
         for {
@@ -313,12 +314,8 @@ final case class JointLedger(
                                 // A `Rejected` here is a deterministic ledger rejection (not a
                                 // transport failure — those retry through), so invalidate the request
                                 // and advance the command number the ledger consumed on the reject.
-                                case L2LedgerResponse.Rejected(_, reason) =>
-                                    invalidateRequest(
-                                      requestId,
-                                      L2LedgerError(reason),
-                                      Some(assigned)
-                                    )
+                                case L2LedgerResponse.Rejected.RegisterDeposit(_, reason) =>
+                                    invalidateRequest(requestId, reason, Some(assigned))
                                 // RegisterDeposit produces no L2 ledger effects, so the accumulated
                                 // L2 state is unchanged; only the deposit map and request advance.
                                 case _: L2LedgerResponse.Applied.RegisterDeposit =>
@@ -379,8 +376,8 @@ final case class JointLedger(
                 for {
                     res <- l2Ledger.applyTransaction(assigned, l2Command)
                     _ <- res match {
-                        case L2LedgerResponse.Rejected(_, reason) =>
-                            invalidateRequest(requestId, L2LedgerError(reason), Some(assigned))
+                        case L2LedgerResponse.Rejected.ApplyTransaction(_, reason) =>
+                            invalidateRequest(requestId, reason, Some(assigned))
                         case L2LedgerResponse.Applied.ApplyTransaction(_, diffs, payouts) =>
                             val newL2State =
                                 p.l2LedgerState.appendTransactionEffects(diffs, payouts, requestId)

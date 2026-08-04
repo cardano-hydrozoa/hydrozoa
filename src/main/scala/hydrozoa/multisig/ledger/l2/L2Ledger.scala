@@ -6,11 +6,21 @@ import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 
-/** Errors occurring from interaction with the L2 Ledger (i.e., as seen from the Joint Ledger)
+/** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
+  * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
+  * typed `Either` value the caller matches on, never thrown from `restoreTo` itself.
   */
-case class L2LedgerError(message: String) extends Throwable {
-    override def toString: String = s"L2 ledger error: $message"
-}
+sealed trait RestoreError extends Throwable
+
+object RestoreError:
+    /** The requested command number is beyond the ledger's durable tip — a corruption tripwire (the
+      * co-anchoring ordering normally prevents it).
+      */
+    final case class CommandNumberTooHigh(requested: L2CommandNumber, tip: L2CommandNumber)
+        extends RestoreError
+
+    /** Replaying the logged commands failed — a ledger bug or store corruption. */
+    final case class InternalLedgerError(message: String) extends RestoreError
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
@@ -147,7 +157,7 @@ trait L2Ledger[F[_]] {
       * own recovery) may make this a no-op.
       *
       * Unlike the command path, this stays an [[EitherT]]: it is a boot-time reconstruction, not a
-      * numbered command, so its failure is a plain error rather than one of the four verdicts.
+      * numbered command, so its failure is a [[RestoreError]] rather than one of the four verdicts.
       */
-    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, L2LedgerError, Unit]
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, Unit]
 }

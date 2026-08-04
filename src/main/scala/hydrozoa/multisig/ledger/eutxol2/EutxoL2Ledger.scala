@@ -17,6 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, Evacuation
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
+import hydrozoa.multisig.ledger.l2.L2LedgerResponse.DepositDecisionRejectReason
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -120,7 +121,7 @@ case class EutxoL2Ledger private (
     implicit def monadF: Monad[IO] = Async[IO]
 
     /** Apply one state-mutating command to `s`, returning the next state with `commandNumber` set
-      * to the caller-assigned value, or an `L2LedgerError`. This is the **single deterministic
+      * to the caller-assigned value, or an error message. This is the **single deterministic
       * transition** — the live path ([[submit]], which validates the number first) calls it, and
       * [[restoreTo]] re-folds it over the logged commands. Keeping both paths on one function is
       * what guarantees a restored state is byte-identical to the live one (§R2b "factoring"). Pure
@@ -131,13 +132,13 @@ case class EutxoL2Ledger private (
         commandNumber: L2CommandNumber,
         s: EutxoL2Ledger.State,
         command: L2LedgerCommand
-    ): Either[L2LedgerError, EutxoL2Ledger.State] = command match
+    ): Either[String, EutxoL2Ledger.State] = command match
         case req: L2LedgerCommand.RegisterDeposit =>
             // No validity gate here — this transition is re-folded by `restoreTo`, and replay must
             // reconstruct state, not re-litigate validity. The gate lives on the live path, in
             // `registerDeposit` (see [[validateSpawnedOutputs]]).
             Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
-                .map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+                .map(e => s"Invalid deposit transaction payload $e")
                 .map(l2Genesis =>
                     s.focus(_.pendingDeposits)
                         .modify(_.updated(req.requestId, l2Genesis))
@@ -158,7 +159,7 @@ case class EutxoL2Ledger private (
 
         case req: L2LedgerCommand.ApplyTransaction =>
             for
-                l2Tx <- L2Tx.parse(req.l2Payload.bytes, config).left.map(L2LedgerError(_))
+                l2Tx <- L2Tx.parse(req.l2Payload.bytes, config)
                 newActiveUtxos <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
@@ -168,7 +169,7 @@ case class EutxoL2Ledger private (
                       l2Tx = l2Tx
                     )
                     .left
-                    .map(error => L2LedgerError(error.toString))
+                    .map(error => error.toString)
             yield s
                 .focus(_.activeUtxos)
                 .replace(newActiveUtxos)
@@ -186,11 +187,11 @@ case class EutxoL2Ledger private (
       * without this gate (or under different min-ada params) would abort recovery. (Aggregate cover
       * is the sibling [[validateDepositCover]] gate.)
       */
-    private def validateSpawnedOutputs(l2Genesis: L2Genesis): Either[L2LedgerError, Unit] =
+    private def validateSpawnedOutputs(l2Genesis: L2Genesis): Either[String, Unit] =
         l2Genesis.asUtxos.values.toVector
             .traverse(output => Payout.Obligation(output, config))
             .map(_ => ())
-            .leftMap(e => L2LedgerError(s"deposit spawns an invalid L2 output: $e"))
+            .leftMap(e => s"deposit spawns an invalid L2 output: $e")
 
     /** The value-conservation gate: a deposit's spawned L2 outputs must be covered by
       * `depositL2Value` (the L1 value the treasury absorbs), so a deposit cannot mint L2 value —
@@ -203,15 +204,13 @@ case class EutxoL2Ledger private (
     private def validateDepositCover(
         l2Genesis: L2Genesis,
         depositL2Value: Value
-    ): Either[L2LedgerError, Unit] =
+    ): Either[String, Unit] =
         val spawnedValue = Value.combine(l2Genesis.genesisObligations.map(_.l2OutputValue))
         val diff = depositL2Value - spawnedValue
         Either.cond(
           diff.coin.value >= 0 && diff.assets.assets.values.forall(_.values.forall(_ >= 0)),
           (),
-          L2LedgerError(
-            s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value ($depositL2Value)"
-          )
+          s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value ($depositL2Value)"
         )
 
     /** The gate shared by all three command methods: fail-stop unless `commandNumber` is the
@@ -279,35 +278,35 @@ case class EutxoL2Ledger private (
             store.putTip(next.commandNumber) >>
             state.set(next)
 
-    override def screenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
+    override def screenTx(l2Payload: ByteString): EitherT[IO, L2ScreenError, Unit] =
         // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
         // signatures over the tx id. All stateless; the stateful required-signers / balance / input
         // checks stay at submission (an unsigned tx that slips past here is still rejected there by
         // MissingKeyHashes).
         EitherT.fromEither[IO](for {
-            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
-            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
+            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2ScreenError(_))
+            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2ScreenError(_))
             _ <- HydrozoaTransactionMutator
                 .screenSignatures(config, l2Tx)
                 .left
-                .map(e => L2LedgerError(e.toString))
+                .map(e => L2ScreenError(e.toString))
         } yield ())
 
     override def screenDeposit(
         req: L2LedgerCommand.ScreenDeposit
-    ): EitherT[IO, L2LedgerError, Unit] =
+    ): EitherT[IO, L2ScreenError, Unit] =
         EitherT.fromEither[IO](for {
             // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger
             // will spawn when the deposit is absorbed. Shares the decode with registration
             // (fromDepositPayload), so nothing screened here can fail to register or absorb later.
             l2Genesis <- Try(
               L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
-            ).toEither.left.map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+            ).toEither.left.map(e => L2ScreenError(s"Invalid deposit transaction payload $e"))
             // depositL2Value must cover the spawned outputs, and each output must clear min-ada on
             // its own — the same two gates registration applies, so a screened deposit can be both
             // registered and absorbed.
-            _ <- validateDepositCover(l2Genesis, req.depositL2Value)
-            _ <- validateSpawnedOutputs(l2Genesis)
+            _ <- validateDepositCover(l2Genesis, req.depositL2Value).left.map(L2ScreenError(_))
+            _ <- validateSpawnedOutputs(l2Genesis).left.map(L2ScreenError(_))
         } yield ())
 
     override def applyTransaction(
@@ -318,10 +317,7 @@ case class EutxoL2Ledger private (
             case Left(failure) => IO.pure(failure)
             case Right(before) =>
                 val attempt = for {
-                    l2Tx <- L2Tx
-                        .parse(req.l2Payload.bytes, config)
-                        .left
-                        .map(error => L2LedgerError(error))
+                    l2Tx <- L2Tx.parse(req.l2Payload.bytes, config)
                     next <- applyMutation(commandNumber, before, req)
                     // Diffs are the symmetric difference between the pre- and post-apply utxo sets.
                     adds <- next.activeUtxos
@@ -336,7 +332,7 @@ case class EutxoL2Ledger private (
                         .toVector
                         .sequence
                         .left
-                        .map(error => L2LedgerError(error.toString))
+                        .map(error => error.toString)
                     deletes = before.activeUtxos
                         .removedAll(next.activeUtxos.keys)
                         .map((ti, _) => EvacuationDiff.Delete(ti.toEvacuationKey))
@@ -346,7 +342,7 @@ case class EutxoL2Ledger private (
                             Payout.Obligation(KeepRaw(utxo._2), config)
                         )
                         .left
-                        .map(error => L2LedgerError(error.toString))
+                        .map(error => error.toString)
                 } yield (
                   next,
                   L2LedgerResponse.Applied.ApplyTransaction(
@@ -359,7 +355,7 @@ case class EutxoL2Ledger private (
                     case Right((next, applied)) => persist(next, req).as(applied)
                     case Left(reject) =>
                         rejectAndAdvance(commandNumber)
-                            .as(L2LedgerResponse.Rejected(commandNumber, reject.message))
+                            .as(L2LedgerResponse.Rejected.ApplyTransaction(commandNumber, reject))
         }
 
     override def registerDeposit(
@@ -371,7 +367,7 @@ case class EutxoL2Ledger private (
             case Right(before) =>
                 val attempt = for {
                     l2Genesis <- Try(L2Genesis.fromDepositEventRegistration(req)).toEither.left
-                        .map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+                        .map(e => s"Invalid deposit transaction payload $e")
                     // Reject a deposit that fails value conservation (cover) or spawns a sub-min-ada
                     // output on the live path, before applyMutation — deliberately not inside
                     // applyMutation, so restoreTo's replay never re-litigates validity.
@@ -386,7 +382,7 @@ case class EutxoL2Ledger private (
                         )
                     case Left(reject) =>
                         rejectAndAdvance(commandNumber)
-                            .as(L2LedgerResponse.Rejected(commandNumber, reject.message))
+                            .as(L2LedgerResponse.Rejected.RegisterDeposit(commandNumber, reject))
         }
 
     /** The committed L2 utxos this address controls — a live filter over `activeUtxos`. Concurrent
@@ -442,13 +438,13 @@ case class EutxoL2Ledger private (
       * target beyond the recorded tip (a corruption tripwire — the co-anchoring ordering prevents
       * it).
       */
-    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
+    override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         for {
             tip <- EitherT.right(store.getTip.map(_.getOrElse(L2CommandNumber.zero)))
             _ <- EitherT.cond[IO](
               Ordering[L2CommandNumber].lteq(commandNumber, tip),
               (),
-              L2LedgerError(s"restoreTo($commandNumber) is beyond the ledger tip $tip")
+              RestoreError.CommandNumberTooHigh(commandNumber, tip)
             )
             base <- EitherT.right(
               store
@@ -457,9 +453,12 @@ case class EutxoL2Ledger private (
             )
             commands <- EitherT.right(store.logRange(base.commandNumber, commandNumber))
             restored <- EitherT.fromEither[IO](
-              commands.foldLeft[Either[L2LedgerError, EutxoL2Ledger.State]](Right(base))(
-                (acc, cmd) => acc.flatMap(s => applyMutation(s.commandNumber.increment, s, cmd))
-              )
+              commands
+                  .foldLeft[Either[String, EutxoL2Ledger.State]](Right(base))((acc, cmd) =>
+                      acc.flatMap(s => applyMutation(s.commandNumber.increment, s, cmd))
+                  )
+                  .left
+                  .map(RestoreError.InternalLedgerError(_))
             )
             // Respect the freeze: it survives only if it happened at or before the target — rewinding
             // to before the freezing decision clears it.
@@ -505,9 +504,10 @@ case class EutxoL2Ledger private (
                     absorbed <- req.absorbedDeposits.traverse(id =>
                         before.pendingDeposits
                             .get(id)
-                            .toRight(L2LedgerError(s"unknown deposit compartment: $id"))
+                            .toRight(DepositDecisionRejectReason.CompartmentNotFound(id))
                     )
-                    next <- applyMutation(commandNumber, before, req)
+                    next <- applyMutation(commandNumber, before, req).left
+                        .map(DepositDecisionRejectReason.InternalLedgerError(_))
                     // Registration validated each output's min-ada, so this should not fail; if it
                     // does it is an internal merge error (a ledger bug) — reject + freeze.
                     diffs <- absorbed
@@ -520,7 +520,11 @@ case class EutxoL2Ledger private (
                                     EvacuationDiff.Update(i.toEvacuationKey, obligation)
                                 )
                         )
-                        .leftMap(e => L2LedgerError(s"internal merge error: $e"))
+                        .leftMap(e =>
+                            DepositDecisionRejectReason.InternalLedgerError(
+                              s"internal merge error: $e"
+                            )
+                        )
                 } yield (next, L2LedgerResponse.Applied.ApplyDepositDecisions(commandNumber, diffs))
                 // A rejected decision is a coordination bug, so instead of advancing the tip alone it
                 // **freezes** the ledger: every later command then answers LedgerFreeze until
@@ -529,6 +533,8 @@ case class EutxoL2Ledger private (
                     case Right((next, applied)) => persist(next, req).as(applied)
                     case Left(reject) =>
                         rejectAndFreeze(commandNumber)
-                            .as(L2LedgerResponse.Rejected(commandNumber, reject.message))
+                            .as(
+                              L2LedgerResponse.Rejected.ApplyDepositDecisions(commandNumber, reject)
+                            )
         }
 }
