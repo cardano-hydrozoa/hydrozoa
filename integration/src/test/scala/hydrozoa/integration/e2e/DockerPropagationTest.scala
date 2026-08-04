@@ -11,8 +11,8 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.multisig.consensus.UserRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.server.ApiDto.{L2TxSummaryView, L2UtxoView, RequestIdView, mkRequestIdView, given}
-import hydrozoa.multisig.server.SubmissionClient
+import hydrozoa.multisig.server.ApiDto.{RequestIdView, mkRequestIdView}
+import hydrozoa.multisig.server.{EutxoL2QueryClient, SubmissionClient}
 import io.circe.Json
 import io.circe.parser.parse
 import java.io.File
@@ -195,19 +195,8 @@ class DockerPropagationTest extends AnyFunSuite:
             head0Bech32 <- IO.fromOption(head0Address.toBech32.toOption)(
               RuntimeException("head-0 address is not bech32-renderable")
             )
-            head1Bech32 <- IO.fromOption(head1Address.toBech32.toOption)(
-              RuntimeException("head-1 address is not bech32-renderable")
-            )
 
-            views <- client.expect[List[L2UtxoView]](
-              headUri(0) / "l2" / "cardano-eutxo" / "utxos" / head0Bech32
-            )
-            parsed <- IO.fromEither(
-              views
-                  .traverse(SubmitL2Transaction.parseUtxoView)
-                  .left
-                  .map(e => RuntimeException(s"could not parse head-0's L2 utxos: $e"))
-            )
+            parsed <- EutxoL2QueryClient.http(client, headUri(0)).utxos(head0Address)
             selected <- IO.fromOption(parsed.headOption)(
               RuntimeException(s"head-0 has no opening L2 utxo at $head0Bech32")
             )
@@ -233,7 +222,7 @@ class DockerPropagationTest extends AnyFunSuite:
 
             _ <- log("polling all four peers for the propagated utxo…")
             _ <- pollUntil(s"utxo $txIdHex at head-1 on every peer", ConvergeTimeout, 3.seconds)(
-              allPeersShowUtxo(client, head1Bech32, txIdHex)
+              allPeersShowUtxo(client, head1Address, txIdHex)
             )
             _ <- pollUntil("our tx in every peer's /transactions feed", ConvergeTimeout, 3.seconds)(
               allPeersShowTransaction(client, expectedRequest)
@@ -266,25 +255,21 @@ class DockerPropagationTest extends AnyFunSuite:
             .map(_.forall(identity))
 
     /** Every peer's `GET /l2/cardano-eutxo/utxos/{head-1}` lists a utxo minted by our tx. */
-    private def allPeersShowUtxo(client: Client[IO], addr: String, txIdHex: String): IO[Boolean] =
+    private def allPeersShowUtxo(
+        client: Client[IO],
+        addr: ShelleyAddress,
+        txIdHex: String
+    ): IO[Boolean] =
         peerIndices
-            .traverse(i =>
-                client.expect[List[L2UtxoView]](
-                  headUri(i) / "l2" / "cardano-eutxo" / "utxos" / addr
-                )
-            )
-            .map(_.forall(_.exists(_.input.transaction_id == txIdHex)))
+            .traverse(i => EutxoL2QueryClient.http(client, headUri(i)).utxos(addr))
+            .map(_.forall(_.exists((input, _) => input.transactionId.toHex == txIdHex)))
 
     /** Every peer's `GET /l2/cardano-eutxo/transactions` feed carries the entry for our submitted
       * request — matched by its request id, so the check is specific to the tx we sent.
       */
     private def allPeersShowTransaction(client: Client[IO], request: RequestIdView): IO[Boolean] =
         peerIndices
-            .traverse(i =>
-                client.expect[List[L2TxSummaryView]](
-                  (headUri(i) / "l2" / "cardano-eutxo" / "transactions").withQueryParam("count", 50)
-                )
-            )
+            .traverse(i => EutxoL2QueryClient.http(client, headUri(i)).transactions(RecentTxWindow))
             .map(_.forall(_.exists(_.requestId == request)))
 
     // ---- config authoring --------------------------------------------------------------------
@@ -460,6 +445,7 @@ object DockerPropagationTest:
 
     private val TopupLovelace = 100_000_000_000L // 100k ADA to head-0 on the devnet
     private val SendAda = 2L // ADA moved head-0 → head-1 on L2
+    private val RecentTxWindow = 50 // entries pulled from each peer's /transactions feed
 
     // Placeholder Blockfrost key for the keyless Yaci devnet — value is ignored (see `cli`).
     private val DummyBlockfrostKey = "preview00000000000000000000000000000000"
