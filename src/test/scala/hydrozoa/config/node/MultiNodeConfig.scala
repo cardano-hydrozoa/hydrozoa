@@ -290,7 +290,7 @@ object MultiNodeConfig {
                           adminPassword = "welcome",
                           httpHost = "0.0.0.0",
                           httpPort = "8080",
-                          cardanoBackendUrl = None,
+                          blockfrostApiUrl = None,
                         )
                     )
                   )

@@ -52,30 +52,15 @@ object CustomNetworkResolver {
             case Some(adminUrl) => resolveViaYaciAdmin(url, adminUrl, apiKey)
             case None           => resolveViaGenesis(url, apiKey)
         }
-        resolved.flatMap(rejectStandardMagic)
-    }
-
-    /** A backend that reports a standard network's magic must be configured as that standard
-      * network (`cardanoNetwork: preview|preprod|mainnet` + `cardanoBackendUrl`), not left unset (a
-      * bare Custom): only the baked-in [[CardanoInfo]] carries the correct (Byron-aware) slot
-      * geometry and address tag. Devnet magics (e.g. Yaci's 42) are unaffected.
-      */
-    private def rejectStandardMagic(custom: CardanoNetwork.Custom): IO[CardanoNetwork.Custom] = {
-        val standard = List(CardanoNetwork.Mainnet, CardanoNetwork.Preprod, CardanoNetwork.Preview)
-            .find(_.protocolMagic == custom.protocolMagic)
-        standard match {
-            case Some(net) =>
-                val name = net.toString.toLowerCase
-                IO.raiseError(
-                  IllegalStateException(
-                    s"the backend reports $name's network magic (${custom.protocolMagic}); set " +
-                        s"cardanoNetwork: $name with your endpoint as cardanoBackendUrl instead of " +
-                        "leaving the network unset, so the correct baked-in parameters and slot " +
-                        "config are used"
-                  )
-                )
-            case None => IO.pure(custom)
-        }
+        resolved.flatMap(custom =>
+            IO.fromEither(
+              CardanoNetwork
+                  .rejectStandardMagic(custom)
+                  .map(_ => custom)
+                  .left
+                  .map(IllegalStateException(_))
+            )
+        )
     }
 
     private def resolveViaYaciAdmin(

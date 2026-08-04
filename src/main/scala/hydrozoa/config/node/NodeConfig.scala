@@ -88,7 +88,7 @@ object NodeConfig {
                     EitherT.liftF(
                       CardanoBackendBlockfrost(
                         network,
-                        privateConfig.cardanoBackendUrl,
+                        privateConfig.blockfrostApiUrl,
                         privateConfig.blockfrostApiKey,
                         tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
                       )
@@ -114,7 +114,7 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
-        cardanoBackendUrl: Option[String] = None,
+        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownHeadPeerPrivate <- OwnHeadPeerPrivate(ownHeadWallet, headConfig.headPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -127,7 +127,7 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
-          cardanoBackendUrl,
+          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 
@@ -146,7 +146,7 @@ object NodeConfig {
         adminPassword: String,
         httpHost: String,
         httpPort: String,
-        cardanoBackendUrl: Option[String] = None,
+        blockfrostApiUrl: Option[String] = None,
     ): Option[NodeConfig] = for {
         ownCoilPeerPrivate <- OwnCoilPeerPrivate(ownCoilWallet, headConfig.coilPeers)
         nodePrivateConfig = NodePrivateConfig(
@@ -159,7 +159,7 @@ object NodeConfig {
           adminPassword,
           httpHost,
           httpPort,
-          cardanoBackendUrl,
+          blockfrostApiUrl,
         )
     } yield NodeConfig(headConfig, nodePrivateConfig)
 

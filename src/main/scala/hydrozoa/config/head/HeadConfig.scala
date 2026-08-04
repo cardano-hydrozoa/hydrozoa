@@ -309,7 +309,7 @@ object HeadConfig {
                 cardanoBackend <- EitherT.liftF(
                   CardanoBackendBlockfrost(
                     network,
-                    privateConfig.cardanoBackendUrl,
+                    privateConfig.blockfrostApiUrl,
                     privateConfig.blockfrostApiKey,
                     tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
                   )
