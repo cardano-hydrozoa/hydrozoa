@@ -104,6 +104,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- (1 to 3).toList.traverse_(i =>
                     ledger
                         .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                        .rethrowT
                 )
                 // Crash boundary: fastBlockMark = block 2, recorded at L2 command number 2.
                 brief <- blockBrief(2)
@@ -128,6 +129,7 @@ class RecoverSeamsTest extends AnyFunSuite:
                 _ <- (1 to 3).toList.traverse_(i =>
                     ledger
                         .sendApplyDepositDecisions(L2CommandNumber(i.toLong), noop(i))
+                        .rethrowT
                 )
                 // Crash boundary: fastBlockMark = block 2 (max BlockResult), recorded at L2 command
                 // number 2. The header is read from the Block journal (present inbound on any peer),

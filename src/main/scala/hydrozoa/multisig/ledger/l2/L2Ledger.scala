@@ -86,20 +86,22 @@ trait L2Ledger[F[_]] {
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       *
-      * Infallible by construction: a deposit decision has no per-request verdict — it merges
-      * already-registered, already-validated deposits, so it always applies. Its only failure modes
-      * (a decision for an unregistered deposit; an absorbed output that should have been rejected
-      * at registration) are JointLedger-side invariant violations, which an implementation
-      * fail-stops on (a `raise` in `F`), never a `Left`. See
+      * A deposit decision is not a user request, so a failure is not an ordinary verdict: deposits
+      * are validated at registration, so a decision should never fail on deposit *validity* — only
+      * on a coordination bug (a decision for a deposit compartment the ledger never registered, or
+      * an internal merge error). Such a failure returns a `Left` **and freezes the ledger**: every
+      * subsequent command then fail-stops (a `raise` in `F`) until `restoreTo` rewinds past the
+      * freeze. JointLedger panics on the `Left` (via `executeL2Command`). See
       * `docs/l2-ledger-command-coordination.md`.
       *
       * @return
-      *   the evacuation diffs the absorbed deposits produce.
+      *   the evacuation diffs the absorbed deposits produce, or a `Left` if the decision could not
+      *   be applied.
       */
     def sendApplyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): F[Vector[EvacuationDiff]]
+    ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#l2-events
@@ -164,7 +166,7 @@ trait L2Ledger[F[_]] {
             L2LedgerAction.Real(
               Kleisli(ledgerState =>
                   for {
-                      resDiffs <- EitherT.liftF(sendApplyDepositDecisions(commandNumber, req))
+                      resDiffs <- sendApplyDepositDecisions(commandNumber, req)
                       newState = L2LedgerState(
                         ledgerState.diffs ++ resDiffs,
                         ledgerState.payouts,

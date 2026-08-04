@@ -102,9 +102,9 @@ object RemoteL2LedgerCodecs {
     }
 
     // Response codecs. Each response is a single-key object tagging the variant (encoder and decoder
-    // agree on the tag). Applied/Duplicate carry `commandNumber` plus only the effects the answered
-    // command produces: `evacuationDiffs` / `payouts` are omitted when empty and default to empty on
-    // decode (RegisterDeposit produces neither; ApplyDepositDecisions no payouts).
+    // agree on the tag). Applied carries `commandNumber` plus only the effects the answered command
+    // produces: `evacuationDiffs` / `payouts` are omitted when empty and default to empty on decode
+    // (RegisterDeposit produces neither; ApplyDepositDecisions no payouts).
     private def encodeEffects(
         commandNumber: L2CommandNumber,
         evacuationDiffs: Vector[EvacuationDiff],
@@ -137,26 +137,20 @@ object RemoteL2LedgerCodecs {
             }
         )
 
-    given duplicateEncoder: Encoder[Response.Duplicate] =
-        d => encodeEffects(d.commandNumber, d.evacuationDiffs, d.payouts)
-    given duplicateDecoder(using CardanoNetwork.Section): Decoder[Response.Duplicate] =
-        Decoder.instance(c =>
-            decodeEffects(c).map { case (cn, diffs, payouts) =>
-                Response.Duplicate(cn, diffs, payouts)
-            }
-        )
-
     given outOfOrderEncoder: Encoder[Response.OutOfOrder] = deriveEncoder
     given outOfOrderDecoder: Decoder[Response.OutOfOrder] = deriveDecoder
+
+    given ledgerFreezeEncoder: Encoder[Response.LedgerFreeze] = deriveEncoder
+    given ledgerFreezeDecoder: Decoder[Response.LedgerFreeze] = deriveDecoder
 
     given rejectedEncoder: Encoder[Response.Rejected] = deriveEncoder
     given rejectedDecoder: Decoder[Response.Rejected] = deriveDecoder
 
     given responseEncoder: Encoder[Response] = {
-        case r: Response.Applied    => io.circe.Json.obj("Applied" -> r.asJson)
-        case r: Response.Duplicate  => io.circe.Json.obj("Duplicate" -> r.asJson)
-        case r: Response.OutOfOrder => io.circe.Json.obj("OutOfOrder" -> r.asJson)
-        case r: Response.Rejected   => io.circe.Json.obj("Rejected" -> r.asJson)
+        case r: Response.Applied      => io.circe.Json.obj("Applied" -> r.asJson)
+        case r: Response.Rejected     => io.circe.Json.obj("Rejected" -> r.asJson)
+        case r: Response.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> r.asJson)
+        case r: Response.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> r.asJson)
     }
 
     given responseDecoder(using CardanoNetwork.Section): Decoder[Response] = Decoder.instance { c =>
@@ -166,10 +160,10 @@ object RemoteL2LedgerCodecs {
               io.circe.DecodingFailure("Response must have exactly one field", c.history)
             )
             .flatMap {
-                case "Applied"    => c.downField("Applied").as[Response.Applied]
-                case "Duplicate"  => c.downField("Duplicate").as[Response.Duplicate]
-                case "OutOfOrder" => c.downField("OutOfOrder").as[Response.OutOfOrder]
-                case "Rejected"   => c.downField("Rejected").as[Response.Rejected]
+                case "Applied"      => c.downField("Applied").as[Response.Applied]
+                case "Rejected"     => c.downField("Rejected").as[Response.Rejected]
+                case "OutOfOrder"   => c.downField("OutOfOrder").as[Response.OutOfOrder]
+                case "LedgerFreeze" => c.downField("LedgerFreeze").as[Response.LedgerFreeze]
                 case other =>
                     Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
             }

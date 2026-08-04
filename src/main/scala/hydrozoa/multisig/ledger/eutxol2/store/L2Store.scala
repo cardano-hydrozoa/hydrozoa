@@ -55,6 +55,16 @@ trait L2Store[F[_]]:
       */
     def getTip: F[Option[L2CommandNumber]]
 
+    /** Record the ledger's frozen state — the command number of the `ApplyDepositDecisions` that
+      * froze it, or `None` when not frozen. Written when the ledger freezes on a decision it cannot
+      * apply, and adjusted by `restoreTo` (a rewind to before the freeze clears it), so a frozen
+      * ledger stays frozen across a crash.
+      */
+    def putFrozenAt(commandNumber: Option[L2CommandNumber]): F[Unit]
+
+    /** The command number of the decision that froze the ledger, or `None` if it is not frozen. */
+    def getFrozenAt: F[Option[L2CommandNumber]]
+
 object L2Store:
     /** Write a full-state snapshot every this many commits (§R2b; tune later, not config-driven).
       */

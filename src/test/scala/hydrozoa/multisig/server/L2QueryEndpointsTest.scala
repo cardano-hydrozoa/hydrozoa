@@ -77,6 +77,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                               L2CommandNumber(n.toLong),
                               rejectDecision(n, RequestId(0, n.toLong))
                             )
+                            .rethrowT
                     }
                     requestSequencerStub <- system.actorOf(
                       new Actor[IO, RequestSequencer.Request] {

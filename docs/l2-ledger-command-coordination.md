@@ -1,31 +1,33 @@
-# L2 ledger command coordination, transport, and recovery
+# The Gummiworm ↔ L2 ledger protocol
 
-How Hydrozoa drives a black-box L2 ledger (the built-in EUTXO reference ledger, or a remote
-sidecar such as Sugar Rush) as an ordered command stream: who assigns command numbers, how the
-transport survives connectivity loss without breaking consensus, and how the two sides co-anchor on
-crash recovery.
+How Hydrozoa drives a black-box L2 ledger (the built-in EUTXO reference ledger, or a remote sidecar
+such as Sugar Rush) as an ordered command stream — both the **design** (who assigns command numbers,
+how the transport survives connectivity loss without breaking consensus, how the two sides co-anchor
+on crash recovery) **and the contract** a ledger must implement to serve as a Gummiworm ledger
+backend.
 
-Terminology: **spec** = the Gummiworm whitepaper. This is a *design doc*, not the spec. The wire
-contract this doc defines *extends* the current spec (`/whitepaper/sugar-rush/commands`); the delta
-is called out in [Wire protocol](#wire-protocol) and collected as the ledger's contract in
-`docs/l2-ledger-contract.md`.
+Terminology: **spec** = the Gummiworm whitepaper. This doc *extends* the current spec
+(`/whitepaper/sugar-rush/commands`); the delta is called out in [Wire protocol](#wire-protocol).
+Where it says "the ledger must …", that is the normative contract for a ledger implementer.
 
-## The two operation classes
+## Screening vs. applying ledger commands
 
 The `JointLedger` (JL) and `RequestSequencer` both talk to the L2 ledger, but with opposite
 failure semantics, so they ride **separate traits and connections**:
 
 - **Screening** (`L2Screener`, driven by `RequestSequencer`): stateless, order-independent,
   pre-`RequestId` checks. **Fail-soft** — a failure becomes `UserRequest.Rejected`; the user
-  retries. Remote screening is a passthrough stub today (no socket) until a real screening endpoint
-  lands.
-- **Mutation** (`L2Ledger`, driven by `JointLedger`): the ordered, state-affecting command stream
-  (`RegisterDeposit`, `ApplyTransaction`, `ApplyDepositDecisions`). Ordered, exactly-once,
-  must-land. This doc is about the mutation stream.
+  retries. A ledger is **recommended to run screening as a separate process**, not folded into the
+  command API: it shares no state with the command stream, and keeping it off the command interface
+  keeps that API's surface (and the command-number contract) small. Remote screening is a
+  passthrough stub today (no socket) until a real screening endpoint lands.
+- **Applying ledger commands** (`L2Ledger`, driven by `JointLedger`): the ordered, state-affecting
+  command stream (`RegisterDeposit`, `ApplyTransaction`, `ApplyDepositDecisions`). Ordered,
+  exactly-once, must-land. This doc is about the command stream.
 
 ## The command number is a coordination index, owned by JointLedger
 
-JointLedger assigns every mutation command a **monotonic command number** — a coordination /
+JointLedger assigns every command a **monotonic command number** — a coordination /
 sequencing / dedup key that identifies the command's *position in the stream*, **not** a
 state-version. It is held in JL's actor state (`Done`/`Producing`), seeded at `zero`, and persisted
 per block as the recovery anchor (`Cf.L2CommandNumber`).
@@ -50,8 +52,8 @@ Precisely, against the ledger's current tip `T`:
 | incoming number | meaning | ledger action |
 |---|---|---|
 | `== T + 1` | fresh | evaluate → apply (mutate + log) or reject (no mutation); **advance `T` either way** |
-| `== T` | duplicate (lost-ack resend of the last command) | replay the cached outcome (`Duplicate` if you applied it, `Rejected` if you rejected it); do not advance |
-| else (`> T+1` or `< T`) | out of order / desync | reject with `OutOfOrder(current = T)`; do not apply |
+| `== T` | lost-ack resend of the last command | replay the **cached last response** verbatim (whatever it was); do not re-evaluate, do not advance |
+| else (`> T+1` or `< T`) | out of order / desync | reply `OutOfOrder(…, expected = T+1)`; do not apply |
 
 `T` does double duty: the dedup/validation cursor above, and the `restoreTo` guard below. It
 advances on every command, so it is **not** derivable from the applied log (a trailing rejection
@@ -60,99 +62,158 @@ moves `T` past the last logged command) — it must be tracked/stored in its own
 ## Transport: retry through, never a verdict
 
 Each peer drives its **own** replica of the ledger, so a peer-local transport failure that dropped
-a command would diverge that peer's block from the others'. Therefore the mutation transport
+a command would diverge that peer's block from the others'. Therefore the command transport
 **must not turn a transport failure into a per-request verdict.**
 
 - A transport failure (connection loss, silent remote, timeout) is **retried through, forever**
   (bounded exponential backoff) over one persistent, shared-client connection. A request only
   returns once the remote gives a real verdict. There is **no "unavailable" error**.
 - Blind resend is safe because of the command number: a re-sent command the ledger already evaluated
-  replays its cached verdict — `Duplicate` (the original effects) if it was applied, `Rejected` (the
-  same message) if it was rejected — so it is applied at most once and never silently re-evaluated.
+  replays its **cached last response** verbatim (an `Applied` with its effects, a `Rejected`, or a
+  `LedgerFreeze`), so it is applied at most once and never silently re-evaluated.
 - A permanently-unreachable ledger stalls this peer until the Cardano liaison's L1 fallback resolves
   the head. That is correct: a peer that cannot reach its ledger cannot make progress, and stalling
   beats diverging.
 
-Consequently JL only ever sees a deterministic verdict, so its existing handling is correct as-is: a
-`Rejected` verdict soft-invalidates the request, uniformly across peers. Only `RegisterDeposit` and
-`ApplyTransaction` can be `Rejected`; `ApplyDepositDecisions` is infallible (it merges
-already-validated deposits) and fail-stops on an invariant violation rather than rejecting.
+Consequently JL only ever sees a deterministic answer. A `Rejected` `RegisterDeposit` /
+`ApplyTransaction` invalidates that user request, uniformly across peers. `ApplyDepositDecisions`
+is **not** a user request, so a failure is never an ordinary verdict: a decision failure is a
+coordination bug — an `UnknownDepositCompartment` (JL and the ledger disagree on which deposits exist)
+or an internal merge error — so JL **panics** on it, and on a `LedgerFreeze`, rather than continue
+against a possibly corrupt L2 state (see [Responses](#responses)). Deposits are validated at
+registration, so a decision should never fail on deposit *validity*.
 
 ## Responses
 
-The mutation response is a small ADT (extending the spec's `Success | Failure`). **Every branch
-echoes the command number it answers**, so the client correlates each response to the request it sent
-and fail-stops on a mismatch (a stray/duplicated frame can't be mistaken for the current command's
-verdict). The effects are only what the command produces:
+The response is a four-branch ADT. **Every branch echoes the command number it answers**, so
+the client correlates each response to the request it sent and fail-stops on a mismatch. A resend
+(`== T`) replays the ledger's **cached last response** verbatim.
 
-- **`Applied(commandNumber, effects)`** — applied at the assigned number. Effects per command:
-  nothing for `RegisterDeposit`, evacuation diffs for `ApplyDepositDecisions`, diffs + payouts for
-  `ApplyTransaction`.
-- **`Duplicate(commandNumber, effects)`** — a re-send of the *last applied* command (`== T`); replays
-  the same per-command effects from a window-of-1 cache. Consumed exactly like `Applied` — applied
-  once. (A re-send of the last *rejected* command replays as `Rejected`, not `Duplicate` — the tip
-  advances on a rejection too.)
-- **`OutOfOrder(commandNumber, current = T)`** — the number is not fresh and not the cached last
-  (`> T+1` or `< T`): a desync. `commandNumber` is what we sent; `current` is the ledger's tip.
-- **`Rejected(commandNumber, reason)`** — a deterministic ledger rejection (min-ada, invalid tx, …).
-  Not a transport failure.
+```typescript
+type GummiwormResponse =
+  | { "Applied":      { commandNumber: CommandNumber, effects: AppliedEffects } }
+  | { "Rejected":     { commandNumber: CommandNumber, reason: RejectReason } }
+  | { "OutOfOrder":   { commandNumber: CommandNumber, expected: CommandNumber } }
+  | { "LedgerFreeze": { commandNumber: CommandNumber, wrongDecisionCommandNumber: CommandNumber } }
 
-The remote client asserts each response's `commandNumber` equals the request's (mismatch →
-fail-stop), then maps `Applied`/`Duplicate` → `Right(effects)`, `Rejected` → `Left`, and
-`OutOfOrder`/undecodable → a **hard fail-stop** (never a `Left` — turning a desync into a per-request
-verdict would diverge the peer). A window of one suffices because JL is strictly single-in-flight.
-The consumer-side command number lives on JointLedger; the ledger trait exposes no
+// Applied effects and Rejected reasons are both typed PER COMMAND (known from the echoed number):
+type AppliedEffects =
+  | { "RegisterDeposit":       {} }
+  | { "ApplyDepositDecisions": { evacuationDiffs: EvacuationDiff[] } }
+  | { "ApplyTransaction":      { evacuationDiffs: EvacuationDiff[], payouts: TransactionOutput[] } }
+
+type RejectReason =
+  | { "RegisterDeposit":       "UnparseablePayload" | "RuleViolation" }  // rule violations may be many
+  | { "ApplyTransaction":      "UnparseableTx" | "InvalidTx" }
+  | { "ApplyDepositDecisions": "UnknownDepositCompartment" | "InternalMergeError" }
+
+type CommandNumber = number   // u64, monotonic
+```
+
+- **`Applied(commandNumber, effects)`** — the command applied; its `effects` are **typed per command**
+  (the command is known from the echoed number): nothing for `RegisterDeposit`, evacuation diffs for
+  `ApplyDepositDecisions`, diffs + payouts for `ApplyTransaction`.
+- **`Rejected(commandNumber, reason)`** — a deterministic rejection; its `reason` is **typed per
+  command**: `RegisterDeposit` → unparseable / a rule violation (e.g. sub-min-ada, over-cover);
+  `ApplyTransaction` →
+  unparseable / invalid; `ApplyDepositDecisions` → `UnknownDepositCompartment` / `InternalMergeError`
+  (below).
+- **`OutOfOrder(commandNumber, expected = T+1)`** — the number is not fresh and not the cached last
+  (`> T+1` or `< T`): a desync. Request-agnostic. `expected` is the number the ledger wanted next; JL
+  derives the tip as `expected − 1`.
+- **`LedgerFreeze(commandNumber, wrongDecisionCommandNumber)`** — the reply to every command that
+  arrives *after* a decision the ledger could not apply: the ledger is **frozen**, and
+  `wrongDecisionCommandNumber` is the `ApplyDepositDecisions` that broke it. Cleared only by JL
+  rewinding past the freeze with `restoreTo`.
+
+**Deposit decisions can fail, but not as a user verdict.** Deposits are validated at registration
+(screening + the registration gate), so a decision should never fail on deposit *validity*. It can
+still fail on a coordination bug — the failing decision gets `Rejected(ApplyDepositDecisions, reason)` with
+`UnknownDepositCompartment` (JL named a compartment the ledger never registered — recoverable) or
+`InternalMergeError` (a ledger bug — terminal) — and the ledger then **freezes** (records a
+`FreezeLedger` event; every *subsequent* command gets `LedgerFreeze`). JL **panics** on either for
+now; later it may branch (retry the recoverable one, fall back to the L1 rule-based regime on the
+terminal one). This reverts an earlier draft that made `ApplyDepositDecisions` infallible — it is
+fallible; its failure is just handled by a panic, not by invalidating a request.
+
+The client asserts each response's `commandNumber` equals the request's (mismatch → fail-stop), maps
+`Applied` → `Right(effects)`, a `Rejected` `RegisterDeposit`/`ApplyTransaction` → `Left` (invalidate
+the request), and `OutOfOrder` / `LedgerFreeze` / a `Rejected` `ApplyDepositDecisions` / an undecodable
+frame → a **hard fail-stop** (never a `Left` — turning a desync or a coordination bug into a
+per-request verdict would diverge the peer). A window of one suffices because JL is strictly
+single-in-flight. The consumer-side command number lives on JointLedger; the ledger exposes no
 `currentCommandNumber` query (JL owns and persists the authoritative number).
+
+### Deposits are validated at registration, not at absorption
+
+The ledger `Rejected`s a `RegisterDeposit` whose payload is unparseable, whose spawned L2 outputs are
+individually invalid (e.g. any output below min-ada), or whose outputs are not covered by
+`depositL2Value` — their total exceeding the L1 value the treasury absorbs would mint L2 value from
+nothing. It validates all of this at *registration* (the same validity absorption would enforce), so
+**a deposit that registers is guaranteed to absorb** — which is why an `ApplyDepositDecisions` should
+never fail on deposit *validity*, only on the coordination bugs above. These gates are authoritative
+at registration on every peer, because a peer's own pre-screen is best-effort and, for a remote
+ledger, absent. (Broader spam/DoS is a separate mitigation, e.g. proof of work.)
 
 ## Recovery: mapping the coordination index to ledger state
 
-The ledger persists its own durable record, keyed by the coordination index:
+Both sides persist. **JointLedger stores its full command stream and the responses it received**
+(the authoritative record of what it drove); **the ledger** stores enough to be rewound and to
+survive a crash:
 
-- a **sparse log** `index → command`, holding every command that returned a verdict of *apply*
-  (valid commands only — invalid ones consume a number but are not logged);
-- periodic **snapshots** keyed by index (a replay accelerator);
-- the **tip `T`** (highest index seen, applied *or* rejected).
+- an **event log** — each applied command produces one or more events, stored keyed
+  `(commandNumber, eventNumber) → event`, **sparse in the command number** (a rejected command
+  produces no events and leaves a gap). A failed `ApplyDepositDecisions` records a **`FreezeLedger`
+  event**, so the frozen state is just part of the reconstructed state (no separate flag) and survives
+  a crash like any other state;
+- the **cached last response** — so a lost-ack resend (including one right after a crash) replays
+  byte-identically;
+- the **tip `T`** (highest number seen, applied *or* rejected — a trailing rejection moves it past the
+  last logged event, so it is not derivable from the log);
+- *(optional)* periodic **snapshots** keyed by the command number, a replay accelerator.
 
-`restoreTo(N)` reconstructs the ledger state as of index `N`: load the latest snapshot `≤ N`, re-fold
-the sparse log in `(snapshot, N]`, and set the tip to `N`. Because rejected commands change no state,
-folding the applied subset `≤ N` yields exactly the state at `N`. `restoreTo(N > T)` is a corruption
-tripwire (it should never happen — see below).
+**`restoreTo(N)` is not a command** — it carries no command number and does not advance the tip. It
+reconstructs the ledger state as of command `N` (latest snapshot `≤ N`, then re-fold the events in
+`(snapshot, N]`) and sets the tip to `N`. It **respects the freeze**: a `FreezeLedger` event in the
+replayed range leaves the ledger frozen, so JL **unfreezes** by rewinding to *before* the offending
+decision — it does not blindly clear the frozen state. After it, the ledger **trusts the suffix JL
+re-drives** from `N+1` and does **not** re-check it against its stale post-`N` log: consensus is the
+caller's, not the ledger's, so JL may legitimately re-drive a different suffix.
 
 **Cross-store consistency comes from ordering, not a distributed transaction.** The ledger durably
-logs a command *before it responds*, and JL persists its index *only at block completion* (after
-every command in the block got a verdict, the transport having retried through any connectivity
-loss). So:
-
-- the ledger's durable tip is **always ≥ JL's saved index** — a transport failure just prevents the
-  block from completing, saving nothing; `restoreTo(N > T)` is therefore a tripwire, not a live path;
-- if the ledger is *ahead* of JL's saved index (crash after some commands, before block completion),
-  `restoreTo(saved)` folds only `≤ saved` and rolls the extra back, then consensus re-drives the
-  tail.
+records a command's events *and caches+persists its response* **before it replies**, and JL persists
+its index *only at block completion* (after every command in the block got an answer, the transport
+having retried through any connectivity loss). So the ledger's durable tip is **always ≥ JL's saved
+index** — a transport failure just prevents the block from completing, saving nothing. If the ledger
+is *ahead* of JL's saved index (crash mid-block), `restoreTo(saved)` rolls the extra back and
+consensus re-drives the tail.
 
 Scope: this is the *local EUTXO reference ledger's* recovery, and the *contract a remote sidecar must
-meet* for its own recovery; JL saving the index is backend-agnostic. Full remote co-anchored
-recovery — a crash-time re-drive of `[anchor+1, head]` against a remote that stayed *ahead* of the
-anchor, where a window of one cannot replay a command `< T` — is out of scope here; the
-self-correlating wire (responses echo the number, client asserts + fail-stops) is the safe interim.
+meet* for its own recovery; JL saving the index is backend-agnostic. (The reference EUTXO ledger may
+store applied *commands* and re-apply them instead of an event log — equivalent for restore.) Full
+remote co-anchored recovery — a crash-time re-drive of `[anchor+1, head]` against a remote that stayed
+*ahead* of the anchor — is out of scope here; the self-correlating wire (responses echo the number,
+client asserts + fail-stops) is the safe interim.
 
 ## Wire protocol
 
-The command envelope carries the coordination number alongside the command; the response is the ADT
-above. Delta from the spec (`/whitepaper/sugar-rush/commands`):
+The command envelope wraps the coordination number around each command; the response is the
+[response ADT](#responses) above.
 
-- **Command** — spec `{ "RegisterDeposit": RegisterDeposit }`; ours adds the number:
-  `{ "RegisterDeposit": { "commandNumber": N, "command": RegisterDeposit } }` (same for the other
-  two).
-- **Response** — spec `Success | Failure`; ours is `Applied | Duplicate | OutOfOrder | Rejected`
+```typescript
+type GummiwormCommand =
+  | { "RegisterDeposit":        { commandNumber: CommandNumber, command: RegisterDeposit } }
+  | { "ApplyDepositDecisions":  { commandNumber: CommandNumber, command: ApplyDepositDecisions } }
+  | { "ApplyTransaction":       { commandNumber: CommandNumber, command: ApplyTransaction } }
+```
+
+Delta from the spec (`/whitepaper/sugar-rush/commands`):
+
+- **Command** — spec `{ "RegisterDeposit": RegisterDeposit }`; ours wraps it with the number (above).
+- **Response** — spec `Success | Failure`; ours is `Applied | Rejected | OutOfOrder | LedgerFreeze`
   (each a single-key tagged object). `Applied`/`Rejected` map onto the spec's `Success`/`Failure`;
-  `Duplicate`/`OutOfOrder` are new, required by the coordination contract.
+  `OutOfOrder`/`LedgerFreeze` are new, required by the coordination contract. A resend replays the
+  cached last response. `restoreTo` is a separate, un-numbered request.
 - **Command payloads** — match the spec except **`userVk: ByteString`**: the contract omits it (the
   native L2 tx self-authenticates via its own witnesses, so the spec should drop it), and it omits
   the spec's `ProxyBlockConfirmation` / `ProxyRequestError`.
-
-## Screening split
-
-`L2Screener{ screenTx, screenDeposit }` is split out of `L2Ledger` so screening rides its own trait
-(and, for a remote, its own connection) with fail-soft semantics, keeping the command-number
-contract on the mutation trait where it belongs. `EutxoL2Ledger` implements both; the remote screener
-is a passthrough stub until a remote screening endpoint lands.

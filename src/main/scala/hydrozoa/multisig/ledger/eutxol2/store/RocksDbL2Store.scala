@@ -97,6 +97,20 @@ final class RocksDbL2Store private (
                 yield (logMax.toList ++ snapMax.toList).maxOption
         }
 
+    def putFrozenAt(commandNumber: Option[L2CommandNumber]): IO[Unit] =
+        IO.blocking {
+            commandNumber match {
+                case Some(cn) =>
+                    db.put(metaCf, writeOptions, RocksDbL2Store.FrozenAtKey, commandNumberToKey(cn))
+                case None => db.delete(metaCf, writeOptions, RocksDbL2Store.FrozenAtKey)
+            }
+        }
+
+    def getFrozenAt: IO[Option[L2CommandNumber]] =
+        IO.blocking(
+          Option(db.get(metaCf, readOptions, RocksDbL2Store.FrozenAtKey)).map(keyToCommandNumber)
+        )
+
     /** The greatest command-number key in `cf`, or None if empty — used to derive the tip on a
       * legacy store written before the tip entry existed.
       */
@@ -125,6 +139,11 @@ object RocksDbL2Store:
 
     /** Fixed key of the single recovery-tip entry, held in the default column family. */
     private val TipKey = "tip".getBytes("UTF-8")
+
+    /** Fixed key of the frozen-at marker (the freezing decision's command number), in the default
+      * column family; absent when the ledger is not frozen.
+      */
+    private val FrozenAtKey = "frozenAt".getBytes("UTF-8")
 
     /** Open (creating if absent) the L2 store at `path`. The returned `Resource` closes the DB and
       * releases every native handle on completion.

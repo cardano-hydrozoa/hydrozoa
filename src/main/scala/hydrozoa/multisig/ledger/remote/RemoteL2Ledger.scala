@@ -28,10 +28,11 @@ import scala.concurrent.duration.*
   * that peer's block from the others'. So a transport failure (connection loss, silent remote) is
   * **retried through, forever** (bounded exponential backoff) rather than surfaced — a request only
   * returns once the remote gives a real answer. Blind resend is safe because JointLedger stamps
-  * each command with a monotonic command number and the remote deduplicates by it: a re-sent
-  * command the remote already applied comes back as [[Response.Duplicate]] carrying the original
-  * effects, so it is applied exactly once. A permanently-unreachable ledger stalls this peer until
-  * the Cardano liaison's L1 fallback resolves the head; there is no "unavailable" verdict.
+  * each command with a monotonic command number and the remote caches its last response by it: a
+  * re-sent command the remote already evaluated replays that cached response verbatim (the same
+  * [[Response.Applied]] carrying the original effects), so it takes effect exactly once. A
+  * permanently-unreachable ledger stalls this peer until the Cardano liaison's L1 fallback resolves
+  * the head; there is no "unavailable" verdict.
   *
   * One shared JDK `HttpClient` ([[wsClient]]) is held for the ledger's lifetime — opening a fresh
   * client per request leaks a selector thread + file descriptors each time (reclaimed only on GC)
@@ -80,20 +81,10 @@ class RemoteL2Ledger private (
     override def sendApplyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): IO[Vector[EvacuationDiff]] =
-        // A deposit decision has no verdict, so a remote `Rejected` here is a protocol violation
-        // (the remote rejecting a command it cannot reject) — fail-stop, like the local ledger's
-        // invariant panics, rather than diverge this peer with a phantom soft reject.
-        sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).value.flatMap {
-            case Right((diffs, _)) => IO.pure(diffs)
-            case Left(rejected) =>
-                IO.raiseError(
-                  L2LedgerError(
-                    "remote L2 ledger rejected an ApplyDepositDecisions" +
-                        s" (a decision has no verdict — invariant violation): ${rejected.message}"
-                  )
-                )
-        }
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
+        // A remote `Rejected` for a decision → `Left` → JointLedger panics on it (a coordination
+        // bug, not a soft reject); a `LedgerFreeze` → fail-stop in `sendRequest`.
+        sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).map(_._1)
 
     override def sendApplyTransaction(
         commandNumber: L2CommandNumber,
@@ -105,20 +96,21 @@ class RemoteL2Ledger private (
       * It must not fail — `JointLedger.State.recover` treats a `Left` as fatal, so returning an
       * error would crash a remote-backed node at boot after its first block. A real desync between
       * the restored JointLedger command number and the remote's own position surfaces on the next
-      * command as [[Response.OutOfOrder]] / [[Response.Duplicate]], not here.
+      * command as [[Response.OutOfOrder]], not here.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, L2LedgerError, Unit] =
         EitherT.rightT(())
 
     /** Send a request and interpret the remote's answer. Transport failure is retried through by
       * [[exchange]] and never seen here, so a returned response is always a real verdict:
-      *   - [[Response.Applied]] / [[Response.Duplicate]] → the command's effects (a duplicate is a
-      *     lost-ack resend the remote already applied; its cached effects are used, applied once);
-      *   - [[Response.Rejected]] → `Left` (a deterministic ledger verdict — JointLedger invalidates
-      *     the request, uniformly across peers);
-      *   - [[Response.OutOfOrder]], an undecodable response, or a response for the wrong command
-      *     number → a hard failure (fail-stop), never a `Left`: turning a desync or protocol
-      *     violation into a per-request verdict would diverge this peer.
+      *   - [[Response.Applied]] → the command's effects (a lost-ack resend replays the remote's
+      *     cached response, so it is applied exactly once);
+      *   - [[Response.Rejected]] → `Left` (a deterministic verdict — JointLedger invalidates a
+      *     `RegisterDeposit`/`ApplyTransaction`, and panics on a rejected `ApplyDepositDecisions`);
+      *   - [[Response.OutOfOrder]], [[Response.LedgerFreeze]], an undecodable response, or a
+      *     response for the wrong command number → a hard fail-stop, never a `Left`: turning a
+      *     desync, a frozen ledger, or a protocol violation into a per-request verdict would
+      *     diverge this peer.
       *
       * Every response echoes the command number it answers; a mismatch against the request is a
       * protocol violation (a stray/duplicated frame), so it fail-stops rather than being trusted.
@@ -144,14 +136,18 @@ class RemoteL2Ledger private (
                         )
                     case Right(Response.Applied(_, diffs, payouts)) =>
                         IO.pure(Right((diffs, payouts)))
-                    case Right(Response.Duplicate(_, diffs, payouts)) =>
-                        IO.pure(Right((diffs, payouts)))
                     case Right(Response.Rejected(_, message)) =>
                         IO.pure(Left(L2LedgerError(message)))
-                    case Right(Response.OutOfOrder(_, current)) =>
+                    case Right(Response.OutOfOrder(_, expected)) =>
                         IO.raiseError(
                           L2LedgerError(
-                            s"remote L2 ledger out of order: its current command number is $current"
+                            s"remote L2 ledger out of order: it expected command number $expected"
+                          )
+                        )
+                    case Right(Response.LedgerFreeze(_, wrongDecision)) =>
+                        IO.raiseError(
+                          L2LedgerError(
+                            s"remote L2 ledger is frozen (decision $wrongDecision could not be applied)"
                           )
                         )
                 }
@@ -329,17 +325,14 @@ object RemoteL2Ledger {
 
     }
 
-    /** Response types received from the remote L2 ledger. The remote is the authority on its own
-      * current command number and classifies each request against it: `== current + 1` is fresh
-      * ([[Response.Applied]]); `== current` is the last command re-sent after a lost ack, replayed
-      * from its window-of-1 cache as the cached verdict — [[Response.Duplicate]] if it was applied,
-      * [[Response.Rejected]] if it was rejected (the tip advances on a rejection too); anything
-      * else non-fresh — `> current + 1` or `< current` — is [[Response.OutOfOrder]] (a window of
-      * one cannot replay an older command's effects). A first-time deterministic ledger rejection
-      * is also [[Response.Rejected]].
+    /** Response types received from the remote L2 ledger. The remote validates each command number
+      * against its tip `T`: `== T + 1` is fresh ([[Response.Applied]] / [[Response.Rejected]]);
+      * `== T` is a lost-ack resend, answered by replaying the cached last response verbatim;
+      * anything else (`> T + 1` or `< T`) is [[Response.OutOfOrder]]. A decision the ledger could
+      * not apply freezes it, and every command after that is answered [[Response.LedgerFreeze]].
       *
       * **Every response echoes the command number it answers**, so the client correlates it to the
-      * request it sent and fail-stops on a mismatch (a stray/duplicated frame). The effects are
+      * request it sent and fail-stops on a mismatch (a stray/duplicated frame). Applied effects are
       * only what the answered command produces: none for `RegisterDeposit`, evacuation diffs for
       * `ApplyDepositDecisions`, diffs + payouts for `ApplyTransaction`.
       */
@@ -350,7 +343,8 @@ object RemoteL2Ledger {
     object Response {
 
         /** The command was applied at `commandNumber`; the effects it produced follow (empty
-          * vectors for a command that produces none).
+          * vectors for a command that produces none). A lost-ack resend replays this from the
+          * remote's cache, so the command is still applied exactly once.
           */
         final case class Applied(
             commandNumber: L2CommandNumber,
@@ -358,31 +352,27 @@ object RemoteL2Ledger {
             payouts: Vector[Payout.Obligation]
         ) extends Response
 
-        /** A re-send of the command the remote most recently *applied* (`== current`, a lost-ack
-          * retry): it replays the original effects from its window-of-1 cache. Consumed exactly
-          * like [[Applied]] — the command is still applied exactly once. A re-send of the last
-          * command the remote *rejected* comes back as [[Rejected]] (same message), not
-          * `Duplicate`. Only the immediately-preceding command can be a Duplicate; an older re-sent
-          * command (`< current`) is [[OutOfOrder]].
-          */
-        final case class Duplicate(
-            commandNumber: L2CommandNumber,
-            evacuationDiffs: Vector[EvacuationDiff],
-            payouts: Vector[Payout.Obligation]
-        ) extends Response
-
-        /** The command number is neither fresh nor the cached last — `> current + 1` (ahead of the
-          * remote) or `< current` (behind its window-of-1). A desync; `commandNumber` is what we
-          * sent and `current` is the remote's last-applied number. The consumer fail-stops rather
-          * than treating it as a per-request verdict.
-          */
-        final case class OutOfOrder(commandNumber: L2CommandNumber, current: L2CommandNumber)
-            extends Response
-
-        /** The command was deterministically rejected by the ledger — a real verdict, not a
-          * transport failure.
+        /** The command was deterministically rejected — a real verdict, not a transport failure.
+          * The client invalidates a `RegisterDeposit`/`ApplyTransaction` and panics on a rejected
+          * `ApplyDepositDecisions`.
           */
         final case class Rejected(commandNumber: L2CommandNumber, message: String) extends Response
+
+        /** The command number is neither fresh nor the cached last — `> T + 1` (ahead of the
+          * remote) or `< T` (behind it): a desync. `commandNumber` is what we sent; `expected` is
+          * the number the remote wanted next (`T + 1`). The client fail-stops.
+          */
+        final case class OutOfOrder(commandNumber: L2CommandNumber, expected: L2CommandNumber)
+            extends Response
+
+        /** The ledger is **frozen** — it could not apply the `ApplyDepositDecisions` at
+          * `wrongDecisionCommandNumber`, and answers this to every command until a `restoreTo`
+          * rewinds past the freeze. The client fail-stops.
+          */
+        final case class LedgerFreeze(
+            commandNumber: L2CommandNumber,
+            wrongDecisionCommandNumber: L2CommandNumber
+        ) extends Response
     }
 
     /** Create a RemoteL2Ledger as a [[Resource]] owning one shared WebSocket client for its whole

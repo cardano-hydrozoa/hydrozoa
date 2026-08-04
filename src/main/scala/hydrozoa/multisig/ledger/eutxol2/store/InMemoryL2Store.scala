@@ -17,7 +17,8 @@ object InMemoryL2Store:
             log <- Ref.of[IO, TreeMap[L2CommandNumber, L2LedgerCommand]](TreeMap.empty)
             snapshots <- Ref.of[IO, TreeMap[L2CommandNumber, L2Snapshot]](TreeMap.empty)
             tip <- Ref.of[IO, Option[L2CommandNumber]](None)
-        yield new Impl(log, snapshots, tip)
+            frozenAt <- Ref.of[IO, Option[L2CommandNumber]](None)
+        yield new Impl(log, snapshots, tip, frozenAt)
 
     /** Resource form, for parity with the RocksDB factory; the release is a no-op. */
     def open: Resource[IO, L2Store[IO]] = Resource.eval(create)
@@ -25,7 +26,8 @@ object InMemoryL2Store:
     private final class Impl(
         log: Ref[IO, TreeMap[L2CommandNumber, L2LedgerCommand]],
         snapshots: Ref[IO, TreeMap[L2CommandNumber, L2Snapshot]],
-        tip: Ref[IO, Option[L2CommandNumber]]
+        tip: Ref[IO, Option[L2CommandNumber]],
+        frozenAt: Ref[IO, Option[L2CommandNumber]]
     ) extends L2Store[IO]:
 
         def appendLog(commandNumber: L2CommandNumber, command: L2LedgerCommand): IO[Unit] =
@@ -59,3 +61,8 @@ object InMemoryL2Store:
                         s <- snapshots.get
                     yield (l.lastOption.map(_._1).toList ++ s.lastOption.map(_._1).toList).maxOption
             }
+
+        def putFrozenAt(commandNumber: Option[L2CommandNumber]): IO[Unit] =
+            frozenAt.set(commandNumber)
+
+        def getFrozenAt: IO[Option[L2CommandNumber]] = frozenAt.get

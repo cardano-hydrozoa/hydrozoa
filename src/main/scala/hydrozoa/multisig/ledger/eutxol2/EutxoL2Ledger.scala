@@ -76,6 +76,11 @@ object EutxoL2Ledger {
           * logged command, so it is not derivable from the log alone.
           */
         commandNumber: L2CommandNumber,
+        /** The command number of the `ApplyDepositDecisions` that froze the ledger, or `None` when
+          * not frozen. A frozen ledger refuses every command (fail-stop) until [[restoreTo]]
+          * rewinds to before the freeze; persisted via `store.putFrozenAt` so it survives a crash.
+          */
+        frozenAt: Option[L2CommandNumber],
     )
 
     object State:
@@ -88,7 +93,8 @@ object EutxoL2Ledger {
               activeUtxos = config.initialEvacuationMap.toUtxos,
               pendingDeposits = Map.empty,
               headId = None,
-              commandNumber = L2CommandNumber.zero
+              commandNumber = L2CommandNumber.zero,
+              frozenAt = None
             )
 
     /** Build a ledger whose state lives only in memory (no recovery store). Convenience for callers
@@ -220,18 +226,29 @@ case class EutxoL2Ledger private (
       * ledger tip stays put — a one-sided reverse desync). Mirrors the remote ledger's `OutOfOrder`
       * → fail-stop. Unreachable while JointLedger drives strictly single-in-flight and in
       * lock-step, but keeps the invariant self-checking if that ever breaks. Shared by the fallible
-      * ([[submit]]) and infallible ([[submitInfallible]]) command paths.
+      * ([[submit]]) and decision ([[submitDecision]]) command paths. A **frozen** ledger refuses
+      * every command here — the local analogue of the remote's `LedgerFreeze` reply.
       */
     private def onFreshNumber[A](
         commandNumber: L2CommandNumber
     )(fresh: EutxoL2Ledger.State => IO[A]): IO[A] =
         state.get.flatMap { before =>
-            val expected = before.commandNumber.increment
-            if commandNumber != expected then
-                IO.raiseError(
-                  L2LedgerError(s"command number $commandNumber out of order (expected $expected)")
-                )
-            else fresh(before)
+            before.frozenAt match
+                case Some(frozen) =>
+                    IO.raiseError(
+                      L2LedgerError(
+                        s"ledger frozen: decision $frozen could not be applied; refusing $commandNumber"
+                      )
+                    )
+                case None =>
+                    val expected = before.commandNumber.increment
+                    if commandNumber != expected then
+                        IO.raiseError(
+                          L2LedgerError(
+                            s"command number $commandNumber out of order (expected $expected)"
+                          )
+                        )
+                    else fresh(before)
         }
 
     /** Validate the caller-assigned `commandNumber` against the ledger's tip and evaluate a
@@ -256,21 +273,24 @@ case class EutxoL2Ledger private (
             }
         }
 
-    /** Like [[submit]] but for a command that has no per-request verdict — it always applies (or
-      * the ledger fail-stops on a broken invariant). There is no reject path, so `attempt` runs in
-      * `IO`: a `raiseError` inside it is a panic (an impossible state), never a soft reject. Used
-      * by [[sendApplyDepositDecisions]], whose only failure modes — a decision for an unregistered
-      * deposit, or an absorbed output that should have been rejected at registration — are
-      * JointLedger-side invariant violations, not ledger verdicts. Fail-stop is safe: a
-      * persistently-mad head is what Hydrozoa's L1 rule-based regime exists to resolve.
+    /** Like [[submit]] but for `ApplyDepositDecisions`: a rejection is not a per-request verdict
+      * but a coordination bug (an unknown deposit compartment, or an internal merge error), so
+      * instead of advancing the tip alone it **freezes** the ledger — every subsequent command then
+      * fail-stops ([[onFreshNumber]]) until [[restoreTo]] rewinds past the freeze. JointLedger
+      * panics on the returned `Left`. Deposits are validated at registration, so the applied path
+      * never fails on deposit *validity*.
       */
-    private def submitInfallible[A](
+    private def submitDecision[A](
         commandNumber: L2CommandNumber,
         command: L2LedgerCommand,
-        attempt: EutxoL2Ledger.State => IO[(EutxoL2Ledger.State, A)]
-    ): IO[A] =
-        onFreshNumber(commandNumber) { before =>
-            attempt(before).flatMap { case (next, effects) => persist(next, command).as(effects) }
+        attempt: EutxoL2Ledger.State => Either[L2LedgerError, (EutxoL2Ledger.State, A)]
+    ): EitherT[IO, L2LedgerError, A] =
+        EitherT {
+            onFreshNumber(commandNumber) { before =>
+                attempt(before) match
+                    case Right((next, effects)) => persist(next, command).as(Right(effects))
+                    case Left(reject)           => rejectAndFreeze(commandNumber).as(Left(reject))
+            }
         }
 
     /** Advance the tip for a *rejected* fresh command — durably and in memory — without logging or
@@ -287,6 +307,15 @@ case class EutxoL2Ledger private (
                   store.putSnapshot(commandNumber, L2Snapshot.fromState(advanced))
                 ) >> state.set(advanced)
             }
+
+    /** Reject a decision the ledger could not apply and **freeze**: advance the tip (the command
+      * was evaluated, like any reject) and record the freeze — in the store and in memory — so
+      * every subsequent command fail-stops until [[restoreTo]] rewinds to before `commandNumber`.
+      */
+    private def rejectAndFreeze(commandNumber: L2CommandNumber): IO[Unit] =
+        rejectAndAdvance(commandNumber) >>
+            store.putFrozenAt(Some(commandNumber)) >>
+            state.update(_.focus(_.frozenAt).replace(Some(commandNumber)))
 
     /** Durably advance to `next`: append the command to the log, snapshot every
       * [[L2Store.SnapshotInterval]] commits, record the tip, then set the in-memory state — in that
@@ -465,8 +494,22 @@ case class EutxoL2Ledger private (
                 (acc, cmd) => acc.flatMap(s => applyMutation(s.commandNumber.increment, s, cmd))
               )
             )
+            // Respect the freeze: it survives only if it happened at or before the target — rewinding
+            // to before the freezing decision clears it.
+            frozenAt <- EitherT.right(
+              store.getFrozenAt.map(_.filter(Ordering[L2CommandNumber].lteq(_, commandNumber)))
+            )
             _ <- EitherT.right(store.putTip(commandNumber))
-            _ <- EitherT.right(state.set(restored.focus(_.commandNumber).replace(commandNumber)))
+            _ <- EitherT.right(store.putFrozenAt(frozenAt))
+            _ <- EitherT.right(
+              state.set(
+                restored
+                    .focus(_.commandNumber)
+                    .replace(commandNumber)
+                    .focus(_.frozenAt)
+                    .replace(frozenAt)
+              )
+            )
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
@@ -485,40 +528,33 @@ case class EutxoL2Ledger private (
     override def sendApplyDepositDecisions(
         commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): IO[Vector[EvacuationDiff]] =
-        submitInfallible(
+    ): EitherT[IO, L2LedgerError, Vector[EvacuationDiff]] =
+        submitDecision(
           commandNumber,
           req,
           before =>
               for {
-                  // A decision for a deposit we never registered is impossible in correct operation
-                  // (JointLedger only decides on registered deposits) — fail-stop, not a verdict.
+                  // Unknown deposit compartment: the decision names a deposit the ledger never
+                  // registered (a JointLedger bug, not a deposit-validity failure) — reject + freeze.
                   absorbed <- req.absorbedDeposits.traverse(id =>
-                      IO.fromOption(before.pendingDeposits.get(id))(
-                        L2LedgerError(s"ApplyDepositDecisions references unregistered deposit $id")
+                      before.pendingDeposits
+                          .get(id)
+                          .toRight(L2LedgerError(s"unknown deposit compartment: $id"))
+                  )
+                  next <- applyMutation(commandNumber, before, req)
+                  // Registration validated each output's min-ada, so this should not fail; if it
+                  // does it is an internal merge error (a ledger bug) — reject + freeze.
+                  diffs <- absorbed
+                      .flatMap(_.asUtxos)
+                      .toVector
+                      .traverse((i, o) =>
+                          Payout
+                              .Obligation(o, config)
+                              .map(obligation =>
+                                  EvacuationDiff.Update(i.toEvacuationKey, obligation)
+                              )
                       )
-                  )
-                  next <- IO.fromEither(applyMutation(commandNumber, before, req))
-                  // Registration validated each spawned output's min-ada, so Payout.Obligation
-                  // cannot fail here; a failure would be a broken invariant — fail-stop.
-                  diffs <- IO.fromEither(
-                    absorbed
-                        .flatMap(_.asUtxos)
-                        .toVector
-                        .traverse((i, o) =>
-                            Payout
-                                .Obligation(o, config)
-                                .map(obligation =>
-                                    EvacuationDiff.Update(i.toEvacuationKey, obligation)
-                                )
-                        )
-                        .leftMap(e =>
-                            L2LedgerError(
-                              "absorbed deposit output failed min-ada at absorption" +
-                                  s" (should be rejected at registration): $e"
-                            )
-                        )
-                  )
+                      .leftMap(e => L2LedgerError(s"internal merge error: $e"))
               } yield (next, diffs)
         )
 }
