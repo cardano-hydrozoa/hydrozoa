@@ -38,7 +38,7 @@ final case class RuleBasedTreasuryUtxo(
 
     def referenceOutput(using config: Config): ReferenceOutput = ReferenceOutput(toUtxo)
 
-    def spendAttached(redeemer: TreasuryRedeemer)(using config: Config) = Spend(
+    def spendAttached(redeemer: TreasuryRedeemer)(using config: Config): Spend = Spend(
       toUtxo,
       ThreeArgumentPlutusScriptWitness(
         PlutusScriptAttached,

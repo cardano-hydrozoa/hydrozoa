@@ -61,7 +61,7 @@ case object MultisigRegimeOutput {
       scriptRef = Some(ScriptRef(config.headMultisigScript.script))
     )
 
-    def burnRegimeWitnessToken(using config: Config) = Mint(
+    def burnRegimeWitnessToken(using config: Config): Mint = Mint(
       config.headMultisigScript.policyId,
       config.headTokenNames.regimeWitnessTokenName,
       -1,
