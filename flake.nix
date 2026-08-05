@@ -48,6 +48,7 @@
             async-profiler # Low-overhead profiler for the JVM: https://github.com/async-profiler/async-profiler
             git # otherwise `git` resolves to the broken macOS Xcode shim inside `nix develop`
             jdk
+            jq # JSON on the command line; used by scripts/yaci-devnet.sh
             just # command runner, similar to `make`
             libnotify # used in justfile
             ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls

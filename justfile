@@ -134,6 +134,12 @@ build-head-config HOME="head/demo": _require-launcher
   if [ -z "$key" ]; then echo "error: no Blockfrost key — create $template (deployment guide step 1) or export BLOCKFROST_API_KEY" >&2; exit 1; fi
   {{hydrozoa}} build-head-config --home {{HOME}} --blockfrost-key "$key"
 
+# Drive a local Yaci DevKit devnet as the head's L1 (dev/testing — no Blockfrost key, no funded
+# testnet wallet). Commands: `up`, `network [OUT]`, `topup ADDRESS [ADA]`, `down`; run without
+# arguments for the full usage. The Docker smoke-test calls the same script.
+yaci-devnet *ARGS:
+  scripts/yaci-devnet.sh {{ARGS}}
+
 # Run a head node in the foreground from a generated head-config + a peer's private config.
 serve HEAD_CONFIG PRIVATE_CONFIG: _require-launcher
   {{hydrozoa}} serve {{HEAD_CONFIG}} {{PRIVATE_CONFIG}}
