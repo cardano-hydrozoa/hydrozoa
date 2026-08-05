@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en" }}">
+
+  {%- include head.html -%}
+
+  <body>
+
+    {%- comment -%}
+      Group the content pages into the two doc sections for the left sidebar.
+      READMEs (their url ends in `/`, not `.html`) are the section landing pages,
+      linked from the section headers rather than listed as items.
+    {%- endcomment -%}
+    {%- assign guides = site.html_pages | where_exp: "p", "p.url contains '/user-guide/' and p.url contains '.html'" | sort: "title" -%}
+    {%- assign specs = site.html_pages | where_exp: "p", "p.url contains '/spec/' and p.url contains '.html'" | sort: "title" -%}
+
+    <div class="layout">
+      <aside class="sidebar" aria-label="Documentation navigation">
+        <a class="brand" href="{{ '/' | relative_url }}">{{ site.title | default: "Documentation" | escape }}</a>
+        <nav class="site-nav">
+          <a class="nav-item{% if page.url == '/' %} active{% endif %}" href="{{ '/' | relative_url }}">Home</a>
+
+          <p class="nav-section"><a href="{{ '/user-guide/' | relative_url }}">User guide</a></p>
+          <ul>
+            {%- for p in guides -%}
+            <li><a class="nav-item{% if p.url == page.url %} active{% endif %}" href="{{ p.url | relative_url }}">{{ p.title | escape }}</a></li>
+            {%- endfor -%}
+          </ul>
+
+          <p class="nav-section"><a href="{{ '/spec/' | relative_url }}">Design &amp; reference</a></p>
+          <ul>
+            {%- for p in specs -%}
+            <li><a class="nav-item{% if p.url == page.url %} active{% endif %}" href="{{ p.url | relative_url }}">{{ p.title | escape }}</a></li>
+            {%- endfor -%}
+          </ul>
+        </nav>
+      </aside>
+
+      <main class="content" aria-label="Content">
+        <div class="wrapper">
+          {{ content }}
+        </div>
+      </main>
+    </div>
+
+    {%- include footer.html -%}
+
+  </body>
+
+</html>
