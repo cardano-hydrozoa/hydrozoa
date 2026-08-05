@@ -340,18 +340,27 @@ object Bootstrap:
     def resolveChainSource(source: Either[String, Path]): IO[CardanoNetwork] =
         source.fold(standardNetworkByName, readCardanoNetworkFile)
 
-    /** One of the three standard chains, by name. */
-    def standardNetworkByName(name: String): IO[StandardCardanoNetwork] = name match {
-        case "preview" => IO.pure(CardanoNetwork.Preview)
-        case "preprod" => IO.pure(CardanoNetwork.Preprod)
-        case "mainnet" => IO.pure(CardanoNetwork.Mainnet)
-        case other =>
-            IO.raiseError(
-              new IllegalArgumentException(
-                s"unknown cardano network \"$other\" (expected preview, preprod or mainnet)"
-              )
-            )
+    /** One of the three standard chains, by name, or nothing — so a caller that can report the
+      * error better than an exception (a CLI parser, say) is able to.
+      */
+    def standardNetworkByNameOpt(name: String): Option[StandardCardanoNetwork] = name match {
+        case "preview" => Some(CardanoNetwork.Preview)
+        case "preprod" => Some(CardanoNetwork.Preprod)
+        case "mainnet" => Some(CardanoNetwork.Mainnet)
+        case _         => None
     }
+
+    /** One of the three standard chains, by name. */
+    def standardNetworkByName(name: String): IO[StandardCardanoNetwork] =
+        standardNetworkByNameOpt(name) match {
+            case Some(network) => IO.pure(network)
+            case None =>
+                IO.raiseError(
+                  new IllegalArgumentException(
+                    s"unknown cardano network \"$name\" (expected preview, preprod or mainnet)"
+                  )
+                )
+        }
 
     /** Read a chain description written by `hydrozoa discover-network`, refusing one that carries a
       * standard chain's magic — that chain must be named, so its baked-in slot geometry is used.
@@ -1312,6 +1321,13 @@ object InitBootstrapFiles:
                 case (Some(_), Some(_)) =>
                     Validated.invalidNel(
                       "--cardano-network and --cardano-network-file are mutually exclusive"
+                    )
+                // Rejected here rather than left to `resolveChainSource`, so a typo comes back as
+                // decline's usage message instead of an exception out of the middle of a run.
+                case (Some(name), None) if Bootstrap.standardNetworkByNameOpt(name).isEmpty =>
+                    Validated.invalidNel(
+                      s"unknown network: $name (expected preview, preprod or mainnet — a chain " +
+                          "outside those three needs --cardano-network-file)"
                     )
                 case (Some(name), None) => Validated.validNel(Left(name))
                 case (None, Some(file)) => Validated.validNel(Right(file))

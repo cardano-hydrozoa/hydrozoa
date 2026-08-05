@@ -74,6 +74,27 @@ object CardanoNetworkDiscovery {
         )
         val custom: CardanoNetwork.Custom =
             CardanoNetwork.Custom(CardanoInfo(protocolParams, network, slotConfig), magic)
-        CardanoNetwork.rejectStandardMagic(custom).map(_ => custom)
+        for {
+            _ <- rejectDegenerateGeometry(slotConfig)
+            _ <- CardanoNetwork.rejectStandardMagic(custom)
+        } yield custom
+    }
+
+    /** Refuse a slot length or epoch length of zero. Both are divisors — `timeToSlot` and `epochOf`
+      * — so a zero would not fail here but as an `ArithmeticException` at every node's startup,
+      * long after this description was pinned into the head config.
+      */
+    private def rejectDegenerateGeometry(slotConfig: SlotConfig): Either[String, Unit] = {
+        val degenerate = List(
+          "slotLength" -> slotConfig.slotLength,
+          "epochLength" -> slotConfig.epochLength
+        ).filter(_._2 <= 0L)
+        Either.cond(
+          degenerate.isEmpty,
+          (),
+          degenerate
+              .map((name, value) => s"the backend reports $name = $value")
+              .mkString("", "; ", " — a chain cannot be described with that slot geometry")
+        )
     }
 }

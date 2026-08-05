@@ -51,12 +51,31 @@ class CardanoNetworkDiscoveryTest extends AnyFunSuite:
         }
     }
 
-    test("a sub-second slot length survives the conversion") {
-        // Guards the scaling order: seconds must be scaled before any truncation.
+    test("a slot length other than the 1s default is scaled, not assumed") {
+        // `GenesisInfo.slotLength` is integral, so a sub-second devnet cannot be described at all —
+        // it would fail while decoding `/genesis`, before reaching here. Whole seconds are the
+        // range this has to carry.
         val slotConfig = CardanoNetworkDiscovery
             .mkCustomNetwork(genesis(networkMagic = 42, slotLengthSeconds = 2L), params)
             .fold(m => fail(m), _.cardanoInfo.slotConfig)
         assert(slotConfig.slotLength == 2000L)
+    }
+
+    test("a backend reporting a zero slot or epoch length is refused") {
+        // Both are divisors in SlotConfig; left alone they would surface as an ArithmeticException
+        // at node startup, long after this description was pinned into the head config.
+        val zeroSlotLength = genesis(networkMagic = 42, slotLengthSeconds = 0L)
+        val zeroEpochLength = genesis(networkMagic = 42).copy(epochLength = 0L)
+        assert(
+          CardanoNetworkDiscovery
+              .mkCustomNetwork(zeroSlotLength, params)
+              .left
+              .exists(_.contains("slotLength")) &&
+              CardanoNetworkDiscovery
+                  .mkCustomNetwork(zeroEpochLength, params)
+                  .left
+                  .exists(_.contains("epochLength"))
+        )
     }
 
     test("a backend reporting a standard chain's magic is refused, by name") {
