@@ -1,191 +1,940 @@
 package hydrozoa.multisig.server
 
 import cats.effect.IO
-import fs2.Stream
+import cats.syntax.traverse.*
+import hydrozoa.BuildInfo
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequest}
-import hydrozoa.multisig.server.ApiResponse.{CardanoNativeToken, Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.NodeStatus
+import hydrozoa.multisig.consensus.peer.HeadPeerNumber
+import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer, UserRequestWithId}
+import hydrozoa.multisig.ledger.block.{BlockBrief, BlockNumber}
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
+import hydrozoa.multisig.persistence.{ConsensusStoreReader, RequestBlockEntry}
+import hydrozoa.multisig.server.ApiDto.*
 import hydrozoa.multisig.server.HydrozoaHttpEvent.*
-import hydrozoa.multisig.server.JsonCodecs.{UserRequestDecoder, given}
-import io.circe.syntax.*
-import org.http4s.circe.*
-import org.http4s.dsl.io.*
-import org.http4s.headers.Authorization
-import org.http4s.{BasicCredentials, EntityDecoder, HttpRoutes}
+import hydrozoa.multisig.server.TapirJson.*
+import java.time.Instant
+import org.http4s.HttpRoutes
+import scala.util.Try
+import scalus.cardano.address.Address
+import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
+import sttp.apispec.openapi.circe.yaml.*
+import sttp.model.StatusCode
+import sttp.model.headers.WWWAuthenticateChallenge
+import sttp.tapir.*
+import sttp.tapir.docs.openapi.{OpenAPIDocsInterpreter, OpenAPIDocsOptions}
+import sttp.tapir.generic.auto.*
+import sttp.tapir.model.UsernamePassword
+import sttp.tapir.server.ServerEndpoint
+import sttp.tapir.server.http4s.Http4sServerInterpreter
+import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
-/** HTTP routes for the Hydrozoa server. These routes are what get called by the frontend (or a
-  * proxy -- load-balancer, unified api).
+/** The Hydrozoa node's user-facing HTTP API, described as tapir endpoint values.
+  *
+  * Endpoints-as-data is what makes the OpenAPI schema (and Swagger UI) genuinely *generated* from
+  * the same definitions that serve traffic — there is one source of truth, so the docs cannot drift
+  * from the routes. The tapir http4s interpreter stays inside cats-effect: handlers are `IO`, the
+  * result is a plain `HttpRoutes[IO]`, and it mounts on the same Ember server.
   */
 class HydrozoaRoutes(
     requestSequencer: RequestSequencer.Handle,
     blockWeaver: BlockWeaver.Handle,
+    nodeStatus: IO[NodeStatus],
+    consensusReader: ConsensusStoreReader[IO],
+    l2QueryReader: Option[EutxoL2LedgerReader[IO]],
     headConfig: HeadConfig,
     serverConfig: HydrozoaServer.Config,
     tracer: ContraTracer[IO, HydrozoaHttpEvent]
 ) {
-    private given HeadConfig = headConfig
+    import HydrozoaRoutes.{apiTitle, apiVersion, l2ApiTitle}
 
-    /** Check if the provided credentials match the configured admin credentials */
-    private def checkAuth(req: org.http4s.Request[IO]): Boolean =
-        req.headers.get[Authorization] match {
-            case Some(Authorization(BasicCredentials(username, password))) =>
-                username == serverConfig.adminUsername && password == serverConfig.adminPassword
-            case _ => false
+    /** Decomposes hard-confirmed stacks' effects onto blocks for the effect queries. */
+    private val effectsResolver: EffectsResolver = EffectsResolver(consensusReader)
+
+    /** How many recent L2 transactions to return when `?count=` is omitted. */
+    private val defaultRecentTxCount = 50
+
+    /** The shared error output: an HTTP status plus an `{ error }` body. */
+    private val errorOut: EndpointOutput[(StatusCode, ErrorResponse)] =
+        statusCode.and(jsonBody[ErrorResponse])
+
+    private def fail(code: StatusCode, message: String): (StatusCode, ErrorResponse) =
+        (code, ErrorResponse(message))
+
+    /** The admin realm advertised on a `401` from the finalize endpoint. */
+    private val adminChallenge: WWWAuthenticateChallenge =
+        WWWAuthenticateChallenge.basic("Hydrozoa Admin")
+
+    /** Finalize's error output — like [[errorOut]], but carrying an optional `WWW-Authenticate`
+      * header so a `401` re-advertises the Basic challenge (as the old route did).
+      */
+    private val finalizeErrorOut: EndpointOutput[(StatusCode, Option[String], ErrorResponse)] =
+        statusCode.and(header[Option[String]]("WWW-Authenticate")).and(jsonBody[ErrorResponse])
+
+    // ---- Endpoint definitions (the single source of truth for routes + schema) ----
+
+    private val submitRequestEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.post
+            .in("head" / "requests")
+            .name("postHeadRequest")
+            .tag("Requests")
+            .in(
+              // Explicit examples so Swagger UI shows a copy-pasteable body *including* the `type`
+              // discriminator — its auto-generated examples omit the discriminator property, which
+              // for this (internally-tagged) input would produce a 400.
+              jsonBody[SubmitRequestView].examples(
+                List(
+                  EndpointIO.Example.of(
+                    SubmitRequestView.SubmitTransactionView("84a400d9010281825820…"),
+                    name = Some("transaction"),
+                    summary = Some("Submit an L2 transaction")
+                  ),
+                  EndpointIO.Example.of(
+                    SubmitRequestView.SubmitDepositView("84a400d9010281825820…", "a1024568656164…"),
+                    name = Some("deposit"),
+                    summary = Some("Register an L1 deposit")
+                  )
+                )
+              )
+            )
+            .out(jsonBody[RequestAcceptedResponse])
+            .errorOut(errorOut)
+            .description(
+              "Submit a request. A `type` field tags the kind: " +
+                  "`{ \"type\": \"deposit\", \"l1Payload\", \"l2Payload\" }` registers an L1 deposit " +
+                  "(the unsigned deposit-tx CBOR plus the serialized L2 outputs it spawns on " +
+                  "absorption); `{ \"type\": \"transaction\", \"l2Payload\" }` submits an L2 " +
+                  "transaction (a native, self-authenticating Cardano tx). Payloads are lowercase " +
+                  "hex. Returns the assigned request id."
+            )
+            .serverLogic(body => acceptUserRequest("POST /head/requests", body))
+
+    private val headInfoEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "info")
+            .name("getHeadInfo")
+            .out(jsonBody[HeadInfoResponse])
+            .errorOut(errorOut)
+            .description("Head parameters plus the current node time.")
+            .serverLogic(_ =>
+                IO.realTimeInstant
+                    .map(_.getEpochSecond)
+                    .map(now => Right(ApiDto.mkHeadInfoResponse(headConfig, now)))
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** `{block-number}` path segments decode to a validated [[BlockNumber]] — a malformed or
+      * negative number is a 400 at decode, never a throw in a handler.
+      */
+    private given Codec[String, BlockNumber, CodecFormat.TextPlain] =
+        Codec.int.mapDecode(i =>
+            if i >= 0 then DecodeResult.Value(BlockNumber(i))
+            else
+                DecodeResult.Error(
+                  i.toString,
+                  new IllegalArgumentException("negative block number")
+                )
+        )(_.convert)
+
+    /** `{request-id}` path segments decode to a validated [[RequestId]] from its opaque i64 form
+      * (`asI64`, bits 40-47 = author peer, bits 0-39 = request number). Out of `[0, 2^48)` — where
+      * `fromI64` would throw an out-of-range peer/number — is a 400 at decode, not a 500.
+      */
+    private given Codec[String, RequestId, CodecFormat.TextPlain] =
+        Codec.long.mapDecode(n =>
+            if n >= 0 && n < (1L << 48) then DecodeResult.Value(RequestId.fromI64(n))
+            else
+                DecodeResult.Error(
+                  n.toString,
+                  new IllegalArgumentException("request id out of range [0, 2^48)")
+                )
+        )(_.asI64)
+
+    /** `{l1TxId}` path segments decode to a validated 32-byte [[TransactionHash]] from lower-case
+      * hex; a malformed or wrong-length token is a 400 at decode.
+      */
+    private given Codec[String, TransactionHash, CodecFormat.TextPlain] =
+        Codec.string.mapDecode(s =>
+            Try(TransactionHash.fromByteString(ByteString.fromHex(s))).toEither match
+                case Right(h) if h.bytes.size == 32 => DecodeResult.Value(h)
+                case _ =>
+                    DecodeResult.Error(s, new IllegalArgumentException("malformed 32-byte l1TxId"))
+        )(_.toHex)
+
+    private val blocksEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks")
+            .name("getHeadBlocks")
+            .tag("Blocks")
+            .out(jsonBody[List[BlockSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Every block of the head in block order — number, fast-cycle leader, and type. " +
+                  "Block 0 is the head's initial block (config, no leader)."
+            )
+            .serverLogic(_ =>
+                consensusReader.blockBriefs
+                    .map(briefs =>
+                        Right(
+                          ApiDto.mkInitialBlockSummaryView ::
+                              briefs.map(ApiDto.mkBlockSummaryView(_, headConfig.nHeadPeers))
+                        )
+                    )
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockDetailsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number"))
+            .name("getHeadBlock")
+            .tag("Blocks")
+            .out(jsonBody[BlockDetailsView])
+            .errorOut(errorOut)
+            .description(
+              "One block's type, leader, hard-confirming stack, full header, and confirmation " +
+                  "status: PROPOSED, SOFT_CONFIRMED (+ soft-confirmation time), or HARD_CONFIRMED " +
+                  "(+ hard-confirmation time). Each confirmation time records a local event at this " +
+                  "peer — when it produced the soft/hard confirmation — so different peers report " +
+                  "different times for the same block. This is by design."
+            )
+            .serverLogic(num =>
+                blockDetails(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockBodyEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "body")
+            .name("getHeadBlockBody")
+            .tag("Blocks")
+            .out(jsonBody[BlockBodyView])
+            .errorOut(errorOut)
+            .description(
+              "The block's content: its transactions (the request ids woven into the block, each " +
+                  "with its validity verdict) and its deposit decisions (the request ids absorbed " +
+                  "into the treasury and those rejected). 404 if the block does not exist."
+            )
+            .serverLogic(num =>
+                blockBody(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockEffectsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects")
+            .name("getHeadBlockEffects")
+            .tag("Blocks")
+            .out(jsonBody[BlockEffectsView])
+            .errorOut(errorOut)
+            .description(
+              "A block's L1 effects as l1TxIds, grouped by kind (initialization, settlement, " +
+                  "fallback, sec, rollouts, refunds, finalization) per block type. Empty until " +
+                  "the block is hard-confirmed."
+            )
+            .serverLogic(num =>
+                blockEffectsListing(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** One `GET /head/blocks/<n>/effects/<kind>` endpoint per real-tx kind — the effect in full
+      * (with its l1TxId; the kind is the path, so it is not discriminated), or a 404 when this
+      * block carries no effect of that kind.
+      */
+    private def blockTxEffectEndpoint(
+        segment: String,
+        kind: EffectKind
+    ): ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / segment)
+            .name(s"getHeadBlockEffect_$segment")
+            .tag("Blocks")
+            .out(jsonBody[TxEffectView])
+            .errorOut(errorOut)
+            .description(s"The block's $segment effect in full, or 404 if it has none.")
+            .serverLogic(num =>
+                blockTxEffectOfKind(num, kind)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** `GET /head/blocks/<n>/effects/sec` — the block's SEC in full, or a 404. */
+    private val blockSecEffectEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "sec")
+            .name("getHeadBlockEffect_sec")
+            .tag("Blocks")
+            .out(jsonBody[SecEffectView])
+            .errorOut(errorOut)
+            .description(
+              "The block's SEC (standalone evacuation commitment), or 404 if it has none."
+            )
+            .serverLogic(num =>
+                blockSecEffect(num)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val blockRolloutEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in(
+              "head" / "blocks" / path[BlockNumber]("block-number") / "effects" / "rollouts" /
+                  path[Int]("number")
+            )
+            .name("getHeadBlockRollout")
+            .tag("Blocks")
+            .out(jsonBody[TxEffectView])
+            .errorOut(errorOut)
+            .description("One rollout of the block's rollout chain by index, or 404 if absent.")
+            .serverLogic((num, i) =>
+                blockRollout(num, i)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val effectByIdEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "effects" / path[TransactionHash]("l1TxId"))
+            .name("getHeadEffect")
+            .tag("Effects")
+            .out(jsonBody[EffectView])
+            .errorOut(errorOut)
+            .description("Any effect by its l1TxId (real tx id, or an SEC's synthetic hash).")
+            .serverLogic(id =>
+                effectById(id)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    /** The per-kind effect sub-resources, one endpoint each. */
+    private val blockEffectKindEndpoints: List[ServerEndpoint[Any, IO]] =
+        List(
+          "initialization" -> EffectKind.Initialization,
+          "settlement" -> EffectKind.Settlement,
+          "fallback" -> EffectKind.Fallback,
+          "finalization" -> EffectKind.Finalization
+        ).map(blockTxEffectEndpoint) :+ blockSecEffectEndpoint
+
+    private val requestsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests")
+            .in(query[Option[String]]("type"))
+            .in(query[Option[Int]]("peer_number"))
+            .name("getHeadRequests")
+            .tag("Requests")
+            .out(jsonBody[List[RequestSummaryView]])
+            .errorOut(errorOut)
+            .description(
+              "Requests the head has assigned an id — opaque request id, author peer number, and " +
+                  "type (transaction or deposit). Filter with ?type=transaction|deposit and " +
+                  "?peer_number=<n>."
+            )
+            .serverLogic((typeFilter, peerFilter) =>
+                listRequests(typeFilter, peerFilter)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    private val transactionDetailExample: RequestDetailsView =
+        RequestDetailsView.TransactionView(
+          requestId = 5L,
+          peerNumber = 0,
+          receivedAt = "2026-01-01T00:00:00Z",
+          status = RequestStatusView.RequestHardConfirmedView(
+            blockNumber = 12,
+            validity = ValidityView.Valid,
+            softConfirmedAt = Some("2026-01-01T00:00:03Z"),
+            hardConfirmedAt = "2026-01-01T00:02:00Z",
+            relatedEffects = List(EffectRefView("9f8e7d6c5b4a…", EffectKindView.Settlement))
+          )
+        )
+
+    private val depositDetailExample: RequestDetailsView =
+        RequestDetailsView.DepositView(
+          requestId = 1099511627782L,
+          peerNumber = 1,
+          receivedAt = "2026-01-01T00:00:00Z",
+          status = RequestStatusView.RequestHardConfirmedView(
+            blockNumber = 8,
+            validity = ValidityView.Valid,
+            softConfirmedAt = Some("2026-01-01T00:00:04Z"),
+            hardConfirmedAt = "2026-01-01T00:03:00Z",
+            relatedEffects = List(EffectRefView("1a2b3c4d5e6f…", EffectKindView.Refund))
+          ),
+          absorptionDecisionStatus = AbsorptionDecisionStatusView.AbsorptionHardConfirmedView(
+            blockNumber = 10,
+            decision = DecisionView.Absorbed,
+            softConfirmedAt = Some("2026-01-01T00:01:00Z"),
+            hardConfirmedAt = "2026-01-01T00:04:00Z",
+            settlementEffect = Some("4d5e6f7a8b9c…")
+          )
+        )
+
+    private val requestDetailsEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("head" / "requests" / path[RequestId]("request-id"))
+            .name("getHeadRequest")
+            .tag("Requests")
+            .out(
+              // Explicit examples so Swagger UI renders each variant *with* its `type` discriminator
+              // (its auto-generated examples drop it); the codec also surfaces `type` on the nested
+              // `status` / `absorptionDecisionStatus` sums.
+              jsonBody[RequestDetailsView].examples(
+                List(
+                  EndpointIO.Example.of(
+                    transactionDetailExample,
+                    name = Some("transaction"),
+                    summary = Some("A transaction request's details")
+                  ),
+                  EndpointIO.Example.of(
+                    depositDetailExample,
+                    name = Some("deposit"),
+                    summary = Some("A deposit request's details")
+                  )
+                )
+              )
+            )
+            .errorOut(errorOut)
+            .description(
+              "One request's peer, type, receive time, and lifecycle status: UNPROCESSED, " +
+                  "PROPOSED (block + validity), SOFT_CONFIRMED (+ soft-confirmation " +
+                  "time), or HARD_CONFIRMED (+ hard-confirmation time and the related L1 effects — " +
+                  "the l1TxIds the request became). Every time records a " +
+                  "local event at this peer — when it received the request, and when it produced " +
+                  "the soft/hard confirmation — so different peers report different times for the " +
+                  "same request. This is by design."
+            )
+            .serverLogic(id =>
+                requestDetails(id)
+                    .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+            )
+
+    // The two EUTXO L2-query endpoints are defined apart from their handlers so their schema
+    // (openapi-eutxo-l2.yaml) can be generated even on a node with no reader (a remote-ledger node),
+    // and the routes are mounted only when the EUTXO reader is present. See [[l2QueryReader]].
+
+    private val l2UtxosDef
+        : PublicEndpoint[String, (StatusCode, ErrorResponse), List[L2UtxoView], Any] =
+        endpoint.get
+            .in("l2" / "cardano-eutxo" / "utxos" / path[String]("address"))
+            .name("getL2CardanoEutxoUtxos")
+            .out(jsonBody[List[L2UtxoView]])
+            .errorOut(errorOut)
+            .description("Current L2 utxos controlled by a bech32 address (EUTXO ledger only).")
+
+    private val l2TransactionsDef
+        : PublicEndpoint[Option[Int], (StatusCode, ErrorResponse), List[L2TxSummaryView], Any] =
+        endpoint.get
+            .in("l2" / "cardano-eutxo" / "transactions")
+            .name("getL2CardanoEutxoTransactions")
+            .in(query[Option[Int]]("count"))
+            .out(jsonBody[List[L2TxSummaryView]])
+            .errorOut(errorOut)
+            .description("Recent applied L2 transactions, newest first (EUTXO ledger only).")
+
+    /** The EUTXO L2-query endpoints wired to `reader` — mounted only when the node runs the EUTXO
+      * ledger.
+      */
+    private def l2ServerEndpoints(
+        reader: EutxoL2LedgerReader[IO]
+    ): List[ServerEndpoint[Any, IO]] =
+        List(
+          l2UtxosDef.serverLogic(address =>
+              parseAddress(address) match {
+                  case Left(message) => IO.pure(Left(fail(StatusCode.BadRequest, message)))
+                  case Right(addr) =>
+                      reader
+                          .utxosByAddress(addr)
+                          .map(utxos =>
+                              Right(utxos.toList.map((in, out) => ApiDto.mkL2UtxoView(in, out)))
+                          )
+                          .handleError(err =>
+                              Left(fail(StatusCode.InternalServerError, err.getMessage))
+                          )
+              }
+          ),
+          l2TransactionsDef.serverLogic(count =>
+              reader
+                  .recentTransactions(count.getOrElse(defaultRecentTxCount))
+                  .map(summaries => Right(summaries.map(ApiDto.mkL2TxSummaryView).toList))
+                  .handleError(err => Left(fail(StatusCode.InternalServerError, err.getMessage)))
+          )
+        )
+
+    private val healthEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("health")
+            .name("getHealth")
+            .out(jsonBody[HealthResponse])
+            .description("Liveness — always 200 while the process is serving HTTP.")
+            .serverLogicSuccess(_ => IO.pure(HealthResponse("ok")))
+
+    private val versionEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("version")
+            .name("getVersion")
+            .out(jsonBody[VersionResponse])
+            .description(
+              "The build identity (version, git commit, build time) baked in at compile."
+            )
+            .serverLogicSuccess(_ =>
+                IO.pure(
+                  VersionResponse(BuildInfo.version, BuildInfo.gitCommit, BuildInfo.builtAtString)
+                )
+            )
+
+    /** Readiness — `200` only while the head is [[NodeStatus.Active]] (open on L1); otherwise
+      * `503`, always with the lifecycle status in the body, so a proxy routes user traffic here
+      * only when the node can serve it. The verdict is the status code; the body is diagnostic.
+      */
+    private val readyEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.get
+            .in("ready")
+            .name("getReady")
+            .out(statusCode.and(jsonBody[ReadinessResponse]))
+            .description(
+              "Readiness — 200 only while the head is Active (open on L1); 503 with the lifecycle " +
+                  "status otherwise."
+            )
+            .serverLogicSuccess(_ =>
+                nodeStatus.map { status =>
+                    val code =
+                        if status == NodeStatus.Active then StatusCode.Ok
+                        else StatusCode.ServiceUnavailable
+                    (code, ApiDto.mkReadinessResponse(status))
+                }
+            )
+
+    private val finalizeEndpoint: ServerEndpoint[Any, IO] =
+        endpoint.post
+            // Optional credentials so the security logic runs (and logs) even when the header is
+            // absent, rather than tapir short-circuiting the missing-header case.
+            .securityIn(auth.basic[Option[UsernamePassword]](adminChallenge))
+            .in("api" / "admin" / "finalize")
+            .name("postAdminFinalize")
+            .tag("Governance")
+            .out(jsonBody[FinalizeResponse])
+            .errorOut(finalizeErrorOut)
+            .description("Trigger head finalization (admin only).")
+            .serverSecurityLogic {
+                case Some(credentials)
+                    if credentials.username == serverConfig.adminUsername
+                        && credentials.password.contains(serverConfig.adminPassword) =>
+                    IO.pure(Right(()))
+                case _ =>
+                    tracer
+                        .traceWith(UnauthorizedAdmin("POST /api/admin/finalize"))
+                        .as(
+                          Left(
+                            (
+                              StatusCode.Unauthorized,
+                              Some(adminChallenge.toString),
+                              ErrorResponse("Unauthorized")
+                            )
+                          )
+                        )
+            }
+            .serverLogic(_ =>
+                _ =>
+                    (for {
+                        _ <- tracer.traceWith(FinalizeTriggered)
+                        _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
+                        _ <- tracer.traceWith(FinalizeSignalSent)
+                    } yield Right(
+                      FinalizeResponse("success", "Head finalization triggered")
+                    )).handleErrorWith(err =>
+                        tracer
+                            .traceWith(RequestFailed("POST /api/admin/finalize", err))
+                            .as(
+                              Left(
+                                (
+                                  StatusCode.InternalServerError,
+                                  None,
+                                  ErrorResponse(err.getMessage)
+                                )
+                              )
+                            )
+                    )
+            )
+
+    /** The core API endpoints, in the order they appear in the docs — always served. */
+    private val coreEndpoints: List[ServerEndpoint[Any, IO]] =
+        List(
+          submitRequestEndpoint,
+          headInfoEndpoint,
+          requestsEndpoint,
+          requestDetailsEndpoint,
+          blocksEndpoint,
+          blockDetailsEndpoint,
+          blockBodyEndpoint,
+          blockEffectsEndpoint,
+          effectByIdEndpoint,
+          blockRolloutEndpoint,
+          healthEndpoint,
+          readyEndpoint,
+          versionEndpoint,
+          finalizeEndpoint
+        ) ++ blockEffectKindEndpoints
+
+    /** OpenAPI doc options:
+      *   - drop the `View` suffix from every DTO's component-schema name (the Scala types keep it
+      *     as a domain-vs-DTO convention; the spec reads cleaner without it);
+      *   - don't auto-document a body/param decode-failure response — tapir's default advertises a
+      *     `text/plain` 400 that contradicts each endpoint's declared JSON `ErrorResponse`.
+      */
+    private val docsOptions: OpenAPIDocsOptions =
+        OpenAPIDocsOptions.default.copy(
+          defaultDecodeFailureOutput = _ => None,
+          schemaName = sname => OpenAPIDocsOptions.default.schemaName(sname).stripSuffix("View")
+        )
+
+    /** Swagger UI (served at `/docs`) + the raw OpenAPI document for the core API. */
+    private val coreDocsEndpoints: List[ServerEndpoint[Any, IO]] =
+        SwaggerInterpreter(openAPIInterpreterOptions = docsOptions)
+            .fromServerEndpoints[IO](coreEndpoints, apiTitle, apiVersion)
+
+    /** The EUTXO L2-query routes, mounted only when the node runs the EUTXO ledger. */
+    private val l2Routes: List[ServerEndpoint[Any, IO]] =
+        l2QueryReader.fold(List.empty)(l2ServerEndpoints)
+
+    /** The full route set: the core API + its docs, plus the EUTXO L2-query routes when present. */
+    val routes: HttpRoutes[IO] =
+        Http4sServerInterpreter[IO]().toRoutes(coreEndpoints ++ coreDocsEndpoints ++ l2Routes)
+
+    /** The core OpenAPI document as YAML — pinned by the golden test (docs/openapi.yaml). */
+    def openApiYaml: String =
+        OpenAPIDocsInterpreter(docsOptions)
+            .toOpenAPI(coreEndpoints.map(_.endpoint), apiTitle, apiVersion)
+            .toYaml
+
+    /** The EUTXO L2-ledger OpenAPI document as YAML — pinned by the golden test
+      * (docs/openapi-eutxo-l2.yaml). Generated from the endpoint definitions, so it exists whether
+      * or not the L2 routes are mounted on this node.
+      */
+    def l2OpenApiYaml: String =
+        OpenAPIDocsInterpreter(docsOptions)
+            .toOpenAPI(List(l2UtxosDef, l2TransactionsDef), l2ApiTitle, apiVersion)
+            .toYaml
+
+    // ---- Handlers ----
+
+    /** Parse a user request, forward it to the sequencer, and return the assigned id — preserving
+      * the body / decode-error / failure tracing. Any failure is a 400.
+      */
+    private def acceptUserRequest(
+        path: String,
+        body: SubmitRequestView
+    ): IO[Either[(StatusCode, ErrorResponse), RequestAcceptedResponse]] =
+        val handled =
+            for {
+                userRequest <- ApiDto.toUserRequest(body) match {
+                    case Left(message) =>
+                        val error = new RuntimeException(message)
+                        tracer.traceWith(JsonDecodeError(path, error)) *> IO.raiseError(error)
+                    case Right(request) => IO.pure(request)
+                }
+                _ <- tracer.traceWith(RequestDecoded(path, userRequest.toString))
+                requestId <- (requestSequencer ?: userRequest).flatMap {
+                    case Right(id) => IO.pure(id)
+                    // A screen rejection surfaces as a 400 via handleErrorWith below.
+                    case Left(rejected) => IO.raiseError(new RuntimeException(rejected.reason))
+                }
+            } yield ApiDto.mkRequestAcceptedResponse(requestId)
+
+        handled
+            .map(Right(_))
+            .handleErrorWith(err =>
+                tracer
+                    .traceWith(RequestFailed(path, err))
+                    .as(Left(fail(StatusCode.BadRequest, err.getMessage)))
+            )
+
+    /** The block-details body for `num`: block 0 is synthesized from the head config; any other
+      * block resolves through its persisted brief, or a 404.
+      */
+    private def blockDetails(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockDetailsView]] =
+        if num == BlockNumber.zero then
+            for {
+                confirmation <- blockConfirmation(num)
+                stack <- consensusReader.stackOf(num)
+            } yield {
+                val summary = ApiDto.mkInitialBlockSummaryView
+                Right(
+                  BlockDetailsView(
+                    summary.number,
+                    summary.leader,
+                    summary.blockType,
+                    stack.map(_.convert),
+                    confirmation,
+                    header = None
+                  )
+                )
+            }
+        else
+            consensusReader.blockBrief(num).flatMap {
+                case None => IO.pure(Left(blockNotFound(num)))
+                case Some(brief) =>
+                    for {
+                        confirmation <- blockConfirmation(num)
+                        stack <- consensusReader.stackOf(num)
+                    } yield {
+                        val summary = ApiDto.mkBlockSummaryView(brief, headConfig.nHeadPeers)
+                        Right(
+                          BlockDetailsView(
+                            summary.number,
+                            summary.leader,
+                            summary.blockType,
+                            stack.map(_.convert),
+                            confirmation,
+                            header = Some(ApiDto.mkBlockHeaderView(brief.header))
+                          )
+                        )
+                    }
+            }
+
+    /** The block's content: block 0 (config) has none; the rest read their transactions and deposit
+      * decisions from their persisted briefs.
+      */
+    private def blockBody(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockBodyView]] =
+        if num == BlockNumber.zero then IO.pure(Right(ApiDto.mkInitialBlockBodyView))
+        else
+            consensusReader.blockBrief(num).map {
+                case None        => Left(blockNotFound(num))
+                case Some(brief) => Right(ApiDto.mkBlockBodyView(brief))
+            }
+
+    /** The block's type — `initial` for block 0 (config), else read from its brief. `None` if a
+      * non-zero block does not exist.
+      */
+    private def blockTypeOf(num: BlockNumber): IO[Option[ApiDto.BlockTypeView]] =
+        if num == BlockNumber.zero then IO.pure(Some(ApiDto.BlockTypeView.Initial))
+        else
+            consensusReader
+                .blockBrief(num)
+                .map(_.map {
+                    case _: BlockBrief.Minor => ApiDto.BlockTypeView.Minor
+                    case _: BlockBrief.Major => ApiDto.BlockTypeView.Major
+                    case _: BlockBrief.Final => ApiDto.BlockTypeView.Final
+                })
+
+    /** The block-effects listing (l1TxIds grouped by kind), or a 404 when the block does not exist.
+      */
+    private def blockEffectsListing(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), BlockEffectsView]] =
+        effectsResolver.blockEffects(num).flatMap {
+            case None => IO.pure(Left(blockNotFound(num)))
+            case Some(effects) =>
+                blockTypeOf(num).map {
+                    case None            => Left(blockNotFound(num))
+                    case Some(blockType) => Right(ApiDto.mkBlockEffectsView(blockType, effects))
+                }
         }
 
-    // Implicit decoders for request bodies
-    given depositRequestEntityDecoder(using
-        CardanoNetwork.Section
-    ): EntityDecoder[IO, UserRequest] =
-        jsonOf[IO, UserRequest]
+    /** One real-tx kind of the block's effects in full, or a 404 (block missing, or no effect of
+      * that kind on this block).
+      */
+    private def blockTxEffectOfKind(
+        num: BlockNumber,
+        kind: EffectKind
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst { case e: ResolvedEffect.Tx if e.kind == kind => e } match
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
+                    case None =>
+                        Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no $kind effect"))
+        }
 
-    private val userRequestDecoder: JsonCodecs.UserRequestDecoder = UserRequestDecoder()
+    /** The block's SEC in full, or a 404 (block missing, or no SEC on this block). */
+    private def blockSecEffect(
+        num: BlockNumber
+    ): IO[Either[(StatusCode, ErrorResponse), SecEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst { case e: ResolvedEffect.Sec => e } match
+                    case Some(e) => Right(ApiDto.mkSecEffectView(e, headConfig.nHeadPeers))
+                    case None =>
+                        Left(fail(StatusCode.NotFound, s"Block ${num.convert} has no sec effect"))
+        }
 
-    val routes: HttpRoutes[IO] = HttpRoutes.of[IO] {
+    /** One rollout of the block's rollout chain by index, or a 404. */
+    private def blockRollout(
+        num: BlockNumber,
+        index: Int
+    ): IO[Either[(StatusCode, ErrorResponse), TxEffectView]] =
+        effectsResolver.blockEffects(num).map {
+            case None => Left(blockNotFound(num))
+            case Some(effects) =>
+                effects.collectFirst {
+                    case e: ResolvedEffect.Tx
+                        if e.kind == EffectKind.Rollout && e.rolloutIndex.contains(index) =>
+                        e
+                } match
+                    case Some(e) => Right(ApiDto.mkTxEffectView(e))
+                    case None =>
+                        Left(
+                          fail(StatusCode.NotFound, s"Block ${num.convert} has no rollout $index")
+                        )
+        }
 
-        // POST /api/l2/submit - Submit an L2 transaction
-        case req @ POST -> Root / "api" / "l2" / "submit" =>
-            val path = "POST /api/l2/submit"
-            val result: IO[org.http4s.Response[IO]] = for {
-                bodyText <- req.bodyText.compile.string
-                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
-                _ <- tracer.traceWith(RequestBody(path, bodyText))
-                // Try to parse as JSON to get better error messages
-                _ <- io.circe.parser.parse(bodyText) match {
-                    case Left(parseError) =>
-                        tracer.traceWith(JsonParseError(path, parseError))
-                    case Right(json) =>
-                        userRequestDecoder.decodeJson(json) match {
-                            case Left(decodeError) =>
-                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
-                                    tracer.traceWith(
-                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
-                                    )
-                            case Right(_) =>
-                                IO.unit
-                        }
-                }
-                // Re-create request with the body we just read
-                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
-                transactionRequest <- newReq.as[UserRequest]
-                _ <- tracer.traceWith(RequestDecoded(path, transactionRequest.toString))
-                // Send synchronous request to RequestSequencer and get back RequestId
-                requestId <- requestSequencer ?: transactionRequest
-                response = RequestAccepted(requestId = requestId)
-                resp <- Ok(response.asJson)
-            } yield resp
+    /** Any effect by its l1TxId, or a 404. */
+    private def effectById(
+        l1TxId: TransactionHash
+    ): IO[Either[(StatusCode, ErrorResponse), EffectView]] =
+        effectsResolver.effectById(l1TxId).map {
+            case None    => Left(fail(StatusCode.NotFound, s"No effect ${l1TxId.toHex}"))
+            case Some(e) => Right(ApiDto.mkEffectView(e, headConfig.nHeadPeers))
+        }
 
-            result.handleErrorWith { err =>
-                tracer.traceWith(RequestFailed(path, err)) *>
-                    BadRequest(Error(error = err.getMessage).asJson)
+    /** Resolve a block's confirmation status from this node's records: the soft-confirmation
+      * moment, and — through the block → stack index — the hard-confirmation moment.
+      */
+    private def blockConfirmation(num: BlockNumber): IO[BlockConfirmationView] =
+        confirmationTimes(num).map((soft, hard) => ApiDto.mkBlockConfirmationView(soft, hard))
+
+    /** This node's `(soft, hard)` confirmation moments for a block, as wall-clock instants derived
+      * from the records' arrival stamps: the soft-confirmation record, and — through the block →
+      * stack index — the hard-confirmation record. Each moment is present exactly when this peer
+      * holds that record (`wallClockOf` is total), so it also serves as the rung discriminant.
+      */
+    private def confirmationTimes(num: BlockNumber): IO[(Option[Instant], Option[Instant])] =
+        for {
+            soft <- consensusReader.softConfirmation(num)
+            stack <- consensusReader.stackOf(num)
+            hard <- stack match {
+                case None    => IO.pure(None)
+                case Some(s) => consensusReader.hardConfirmation(s)
+            }
+            softAt <- soft.traverse(t => consensusReader.wallClockOf(t.stamp))
+            hardAt <- hard.traverse(t => consensusReader.wallClockOf(t.stamp))
+        } yield (softAt, hardAt)
+
+    /** The request-details body for a request id, or a 404 when the head has assigned no such id.
+      * The lifecycle status resolves through the request → block index and the block's confirmation
+      * records.
+      */
+    /** The request listing, optionally narrowed to one author peer (`peer_number`) and one type
+      * (`transaction`/`deposit`). An unknown `type` value matches nothing (empty list); an
+      * out-of-range `peer_number` likewise yields an empty list, since no such author exists.
+      */
+    private def listRequests(
+        typeFilter: Option[String],
+        peerFilter: Option[Int]
+    ): IO[Either[(StatusCode, ErrorResponse), List[RequestSummaryView]]] =
+        val peers = peerFilter match
+            case None    => headConfig.headPeerNums.toList
+            case Some(p) => headConfig.headPeerNums.toList.filter(_.convert == p)
+        peers
+            .traverse(consensusReader.requestsOf)
+            .map { perPeer =>
+                val rows = perPeer.flatten.map(t => ApiDto.mkRequestSummaryView(t.payload))
+                Right(typeFilter.fold(rows)(t => rows.filter(_.requestType == t)))
             }
 
-        // POST /api/deposit/register - Register a deposit
-        case req @ POST -> Root / "api" / "deposit" / "register" =>
-            val path = "POST /api/deposit/register"
-            val result: IO[org.http4s.Response[IO]] = for {
-                bodyText <- req.bodyText.compile.string
-                _ <- tracer.traceWith(RequestHeaders(path, req.headers.toString))
-                _ <- tracer.traceWith(RequestBody(path, bodyText))
-                _ <- io.circe.parser.parse(bodyText) match {
-                    case Left(parseError) =>
-                        tracer.traceWith(JsonParseError(path, parseError))
-                    case Right(json) =>
-                        io.circe.Decoder[UserRequest].decodeJson(json) match {
-                            case Left(decodeError) =>
-                                tracer.traceWith(JsonDecodeError(path, decodeError)) *>
-                                    tracer.traceWith(
-                                      JsonDecodeErrorHistory(path, decodeError.history.toString)
-                                    )
-                            case Right(_) =>
-                                IO.unit
-                        }
-                }
-                newReq = req.withBodyStream(Stream.emits(bodyText.getBytes))
-                depositRequest <- newReq.as[UserRequest]
-                _ <- tracer.traceWith(RequestDecoded(path, depositRequest.toString))
-                requestId <- requestSequencer ?: depositRequest
-                response = RequestAccepted(requestId)
-                resp <- Ok(response.asJson)
-            } yield resp
-
-            result.handleErrorWith { err =>
-                tracer.traceWith(RequestFailed(path, err)) *>
-                    BadRequest(Error(error = err.getMessage).asJson)
-            }
-
-        // GET /api/head-info
-        case GET -> Root / "api" / "head-info" =>
-            val result: IO[org.http4s.Response[IO]] = for {
-                currentTimePosixSeconds <- IO.realTimeInstant.map(_.getEpochSecond)
-                resp <- Ok(
-                  HeadInfo(
-                    headId = headConfig.headId,
-                    headAddress = headConfig.headMultisigAddress,
-                    multisigRegimeUtxo = headConfig.multisigRegimeUtxo.input,
-                    treasuryBeaconToken = CardanoNativeToken(
-                      headConfig.headMultisigScript.policyId,
-                      headConfig.headTokenNames.treasuryTokenName
-                    ),
-                    submissionDurationSeconds =
-                        headConfig.txTiming.depositSubmissionDuration.finiteDuration.toSeconds,
-                    absorptionStartOffsetSeconds =
-                        headConfig.txTiming.absorptionStartOffsetDuration.finiteDuration.toSeconds,
-                    refundStartOffsetSeconds =
-                        headConfig.txTiming.refundStartOffsetDuration.finiteDuration.toSeconds,
-                    currentTimePosixSeconds = currentTimePosixSeconds,
-                    maxNonPlutusTxFee = headConfig.maxNonPlutusTxFee
-                  ).asJson
+    private def requestDetails(
+        id: RequestId
+    ): IO[Either[(StatusCode, ErrorResponse), RequestDetailsView]] =
+        consensusReader.request(id).flatMap {
+            case None => IO.pure(Left(requestNotFound(id)))
+            case Some(stamped) =>
+                for {
+                    receivedAt <- consensusReader.wallClockOf(stamped.stamp)
+                    processed <- consensusReader.requestBlock(id)
+                    times <- processed match {
+                        case None        => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                        case Some(entry) => confirmationTimes(entry.blockNum)
+                    }
+                    (softAt, hardAt) = times
+                    effects <- effectsResolver.relatedEffects(id)
+                    status = ApiDto.mkRequestStatus(
+                      block = processed.map(e => (e.blockNum.convert, e.validity)),
+                      softConfirmedAt = softAt,
+                      hardConfirmedAt = hardAt,
+                      relatedEffects = effects.map(ApiDto.mkEffectRefView)
+                    )
+                    absorptionDecisionStatus <-
+                        depositAbsorptionDecisionStatus(id, stamped.payload, processed)
+                } yield Right(
+                  ApiDto.mkRequestDetailsView(
+                    stamped.payload,
+                    receivedAt,
+                    status,
+                    absorptionDecisionStatus
+                  )
                 )
-            } yield resp
+        }
 
-            result.handleErrorWith { err =>
-                InternalServerError(Error(error = err.getMessage).asJson)
-            }
-
-        // GET /health - Health check endpoint
-        case GET -> Root / "health" =>
-            Ok(io.circe.Json.obj("status" -> "ok".asJson))
-
-        // POST /api/admin/finalize - Trigger head finalization (admin only)
-        case req @ POST -> Root / "api" / "admin" / "finalize" =>
-            val path = "POST /api/admin/finalize"
-            if !checkAuth(req) then
-                tracer.traceWith(UnauthorizedAdmin(path)) *>
-                    Unauthorized(
-                      org.http4s.headers.`WWW-Authenticate`(
-                        org.http4s.Challenge("Basic", "Hydrozoa Admin")
-                      )
-                    )
-            else
-                val result: IO[org.http4s.Response[IO]] = for {
-                    _ <- tracer.traceWith(FinalizeTriggered)
-                    _ <- blockWeaver ! BlockWeaver.LocalFinalizationTrigger.Triggered
-                    _ <- tracer.traceWith(FinalizeSignalSent)
-                    resp <- Ok(
-                      io.circe.Json.obj(
-                        "status" -> "success".asJson,
-                        "message" -> "Head finalization triggered".asJson
-                      )
-                    )
-                } yield resp
-
-                result.handleErrorWith { err =>
-                    tracer.traceWith(RequestFailed(path, err)) *>
-                        InternalServerError(Error(error = err.getMessage).asJson)
+    /** A valid deposit request's absorption-decision status (unprocessed / proposed / confirmed),
+      * or `None` for a transaction or a deposit already ruled invalid. The confirmation moments are
+      * of the **deciding** block; the absorbing settlement rides on the hard-confirmed rung.
+      */
+    private def depositAbsorptionDecisionStatus(
+        id: RequestId,
+        request: UserRequestWithId,
+        processed: Option[RequestBlockEntry]
+    ): IO[Option[AbsorptionDecisionStatusView]] =
+        val isDeposit = ApiDto.requestTypeName(request) == "deposit"
+        val isInvalid = processed.exists(_.validity == RequestId.ValidityFlag.Invalid)
+        if !isDeposit || isInvalid then IO.pure(None)
+        else
+            for {
+                decision <- consensusReader.decision(id)
+                times <- decision match {
+                    case None    => IO.pure((Option.empty[Instant], Option.empty[Instant]))
+                    case Some(d) => confirmationTimes(d.block)
                 }
-    }
+                (softAt, hardAt) = times
+                settlement <- effectsResolver.depositSettlement(id)
+            } yield Some(
+              ApiDto.mkAbsorptionDecisionStatus(
+                decided = decision.map(d => (d.block.convert, ApiDto.decisionView(d))),
+                softConfirmedAt = softAt,
+                hardConfirmedAt = hardAt,
+                settlementEffect = settlement.map(_.l1TxId.toHex)
+              )
+            )
+
+    private def requestNotFound(id: RequestId): (StatusCode, ErrorResponse) =
+        fail(StatusCode.NotFound, s"Request ${id.asI64} not found")
+
+    private def blockNotFound(num: BlockNumber): (StatusCode, ErrorResponse) =
+        fail(StatusCode.NotFound, s"Block ${num.convert} not found")
+
+    /** Parse a bech32 address, or a message describing why it is malformed. */
+    private def parseAddress(bech32: String): Either[String, Address] =
+        Try(Address.fromBech32(bech32)).toEither.left
+            .map(err => s"Invalid bech32 address '$bech32': ${err.getMessage}")
 }
 
 object HydrozoaRoutes {
+    val apiTitle: String = "Hydrozoa node API"
+    val l2ApiTitle: String = "Hydrozoa EUTXO L2 ledger API"
+    val apiVersion: String = "0.1.0"
+
     def apply(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        nodeStatus: IO[NodeStatus],
+        consensusReader: ConsensusStoreReader[IO],
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         serverConfig: HydrozoaServer.Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[HydrozoaRoutes] =
-        IO.pure(new HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, serverConfig, tracer))
+        IO.pure(
+          new HydrozoaRoutes(
+            requestSequencer,
+            blockWeaver,
+            nodeStatus,
+            consensusReader,
+            l2QueryReader,
+            headConfig,
+            serverConfig,
+            tracer
+          )
+        )
 }

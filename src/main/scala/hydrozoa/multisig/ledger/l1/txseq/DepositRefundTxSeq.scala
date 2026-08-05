@@ -210,8 +210,7 @@ private object DepositRefundTxSeqOps {
     final case class Parse(config: Config)(
         depositTxBytes: EnrichedTx.Serialized,
         l2Payload: ByteString,
-        requestId: RequestId,
-        requestValidityEndTime: RequestValidityEndTime
+        requestId: RequestId
     ) {
         import Parse.*
 
@@ -220,8 +219,7 @@ private object DepositRefundTxSeqOps {
                 depositTx <- DepositTx
                     .Parse(config)(
                       txBytes = depositTxBytes,
-                      l2Payload = l2Payload,
-                      requestValidityEndTime = requestValidityEndTime
+                      l2Payload = l2Payload
                     )
                     .result
                     .left

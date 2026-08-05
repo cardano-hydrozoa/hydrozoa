@@ -35,10 +35,14 @@ object CollateralUtxo {
             override def getMessage: String =
                 "CollateralUtxo.parse requires a pubkey (non-script) ShelleyAddress"
         }
+        case object NotAdaOnly extends ParseError {
+            override def getMessage: String = "CollateralUtxo.parse requires an ada-only output"
+        }
     }
 
     def parse(utxo: Utxo): Either[ParseError, CollateralUtxo] =
         utxo.output match {
+            case b: Babbage if !b.value.isOnlyAda => Left(ParseError.NotAdaOnly)
             case b: Babbage =>
                 b.address match {
                     case sa: ShelleyAddress =>

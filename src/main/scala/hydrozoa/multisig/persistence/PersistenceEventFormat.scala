@@ -20,12 +20,12 @@ object PersistenceEventFormat:
             case OpenRocksDbReady(path, cfCount) =>
                 info(s"RocksDB backend at $path ready (CFs=$cfCount)")
             case Get(key, hit) =>
-                info(s"get $key -> ${if hit then "hit" else "miss"}")
+                debug(s"get $key -> ${if hit then "hit" else "miss"}")
             case Put(key) =>
-                info(s"put $key")
+                debug(s"put $key")
             case Delete(key) =>
-                info(s"delete $key")
+                debug(s"delete $key")
             case Write(ops) =>
-                info(s"write batch ($ops ops)")
+                debug(s"write batch ($ops ops)")
         }
     }

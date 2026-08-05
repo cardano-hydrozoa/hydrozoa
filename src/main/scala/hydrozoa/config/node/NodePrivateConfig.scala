@@ -1,20 +1,19 @@
 package hydrozoa.config.node
 
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.operation.evacuation.NodeOperationEvacuationConfig
 import hydrozoa.config.node.operation.multisig.NodeOperationMultisigConfig
 import hydrozoa.config.node.owninfo.OwnPeerPrivate
 import io.circe.*
 import io.circe.generic.semiauto.*
-import scala.annotation.unused
 
 final case class NodePrivateConfig(
     override val ownPeerPrivate: OwnPeerPrivate,
     override val nodeOperationEvacuationConfig: NodeOperationEvacuationConfig,
     override val nodeOperationMultisigConfig: NodeOperationMultisigConfig,
     override val blockfrostApiKey: String,
-    override val sugarRushUri: String,
+    override val remoteLedgerUri: Option[String],
     override val adminUsername: String,
     override val adminPassword: String,
     override val httpHost: String,
@@ -40,7 +39,10 @@ object NodePrivateConfig {
 
         def blockfrostApiKey: String = nodePrivateConfig.blockfrostApiKey
 
-        def sugarRushUri: String = nodePrivateConfig.sugarRushUri
+        /** WS URI of the remote L2 ledger, required only when `l2Ledger = any-remote`; a
+          * `cardano-eutxo` node runs its ledger in-process and omits it.
+          */
+        def remoteLedgerUri: Option[String] = nodePrivateConfig.remoteLedgerUri
 
         def adminUsername: String = nodePrivateConfig.adminUsername
 
@@ -56,6 +58,6 @@ object NodePrivateConfig {
 
     given nodePrivateConfigDecoder(using
         headPeers: HeadPeers.Section,
-        @unused network: CardanoNetwork.Section
+        coilPeers: CoilPeers
     ): Decoder[NodePrivateConfig] = deriveDecoder[NodePrivateConfig]
 }

@@ -76,11 +76,13 @@ object Deposits {
     // a registered deposit as already been submitted or declined by the model (acting in the role of "end-user")
     extension (hydrozoaRegistered: Refundable) {
         def depositAbsorptionStart(using config: TxTiming.Section): DepositAbsorptionStartTime =
-            val requestValidityEnd = hydrozoaRegistered.request.request.header.validityEnd
+            val requestValidityEnd =
+                hydrozoaRegistered.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
             config.txTiming.depositAbsorptionStartTime(requestValidityEnd)
 
         def depositAbsorptionEnd(using config: TxTiming.Section): DepositAbsorptionEndTime =
-            val requestValidityEnd = hydrozoaRegistered.request.request.header.validityEnd
+            val requestValidityEnd =
+                hydrozoaRegistered.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
             config.txTiming.depositAbsorptionEndTime(requestValidityEnd)
 
         def cmd: RegisterDepositCommand = hydrozoaRegistered match {

@@ -4,6 +4,7 @@ import cats.effect.*
 import cats.effect.unsafe.implicits.global
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.HeadConfig.given
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.{OwnHeadPeerPrivate, OwnPeerPrivate}
@@ -31,8 +32,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             cardanoBackend <- lift(
               CardanoBackendMock.mockIO(
                 MockState(initialUtxos =
-                    Map(headConfig.seedUtxo.toTuple)
-                        ++ headConfig.additionalFundingUtxos
+                    headConfig.initializationTx.resolvedUtxos.utxos
                         ++ Map.from(headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
                 )
               )
@@ -76,6 +76,7 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
             mnc <- ask
             _ <- {
                 given (HeadPeers.Section & CardanoNetwork.Section) = mnc.headConfig
+                given CoilPeers = mnc.headConfig.coilPeers
                 val npc = mnc.nodePrivateConfigs.head._2
                 val dummy = mkDummy(npc, mnc.headPeers)
                 val encoded = dummy.asJson
@@ -88,6 +89,15 @@ object ConfigurationCodecTest extends Properties("Configuration Codec Properties
                           "=" * 80 + s"\nMarshalled (dummy):\n\n $dummy \n\n" +
                           "=" * 80 + s"\nEncoded:\n\n $encoded \n\n" +
                           "=" * 80 + s"\nDecoded:\n\n $decoded \n\n"
+                    )
+                    // A cardano-eutxo node runs its ledger in-process and needs no remote URI, so a
+                    // private config that omits `remoteLedgerUri` must decode to None.
+                    withoutUri = encoded.mapObject(_.remove("remoteLedgerUri"))
+                    decodedNoUri <- failLeft(withoutUri.as[NodePrivateConfig])
+                    _ <- assertWith(
+                      decodedNoUri.remoteLedgerUri.isEmpty,
+                      "an omitted remoteLedgerUri should decode to None, got " +
+                          decodedNoUri.remoteLedgerUri.toString
                     )
                 } yield ()
             }

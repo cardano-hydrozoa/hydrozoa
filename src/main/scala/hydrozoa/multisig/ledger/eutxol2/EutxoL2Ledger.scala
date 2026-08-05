@@ -7,14 +7,13 @@ import cats.syntax.all.*
 import hydrozoa.config.head.initialization.InitializationParameters
 import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.parameters.HeadParameters
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
-import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.{InMemoryL2Store, L2Snapshot, L2Store}
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, EvacuationMap, evacuationKeyOrdering}
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
@@ -23,6 +22,7 @@ import io.bullet.borer.Cbor
 import monocle.syntax.all.*
 import scala.collection.immutable.TreeMap
 import scala.util.Try
+import scalus.cardano.address.Address
 import scalus.cardano.ledger.*
 import scalus.uplc.builtin.ByteString
 
@@ -64,7 +64,7 @@ extension (em: EvacuationMap) {
 }
 
 object EutxoL2Ledger {
-    type Config = CardanoNetwork.Section & InitializationParameters.Section
+    type Config = CardanoNetwork.Section & InitializationParameters.Section & HeadParameters.Section
 
     case class State(
         activeUtxos: Utxos,
@@ -74,12 +74,9 @@ object EutxoL2Ledger {
           */
         transientTokens: TransientTokens,
         pendingDeposits: Map[RequestId, L2Genesis],
-        errors: Map[RequestId, String],
-        confirmations: Map[BlockNumber, Vector[(RequestId, EnrichedTx.Serialized)]],
         headId: Option[HeadId],
         /** Monotonic commit counter — the recovery anchor (§R2b). Bumped once per successful
-          * state-mutating command; the transient proxy commands (confirmations / errors) do not
-          * advance it.
+          * state-mutating command.
           */
         commandNumber: L2CommandNumber,
     )
@@ -94,8 +91,6 @@ object EutxoL2Ledger {
               activeUtxos = config.initialEvacuationMap.toUtxos,
               transientTokens = TransientTokens.empty,
               pendingDeposits = Map.empty,
-              errors = Map.empty,
-              confirmations = Map.empty,
               headId = None,
               commandNumber = L2CommandNumber.zero
             )
@@ -122,7 +117,8 @@ case class EutxoL2Ledger private (
     // go away in the future, so...
     private val state: Ref[IO, EutxoL2Ledger.State],
     private val store: L2Store[IO]
-) extends L2Ledger[IO] {
+) extends L2Ledger[IO],
+      EutxoL2LedgerReader[IO] {
     implicit def monadF: Monad[IO] = Async[IO]
 
     /** Apply one **real** (state-mutating) command to `s`, returning the next state with
@@ -152,7 +148,7 @@ case class EutxoL2Ledger private (
               s.focus(_.activeUtxos)
                   .modify(_ ++ addedL2Utxos.map((i, o) => i -> o.value))
                   .focus(_.pendingDeposits)
-                  .modify(_.removedAll(req.absorbedDeposits ++ req.refundedDeposits))
+                  .modify(_.removedAll(req.absorbedDeposits ++ req.rejectedDeposits))
                   .focus(_.commandNumber)
                   .modify(_.increment)
             )
@@ -199,25 +195,43 @@ case class EutxoL2Ledger private (
             _ <- EitherT.right(state.set(next))
         yield next
 
-    override def sendProxyBlockConfirmation(
-        req: L2LedgerCommand.ProxyBlockConfirmation
-    ): EitherT[IO, L2LedgerError, Unit] =
-        EitherT.right(
-          state.update(
-            _.focus(_.confirmations)
-                .modify(c => c.updated(req.blockNumber, req.refundTxs))
-          )
-        )
+    override def sendScreenTx(l2Payload: ByteString): EitherT[IO, L2LedgerError, Unit] =
+        // The native L2 tx must parse, carry this head's headId pin, and have valid vkey-witness
+        // signatures over the tx id. All stateless; the stateful required-signers / balance / input
+        // checks stay at submission (an unsigned tx that slips past here is still rejected there by
+        // MissingKeyHashes).
+        EitherT.fromEither[IO](for {
+            l2Tx <- L2Tx.parse(l2Payload.bytes, config).left.map(L2LedgerError(_))
+            _ <- HeadIdPinValidator.validate(config, l2Tx.tx).left.map(L2LedgerError(_))
+            _ <- HydrozoaTransactionMutator
+                .screenSignatures(config, l2Tx)
+                .left
+                .map(e => L2LedgerError(e.toString))
+        } yield ())
 
-    override def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyRequestError
+    override def sendScreenDeposit(
+        req: L2LedgerCommand.ScreenDeposit
     ): EitherT[IO, L2LedgerError, Unit] =
-        EitherT.right(
-          state.update(
-            _.focus(_.errors)
-                .modify(c => c.updated(req.requestId, req.message))
-          )
-        )
+        EitherT.fromEither[IO](for {
+            // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger
+            // will spawn when the deposit is absorbed. Shares the decode with registration
+            // (fromDepositPayload), so nothing screened here can fail to register later.
+            l2Genesis <- Try(
+              L2Genesis.fromDepositPayload(req.depositId, req.l2Payload)
+            ).toEither.left.map(e => L2LedgerError(s"Invalid deposit transaction payload $e"))
+            // depositL2Value must cover the spawned outputs: the treasury absorbs depositL2Value,
+            // so the L2 state the deposit creates cannot exceed it. Covers = the difference is
+            // non-negative in the coin and every asset.
+            spawnedValue = Value.combine(l2Genesis.genesisObligations.map(_.l2OutputValue))
+            diff = req.depositL2Value - spawnedValue
+            _ <- Either.cond(
+              diff.coin.value >= 0 && diff.assets.assets.values.forall(_.values.forall(_ >= 0)),
+              (),
+              L2LedgerError(
+                s"deposit l2Payload outputs ($spawnedValue) exceed depositL2Value (${req.depositL2Value})"
+              )
+            )
+        } yield ())
 
     override def sendApplyTransaction(
         req: L2LedgerCommand.ApplyTransaction
@@ -267,6 +281,45 @@ case class EutxoL2Ledger private (
 
     override def currentCommandNumber: IO[L2CommandNumber] = state.get.map(_.commandNumber)
 
+    /** The committed L2 utxos this address controls — a live filter over `activeUtxos`. Concurrent
+      * with the JointLedger-driven command path (a plain `Ref` read), so it observes the state as
+      * of the last committed command.
+      */
+    override def utxosByAddress(address: Address): IO[Utxos] =
+        state.get.map(_.activeUtxos.filter((_, output) => output.address == address))
+
+    /** The most recent `limit` applied L2 transactions, newest first, projected to
+      * [[L2TxSummary]]s. Reads the tail of the store's own command log, so it needs no separate
+      * history: for the EUTXO ledger the logged command *is* the record of what happened.
+      *
+      * `limit` counts returned summaries, not commands scanned — one command can expand to several
+      * summaries and a no-op deposit decision to none — so the log window is widened backward until
+      * `limit` summaries are collected or the log is exhausted. Each earlier batch is strictly
+      * older, so accumulating preserves newest-first order.
+      */
+    override def recentTransactions(limit: Int): IO[Vector[L2TxSummary]] =
+        if limit <= 0 then IO.pure(Vector.empty)
+        else
+            state.get.map(_.commandNumber).flatMap { current =>
+                def collect(
+                    upTo: L2CommandNumber,
+                    acc: Vector[L2TxSummary]
+                ): IO[Vector[L2TxSummary]] =
+                    if acc.sizeIs >= limit || upTo.value <= 0L then IO.pure(acc)
+                    else
+                        val fromExclusive =
+                            L2CommandNumber(math.max(0L, upTo.value - limit.toLong))
+                        store
+                            .logRange(fromExclusive, upTo)
+                            .flatMap(commands =>
+                                collect(
+                                  fromExclusive,
+                                  acc ++ commands.reverse.flatMap(L2TxSummary.fromCommand)
+                                )
+                            )
+                collect(current, Vector.empty).map(_.take(limit))
+            }
+
     /** Read the full in-memory state — package-private, for recovery tests that assert a restored
       * ledger matches the live one. Not part of the [[L2Ledger]] interface.
       */
@@ -302,8 +355,7 @@ case class EutxoL2Ledger private (
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot; the
-      * transient `errors` / `confirmations` are not persisted and start empty (§R2b).
+      * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
       */
     private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2

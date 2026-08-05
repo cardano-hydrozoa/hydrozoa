@@ -9,8 +9,8 @@ import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, MultisigTreasuryUtx
 import hydrozoa.multisig.persistence.codec.FoundationCodecs.{resolvedUtxosDecoder, resolvedUtxosEncoder}
 import hydrozoa.multisig.persistence.codec.RuleBasedCodecs.{ruleBasedTreasuryUtxoDecoder, ruleBasedTreasuryUtxoEncoder}
 import hydrozoa.multisig.persistence.codec.TreasuryCodec.{multisigTreasuryUtxoDecoder, multisigTreasuryUtxoEncoder}
-import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{multisigRegimeUtxoDecoder, multisigRegimeUtxoEncoder}
-import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedTreasuryUtxo
+import hydrozoa.multisig.persistence.codec.UtxoWrapperCodecs.{multisigRegimeUtxoDecoder, multisigRegimeUtxoEncoder, ruleBasedRegimeUtxoDecoder, ruleBasedRegimeUtxoEncoder}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryUtxo}
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.{Transaction, Utxo}
@@ -46,6 +46,7 @@ object FallbackTxCodec:
               "treasurySpent" -> t.treasurySpent.asJson,
               "treasuryProduced" -> t.treasuryProduced.asJson,
               "multisigRegimeUtxoSpent" -> t.multisigRegimeUtxoSpent.asJson,
+              "regimeUtxoProduced" -> t.regimeUtxoProduced.asJson,
               "tx" -> t.tx.asJson,
               "resolvedUtxos" -> t.resolvedUtxos.asJson,
               "peerBallotBoxesProduced" -> t.peerBallotBoxesProduced.asJson
@@ -59,6 +60,7 @@ object FallbackTxCodec:
                 ts <- c.downField("treasurySpent").as[MultisigTreasuryUtxo]
                 tp <- c.downField("treasuryProduced").as[RuleBasedTreasuryUtxo]
                 mrus <- c.downField("multisigRegimeUtxoSpent").as[MultisigRegimeUtxo]
+                rup <- c.downField("regimeUtxoProduced").as[RuleBasedRegimeUtxo]
                 tx <- c.downField("tx").as[Transaction]
                 ru <- c.downField("resolvedUtxos").as[ResolvedUtxos]
                 pbbs <- c.downField("peerBallotBoxesProduced").as[NonEmptyList[Utxo]]
@@ -67,6 +69,7 @@ object FallbackTxCodec:
               treasurySpent = ts,
               treasuryProduced = tp,
               multisigRegimeUtxoSpent = mrus,
+              regimeUtxoProduced = rup,
               tx = tx,
               resolvedUtxos = ru,
               peerBallotBoxesProduced = pbbs

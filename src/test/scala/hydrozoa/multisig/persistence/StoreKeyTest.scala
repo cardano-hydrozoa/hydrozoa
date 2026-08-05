@@ -3,13 +3,20 @@ package hydrozoa.multisig.persistence
 import hydrozoa.multisig.consensus.ack.{HardAckNumber, SoftAckNumber}
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.stack.StackNumber
 import org.scalatest.funsuite.AnyFunSuite
+import scalus.cardano.ledger.TransactionHash
+import scalus.uplc.builtin.ByteString
 
 /** Sanity tests for [[StoreKey]] — every key knows its CF, encodes to the expected width, and
   * (where comparable) sorts the way the design assumes (big-endian numeric for spine-indexed CFs).
   */
 class StoreKeyTest extends AnyFunSuite:
+
+    /** A 32-byte hash for the effect-index key tests. */
+    private val sampleHash: TransactionHash =
+        TransactionHash.fromByteString(ByteString.fromArray(Array.tabulate(32)(_.toByte)))
 
     test("every StoreKey type maps to its expected Cf") {
         val cases: List[(StoreKey, Cf)] = List(
@@ -26,6 +33,15 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.EvacuationMap(BlockNumber(0)) -> Cf.EvacuationMap,
           StoreKey.RequestHighWater(BlockNumber(0)) -> Cf.RequestHighWater,
           StoreKey.L2CommandNumber(BlockNumber(0)) -> Cf.L2CommandNumber,
+          StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
+              Cf.RequestBlockIndex,
+          StoreKey.DepositDecisionIndex(RequestId(HeadPeerNumber(0), RequestNumber(0))) ->
+              Cf.DepositDecisionIndex,
+          StoreKey
+              .WithdrawalEffectIndex(RequestId(HeadPeerNumber(0), RequestNumber(0)), sampleHash) ->
+              Cf.WithdrawalEffectIndex,
+          StoreKey.BlockStackIndex(BlockNumber(0)) -> Cf.BlockStackIndex,
+          StoreKey.EffectStackIndex(sampleHash) -> Cf.EffectStackIndex,
           StoreKey.Meta("schema-version") -> Cf.Meta
         )
         cases.foreach { case (k, expected) =>
@@ -40,11 +56,46 @@ class StoreKeyTest extends AnyFunSuite:
           StoreKey.HardConfirmation(StackNumber(123)),
           StoreKey.EvacuationMap(BlockNumber(42)),
           StoreKey.RequestHighWater(BlockNumber(5)),
-          StoreKey.L2CommandNumber(BlockNumber(11))
+          StoreKey.L2CommandNumber(BlockNumber(11)),
+          StoreKey.BlockStackIndex(BlockNumber(3))
         )
         keys.foreach { k =>
             assert(k.encode.length == 4, s"$k encoded to ${k.encode.length} bytes, expected 4")
         }
+    }
+
+    test("EffectStackIndex keys encode as the 32 raw l1TxId bytes") {
+        val k = StoreKey.EffectStackIndex(sampleHash)
+        assert(java.util.Arrays.equals(k.encode, Array.tabulate(32)(_.toByte)))
+    }
+
+    test("RequestBlockIndex keys encode as the packed-i64 RequestId, author-prefix-ordered") {
+        def key(peer: Int, num: Long) =
+            StoreKey.RequestBlockIndex(RequestId(HeadPeerNumber(peer), RequestNumber(num))).encode
+        val _ = assert(key(1, 7).length == 8, s"encoded to ${key(1, 7).length} bytes, expected 8")
+        // Same author: lex order == request-number order (the low bits of the i64).
+        val _ = assert(java.util.Arrays.compareUnsigned(key(1, 1), key(1, 2)) < 0)
+        // Different authors: the author sits in the high bits, so each author's rows stay
+        // contiguous. (1L << 40) - 1 is RequestNumber's maximum — the 40-bit low half.
+        assert(java.util.Arrays.compareUnsigned(key(0, (1L << 40) - 1), key(1, 0)) < 0)
+    }
+
+    test(
+      "WithdrawalEffectIndex keys encode as [requestId i64 : 8][l1TxId : 32], request-prefixed"
+    ) {
+        def key(num: Long, txByte: Byte) =
+            StoreKey
+                .WithdrawalEffectIndex(
+                  RequestId(HeadPeerNumber(0), RequestNumber(num)),
+                  TransactionHash.fromByteString(ByteString.fromArray(Array.fill(32)(txByte)))
+                )
+                .encode
+        val k = key(7, 1)
+        val _ = assert(k.length == 40, s"encoded to ${k.length} bytes, expected 40")
+        // The request-id prefix (8 bytes) dominates, so a prefix scan by request id is contiguous;
+        // within one request, different l1TxIds are distinct rows.
+        val _ = assert(java.util.Arrays.compareUnsigned(key(1, 1), key(2, 1)) < 0)
+        assert(java.util.Arrays.compareUnsigned(key(1, 1), key(1, 2)) < 0)
     }
 
     test("singleton snapshot keys all encode to the same empty key") {

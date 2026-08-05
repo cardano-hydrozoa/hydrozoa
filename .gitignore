@@ -1,6 +1,7 @@
 # Direnv
 .direnv
 .pre-commit-config.yaml
+.envrc.local
 
 # Scala
 .bsp/
@@ -35,3 +36,24 @@ target/
 
 # AI
 .claude/
+/CLAUDE.local.md
+.worktrees
+
+# The head working directory: scaffolded template.local (real Blockfrost key), generated rosters,
+# private configs + signing keys, head-config — all per-deployment, never commit.
+/head/*
+!/head/.gitkeep
+
+# The same working directory under its pre-rename name. `config/` became `head/`, but a leftover
+# `config/` still exists on working copies that predate the rename — and it holds generated private
+# configs with real signing keys, so an unqualified `git add -A` would commit them.
+/config/
+
+# Local notes and tool output (not for commit)
+/docs/local/
+/log
+/.scalex/
+
+# Editor leftovers
+*.swp
+*.swo

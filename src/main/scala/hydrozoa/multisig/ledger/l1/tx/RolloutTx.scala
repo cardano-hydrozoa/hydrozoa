@@ -23,6 +23,13 @@ import scalus.uplc.builtin.ByteString
 sealed trait RolloutTx extends EnrichedTx[RolloutTx], RolloutUtxo.Spent, RolloutUtxo.MbProduced {
     def tx: Transaction
     def txLens: Lens[RolloutTx, Transaction]
+
+    /** How many payout obligations this tx discharges. The sequence discharges the original ordered
+      * payout-obligation vector as a forward run of contiguous slices — the settlement /
+      * finalization takes `[0, payoutCount)`, then each rollout in order takes the next
+      * `payoutCount` — so the per-tx offsets are the running sum of `payoutCount`s and need not be
+      * stored.
+      */
     def payoutCount: Int
 }
 
@@ -72,7 +79,7 @@ private object RolloutTxOps {
             InitializationParameters.Section
 
         final case class Last(override val config: Config)(
-            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation],
+            override val nePayoutObligationsRemaining: NonEmptyVector[Payout.Obligation]
         ) extends Build[RolloutTx.Last](mbRolloutOutputValue = None) {
 
             /** Post-process a transaction builder context into a [[RolloutTx.Last]].
@@ -215,23 +222,30 @@ private object RolloutTxOps {
                         - rolloutSize
                         - margin
 
+                // Fill from the BACK of the handed suffix: this tx takes the highest-index
+                // obligations that fit, leaving the lower-index prefix for earlier txs in the chain.
+                // Across the whole sequence this lays the obligation vector out forward — the
+                // settlement / finalization (built last, absorbing the surviving front chunk) takes
+                // `[0, …)` and each rollout the next contiguous run — so `payoutCount` alone locates
+                // every tx's slice. Prepending each consumed obligation keeps this tx's discharged
+                // chunk in ascending (vector) order.
                 @tailrec
                 def go(
                     remainingSize: Long,
                     addedPayouts: Vector[Payout.Obligation],
                     remainingObligations: Vector[Payout.Obligation]
                 ): (Vector[Payout.Obligation], Vector[Payout.Obligation]) = {
-                    val currentObligation = remainingObligations.head
+                    val currentObligation = remainingObligations.last
                     val remainingSizeAfter = remainingSize - currentObligation.outputSize
                     if remainingSizeAfter >= 0
                     then {
-                        if remainingObligations.tail.isEmpty
+                        if remainingObligations.init.isEmpty
                         then (addedPayouts.prepended(currentObligation), Vector.empty)
                         else
                             go(
                               remainingSizeAfter,
                               addedPayouts.prepended(currentObligation),
-                              remainingObligations.tail
+                              remainingObligations.init
                             )
                     } else (addedPayouts, remainingObligations)
                 }

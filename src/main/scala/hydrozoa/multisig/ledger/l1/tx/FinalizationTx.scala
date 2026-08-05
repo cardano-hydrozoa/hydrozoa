@@ -38,6 +38,11 @@ object FinalizationTx {
     export FinalizationTxOps.Error
 
     sealed trait WithPayouts extends FinalizationTx {
+
+        /** How many payout obligations the finalization tx discharges directly — the front
+          * `[0, payoutCount)` of its ordered payout-obligation vector (the merged first rollout's
+          * slice, or all payouts when they fit).
+          */
         def payoutCount: Int
     }
 
@@ -242,7 +247,7 @@ private object FinalizationTxOps {
 
             private val burnMultisigRegimeToken = Mint(
               config.headMultisigScript.script.scriptHash,
-              config.headTokenNames.multisigRegimeTokenName,
+              config.headTokenNames.regimeWitnessTokenName,
               -1,
               config.headMultisigScript.witnessAttached
             )

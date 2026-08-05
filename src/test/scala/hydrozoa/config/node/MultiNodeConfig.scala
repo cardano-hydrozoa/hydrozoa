@@ -43,7 +43,7 @@ case class MultiNodeConfig private (
                       nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
                       pc.blockfrostApiKey,
-                      pc.sugarRushUri,
+                      pc.remoteLedgerUri,
                       pc.adminUsername,
                       pc.adminPassword,
                       pc.httpHost,
@@ -82,6 +82,19 @@ case class MultiNodeConfig private (
             if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
         }
 
+    /** The dense header-signature list persisted for a hard-confirmed SEC: every head peer's
+      * signature followed by the first `coilQuorum` coil signatures. Matches the order
+      * `HardAckAggregator.collectSecSignatures` produces and `RuleBasedActor.loadAction` splits at
+      * `nHeadPeers` to recover head vs coil signatures.
+      */
+    def multisignHeaderDense(
+        blockHeader: StandaloneEvacuationCommitment.Onchain
+    ): List[BlockHeader.Minor.HeaderSignature] =
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
+        val headSigs = nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
+        val coilSigs = coilWallets.take(headConfig.coilQuorum).map(_.mkHeaderSignature(serialized))
+        headSigs ++ coilSigs
+
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
     ).ownWallet.exportVerificationKey.shelleyAddress()(using headConfig)
@@ -106,6 +119,42 @@ object MultiNodeConfig {
     type MultiNodeConfigTestM[A] = TestM[MultiNodeConfig, A]
     private val mnctm = TestMFixedEnv[MultiNodeConfig]()
     export mnctm.*
+
+    extension (mnc: MultiNodeConfig)
+        /** Coil [[NodeConfig]]s for each of `coilWallets`, reusing head 0's operation-config
+          * sections (evacuation polling period, cardano-liaison polling period, etc.) — these don't
+          * depend on head-vs-coil, and the coil path doesn't exercise any wallet-derived fields on
+          * the template. Placeholder strings for blockfrost / websocket / http-admin are cosmetic
+          * in a mock-backed integration test. Callers get one `NodeConfig` per coil wallet in the
+          * same order the wallets are passed.
+          */
+        def mkCoilNodeConfigs(
+            coilWallets: List[hydrozoa.multisig.consensus.peer.PeerWallet]
+        ): List[NodeConfig] = {
+            val templatePrivate = mnc.nodePrivateConfigs(HeadPeerNumber(0))
+            coilWallets.map { w =>
+                NodeConfig
+                    .mkCoilConfig(
+                      headConfig = mnc.headConfig,
+                      ownCoilWallet = w,
+                      nodeOperationEvacuationConfig = templatePrivate.nodeOperationEvacuationConfig
+                          .copy(ruleBasedWallet = w),
+                      nodeOperationMultisigConfig = templatePrivate.nodeOperationMultisigConfig,
+                      blockfrostApiKey = "not-a-real-key",
+                      remoteLedgerUri = Some("ws://localhost:3001/ws"),
+                      adminUsername = "admin",
+                      adminPassword = "welcome",
+                      httpHost = "0.0.0.0",
+                      httpPort = "8080",
+                    )
+                    .getOrElse(
+                      throw new IllegalStateException(
+                        s"coil wallet ${w.exportVerificationKey} not registered in " +
+                            "headConfig.coilPeerVKeys"
+                      )
+                    )
+            }
+        }
 
     def runDefault[A](testM: MultiNodeConfigTestM[A])(using
         toProp: A => Prop,
@@ -221,7 +270,7 @@ object MultiNodeConfig {
                           nodeOperationEvacuationConfig = noec,
                           nodeOperationMultisigConfig = nomc,
                           blockfrostApiKey = "not a real blockfrost api key",
-                          sugarRushUri = "ws://localhost:3001/ws",
+                          remoteLedgerUri = Some("ws://localhost:3001/ws"),
                           adminUsername = "admin",
                           adminPassword = "welcome",
                           httpHost = "0.0.0.0",

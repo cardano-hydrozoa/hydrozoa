@@ -4,7 +4,10 @@ import cats.effect.{IO, Resource}
 import com.comcast.ip4s.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.lib.logging.ContraTracer
+import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.ledger.l2.EutxoL2LedgerReader
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import hydrozoa.multisig.server.HydrozoaHttpEvent.ServerStarted
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.Server
@@ -30,6 +33,15 @@ object HydrozoaServer {
       *   Handle to the RequestSequencer actor
       * @param blockWeaver
       *   Handle to the BlockWeaver actor
+      * @param nodeStatus
+      *   Node lifecycle status behind `GET /ready`, maintained by `MultisigRegimeManagerBase` and
+      *   `CardanoLiaison`
+      * @param consensusReader
+      *   The consensus-store read model behind the `/head/blocks` queries
+      * @param l2QueryReader
+      *   The EUTXO L2-ledger read model behind `GET /l2/cardano-eutxo/utxos` and
+      *   `/l2/cardano-eutxo/transactions`, or `None` on a node that runs a remote ledger (those
+      *   endpoints are then not mounted)
       * @param headConfig
       *   Head configuration
       * @param config
@@ -42,13 +54,25 @@ object HydrozoaServer {
     def create(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        nodeStatus: IO[NodeStatus],
+        consensusReader: ConsensusStoreReader[IO],
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): Resource[IO, Server] =
         for {
             hydrozoaRoutes <- Resource.eval(
-              HydrozoaRoutes(requestSequencer, blockWeaver, headConfig, config, tracer)
+              HydrozoaRoutes(
+                requestSequencer,
+                blockWeaver,
+                nodeStatus,
+                consensusReader,
+                l2QueryReader,
+                headConfig,
+                config,
+                tracer
+              )
             )
             server <- EmberServerBuilder
                 .default[IO]
@@ -66,11 +90,23 @@ object HydrozoaServer {
     def run(
         requestSequencer: RequestSequencer.Handle,
         blockWeaver: BlockWeaver.Handle,
+        nodeStatus: IO[NodeStatus],
+        consensusReader: ConsensusStoreReader[IO],
+        l2QueryReader: Option[EutxoL2LedgerReader[IO]],
         headConfig: HeadConfig,
         config: Config,
         tracer: ContraTracer[IO, HydrozoaHttpEvent]
     ): IO[Nothing] = {
-        create(requestSequencer, blockWeaver, headConfig, config, tracer)
+        create(
+          requestSequencer,
+          blockWeaver,
+          nodeStatus,
+          consensusReader,
+          l2QueryReader,
+          headConfig,
+          config,
+          tracer
+        )
             .use(_ => IO.never)
     }
 }

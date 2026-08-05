@@ -2,17 +2,16 @@ package hydrozoa.rulebased.ledger.l1
 
 import hydrozoa.config.HydrozoaBlueprint
 import hydrozoa.config.head.HeadConfig
-import hydrozoa.multisig.ledger.commitment.TrustedSetup
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
+import hydrozoa.rulebased.ledger.l1.script.plutus.{DeploymentTx, SetupLadder}
 import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
-import hydrozoa.rulebased.ledger.l1.tx.EvacuationTx
-import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
 import scalus.cardano.onchain.plutus.v3.PosixTime
 import scalus.uplc.builtin.Data.toData
-import scalus.uplc.builtin.bls12_381.G2Element
 
 /** Shared pure fixtures for the rule-based dispute-resolution tests.
   *
@@ -58,24 +57,50 @@ object DisputeTestFixtures {
     }
 
     /** An Unresolved rule-based treasury utxo holding `value`, with the given major version and
-      * voting deadline, and the full trusted-setup G2 points needed for evacuation.
+      * voting deadline.
       */
     def mkRuleBasedTreasuryPure(
+        headConfig: HeadConfig,
         versionMajor: BigInt,
         value: Value,
         txIn: TransactionInput,
         votingDeadline: PosixTime
     ): RuleBasedTreasuryUtxo = {
         val datum = Unresolved(
+          headMp = headConfig.headMultisigScript.policyId,
           deadlineVoting = votingDeadline,
-          versionMajor = versionMajor,
-          setupG2 = TrustedSetup
-              .takeSrsG2(EvacuationTx.Assumptions.maxEvacuationsPerTx + 1)
-              .map(p2 => G2Element(p2).toCompressedByteString)
+          versionMajor = versionMajor
         )
         RuleBasedTreasuryUtxo(
           utxoId = txIn,
           treasuryOutput = RuleBasedTreasuryOutput(datum, value)
+        )
+    }
+
+    /** The rule-based regime utxo (HRWT beacon + head-identity datum) as the FallbackTx would
+      * produce it, for use as a reference input in dispute/treasury tests. Resolve its output via
+      * `toUtxo` with the head config in scope.
+      */
+    def mkRegimeUtxoPure(txIn: TransactionInput): RuleBasedRegimeUtxo =
+        RuleBasedRegimeUtxo(txIn)
+
+    /** The setup-ladder rung utxo covering `k` evacuations: an inline `List[ByteString]` datum at
+      * the burn address, as the ladder deployment would produce it.
+      */
+    def mkSetupRungUtxoPure(
+        headConfig: HeadConfig,
+        k: Int,
+        txIn: TransactionInput
+    ): Utxo = {
+        val rung = SetupLadder.rungForEvacuations(k).toOption.get
+        Utxo(
+          txIn,
+          Babbage(
+            address = DeploymentTx.mkBurnAddress(headConfig.network),
+            value = Value.zero,
+            datumOption = Some(Inline(SetupLadder.rungDatum(rung))),
+            scriptRef = None
+          ).ensureMinAda(headConfig)
         )
     }
 }

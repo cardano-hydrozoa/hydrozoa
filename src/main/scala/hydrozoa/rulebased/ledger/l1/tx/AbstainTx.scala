@@ -31,7 +31,7 @@ final case class AbstainTx(
     ballotBoxProduced: BallotBox[VoteStatus.Abstain.type],
     override val tx: Transaction,
     override val txLens: Lens[AbstainTx, Transaction] = Focus[AbstainTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[AbstainTx] {}
 
 object AbstainTx {
@@ -100,7 +100,8 @@ private object AbstainTxOps {
                 TransactionInput(finalized.transaction.id, 1),
                 abstainOutput
               ),
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

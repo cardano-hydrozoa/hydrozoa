@@ -1,14 +1,14 @@
 package hydrozoa.config.node.owninfo
 
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.stack.StackNumber
 import scalus.crypto.ed25519.VerificationKey
 
 /** A coil node's own public identity. A coil never leads and authors no soft acks, so the
-  * leadership / soft-ack surface is constant. The [[CoilPeerNumber]] is the coil peer's position in
-  * the config's `coilPeerVKeys` (which is in explicit coil-peer-number order), located by matching
-  * its own verification key.
+  * leadership / soft-ack surface is constant. The [[CoilPeerNumber]] is the one [[CoilPeers]] maps
+  * to this peer's verification key.
   */
 final case class OwnCoilPeerPublic private[owninfo] (
     ownCoilPeerNum: CoilPeerNumber,
@@ -25,16 +25,15 @@ final case class OwnCoilPeerPublic private[owninfo] (
 
 object OwnCoilPeerPublic {
 
-    /** Derive this coil's identity by locating its verification key in `coilPeerVKeys` (in explicit
-      * coil-peer-number order); the matching index is its [[CoilPeerNumber]]. `None` if the key is
-      * absent from the configured coil set.
+    /** Derive this coil's identity by locating its verification key among the `coilPeers`; the
+      * matching [[CoilPeerNumber]] is its own. `None` if the key is absent from the configured coil
+      * set.
       */
     def apply(
         ownCoilVKey: VerificationKey,
-        coilPeerVKeys: List[VerificationKey]
+        coilPeers: CoilPeers
     ): Option[OwnCoilPeerPublic] =
-        coilPeerVKeys.indexWhere(_ == ownCoilVKey) match {
-            case -1    => None
-            case index => Some(new OwnCoilPeerPublic(CoilPeerNumber(index), ownCoilVKey))
-        }
+        coilPeers
+            .coilPeerNumberOf(ownCoilVKey)
+            .map(num => new OwnCoilPeerPublic(num, ownCoilVKey))
 }

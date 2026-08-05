@@ -1,13 +1,16 @@
 package hydrozoa.config
 
 import cats.data.*
+import hydrozoa.config.head.network.CardanoNetwork.ensureMinAda
+import hydrozoa.rulebased.ledger.l1.script.plutus.SetupLadder
 import org.scalacheck.Arbitrary
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.address.ShelleyDelegationPart.Null
 import scalus.cardano.address.ShelleyPaymentPart.Key
 import scalus.cardano.ledger.ArbitraryInstances.given
+import scalus.cardano.ledger.DatumOption.Inline
 import scalus.cardano.ledger.TransactionOutput.Babbage
-import scalus.cardano.ledger.{AddrKeyHash, Script, ScriptRef, TransactionInput, Utxo, Value}
+import scalus.cardano.ledger.{AddrKeyHash, Script, ScriptRef, TransactionHash, TransactionInput, Utxo, Value}
 import test.{GenWithTestPeers, given}
 
 // This is for the happy path right now, feel free to expand the parameters
@@ -17,6 +20,9 @@ def generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
         network = testPeers.cardanoNetwork.network
         treasuryId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionInput])
         disputeId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionInput])
+        // The rungs must be outputs 0..6 of a single deployment tx (the on-chain ladder anchor).
+        ladderTxId <- ReaderT.liftF(Arbitrary.arbitrary[TransactionHash])
+        ladderIds = List.tabulate(SetupLadder.rungCount)(i => TransactionInput(ladderTxId, i))
         address <- ReaderT.liftF(
           Arbitrary
               .arbitrary[AddrKeyHash]
@@ -44,7 +50,21 @@ def generateScriptReferenceUtxos: GenWithTestPeers[ScriptReferenceUtxos] =
               mkUtxo(disputeId, HydrozoaBlueprint.disputeScript)
             ): @unchecked
 
+        mkRungUtxo = (id: TransactionInput, i: Int) =>
+            Utxo(
+              id,
+              Babbage(address, Value.zero, Some(Inline(SetupLadder.rungDatum(i))), None)
+                  .ensureMinAda(testPeers)
+            )
+
+        Right(ladder) =
+            ScriptReferenceUtxos.SetupLadderUtxos(
+              testPeers,
+              ladderIds.zipWithIndex.map(mkRungUtxo.tupled)
+            ): @unchecked
+
     } yield ScriptReferenceUtxos(
       treasury,
-      dispute
+      dispute,
+      ladder
     )

@@ -1,7 +1,7 @@
 package hydrozoa.multisig
 
 import cats.*
-import cats.effect.{Deferred, IO}
+import cats.effect.{Deferred, IO, Ref}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorRef.NoSendActorRef
@@ -14,7 +14,6 @@ import hydrozoa.multisig.MultisigRegimeManagerBase.CoreActors
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.*
 import hydrozoa.multisig.ledger.joint.JointLedger
-import hydrozoa.multisig.ledger.l1.tx.FallbackTx
 import hydrozoa.multisig.ledger.l2.L2Ledger
 import hydrozoa.multisig.persistence.Persistence
 import scala.concurrent.duration.DurationInt
@@ -51,6 +50,12 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       */
     val connectionsDeferred: Deferred[IO, Connections] = Deferred.unsafe[IO, Connections]
 
+    /** Node lifecycle status backing the user-facing server's `/ready` endpoint. Advanced
+      * monotonically (via [[NodeStatus.advanceTo]]) by [[CardanoLiaison]] as the L1 target state
+      * changes and by this manager on [[HandoffToRuleBased]]; never read here.
+      */
+    val nodeStatus: Ref[IO, NodeStatus] = Ref.unsafe[IO, NodeStatus](NodeStatus.Initializing)
+
     override def supervisorStrategy: SupervisionStrategy[IO] =
         OneForOneStrategy[IO](maxNrOfRetries = 3, withinTimeRange = 1.minute) {
             case _: IllegalArgumentException =>
@@ -70,7 +75,9 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
             tracer.traceWith(LifecycleEvent.TerminatedActor(childType))
         case TerminatedDependency(dependencyType, _) =>
             tracer.traceWith(LifecycleEvent.TerminatedDependency(dependencyType))
-        case HandoffToRuleBased(fallback) => onHandoffToRuleBased(fallback)
+        case HandoffToRuleBased =>
+            nodeStatus.update(_.advanceTo(NodeStatus.HandedOffToRuleBased)) *>
+                onHandoffToRuleBased
         // TODO: Implement a way to receive a remote comm actor and connect it to its corresponding local comm actor
     }
 
@@ -84,7 +91,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
       * HMRM spawns [[hydrozoa.rulebased.RuleBasedRegimeManager]]; CMRM will spawn the coil-side
       * equivalent. Abstract on purpose — a silent default would swallow the handoff.
       */
-    protected def onHandoffToRuleBased(fallback: FallbackTx): IO[Unit]
+    protected def onHandoffToRuleBased: IO[Unit]
 
     /** Fan a list of (actorRef, actor-kind) pairs into per-child death watches that fire
       * `TerminatedChild` back to this manager.
@@ -116,6 +123,7 @@ trait MultisigRegimeManagerBase[E >: LifecycleEvent <: RegimeManagerEvent]
                 tracers.cardanoLiaison,
                 persistence,
                 mrmSelf = context.self,
+                advanceNodeStatus = next => nodeStatus.update(_.advanceTo(next)),
               )
             )
             consensusActor <- context.actorOf(

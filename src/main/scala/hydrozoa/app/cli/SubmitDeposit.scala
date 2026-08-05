@@ -1,0 +1,209 @@
+package hydrozoa.app.cli
+
+import cats.data.NonEmptyList
+import cats.effect.{ExitCode, IO}
+import cats.syntax.all.*
+import com.monovore.decline.{Command, Opts}
+import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
+import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.node.NodeConfig
+import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
+import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
+import hydrozoa.multisig.backend.cardano.CardanoBackend
+import hydrozoa.multisig.consensus.UserRequest
+import hydrozoa.multisig.consensus.UserRequestBody.DepositRequestBody
+import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
+import hydrozoa.multisig.ledger.event.RequestId
+import hydrozoa.multisig.ledger.l1.tx.RawTx
+import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
+import hydrozoa.multisig.server.SubmissionClient
+import java.nio.file.Path
+import org.http4s.Uri
+import org.http4s.ember.client.EmberClientBuilder
+import scala.concurrent.duration.DurationInt
+import scalus.cardano.ledger.{Coin, TransactionInput, Utxo, Value}
+import scalus.cardano.onchain.plutus.prelude.Option as SOption
+import scalus.uplc.builtin.ByteString
+
+/** Interactive demo target: deposit funds from L1 into a running head.
+  *
+  * Select a peer (its key funds and signs), pick one of the peer's L1 utxos (fetched via the peer's
+  * own Blockfrost backend), enter the L2 outputs the deposit should spawn on absorption (same
+  * destination/value flow as [[SubmitL2Transaction]]), and the tool builds the L2 payload (its hash
+  * pins the payload in the deposit tx metadata, docs/l2-isomorphism.md), registers the deposit with
+  * the head (`POST /head/requests`), then signs the deposit tx and submits it to L1 via Blockfrost,
+  * polling until the deposit utxo lands. The head absorbs it after maturity.
+  *
+  * Usage:
+  * {{{
+  *   hydrozoa submit-deposit [--home head/demo] [--head-uri http://localhost:8080]
+  * }}}
+  */
+object SubmitDeposit:
+
+    /** The accept-by margin: the head must learn the deposit within this window, so it has to
+      * comfortably exceed the interactive prompting + L1 submission time. Absorption is anchored on
+      * the accept-by time, so a wider margin directly delays the deposit landing on L2.
+      */
+    private val acceptByMargin = 3.minutes
+
+    /** The `submit-deposit` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "submit-deposit",
+          header = "Interactively build, register, and submit a deposit into a running head"
+        )((DemoOptions.configDirOpt, DemoOptions.headUriOpt).mapN(run))
+
+    private def run(configDir: Path, headUri: Uri): IO[ExitCode] =
+        EmberClientBuilder.default[IO].build.use { client =>
+            for {
+                picked <- Prompts.selectPeer(configDir.resolve("private"))
+                (peerName, privateConfigPath) = picked
+                loaded <- NodeConfig.load(
+                  configDir.resolve("head-config").resolve("head-config.json"),
+                  privateConfigPath
+                )
+                (config, backend) = loaded
+                given CardanoNetwork.Section = config
+                ownAddress = config.ownWallet.exportVerificationKey.shelleyAddress()
+                ownBech32 <- IO.fromOption(ownAddress.toBech32.toOption)(
+                  RuntimeException("could not render the peer address as bech32")
+                )
+                _ <- IO.println(s"\nPeer $peerName, L1 address: $ownBech32")
+
+                utxos <- backend
+                    .utxosAt(ownAddress)
+                    .flatMap(r =>
+                        IO.fromEither(
+                          r.left.map(e => RuntimeException(s"could not fetch L1 utxos: $e"))
+                        )
+                    )
+                    .map(_.toList)
+                _ <- IO.raiseWhen(utxos.isEmpty)(
+                  RuntimeException(s"no L1 utxos at $ownBech32 — fund it first")
+                )
+                selected <- Prompts.selectFromList(s"L1 utxos at $peerName", utxos)(u =>
+                    s"${u._1.transactionId.toHex.take(16)}…#${u._1.index}  " +
+                        Prompts.renderValue(u._2.value)
+                )
+
+                _ <- IO.println("\nL2 outputs the deposit spawns on absorption:")
+                outputs <- Prompts.promptOutputs(configDir.resolve("private"))
+                obligations = outputs.map((address, value) =>
+                    GenesisObligation(
+                      l2OutputPaymentAddress = address.payment,
+                      l2OutputNetwork = config.network,
+                      l2OutputDatum = SOption.None,
+                      l2OutputValue = value,
+                      l2OutputRefScript = None
+                    )
+                )
+                l2Payload = GenesisObligation.serialize(obligations)
+                l2Value = Value.combine(obligations.map(_.l2OutputValue).toList)
+
+                now <- IO.realTimeInstant
+                requestValidityEndTime = RequestValidityEndTime(
+                  QuantizedInstant.ofEpochSeconds(
+                    config.slotConfig,
+                    now.getEpochSecond + acceptByMargin.toSeconds
+                  )
+                )
+
+                depositRefundTxSeq <- IO.fromEither(
+                  DepositRefundTxSeq
+                      .Build(
+                        l2Payload = l2Payload,
+                        l2Value = l2Value,
+                        depositFee = Coin.zero,
+                        utxosFunding = NonEmptyList.one(Utxo(selected._1, selected._2)),
+                        changeAddress = ownAddress,
+                        requestValidityEndTime = requestValidityEndTime,
+                        refundAddress = ownAddress,
+                        refundDatum = None,
+                        // The id is a correlation field on the returned refund object only — it
+                        // reaches neither the deposit tx bytes nor the register body; the head
+                        // assigns the real id at registration.
+                        requestId = RequestId(0, 0L)
+                      )(using config)
+                      .result
+                      .left
+                      .map(e => RuntimeException(s"could not build the deposit tx: $e"))
+                )
+                depositTx = depositRefundTxSeq.depositTx
+                _ <- IO.println(
+                  s"Built deposit ${depositTx.depositProduced.utxoId} " +
+                      s"(${Prompts.renderValue(l2Value)} to L2, accept-by $requestValidityEndTime)"
+                )
+
+                requestId <- SubmissionClient
+                    .http(client, headUri)
+                    .submit(
+                      UserRequest.DepositRequest(
+                        DepositRequestBody(
+                          l1Payload = ByteString.fromArray(depositTx.tx.toCbor),
+                          l2Payload = l2Payload
+                        )
+                      )
+                    )
+                _ <- IO.println(s"Registered with the head: requestId=$requestId")
+
+                signed = config.ownWallet.signTx(depositTx.tx)
+                _ <- backend
+                    .submitTx(RawTx(signed))
+                    .flatMap(r =>
+                        IO.fromEither(
+                          r.left.map(e => RuntimeException(s"L1 submission failed: $e"))
+                        )
+                    )
+                _ <- IO.println(s"Submitted deposit tx ${signed.id} to L1; waiting for the utxo…")
+                _ <- awaitUtxo(backend, depositTx.depositProduced.utxoId)
+                _ <- {
+                    val txLine = cexplorerTxUrl(config.cardanoNetwork, signed.id.toHex)
+                        .fold(s"  deposit tx:      ${signed.id.toHex}")(url =>
+                            s"  deposit tx:      $url"
+                        )
+                    val requestLine =
+                        s"  request details: GET $headUri/head/requests/${requestId.asI64}"
+                    val watchLines = outputs.toList
+                        .flatMap((address, _) => address.toBech32.toOption)
+                        .distinct
+                        .map(dest => s"    GET $headUri/l2/cardano-eutxo/utxos/$dest")
+                        .mkString("\n")
+                    IO.println(
+                      "Deposit is on L1. The head absorbs it after maturity.\n" +
+                          s"$txLine\n$requestLine\n" +
+                          "  spawned outputs (watch after absorption):\n" +
+                          watchLines
+                    )
+                }
+            } yield ExitCode.Success
+        }
+
+    /** cexplorer.io transaction URL for the head's network; `None` for a Custom network, which has
+      * no public explorer.
+      */
+    private def cexplorerTxUrl(network: CardanoNetwork, txHex: String): Option[String] =
+        val subdomain = network match
+            case CardanoNetwork.Mainnet   => Some("")
+            case CardanoNetwork.Preprod   => Some("preprod.")
+            case CardanoNetwork.Preview   => Some("preview.")
+            case _: CardanoNetwork.Custom => None
+        subdomain.map(s => s"https://${s}cexplorer.io/tx/$txHex")
+
+    /** Poll L1 until the deposit utxo is visible (5s intervals, 3 minutes). */
+    private def awaitUtxo(
+        backend: CardanoBackend[IO],
+        input: TransactionInput,
+        attemptsLeft: Int = 36
+    ): IO[Unit] =
+        backend.resolve(input).flatMap {
+            case Right(Some(_)) => IO.unit
+            case _ if attemptsLeft > 0 =>
+                IO.sleep(5.seconds) *> awaitUtxo(backend, input, attemptsLeft - 1)
+            case other =>
+                IO.raiseError(
+                  RuntimeException(s"deposit utxo $input not visible on L1 after 3min: $other")
+                )
+        }
+
+end SubmitDeposit

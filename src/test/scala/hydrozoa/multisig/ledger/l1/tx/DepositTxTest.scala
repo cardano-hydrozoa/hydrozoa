@@ -15,9 +15,9 @@ import org.scalacheck.Arbitrary.arbitrary
 import org.scalacheck.Prop.propBoolean
 import org.scalacheck.{Gen, Prop, Properties}
 import scala.concurrent.duration.FiniteDuration
+import scalus.cardano.ledger.*
 import scalus.cardano.ledger.ArbitraryInstances.given
 import scalus.cardano.ledger.TransactionOutput.valueLens
-import scalus.cardano.ledger.{Hash, *}
 import scalus.cardano.onchain.plutus.v3.ArbitraryInstances.*
 import scalus.uplc.builtin.ByteString
 import test.*
@@ -58,7 +58,8 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         _ <- arbitrary[TransactionInput]
 
-        depositorAddress <- multiNodeConfig.pickPeer.map(multiNodeConfig.addressOf)
+        depositor <- multiNodeConfig.pickPeer
+        depositorAddress = multiNodeConfig.addressOf(depositor)
 
         nL2Outputs <- Gen.choose(1, 10)
         l2Outputs <- Gen
@@ -99,9 +100,11 @@ def genDepositBuilder(multiNodeConfig: MultiNodeConfig): Gen[DepositTx.Build] = 
 
         _ <- genPubkeyAddress()(using config)
 
+        l2Payload = GenesisObligation.serialize(l2Outputs)
+
     } yield DepositTx.Build(
       utxosFunding = fundingUtxos,
-      l2Payload = GenesisObligation.serialize(l2Outputs),
+      l2Payload = l2Payload,
       depositFee = depositFee,
       changeAddress = depositorAddress,
       requestValidityEndTime = requestValidityEndTime,
@@ -118,17 +121,20 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
         Prop.forAll(MultiNodeConfig.generate(TestPeersSpec.default)()) { multiNodeConfig =>
             val config = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
             val gen = for {
-                hash <- genByteStringOfN(32)
                 index <- Gen.posNum[Int].map(_ - 1)
                 fee <- Gen.choose(0, 100_000_000).map(Coin(_))
-            } yield (index, Hash[Blake2b_256, Any](hash), fee)
+                // blake2b_256 output — always 32 bytes.
+                l2PayloadHash <- genByteStringOfN(32)
+            } yield (index, fee, l2PayloadHash)
 
-            Prop.forAll(gen)((idx, hash, fee) =>
+            Prop.forAll(gen)((idx, fee, l2PayloadHash) =>
                 val aux: AuxiliaryData.Metadata =
                     AuxiliaryData.Metadata(
-                      MD.Deposit(idx, fee, hash).asAuxData(config.headId).getMetadata
+                      MD.Deposit(idx, fee, l2PayloadHash)
+                          .asAuxData(config.headId)
+                          .getMetadata
                     )
-                val expectedX = MD.Deposit(idx, fee, hash)
+                val expectedX = MD.Deposit(idx, fee, l2PayloadHash)
 
                 MD.Deposit.parse(aux) match {
                     case Right(_, x) if x.isInstanceOf[MD.Deposit] =>
@@ -146,12 +152,11 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                 depositBuilder.result match {
                     case Left(e) => s"Build failed: $e" |: Prop(false)
                     case Right(depositTx) =>
-                        DepositTx
-                            .Parse(config)(
-                              ByteString.fromArray(depositTx.tx.toCbor),
-                              depositTx.depositProduced.l2Payload,
-                              depositTx.depositProduced.requestValidityEndTime
-                            )
+                        val txSerialized = ByteString.fromArray(depositTx.tx.toCbor)
+                        val l2Payload = depositTx.depositProduced.l2Payload
+
+                        val parsesBack = DepositTx
+                            .Parse(config)(txSerialized, l2Payload)
                             .result match {
                             case Left(e) =>
                                 s"Produced deposit tx deserializes from CBOR: ${e.getMessage}"
@@ -161,6 +166,23 @@ object DepositTxTest extends Properties("Deposit Tx Test") {
                                 "Parsed cbor round-trips" |: Prop(false)
                             case _ => Prop(true)
                         }
+
+                        // The l2Payload pin: a payload that differs from the one hashed into the
+                        // tx metadata must fail the parse.
+                        val tamperedL2Payload = ByteString.fromArray(
+                          l2Payload.bytes.updated(0, (l2Payload.bytes(0) ^ 0xff).toByte)
+                        )
+                        val rejectsTamperedPayload = DepositTx
+                            .Parse(config)(txSerialized, tamperedL2Payload)
+                            .result match {
+                            case Left(DepositTx.Parse.Error.L2PayloadHashMismatch(_, _)) =>
+                                Prop(true)
+                            case other =>
+                                s"Tampered l2Payload must fail with L2PayloadHashMismatch, got: $other"
+                                    |: Prop(false)
+                        }
+
+                        parsesBack && rejectsTamperedPayload
                 }
             )
         }

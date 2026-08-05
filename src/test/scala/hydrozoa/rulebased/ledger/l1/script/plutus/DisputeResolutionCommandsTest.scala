@@ -9,11 +9,11 @@ import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.{addrKeyHash, pubKeyHash
 import hydrozoa.lib.cardano.scalus.ledger.CollateralUtxo
 import hydrozoa.lib.number.PositiveInt.given
 import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.{mkBallotBoxUtxoPure, mkRuleBasedTreasuryPure}
+import hydrozoa.rulebased.ledger.l1.DisputeTestFixtures.{mkBallotBoxUtxoPure, mkRegimeUtxoPure, mkRuleBasedTreasuryPure}
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.given
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.{EvacuateRedeemer, TreasuryRedeemer}
 import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatumOnchain
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.{AwaitingVote, Voted}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.{VoteDatum, VoteStatus}
 import hydrozoa.rulebased.ledger.l1.tx.CommonGenerators.genCollateralUtxo
@@ -145,11 +145,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
     private val disputeAddr: Address = HydrozoaBlueprint.mkDisputeAddress(env.headConfig.network)
     private val treasuryAddr: Address = HydrozoaBlueprint.mkTreasuryAddress(env.headConfig.network)
 
-    private val treasuryToken = Value.asset(
-      env.headConfig.headMultisigScript.policyId,
-      env.headConfig.headTokenNames.treasuryTokenName,
-      1
-    )
+    private val treasuryToken = env.headConfig.treasuryToken
     private val fallbackTxId = fixed(Arbitrary.arbitrary[TransactionHash], 1)
     private val x1Commitment = fixed(genByteStringOfN(48), 2)
     private val x2Commitment = fixed(genByteStringOfN(48).suchThat(_ != x1Commitment), 3)
@@ -171,12 +167,17 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
     // is only *referenced* by VoteTx/TallyTx (consumed by ResolutionTx), so it stays a valid static
     // reference until resolution — captured here rather than re-extracted each step.
     private val treasury = mkRuleBasedTreasuryPure(
+      env.headConfig,
       versionMajor,
       treasuryToken + Value(Coin.ada(100)),
       TransactionInput(fallbackTxId, 0),
       votingDeadline = now.toPosixTime + 600_000
     )
     private val deadlineSlot: Slot = treasury.parseVotingDeadline(using config).toOption.get
+
+    // The regime utxo (HRWT beacon + head-identity datum) referenced by every dispute-flow tx.
+    private val regimeUtxo =
+        mkRegimeUtxoPure(TransactionInput(fixed(Arbitrary.arbitrary[TransactionHash], 6), 0))
 
     // A single slot delay this large always crosses the voting deadline from the start slot. Offered
     // as the [[scalus.testing.StepAction.Wait]] that moves a trace from the voting phase to the
@@ -229,7 +230,8 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
     private val initialUtxos: Utxos = (
       Map(
         (treasury.utxoId, treasury.treasuryOutput.toOutput(using config)),
-        (collateral.input, collateral.collateralOutput.toOutput(using env))
+        (collateral.input, collateral.collateralOutput.toOutput(using env)),
+        regimeUtxo.toUtxo(using env.headConfig).toTuple
       )
           ++ voteCollaterals.map(c => c.input -> c.collateralOutput.toOutput(using env))
           ++ boxUtxos.map(u => u.input -> u.output)
@@ -274,12 +276,10 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
                       out.datumOption match {
                           case Some(Inline(d)) =>
                               scala.util
-                                  .Try(fromData[RuleBasedTreasuryDatumOnchain](d))
+                                  .Try(fromData[RuleBasedTreasuryDatum](d))
                                   .toOption
-                                  .collect {
-                                      case RuleBasedTreasuryDatumOnchain
-                                              .ResolvedOnchain(_, c, (_, m), _) =>
-                                          (c, m)
+                                  .collect { case RuleBasedTreasuryDatum.Resolved(_, c, (_, m)) =>
+                                      (c, m)
                                   }
                           case _ => None
                       }
@@ -320,6 +320,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
                                   .Build(
                                     b.asInstanceOf[BallotBox[AwaitingVote]],
                                     treasury,
+                                    regimeUtxo,
                                     voteCollateralFor(key),
                                     sec,
                                     signatures,
@@ -344,7 +345,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
                   else
                       tallyPairs(s.boxes).flatMap { (cont, rem) =>
                           TallyTx
-                              .Build(cont, rem, treasury, collateral)(using config)
+                              .Build(cont, rem, treasury, regimeUtxo, collateral)(using config)
                               .result
                               .toOption
                               .map(t => ownWallet.signTx(t.tx))
@@ -365,9 +366,12 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
                       s.boxes match {
                           case List(b) if b.ballotBoxOutput.status.isInstanceOf[Voted] =>
                               ResolutionTx
-                                  .Build(b.asInstanceOf[BallotBox[Voted]], treasury, collateral)(
-                                    using config
-                                  )
+                                  .Build(
+                                    b.asInstanceOf[BallotBox[Voted]],
+                                    treasury,
+                                    regimeUtxo,
+                                    collateral
+                                  )(using config)
                                   .result
                                   .toOption
                                   .map(rx => ownWallet.signTx(rx.tx))
@@ -478,6 +482,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
             .Build(
               box,
               treasury,
+              regimeUtxo,
               voteCollateralFor(box.ballotBoxOutput.key),
               sec,
               signatures,
@@ -529,7 +534,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
       */
     private def evacuateDuringResolve(box: BallotBox[Voted]): Option[Transaction] =
         ResolutionTx
-            .Build(box, treasury, collateral)(using config)
+            .Build(box, treasury, regimeUtxo, collateral)(using config)
             .result
             .toOption
             .map { rt =>
@@ -538,7 +543,11 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
                 // Swap the treasury input's Resolve redeemer for Evacuate.
                 val treasuryIdx = b0.inputs.toIndexedSeq.indexOf(treasury.utxoId)
                 val evacuateData =
-                    toData(TreasuryRedeemer.Evacuate(EvacuateRedeemer(SList.Nil, forgedCommitment)))
+                    toData(
+                      TreasuryRedeemer.Evacuate(
+                        EvacuateRedeemer(SList.Nil, forgedCommitment, BigInt(0))
+                      )
+                    )
                 val ws0 = tx0.witnessSetRaw.value
                 val swapped = ws0.redeemers.toList.flatMap(_.value.toSeq).map { r =>
                     if r.tag == RedeemerTag.Spend && r.index == treasuryIdx then
@@ -582,16 +591,16 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
       */
     private def forgeResolvedMap(box: BallotBox[Voted]): Option[Transaction] =
         ResolutionTx
-            .Build(box, treasury, collateral)(using config)
+            .Build(box, treasury, regimeUtxo, collateral)(using config)
             .result
             .toOption
             .map { rt =>
                 val mutated = mapOutputAt(rt.tx, treasuryAddr) { b =>
                     b.datumOption match {
                         case Some(Inline(d)) =>
-                            fromData[RuleBasedTreasuryDatumOnchain](d) match {
-                                case r: RuleBasedTreasuryDatumOnchain.ResolvedOnchain =>
-                                    val forged: RuleBasedTreasuryDatumOnchain =
+                            fromData[RuleBasedTreasuryDatum](d) match {
+                                case r: RuleBasedTreasuryDatum.Resolved =>
+                                    val forged: RuleBasedTreasuryDatum =
                                         r.copy(evacuationActive = forgedCommitment)
                                     b.copy(datumOption = Some(Inline(toData(forged))))
                                 case _ => b
@@ -661,7 +670,7 @@ object DisputeResolutionCommandsTest extends Properties("RBR Dispute Resolution 
         rem: BallotBox[VoteStatus]
     ): List[Transaction] =
         TallyTx
-            .Build(cont, rem, treasury, collateral)(using config)
+            .Build(cont, rem, treasury, regimeUtxo, collateral)(using config)
             .result
             .toOption
             .toList

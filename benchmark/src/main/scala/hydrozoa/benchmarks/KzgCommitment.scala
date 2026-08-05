@@ -76,9 +76,9 @@ class UtxoToPlutusBenchmark {
     def setup(): Unit = utxos = genUtxos(10_000).toList
 
     @Benchmark
-    def run(): Unit =
+    def run(): TxInInfo =
         val utxo = utxos(nextIndex)
-        val txInInfo = LedgerToPlutusTranslation.getTxInInfoV3(utxo._1, Map(utxo._1 -> utxo._2))
+        LedgerToPlutusTranslation.getTxInInfoV3(utxo._1, Map(utxo._1 -> utxo._2))
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Converting to Plutus Data  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

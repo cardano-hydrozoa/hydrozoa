@@ -81,6 +81,42 @@ object Cf:
     case object EvacuationMap extends Cf:
         def name = "EvacuationMap"
 
+    /** Request → block reverse index, keyed by the opaque request id (its packed i64) → the block
+      * that locally processed the request plus its validity verdict. Written by JL in the same
+      * atomic bundle as the block.
+      */
+    case object RequestBlockIndex extends Cf:
+        def name = "RequestBlockIndex"
+
+    /** Block → stack reverse index: `blockNum` → the stack that hard-confirmed the block. Written
+      * by SCA in the same atomic batch as the stack's `HardConfirmation`.
+      */
+    case object BlockStackIndex extends Cf:
+        def name = "BlockStackIndex"
+
+    /** Effect → stack reverse index: `l1TxId` → the stack whose `HardConfirmation` carries that
+      * effect. Written by SCA in the same atomic batch as the stack's `HardConfirmation`. Backs
+      * `GET /head/effects/<l1TxId>`.
+      */
+    case object EffectStackIndex extends Cf:
+        def name = "EffectStackIndex"
+
+    /** Deposit-request → decision reverse index: the deposit request's opaque id (packed i64) → the
+      * [[DepositDecision]] (absorbed / rejected) and the `blockNum` that decided it. Absence of a
+      * row means the deposit is still undecided. Written by JL in the same atomic bundle as the
+      * deciding block.
+      */
+    case object DepositDecisionIndex extends Cf:
+        def name = "DepositDecisionIndex"
+
+    /** Withdrawal-request → effect reverse index: a set of `(requestId, l1TxId)` pairs (both in the
+      * key, empty value), so a prefix scan by the packed-i64 request id yields the settlement /
+      * rollout / finalization txs that pay that request's L1-bound outputs. Written by SC at stack
+      * close.
+      */
+    case object WithdrawalEffectIndex extends Cf:
+        def name = "WithdrawalEffectIndex"
+
     /** Store-level metadata (schema version + arrival-stamp generation). */
     case object Meta extends Cf:
         def name = "Meta"
@@ -121,6 +157,11 @@ object Cf:
       DepositMap,
       Treasury,
       EvacuationMap,
+      RequestBlockIndex,
+      DepositDecisionIndex,
+      WithdrawalEffectIndex,
+      BlockStackIndex,
+      EffectStackIndex,
       Meta
     )
 

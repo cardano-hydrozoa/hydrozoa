@@ -1,300 +1,351 @@
 package hydrozoa.integration.rbr.property
 
 import cats.effect.*
-import cats.effect.implicits.parallelForGenSpawn
 import cats.effect.unsafe.implicits.global
 import cats.syntax.all.*
-import com.suprnation.actor.ActorSystem
-import hydrozoa.*
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.config.node.operation.evacuation.{NodeOperationEvacuationConfig, NodeOperationEvacuationConfigGen}
+import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.{MultiPeerDisputeProperties, MultiPeerHeadHarness}
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId
 import hydrozoa.integration.rbr.model.petri.net.RBRPlaceId.*
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.classification.Histogram
 import hydrozoa.lib.logging.{ContraTracer, Slf4jTracer}
-import hydrozoa.multisig.backend.cardano.{CardanoBackend, CardanoBackendMock, MockState}
-import hydrozoa.multisig.consensus.peer.PeerWallet
-import hydrozoa.multisig.ledger.block.BlockHeader
-import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
-import hydrozoa.multisig.ledger.joint.EvacuationMap
-import hydrozoa.multisig.ledger.stack.StandaloneEvacuationCommitment
-import hydrozoa.rulebased.ledger.l1.state.StandaloneEvacuationCommitmentOnchain
-import hydrozoa.rulebased.{RuleBasedActor, RuleBasedActorEvent, RuleBasedActorEventFormat, RuleBasedRegimeManager}
-import org.scalacheck.util.Pretty
-import org.scalacheck.{Arbitrary, Gen, Properties, PropertyM}
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
-import scalus.cardano.ledger.*
-import scalus.cardano.ledger.ArbitraryInstances.given
-import scalus.cardano.ledger.EvaluatorMode.EvaluateAndComputeCost
-import scalus.cardano.ledger.rules.{Context, State, UtxoEnv}
-import test.TestPeersSpec
+import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, RequestSequencer}
+import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
+import hydrozoa.rulebased.RuleBasedActorEvent
+import org.scalacheck.Prop
+import scala.annotation.unused
+import scala.concurrent.duration.*
+import scalus.cardano.ledger.{Utxo, Utxos}
+import test.{SeedPhrase, TestPeers}
 
-/*
-CURRENT STATUS:
-- The test only tests "happy path" behavior, where every peer votes for the same commitment
-- We start with a mocked fallback tx
-- We go through dispute + resolution + evacuation successfully
-- Full classification of the utxo state matches
-- Next steps (in order):
-  - Instead of starting the actors individually, start them with the rule-based regime manager
-  - Add in a cardano backend proxy to drop transactions from certain peers and regain some determinism ("rig the races")
-  - Vote for different commitments
-  - start with an actual fallback
-  - add deinit
-  - Domain-based logging (rather than stringly typed)
-  - Model based testing of intermediary states according to full classification
- */
-object EvacuationPropertyTest extends Properties("RBR Evacuation Property"):
+/** Rule-based regime dispute flow through the [[MultiPeerHeadHarness]] — real MRM + persistence +
+  * RBA against a mock L1, exercising the fallback → vote → tally → resolve sequence.
+  *
+  * Scenario:
+  *   1. 3-peer head + 2 coil followers; per-head-peer [[FirewalledCardanoBackend]] drops any
+  *      [[SettlementTx]] with `versionMajor == 2`, so on-chain lags at v1 while peers hard-confirm
+  *      through v2 off-chain.
+  *   2. Bootstrap L2 request + periodic requests give each Major stack a trailing Minor with SEC.
+  *   3. When CL dispatches `Action.FallbackToRuleBased` for major-2, HMRM spawns
+  *      [[RuleBasedRegimeManager]] which spawns [[RuleBasedActor]].
+  *   4. RBA's persistence-backed `loadAction` walks backward, finds the SEC matching the on-chain
+  *      treasury's `versionMajor = 1`, and submits a Vote that Plutus accepts.
+  *   5. Voting deadline elapses → TallyTx → ResolutionTx.
+  *   6. Every peer's RBA builds and submits an [[EvacuationTx]] until its `Evacuation.NoMore`
+  *      terminal event fires.
+  *   7. Test asserts the shared-L1 UTxO histogram matches the expected terminal cardinalities.
+  */
+object EvacuationPropertyTest extends MultiPeerDisputeProperties("RBR Evacuation Property"):
 
-    given ppIDU: (InitialDisputeUtxos => Pretty) = _ =>
-        Pretty(_ => "InitialDisputeUtxos (too long to print)")
+    private val nHeadPeers: Int = 3
+    private val nCoilPeers: Int = 2
+    private val scenarioTimeout: FiniteDuration = 5.minutes
 
-    override def overrideParameters(
-        p: org.scalacheck.Test.Parameters
-    ): org.scalacheck.Test.Parameters =
-        p.withMinSuccessfulTests(3)
+    val _ = property("ws: fallback→RRM→vote→tally→resolve→evacuate happy path") = testProperty(
+      TransportMode.WebSocket
+    )
 
-    // These might need to be tuned. Basically we don't want to end up in a spin loop.
-    //  TODO: How can we detect this in the actors themselves?
-    val votingDuration: FiniteDuration = 5.seconds
-    val evacuationDuration: FiniteDuration = 10.minute
-    // After the terminal "no more evacuations" signal fires, keep the actors running for this
-    // buffer to catch any post-completion crashes (e.g. building an EvacuationTx with an empty
-    // map; treating any such error as Recoverable is what keeps the actors alive for rollbacks).
-    val postCompletionBuffer: FiniteDuration = 30.seconds
-    val actorRunDuration: FiniteDuration =
-        votingDuration + evacuationDuration + postCompletionBuffer
+    private def testProperty(transportMode: TransportMode): Prop =
+        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nHeadPeers, nCoilPeers)
 
-    // 100ms polling period so actors poll on every ~1s cats-actors ping loop tick
-    val fastEvacConfig: NodeOperationEvacuationConfigGen =
-        (wallet: PeerWallet) => Gen.const(NodeOperationEvacuationConfig(100.millis, wallet))
+        val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
 
-    import MultiNodeConfig.*
+        val resource = MultiPeerHeadHarness.mkResource(
+          transportMode = transportMode,
+          testPeers = testPeers,
+          testPeerToUtxos = testPeerToUtxos,
+          takeoffOffset = 60.seconds,
+          coilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
+          coilQuorum = nCoilPeers,
+        ) { (takeoffTime, mnc) =>
+            buildCtxResource(transportMode, mnc, testPeers, takeoffTime)
+        }
 
-    val _ = property("evacuation resolves via vote: treasury present, no votes remain") =
-        run(
-          scenario(mkAction = (sec, sigs, coilSigs) =>
-              RuleBasedRegimeManager.DisputeAction.Vote(
-                sec = sec,
-                signatures = sigs,
-                coilSignatures = coilSigs
-              )
-          ),
-          PropertyM
-              .pick[IO, MultiNodeConfig](
-                MultiNodeConfig
-                    .generate(TestPeersSpec.default)(
-                      generateNodeOperationEvacuationConfig = fastEvacConfig
-                    )
-                    .label("MultiNodeConfig")
-              )
-              .map(Resource.pure[IO, MultiNodeConfig](_))
-        )
+        test.TestM.run[Ctx, Boolean](scenarioTestM, resource)
 
-    lazy val _ = property("evacuation resolves via abstain: treasury present, no votes remain") =
-        run(
-          scenario(mkAction = (_, _, _) => RuleBasedRegimeManager.DisputeAction.Abstain),
-          PropertyM
-              .pick[IO, MultiNodeConfig](
-                MultiNodeConfig
-                    .generate(TestPeersSpec.default)(
-                      generateNodeOperationEvacuationConfig = fastEvacConfig
-                    )
-                    .label("MultiNodeConfig")
-              )
-              .map(Resource.pure[IO, MultiNodeConfig](_))
-        )
+    // ------------------------------------------------------------------
+    // Scenario body
+    // ------------------------------------------------------------------
 
-    /** Shared happy-path scenario: synthesize the post-fallback UTxO set, spawn the
-      * [[DisputeActor]] + [[EvacuationActor]] pair per peer (with the [[DisputeAction]] under test),
-      * and assert the terminal UTxO classification.
-      *
-      * Both Vote and Abstain produce the same terminal state — the default vote utxo already
-      * commits to `evacMap.kzgCommitment`, so peers either join the default's vote or step aside
-      * and let it carry the tally; in either case the resolution evacuates against `evacMap`.
-      *
-      * monadicIO (real time): `setReceiveTimeout` in cats-actors uses
-      * `System.currentTimeMillis()`, which is NOT controlled by TestControl. Real wall-clock time
-      * is required for actors to poll. `fastEvacConfig` overrides the default 1–10 min polling
-      * period so actors poll every ~1s.
-      */
-    private def scenario(
-        mkAction: (
-            StandaloneEvacuationCommitment.Onchain,
-            List[BlockHeader.Minor.HeaderSignature],
-            List[Option[BlockHeader.Minor.HeaderSignature]]
-        ) => RuleBasedRegimeManager.DisputeAction
-    ): MultiNodeConfigTestM[Boolean] =
+    private val ctxTestM = test.TestMFixedEnv[Ctx]()
+    import ctxTestM.*
+
+    private def scenarioTestM: test.TestM[Ctx, Boolean] =
         for
-            env <- ask
-            fallbackTxId <- pick[TransactionHash](
-              Arbitrary.arbitrary[TransactionHash].label("FallbackTx id")
-            )
-            mockFallback: Transaction = new Transaction(
-              body = KeepRaw(TransactionBody(TaggedSortedSet.empty, IndexedSeq.empty, Coin.zero)),
-              witnessSetRaw = KeepRaw(TransactionWitnessSet.empty),
-              isValid = true,
-              auxiliaryData = None
-            ) {
-                override lazy val id = fallbackTxId
-            }
-
-            // Use real wall-clock time so the mock's currentSlot (also real wall-clock)
-            // advances past the voting deadline naturally as the test runs.
-            now <- lift(IO.realTimeInstant.map(t => QuantizedInstant(env.slotConfig, t)))
-
-            nEvacs <- pick(Gen.choose(1, 1000).label("nEvacs"))
-
-            // Generate the synthetic post-fallback UTxO set.
-            initialUtxos <- pick[InitialDisputeUtxos](
-              InitialDisputeUtxos
-                  .gen(fallbackTxId, now, votingDuration, nEvacs)(using env)
-                  .label("initial dispute utxos")
-            )
-
-            // block header: all peers vote for the same commitment (happy path).
-            blockHeader = StandaloneEvacuationCommitmentOnchain(
-              headId = env.headConfig.headTokenNames.treasuryTokenName.bytes,
-              versionMajor = BigInt(1),
-              versionMinor = BigInt(1),
-              commitment = initialUtxos.kzgCommitment
-            )
-
-            // All peers co-sign the block header (a voted block requires all signatures)
-            signatures = env.multisignHeader(blockHeader).toList
-
-            // First coilQuorum coil peers sign; rest are None (per MultiNodeConfig helper).
-            coilSignatures = env.multisignHeaderCoil(blockHeader)
-
-            action = mkAction(blockHeader, signatures, coilSignatures)
-
-            backendAndSnapshot <- lift(
-              CardanoBackendMock.mockIOWithSnapshot(
-                MockState(
-                  ledgerState = State(initialUtxos.allUtxos(using env)),
-                  currentSlot = now.toSlot,
-                  knownTxs = Set(fallbackTxId),
-                  submittedTxs = List((Map.empty, mockFallback))
-                ),
-                mkContext = currentSlot =>
-                    // Needed so that the headConfig's network, slot config, etc. is used.
-                    // TODO: This should probably be factored out into a helper in CardanoBackedMock
-                    //   and used by default.
-                    Context(
-                      fee = Coin.zero,
-                      env = UtxoEnv.apply(
-                        currentSlot,
-                        env.headConfig.cardanoProtocolParams,
-                        certState = CertState.empty,
-                        env.headConfig.network
-                      ),
-                      slotConfig = env.headConfig.slotConfig,
-                      evaluatorMode = EvaluateAndComputeCost
-                    )
-              )
-            )
-
-            (sharedBackend, utxoSnapshot) = backendAndSnapshot
-
-            // Fires when any peer logs that no evacuations remain.
-            evacuatedSignal <- lift(IO.deferred[Unit])
-
-            // Signal tracer that fires when any peer finishes evacuating.
-            evacuationSignalTap: ContraTracer[IO, RuleBasedActorEvent] = ContraTracer.emit {
-                case RuleBasedActorEvent.Evacuation.NoMore => evacuatedSignal.complete(()).void
-                case _                                     => IO.unit
-            }
-
-            terminalUtxos <- lift {
-                val peerBots: List[IO[Unit]] =
-                    env.nodePrivateConfigs.toList.map { (peerId, _) =>
-                        val peerTracer =
-                            Slf4jTracer.sink.contramap(
-                              RuleBasedActorEventFormat.humanFormat(peerId)
-                            ) |+| evacuationSignalTap
-                        actorsFor(
-                          peerId = peerId,
-                          action = action,
-                          sharedBackend = sharedBackend,
-                          candidateEvacMaps = Map(
-                            initialUtxos.evacuationMap.kzgCommitment ->
-                                initialUtxos.evacuationMap
-                          ),
-                          fallbackTxHash = fallbackTxId,
-                          tracer = peerTracer,
-                        )(using env.nodeConfigs(peerId))
-                    }
-
-                IO.race(
-                  evacuatedSignal.get >> IO.sleep(postCompletionBuffer),
-                  peerBots.parSequence
-                ).timeoutTo(
-                  actorRunDuration,
-                  IO.raiseError(
-                    RuntimeException(s"Dispute/evacuation phase timed out after $actorRunDuration")
-                  )
-                ) >> utxoSnapshot
-            }
-
-            classification <- lift(
-              IO.fromEither(
-                Histogram
-                    .empty(RBRClassifier(using env))
-                    .addAll(terminalUtxos.map { case (i, o) => Utxo(i, o) })
-                    .toEither
-                    .left
-                    .map(errs => RuntimeException(errs.toList.mkString("\n")))
-              )
-            )
-
-            nPeers = env.headConfig.nHeadPeers.convert
-
-            // TODO: these buckets probably need refinement. TBD
-            expectedBuckets: Map[RBRPlaceId, Int] = Map(
-              TreasuryRefPlaceId -> 1,
-              DisputeRefPlaceId -> 1,
-              EvacuationOutputPlaceId -> nEvacs,
-              ResolvedTreasuryPlaceId -> 1,
-              CollateralPlaceId -> nPeers,
-            )
-
-            _ <- assertWith(
-              classification.classified == expectedBuckets,
-              "Histogram mismatch:\n" +
-                  s"  expected: ${expectedBuckets.toList.map((k, v) => (k.toString, v)).sorted.mkString("\n")}\n" +
-                  s"  actual:   $classification"
-            )
+            _ <- step1a_submitBootstrapRequest
+            _ <- step1b_startPeriodicRequestLoop
+            _ <- step2_awaitFallbackToRuleBasedHandoff
+            _ <- step3_awaitResolutionSubmitted
+            _ <- step4_awaitEvacuationDone
+            _ <- step5_assertTerminalHistogram
         yield true
 
-    /** Spawn a [[RuleBasedActor]] for one peer inside its own [[ActorSystem]] and block until the
-      * system terminates. Until a stage4-style harness can drive a head through hard-confirmation +
-      * fallback into the rule-based regime, this test bypasses [[RuleBasedRegimeManager]] and feeds
-      * the synthetic post-fallback inputs straight to the actor.
+    /** State + handles threaded between steps. */
+    private final case class Ctx(
+        harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
+        fallbackDispatched: Deferred[IO, Unit],
+        resolutionSubmitted: Deferred[IO, Unit],
+        // Set of peers whose RBA has fired `Evacuation.NoMore`. `evacuationDone` is only
+        // completed once every head + coil peer has fired — waiting for the first NoMore is
+        // racy: the winning-drain peer fires while others may still be mid-submission.
+        peersEvacuationDone: Ref[IO, Set[PeerId]],
+        evacuationDone: Deferred[IO, Unit],
+        // First `PayoutsLeft(n)` observed on any peer — the KZG-committed evacuation count at
+        // the RBA's read of the resolved treasury. Subsequent PayoutsLeft values are strictly
+        // smaller as drain progresses; taking the first captures the pre-drain total.
+        firstPayoutsLeft: Ref[IO, Option[Int]],
+        periodicRequestFiber: Ref[IO, Option[FiberIO[Nothing]]],
+    )
+
+    private def step1a_submitBootstrapRequest: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(MultiPeerHeadHarness.submitKickRequest(ctx.harness))
+        yield ()
+
+    /** Keep feeding requests so each Major stack has a trailing Minor with an SEC — otherwise
+      * `loadAction` walks backward past every Major-only stack and abstains, tally/resolve then
+      * takes the default vote's kzg. Either terminal state is acceptable for this test, but the
+      * shorter path via a real Vote exercises more of the flow.
       */
-    private def actorsFor(
-        peerId: Int,
-        action: RuleBasedRegimeManager.DisputeAction,
-        sharedBackend: CardanoBackend[IO],
-        candidateEvacMaps: Map[KzgCommitment, EvacuationMap],
-        fallbackTxHash: TransactionHash,
-        tracer: ContraTracer[IO, RuleBasedActorEvent],
-    )(using config: RuleBasedRegimeManager.Config): IO[Unit] =
-        ActorSystem[IO](s"RBR actor for peer $peerId").use { system =>
-            for {
-                _ <- system.actorOf(
-                  RuleBasedActor(
-                    loadAction = IO.pure(action),
-                    loadEvacuationInputs = IO.pure(
-                      RuleBasedActor.EvacuationInputs(
-                        candidateEvacMaps = candidateEvacMaps,
-                        fallbackTxHash = fallbackTxHash
-                      )
-                    ),
-                    cardanoBackend = sharedBackend,
-                    tracer = tracer
+    private def step1b_startPeriodicRequestLoop: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            fiber <- lift(
+              (IO.sleep(1.second) >> MultiPeerHeadHarness.submitKickRequest(
+                ctx.harness
+              )).foreverM.start
+            )
+            _ <- lift(ctx.periodicRequestFiber.set(Some(fiber)))
+        yield ()
+
+    private def step2_awaitFallbackToRuleBasedHandoff: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(ctx.fallbackDispatched.get.timeout(scenarioTimeout))
+        yield ()
+
+    private def step3_awaitResolutionSubmitted: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(ctx.resolutionSubmitted.get.timeout(scenarioTimeout))
+        yield ()
+
+    private def step4_awaitEvacuationDone: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(ctx.evacuationDone.get.timeout(scenarioTimeout))
+        yield ()
+
+    /** After evacuation completes, cancel the periodic-request loop, wait a beat for any in-flight
+      * tx to settle, snapshot the shared mock L1, and check the UTxO distribution matches the
+      * expected terminal buckets.
+      */
+    private def step5_assertTerminalHistogram: test.TestM[Ctx, Unit] =
+        for
+            ctx <- ask
+            _ <- lift(ctx.periodicRequestFiber.get.flatMap(_.traverse_(_.cancel)))
+            _ <- lift(IO.sleep(quiescenceDelay))
+            utxos <- lift(ctx.harness.l1Snapshot)
+            actual <- lift(runClassifier(utxos)(using ctx.harness.multiNodeConfig))
+            expectedEvacCount <- lift(
+              ctx.firstPayoutsLeft.get.flatMap(
+                IO.fromOption(_)(
+                  new IllegalStateException(
+                    "no `Evacuation.PayoutsLeft` observed; RBA never entered the drain loop"
                   )
                 )
-                _ <- system.waitForTermination
-            } yield ()
+              )
+            )
+            expected = expectedCardinalities(expectedEvacCount)
+            _ <- assertWith(
+              actual == expected,
+              s"Cardinality mismatch:\n  expected: $expected\n  actual:   $actual",
+            )
+        yield ()
+
+    // Time to wait after cancelling the periodic loop for any in-flight tx to reach the mock.
+    // 2s covers a full CL polling period + tx submission at the fast harness timing.
+    private val quiescenceDelay: FiniteDuration = 2.seconds
+
+    // ------------------------------------------------------------------
+    // Ctx bring-up
+    // ------------------------------------------------------------------
+
+    private def buildCtxResource(
+        transportMode: TransportMode,
+        multiNodeConfig: MultiNodeConfig,
+        testPeers: TestPeers,
+        takeoffTime: Option[java.time.Instant],
+    ): Resource[IO, Ctx] =
+        for
+            fallbackDispatched <- Resource.eval(Deferred[IO, Unit])
+            resolutionSubmitted <- Resource.eval(Deferred[IO, Unit])
+            peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
+            evacuationDone <- Resource.eval(Deferred[IO, Unit])
+            firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
+            periodicRequestFiber <- Resource.eval(Ref[IO].of(Option.empty[FiberIO[Nothing]]))
+
+            harness <- MultiPeerHeadHarness.disputeHarnessResource(
+              label = s"RBREvacuation-${transportMode.toString.toLowerCase}",
+              transportMode = transportMode,
+              multiNodeConfig = multiNodeConfig,
+              testPeers = testPeers,
+              takeoffTime = takeoffTime,
+              tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+| observerTracer(
+                fallbackDispatched,
+                resolutionSubmitted,
+                peersEvacuationDone,
+                evacuationDone,
+                firstPayoutsLeft,
+              ),
+              wrapBackend = (peerId, backend) =>
+                  FirewalledCardanoBackend(
+                    underlying = backend,
+                    shouldDrop = MultiPeerHeadHarness.DropRule.settlementProducingMajor(2).toGate,
+                    firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId),
+                  ),
+            )
+        yield Ctx(
+          harness = harness,
+          fallbackDispatched = fallbackDispatched,
+          resolutionSubmitted = resolutionSubmitted,
+          peersEvacuationDone = peersEvacuationDone,
+          evacuationDone = evacuationDone,
+          firstPayoutsLeft = firstPayoutsLeft,
+          periodicRequestFiber = periodicRequestFiber,
+        )
+
+    // ------------------------------------------------------------------
+    // Wiring
+    // ------------------------------------------------------------------
+
+    private def observerTracer(
+        fallbackDispatched: Deferred[IO, Unit],
+        resolutionSubmitted: Deferred[IO, Unit],
+        peersEvacuationDone: Ref[IO, Set[PeerId]],
+        evacuationDone: Deferred[IO, Unit],
+        firstPayoutsLeft: Ref[IO, Option[Int]],
+    ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
+        // Both HeadRegimeManagerEvent and CoilRegimeManagerEvent embed the same
+        // `CommonChildEvent` and `RuleBasedOnlyChildEvent` cases, so one PF handles either
+        // side.
+        val onEvent: PeerId => Any => IO[Unit] = peer => {
+            case CommonChildEvent.CardanoLiaison(
+                  _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
+                ) =>
+                fallbackDispatched.complete(()).void
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Tx.SubmitSuccess(tx)
+                ) if tx.transactionFamily == "Resolution" =>
+                resolutionSubmitted.complete(()).void
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
+                ) =>
+                firstPayoutsLeft.update(_.orElse(Some(n)))
+
+            case RuleBasedOnlyChildEvent.RuleBasedActor(
+                  RuleBasedActorEvent.Evacuation.NoMore
+                ) =>
+                peersEvacuationDone
+                    .updateAndGet(_ + peer)
+                    .flatMap { seen =>
+                        IO.whenA(seen.size == nHeadPeers + nCoilPeers)(
+                          evacuationDone.complete(()).void
+                        )
+                    }
+
+            case _ => IO.unit
         }
+        ContraTracer[IO, MultiPeerHeadHarness.Event] {
+            case MultiPeerHeadHarness.Event.Head(peerNum, evt) =>
+                onEvent(PeerId.Head(peerNum))(evt)
+            case MultiPeerHeadHarness.Event.Coil(coilNum, evt) =>
+                onEvent(PeerId.Coil(coilNum))(evt)
+        }
+
+    // ------------------------------------------------------------------
+    // Terminal-state classifier
+    // ------------------------------------------------------------------
+
+    /** Bucket every UTxO in the shared L1 snapshot via [[RBRClassifier]]. Raises on ambiguity —
+      * classifier fns are meant to be disjoint. Returns a total map keyed by every place id so
+      * comparisons against `expectedCardinalities` see missing buckets as 0.
+      */
+    private def runClassifier(
+        utxos: Utxos
+    )(using MultiNodeConfig): IO[Map[RBRPlaceId, Int]] =
+        val classifier = new RBRClassifier
+        val allUtxos = utxos.toList.map { case (i, o) => Utxo(i, o) }
+        Histogram.empty(classifier).addAll(allUtxos).toEither match
+            case Left(errs) =>
+                IO.raiseError(
+                  new RuntimeException(s"Ambiguous UTxO classification: ${errs.toList}")
+                )
+            case Right(hist) =>
+                // logAmbientUtxos(classifier, allUtxos) *>
+                IO.pure(RBRPlaceId.values.toList.map(k => k -> hist(k)).toMap)
+
+    /** Diagnostic helper: emit each ambient-bucket UTxO (input / address / value / datum) via Slf4j
+      * so the composition of [[AmbientPlaceId]] can be identified when the terminal cardinality
+      * shifts. Toggle by uncommenting the `logAmbientUtxos(...)` call site in [[runClassifier]].
+      * Not on the happy path so callers pay nothing when commented out.
+      */
+    @unused
+    private def logAmbientUtxos(classifier: RBRClassifier, utxos: List[Utxo]): IO[Unit] =
+        val ambient = utxos.filter(u => classifier.classify(u).contains(AmbientPlaceId))
+        val lines = ambient.zipWithIndex
+            .map { case (u, idx) =>
+                s"  [$idx] input=${u.input} addr=${u.output.address} value=${u.output.value} datum=${u.output.datumOption}"
+            }
+            .mkString("\n")
+        Slf4jTracer.sink.traceWith(
+          hydrozoa.lib.logging.LogEvent
+              .From(Map.empty, "AmbientDiagnostic")
+              .info(s"AmbientPlaceId utxos (${ambient.size}):\n$lines")
+        )
+
+    /** Expected terminal cardinalities: init → settle-v1 → fallback → vote → tally → resolve →
+      * evacuate on the happy path. `evacuationCount` is the first `PayoutsLeft(n)` observed from
+      * any peer's RBA — exactly the size of the resolved treasury's evacuation map before drain
+      * begins (see `RuleBasedActor.Evacuation.handle`).
+      *   - `EvacuationOutputPlaceId -> evacuationCount`: every L2 output was drained to L1 via the
+      *     RBA's `EvacuationTx` loop; each output carries the `"evacuation"` inline-datum sentinel
+      *     stamped by [[InitializationParametersGen.generatePeerContribution]], which survives the
+      *     KZG membership hash and so appears on the L1 evacuation outputs.
+      *   - `PayoutObligationsPlaceId -> 0`: no in-flight payout obligations remain on the resolved
+      *     treasury.
+      *   - `CollateralPlaceId -> 0`: the [[RBRClassifier]] identifies collateral by the
+      *     `"collateral"` datum sentinel, which only exists in the synthetic
+      *     [[InitialDisputeUtxos]] fixture — the real tx builders draw collateral from plain Ada
+      *     wallet UTxOs (no datum). Preserved collateral therefore lands in [[AmbientPlaceId]]
+      *     here. TODO: the right way to bucket collateral in an end-to-end scenario is to walk the
+      *     tx graph and mark any output that is later consumed as a `collateral_input` of some
+      *     downstream tx — i.e. classify by role in tx history rather than by content sentinel.
+      *   - `AmbientPlaceId -> nHeadPeers * 2 + nCoilPeers`: head peers keep two wallet-ADA streams
+      *     at their shelley address — an [[InitializationTx]] change output and a [[FallbackTx]]
+      *     equity payout. Coil peers keep only the init-change stream (no fallback equity). Every
+      *     RBR-side script tx that pays its fee from collateral (Vote/Resolution/Evacuation) picks
+      *     one of these as its collateral input and returns it (fee-subtracted) at the same
+      *     address, so no utxo is destroyed.
+      */
+    private def expectedCardinalities(evacuationCount: Int): Map[RBRPlaceId, Int] =
+        Map(
+          TreasuryRefPlaceId -> 1,
+          DisputeRefPlaceId -> 1,
+          RegimeRefPlaceId -> 1,
+          SetupLadderRefPlaceId -> 7,
+          ResolvedTreasuryPlaceId -> 1,
+          UnresolvedTreasuryPlaceId -> 0,
+          VotedPlaceId -> 0,
+          UnvotedPlaceId -> 0,
+          CollateralPlaceId -> 0,
+          EvacuationOutputPlaceId -> evacuationCount,
+          PayoutObligationsPlaceId -> 0,
+          AmbientPlaceId -> (nHeadPeers * 2 + nCoilPeers),
+        )

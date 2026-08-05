@@ -5,6 +5,7 @@ import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.persistence.PersistenceEvent.*
 import java.nio.ByteBuffer
+import java.time.Instant
 
 /** The **typed, actor-facing** persistence API.
   *
@@ -60,9 +61,26 @@ trait Persistence[F[_]]:
       */
     def backend: BackendStore[F]
 
+    /** The wall-clock anchor for each arrival-stamp generation: `generation → epoch-nanos at that
+      * generation's monotonic zero`. Lets any [[ArrivalStamp]] be converted to wall-clock time via
+      * [[wallClockOf]] without ever persisting a wall clock — only monotonic stamps and this anchor
+      * are stored. Captured once per generation at [[Persistence.fromBackend]].
+      */
+    def zeroTimes: F[Map[Int, Long]]
+
+    /** Convert an arrival stamp to the wall-clock instant it was recorded at, using its
+      * generation's [[zeroTimes]] anchor (`wall = zeroTime[generation] + monotonicNanos`). Total:
+      * every generation is anchored at open before any of its stamps can exist, and anchors are
+      * never pruned, so a stamp produced by a running node always has its anchor.
+      */
+    def wallClockOf(stamp: ArrivalStamp): F[Instant]
+
 object Persistence:
     /** The arrival-stamp generation counter's key in `Cf.Meta` (a 4-byte big-endian `Int`). */
     private val generationKey: Array[Byte] = "arrival-generation".getBytes("UTF-8")
+
+    /** The per-generation zero-time anchor map's key in `Cf.Meta`. */
+    private val zeroTimesKey: Array[Byte] = "arrival-zero-times".getBytes("UTF-8")
 
     /** The per-process arrival-stamp generation: read the persisted counter, increment it, write it
       * back, and return the new value. Bumped **once per store-open per process** so stamps from a
@@ -74,6 +92,50 @@ object Persistence:
             next = prev.map(b => ByteBuffer.wrap(b).getInt).getOrElse(0) + 1
             _ <- backend.put(Cf.Meta, generationKey, ByteBuffer.allocate(4).putInt(next).array())
         yield next
+
+    /** Nanoseconds in a second — the scale bridging `Instant` (seconds + nanos) and the epoch-nanos
+      * zero-time anchor.
+      */
+    private val nanosPerSecond: Long = 1_000_000_000L
+
+    private def instantToEpochNanos(t: Instant): Long =
+        t.getEpochSecond * nanosPerSecond + t.getNano
+
+    private def epochNanosToInstant(nanos: Long): Instant =
+        Instant.ofEpochSecond(
+          Math.floorDiv(nanos, nanosPerSecond),
+          Math.floorMod(nanos, nanosPerSecond)
+        )
+
+    /** Read the persisted `generation → epoch-nanos` anchor map (JSON in `Cf.Meta`). Empty when the
+      * store has never recorded one.
+      */
+    private def readZeroTimes(backend: BackendStore[IO]): IO[Map[Int, Long]] =
+        backend.get(Cf.Meta, zeroTimesKey).map {
+            case None => Map.empty
+            case Some(bytes) =>
+                io.circe.parser
+                    .decode[Map[String, Long]](new String(bytes, "UTF-8"))
+                    .getOrElse(Map.empty)
+                    .map((g, n) => g.toInt -> n)
+        }
+
+    /** Anchor `generation` to now: record `zeroTime = epochNanos(realTime) − monotonicNanos`, the
+      * wall-clock instant this generation's monotonic clock reads zero at, so any later stamp
+      * `(generation, m)` converts to `zeroTime + m`. Sampled once at open, merged into the map.
+      */
+    private def recordZeroTime(backend: BackendStore[IO], generation: Int): IO[Map[Int, Long]] =
+        for
+            realTime <- IO.realTimeInstant
+            monotonic <- IO.monotonic
+            zeroTime = instantToEpochNanos(realTime) - monotonic.toNanos
+            existing <- readZeroTimes(backend)
+            merged = existing.updated(generation, zeroTime)
+            json = io.circe.Json
+                .obj(merged.map((g, n) => g.toString -> io.circe.Json.fromLong(n)).toSeq*)
+                .noSpaces
+            _ <- backend.put(Cf.Meta, zeroTimesKey, json.getBytes("UTF-8"))
+        yield merged
 
     /** The standard `Persistence` implementation — wraps a [[BackendStore]] and threads keys /
       * values through each [[StoreKey]]'s codec on the way through. Bumps the arrival-stamp
@@ -87,12 +149,26 @@ object Persistence:
         store: BackendStore[IO],
         tracer: ContraTracer[IO, PersistenceEvent]
     )(using CardanoNetwork.Section): IO[Persistence[IO]] =
-        for generation <- bumpGeneration(store)
+        for
+            generation <- bumpGeneration(store)
+            anchors <- recordZeroTime(store, generation)
         yield new Persistence[IO]:
             val backend: BackendStore[IO] = store
 
             def arrivalStamp: IO[ArrivalStamp] =
                 IO.monotonic.map(m => ArrivalStamp(generation, m.toNanos))
+
+            def zeroTimes: IO[Map[Int, Long]] = IO.pure(anchors)
+
+            def wallClockOf(stamp: ArrivalStamp): IO[Instant] =
+                // Every generation is anchored at open, so `stamp.generation` is present for any
+                // real stamp; fall back to this generation's anchor for the unreachable
+                // (legacy / synthetic) case rather than reintroduce a partial result.
+                IO.pure(
+                  epochNanosToInstant(
+                    anchors.getOrElse(stamp.generation, anchors(generation)) + stamp.monotonicNanos
+                  )
+                )
 
             def get(key: StoreKey): IO[Option[key.Value]] =
                 backend

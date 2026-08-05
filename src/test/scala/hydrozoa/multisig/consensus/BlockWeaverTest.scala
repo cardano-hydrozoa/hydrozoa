@@ -1,30 +1,28 @@
 package hydrozoa.multisig.consensus
 
 import cats.effect.unsafe.implicits.global
-import cats.effect.{IO, Resource}
+import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
 import com.suprnation.actor.Actor.{Actor, Receive}
 import com.suprnation.actor.ActorSystem
+import com.suprnation.actor.event.Error as ActorError
 import com.suprnation.actor.test.TestKit
 import com.suprnation.typelevel.actors.syntax.*
 import hydrozoa.config.head.HeadConfig
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant
 import hydrozoa.lib.cardano.scalus.QuantizedTime.QuantizedInstant.realTimeQuantizedInstant
 import hydrozoa.lib.logging.Slf4jTracer
 import hydrozoa.multisig.consensus.UserRequest.TransactionRequest
 import hydrozoa.multisig.consensus.UserRequestBody.TransactionRequestBody
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.ledger.block.{BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
+import hydrozoa.multisig.ledger.block.{Block, BlockBody, BlockBrief, BlockHeader, BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.joint.JointLedger
 import hydrozoa.multisig.ledger.joint.JointLedger.Requests.{CompleteBlockFinal, CompleteBlockRegular, StartBlock}
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 import org.scalacheck.{Gen, Properties, PropertyM, Test}
 import scala.concurrent.duration.DurationInt
-import scalus.cardano.ledger.{Blake2b_256, Hash}
 import scalus.uplc.builtin.ByteString
 import test.Generators.Hydrozoa.genRequestId
 import test.TestPeerName.{Bob, Carol}
@@ -61,25 +59,18 @@ object BlockWeaverTestHelpers {
             }
 
     /** A dummy user request whose content is not interesting to the block weaver — only the request
-      * id matters. Closed over the trial's [[MultiNodeConfig]] so the head id / peer vkey match the
-      * env.
+      * id matters.
       */
-    def genUserRequest(mnc: MultiNodeConfig): Gen[UserRequestWithId] = {
-        val zeroQI = QuantizedInstant(mnc.slotConfig, Instant.ofEpochSecond(0))
+    def genUserRequest: Gen[UserRequestWithId] =
         for {
             requestId <- genRequestId
             userRequest = TransactionRequest(
-              header = UserRequestHeader(
-                headId = mnc.headConfig.headId,
-                validityStart = RequestValidityStartTime(zeroQI),
-                validityEnd = RequestValidityEndTime(zeroQI),
-                bodyHash = Hash[Blake2b_256, Any](ByteString.fromArray(Array.fill[Byte](32)(0)))
-              ),
-              body = TransactionRequestBody(ByteString.empty),
-              userVk = mnc.headConfig.headPeerVKeys.head
+              body = TransactionRequestBody(ByteString.empty)
             )
-        } yield UserRequestWithId(userRequest = userRequest, requestId = requestId)
-    }
+        } yield UserRequestWithId(
+          userRequest = userRequest,
+          requestId = requestId
+        )
 
     def mkBlockWeaverActor(peerNumber: HeadPeerNumber): BWTest[BlockWeaver.Handle] =
         for {
@@ -90,8 +81,29 @@ object BlockWeaverTestHelpers {
             actor <- lift(env.system.actorOf(BlockWeaver(config, connections, tracer)))
         } yield actor
 
+    /** Empty final block brief for block 1, so Carol reproduces the head's last block and then arms
+      * as leader of block 2.
+      */
+    def mkDummyFinalBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Final] =
+        lift(
+          for {
+              now <- realTimeQuantizedInstant(config.slotConfig)
+          } yield BlockBrief.Final(
+            BlockHeader.Final(
+              blockNum = BlockNumber(1),
+              blockVersion = BlockVersion.Full(1, 0),
+              startTime = BlockCreationStartTime(now),
+              endTime = BlockCreationEndTime(now + 1.second)
+            ),
+            BlockBody.Final(
+              requests = List.empty,
+              depositsRejected = List.empty
+            )
+          )
+        )
+
     /** Empty block brief for block 1, so Carol starts working on block 2. */
-    def mkDummyBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Next] =
+    def mkDummyBlockBrief1(config: HeadConfig): BWTest[BlockBrief.Minor] =
         lift(for {
             now <- realTimeQuantizedInstant(config.slotConfig)
         } yield {
@@ -112,8 +124,8 @@ object BlockWeaverTestHelpers {
                 mDepositDecisionWakeupTime = None
               ),
               BlockBody.Minor(
-                events = List.empty,
-                depositsRefunded = List.empty
+                requests = List.empty,
+                depositsRejected = List.empty
               )
             )
         })
@@ -122,6 +134,8 @@ object BlockWeaverTestHelpers {
 
         val events: AtomicReference[Vector[UserRequestWithId]] = AtomicReference(Vector.empty)
         val startBlockNums: AtomicReference[Vector[BlockNumber]] = AtomicReference(Vector.empty)
+        val finalCompletions: AtomicReference[Vector[CompleteBlockFinal]] =
+            AtomicReference(Vector.empty)
 
         override def receive: Receive[IO, JointLedger.Requests.Request] = {
             case e: UserRequestWithId =>
@@ -130,8 +144,8 @@ object BlockWeaverTestHelpers {
                 IO { startBlockNums.updateAndGet(_ :+ s.blockNum) }
             case _: CompleteBlockRegular =>
                 IO.pure(())
-            case _: CompleteBlockFinal =>
-                IO.pure(())
+            case f: CompleteBlockFinal =>
+                IO { finalCompletions.updateAndGet(_ :+ f) }
         }
 }
 
@@ -179,7 +193,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       resource = defaultResource,
       testM = for {
           env <- ask
-          anyRequest <- pick(genUserRequest(env.multiNodeConfig))
+          anyRequest <- pick(genUserRequest)
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
           brief <- mkDummyBlockBrief1(config.headConfig)
@@ -213,7 +227,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event to finish the first block")
+            genUserRequest.label("any event to finish the first block")
           )
           weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
           _ <- lift(weaver ! anyLedgerEvent)
@@ -221,6 +235,125 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
               case CompleteBlockRegular(None, _, _, _) => ()
           })
+      } yield true
+    )
+
+    // ===================================
+    // Bob (1) completes empty block 1 as final on the finalization trigger
+    // ===================================
+    val _ = property("Bob (1) completes empty block 1 as final on the finalization trigger") = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          startBlockNums <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            startBlockNums == Vector(BlockNumber(1)),
+            s"The trigger must start (empty) block 1, but StartBlocks were $startBlockNums"
+          )
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
+              case CompleteBlockFinal(None, _) => ()
+          })
+      } yield true
+    )
+
+    // ===================================
+    // Bob (1), retired by the finalization trigger, ignores a late request
+    // ===================================
+    val _ = property(
+      "Bob (1), retired by the finalization trigger, ignores a late request"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          anyLedgerEvent <- pick(genUserRequest.label("request arriving after the trigger"))
+          errors <- lift(Ref[IO].of(List.empty[String]))
+          drainer <- lift(
+            env.system.eventStream.take
+                .flatMap {
+                    case e: ActorError if e.cause != ActorError.NoCause =>
+                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                    case _ => IO.unit
+                }
+                .foreverM
+                .start
+          )
+          weaver <- mkBlockWeaverActor(Bob.headPeerNumber)
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) {
+              case CompleteBlockFinal(None, _) => ()
+          })
+          // The weaver retired on the final block; a request arriving after must
+          // dead-letter — never panic, never reach the joint ledger.
+          _ <- lift((weaver ! anyLedgerEvent) >> env.system.waitForIdle())
+          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
+          collected <- lift(errors.get)
+          _ <- lift(drainer.cancel)
+          _ <- assertWith(
+            collected.isEmpty,
+            s"a late request must dead-letter on the retired weaver, not panic it: $collected"
+          )
+          fedEvents <- lift(IO(env.jointLedgerMock.events.get))
+          _ <- assertWith(
+            fedEvents.isEmpty,
+            s"the late request must not reach the joint ledger, but it fed $fedEvents"
+          )
+      } yield true
+    )
+
+    // ===================================
+    // Carol (2), armed as leader of block 2, records the trigger and finalizes only at completion
+    // ===================================
+    val _ = property(
+      "Carol (2), armed as leader of block 2, records the trigger and finalizes only at completion"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          anyLedgerEvent <- pick(genUserRequest.label("request completing block 2"))
+          weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
+          config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
+          brief <- mkDummyBlockBrief1(config.headConfig)
+          // Reproduce block 1 as a follower and arm as the leader of block 2.
+          _ <- lift((weaver ! brief) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.startBlockNums.get == Vector(BlockNumber(1)))
+          // The trigger on a later-block armed leader is recorded only — it must not
+          // start or complete block 2 by itself.
+          _ <- lift(
+            (weaver ! BlockWeaver.LocalFinalizationTrigger.Triggered) >> env.system.waitForIdle()
+          )
+          startBlockNums <- lift(IO(env.jointLedgerMock.startBlockNums.get))
+          _ <- assertWith(
+            startBlockNums == Vector(BlockNumber(1)),
+            s"The trigger alone must not start block 2, but StartBlocks were $startBlockNums"
+          )
+          earlyCompletions <- lift(IO(env.jointLedgerMock.finalCompletions.get))
+          _ <- assertWith(
+            earlyCompletions.isEmpty,
+            s"The trigger alone must not complete block 2, but got $earlyCompletions"
+          )
+          // Once block 1 is confirmed and a request (or the forced wakeup) drives
+          // completion, the recorded flag makes block 2 final.
+          _ <- lift(
+            weaver ! Block.SoftConfirmed.Minor(
+              brief,
+              headerMultiSigned = List.empty,
+              finalizationRequested = false
+            )
+          )
+          _ <- lift((weaver ! anyLedgerEvent) >> env.system.waitForIdle())
+          _ <- settle(env.jointLedgerMock.finalCompletions.get.nonEmpty)
+          finalCompletions <- lift(IO(env.jointLedgerMock.finalCompletions.get))
+          _ <- assertWith(
+            finalCompletions.nonEmpty,
+            "The recorded trigger must complete block 2 as final at completion time"
+          )
       } yield true
     )
 
@@ -233,7 +366,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           env <- ask
           requests <- pick(
             Gen
-                .nonEmptyListOf(genUserRequest(env.multiNodeConfig))
+                .nonEmptyListOf(genUserRequest)
                 .map(_.distinctBy(_.requestId))
                 .label("random user requests")
           )
@@ -273,7 +406,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
           env <- ask
           events <- pick(
             Gen
-                .nonEmptyListOf(genUserRequest(env.multiNodeConfig))
+                .nonEmptyListOf(genUserRequest)
                 .map(_.distinctBy(_.requestId))
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
@@ -330,7 +463,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event to start the block")
+            genUserRequest.label("any event to start the block")
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)
@@ -348,6 +481,51 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
     )
 
     // ===================================
+    // Carol (2) retires after reproducing the final block; a Final confirmation is harmless
+    // ===================================
+    val _ = property(
+      "Carol (2) retires after reproducing the final block; a Final confirmation is harmless"
+    ) = run(
+      resource = defaultResource,
+      testM = for {
+          env <- ask
+          errors <- lift(Ref[IO].of(List.empty[String]))
+          drainer <- lift(
+            env.system.eventStream.take
+                .flatMap {
+                    case e: ActorError if e.cause != ActorError.NoCause =>
+                        errors.update(_ :+ s"[${e.logSource}] ${e.cause.getMessage}")
+                    case _ => IO.unit
+                }
+                .foreverM
+                .start
+          )
+          weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
+          finalBrief <- mkDummyFinalBlockBrief1(
+            env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber).headConfig
+          )
+          // Carol reproduces final block 1 as a follower and retires (no block will follow);
+          // the Final confirmation sent next must dead-letter or retire her — never panic.
+          _ <- lift((weaver ! finalBrief) >> env.system.waitForIdle())
+          _ <- lift(expectMsgPF(env.jointLedgerMockActor, 5.seconds) { case _: CompleteBlockFinal =>
+              ()
+          })
+          _ <- lift(
+            (weaver ! Block.SoftConfirmed.Final(finalBrief, headerMultiSigned = List.empty)) >>
+                env.system.waitForIdle()
+          )
+          // Give the event-stream drainer a beat to observe a panic before reading.
+          _ <- lift(awaitCond(errors.get.map(_.nonEmpty), 500.millis, 50.millis).attempt.void)
+          collected <- lift(errors.get)
+          _ <- lift(drainer.cancel)
+          _ <- assertWith(
+            collected.isEmpty,
+            s"the final confirmation must retire the armed leader, not panic it: $collected"
+          )
+      } yield true
+    )
+
+    // ===================================
     // Carol (2) starts block 2 when request then previous block brief received
     // ===================================
     val _ = property(
@@ -357,7 +535,7 @@ object BlockWeaverTest extends Properties("Block weaver test"), TestKit {
       testM = for {
           env <- ask
           anyLedgerEvent <- pick(
-            genUserRequest(env.multiNodeConfig).label("any event before brief")
+            genUserRequest.label("any event before brief")
           )
           weaver <- mkBlockWeaverActor(Carol.headPeerNumber)
           config = env.multiNodeConfig.nodeConfigs(Carol.headPeerNumber)

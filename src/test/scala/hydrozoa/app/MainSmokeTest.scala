@@ -19,7 +19,7 @@ import scala.concurrent.duration.DurationInt
 
 /** End-to-end sanity check: generates a 1-peer sample config in memory, writes it to a temp dir
   * (the head peer's mesh `webSocketAddress` carries port 0 from the test fixture, and `httpPort` is
-  * patched to "0", so the OS picks free ephemeral ports), and runs [[Main.runNode]] against the
+  * patched to "0", so the OS picks free ephemeral ports), and runs [[Serve.runNode]] against the
   * on-disk files. A mock [[hydrozoa.multisig.backend.cardano.CardanoBackend]] is pre-seeded with
   * the head's script-ref UTxOs so config decoding doesn't try to hit Blockfrost.
   *
@@ -30,7 +30,7 @@ import scala.concurrent.duration.DurationInt
   */
 class MainSmokeTest extends AnyFunSuite:
 
-    test("Main.runNode reaches ServerStarted for a generated single-peer config") {
+    test("Serve.runNode reaches ServerStarted for a generated single-peer config") {
         val rootTmp = Files.createTempDirectory("hydrozoa-smoke-")
         val configDir = rootTmp.resolve("config")
         val dataDir = rootTmp.resolve("data")
@@ -68,8 +68,7 @@ class MainSmokeTest extends AnyFunSuite:
 
             mockBackend <- CardanoBackendMock.mockIO(
               MockState(initialUtxos =
-                  Map(mnc.headConfig.seedUtxo.toTuple)
-                      ++ mnc.headConfig.additionalFundingUtxos
+                  mnc.headConfig.initializationTx.resolvedUtxos.utxos
                       ++ Map.from(mnc.headConfig.scriptReferenceUtxos.toList.map(_.toTuple))
               )
             )
@@ -80,7 +79,7 @@ class MainSmokeTest extends AnyFunSuite:
                 case _                                  => IO.unit
             }
 
-            fiber <- Main
+            fiber <- Serve
                 .runNode(
                   headPath,
                   privatePath,
@@ -96,7 +95,7 @@ class MainSmokeTest extends AnyFunSuite:
                   30.seconds,
                   IO.raiseError(
                     new AssertionError(
-                      "Main.runNode did not reach HydrozoaHttpEvent.ServerStarted within 30s"
+                      "Serve.runNode did not reach HydrozoaHttpEvent.ServerStarted within 30s"
                     )
                   )
                 )
@@ -105,7 +104,7 @@ class MainSmokeTest extends AnyFunSuite:
                 case Right(o) =>
                     IO.raiseError(
                       new AssertionError(
-                        s"Main.runNode terminated before reaching ServerStarted: $o"
+                        s"Serve.runNode terminated before reaching ServerStarted: $o"
                       )
                     )
             }

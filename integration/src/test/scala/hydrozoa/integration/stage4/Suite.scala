@@ -3,22 +3,19 @@ package hydrozoa.integration.stage4
 import cats.data.ReaderT
 import cats.effect.{IO, Ref, Resource}
 import cats.implicits.*
-import hydrozoa.config.head.coil.{CoilPeerData, CoilPeers}
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.initialization.{InitializationParametersGenTopDown, generateInitialBlock}
-import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.BlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.generateYaciTxTiming
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.parameters.generateHeadParameters
 import hydrozoa.config.head.{InitParamsType, generateHeadConfig, generateHeadConfigBootstrap}
 import hydrozoa.config.node.{MultiNodeConfig, NodeConfig}
-import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.StorageBackend.Mode as BackendMode
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
-import hydrozoa.integration.harness.Plugin
+import hydrozoa.integration.harness.{MultiPeerHeadHarness, Plugin}
 import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.integration.stage4.Model.*
 import hydrozoa.lib.cardano.scalus.QuantizedTime.given_Ordering_QuantizedInstant.mkOrderingOps
-import hydrozoa.lib.cardano.scalus.QuantizedTime.quantize
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info, warn}
 import hydrozoa.multisig.backend.cardano.yaciTestSauceGenesis
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId, PeerWallet}
@@ -98,77 +95,71 @@ case class Stage4Suite(
     // into each MRM.
     override def sutResource(state: ModelState): Resource[IO, Stage4Sut] =
         val multiNodeConfig = state.params.multiNodeConfig
-        val peers           = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
-        val coilConfigs     = state.params.coilNodeConfigs
-        val startEpochMs    = state.currentModelTime.getEpochSecond * 1000L
-        val coilNums        = coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
+        val peers = multiNodeConfig.nodeConfigs.keys.toSeq.sortBy(p => p: Int)
+        val coilConfigs = state.params.coilNodeConfigs
+        val startEpochMs = state.currentModelTime.getEpochSecond * 1000L
+        val coilNums = coilConfigs.map(MultiPeerHeadHarness.Transport.coilNumOf)
 
         for
             // Captures (writer arms over Refs)
-            perPeer   <- Resource.eval(Stage4Plugins.perPeerCaptures(peers))
-            perCoil   <- Resource.eval(Stage4Plugins.perCoilCaptures(coilNums))
+            perPeer <- Resource.eval(Stage4Plugins.perPeerCaptures(peers))
+            perCoil <- Resource.eval(Stage4Plugins.perCoilCaptures(coilNums))
             landedTxs <- Resource.eval(Stage4Plugins.effectsLandedCapture)
 
             // Target Deferreds — armed in beforeFinalize to gate the signal predicates below.
             fastSettlementTarget <- Resource.eval(IO.deferred[Set[RequestId]])
-            slowCoverageTarget   <- Resource.eval(IO.deferred[Set[Int]])
-            effectsLandedTarget  <- Resource.eval(IO.deferred[List[BlockExpectation]])
+            slowCoverageTarget <- Resource.eval(IO.deferred[Set[Int]])
+            effectsLandedTarget <- Resource.eval(IO.deferred[List[BlockExpectation]])
 
             // Signals (predicate arms over Deferred[T])
-            fastSettlementSignal  <- Resource.eval(
-                                       Stage4Plugins
-                                           .fastSettlementSignal(perPeer, fastSettlementTarget)
-                                     )
-            slowCoverageSignal    <- Resource.eval(
-                                       Stage4Plugins
-                                           .slowCoverageSignal(perPeer, slowCoverageTarget)
-                                     )
-            effectsLandedSignal   <- Resource.eval(
-                                       Stage4Plugins
-                                           .effectsLandedSignal(landedTxs, effectsLandedTarget)
-                                     )
+            fastSettlementSignal <- Resource.eval(
+              Stage4Plugins
+                  .fastSettlementSignal(perPeer, fastSettlementTarget)
+            )
+            slowCoverageSignal <- Resource.eval(
+              Stage4Plugins
+                  .slowCoverageSignal(perPeer, slowCoverageTarget)
+            )
+            effectsLandedSignal <- Resource.eval(
+              Stage4Plugins
+                  .effectsLandedSignal(landedTxs, effectsLandedTarget)
+            )
             fallbackEnteredSignal <- Resource.eval(Stage4Plugins.fallbackEnteredSignal)
 
             // SUT-command-fed Ref (not a plugin — written by commands, not tracer arms)
             submittedRequestIds <- Resource.eval(Ref[IO].of(Vector.empty[RequestId]))
 
-            hooks = MultiPeerHeadHarness.Hooks[Stage4PeerHandle, Unit](
-                      tracer = Plugin.tracerOf(
-                        perPeer,
-                        perCoil,
-                        landedTxs,
-                        fastSettlementSignal,
-                        slowCoverageSignal,
-                        effectsLandedSignal,
-                        fallbackEnteredSignal,
-                      ),
-                      peerHandle = (peerNum, conns) =>
-                          IO.pure(
-                            Stage4PeerHandle(
-                              conns.requestSequencer.getOrElse(
-                                sys.error(s"head peer $peerNum missing RequestSequencer")
-                              )
-                            )
-                          ),
-                      coilHandle = (_, _) => IO.unit,
-                    )
+            // Hooks.handle is unused now — each head peer's SubmissionClient is built by the
+            // harness against its in-process HydrozoaRoutes and exposed on Peer[H].submissionClient.
+            hooks = MultiPeerHeadHarness.Hooks[Unit](
+              tracer = Plugin.tracerOf(
+                perPeer,
+                perCoil,
+                landedTxs,
+                fastSettlementSignal,
+                slowCoverageSignal,
+                effectsLandedSignal,
+                fallbackEnteredSignal,
+              ),
+              handle = (_, _) => IO.unit,
+            )
             harness <- MultiPeerHeadHarness.resource(
-                           MultiPeerHeadHarness.Inputs(
-                             config = MultiPeerHeadHarness
-                                 .Config(label, backendMode, transportMode),
-                             multiNodeConfig = multiNodeConfig,
-                             coilNodeConfigs = coilConfigs,
-                             preinitPeerUtxosL1 = state.preinitPeerUtxosL1,
-                             takeoffTime = state.takeoffTime,
-                             startEpochMs = startEpochMs,
-                           ),
-                           hooks,
-                       )
+              MultiPeerHeadHarness.Inputs(
+                config = MultiPeerHeadHarness
+                    .Config(label, backendMode, transportMode),
+                multiNodeConfig = multiNodeConfig,
+                coilNodeConfigs = coilConfigs,
+                preinitPeerUtxosL1 = state.preinitPeerUtxosL1,
+                takeoffTime = state.takeoffTime,
+                startEpochMs = startEpochMs,
+              ),
+              hooks,
+            )
         yield Stage4Sut(
           static = Stage4SutStatic(
             system = harness.system,
             cardanoBackend = harness.cardanoBackend,
-            peers = harness.peers.map { case (n, p) => n -> p.handle },
+            peers = harness.peers.map { case (n, p) => n -> p.submissionClient },
             backendStores = harness.peers.map { case (n, p) => n -> p.backendStore },
             log = Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("Stage4.Sut")),
           ),
@@ -188,7 +179,6 @@ case class Stage4Suite(
           ),
         )
 
-
     override def beforeFinalize(lastState: ModelState, sut: Stage4Sut): IO[Prop] = {
         // Race the happy-path drain against the fallback-entered signal. If any peer's CL
         // successfully submits a `FallbackToRuleBased`, abandon the analysis and fail with
@@ -205,35 +195,33 @@ case class Stage4Suite(
             // One-time coverage check: if all IDs already landed before we armed the target,
             // fire the signal ourselves (no new brief will arrive to trigger the predicate).
             allBriefs <- sut.mutable.perPeer.state.values.toList
-                             .traverse(_.blockBriefs.get)
-                             .map(_.flatten)
-            seen       = allBriefs
-                             .flatMap(br =>
-                                 br.events.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRefunded
-                             )
-                             .toSet
+                .traverse(_.blockBriefs.get)
+                .map(_.flatten)
+            seen = allBriefs
+                .flatMap(br => br.requests.map(_._1) ++ br.depositsAbsorbed ++ br.depositsRejected)
+                .toSet
             _ <- IO.whenA(submitted.forall(seen.contains))(
-                     sut.mutable.fastSettlementSignal.complete(())
-                 )
+              sut.mutable.fastSettlementSignal.complete(())
+            )
             _ <- IO.whenA(submitted.nonEmpty)(sut.mutable.fastSettlementSignal.await)
             // Arm the slow-cycle drain: freeze the block nums that must be covered. Done after
             // the fast drain so any blocks produced during that wait are included in the target.
             blockNums <- sut.mutable.perPeer.state.values.toList
-                             .traverse(_.blockBriefs.get)
-                             .map(_.flatten.map(b => (b.blockNum: Int)).toSet)
+                .traverse(_.blockBriefs.get)
+                .map(_.flatten.map(b => b.blockNum: Int).toSet)
             _ <- sut.mutable.slowCoverageTarget.complete(blockNums)
             // One-time coverage check across ALL peers — matching the predicate condition so a
             // spurious signal fire can't race ahead of any peer's stacks update.
             allPeersStacks <- sut.mutable.perPeer.state.values.toList.traverse(_.stacks.get)
-            allCovered      = blockNums.isEmpty ||
-                                  allPeersStacks.forall { peerStacks =>
-                                      blockNums.forall { bn =>
-                                          peerStacks.exists { s =>
-                                              (s.brief.firstBlockNum: Int) <= bn &&
-                                              bn <= (s.brief.lastBlockNum: Int)
-                                          }
-                                      }
-                                  }
+            allCovered = blockNums.isEmpty ||
+                allPeersStacks.forall { peerStacks =>
+                    blockNums.forall { bn =>
+                        peerStacks.exists { s =>
+                            (s.brief.firstBlockNum: Int) <= bn &&
+                            bn <= (s.brief.lastBlockNum: Int)
+                        }
+                    }
+                }
             _ <- IO.whenA(allCovered)(sut.mutable.slowCoverageSignal.complete(()))
             _ <- IO.whenA(blockNums.nonEmpty)(sut.mutable.slowCoverageSignal.await)
             // Arm the effects-landed drain: now that the slow cycle has reached agreement on
@@ -241,19 +229,19 @@ case class Stage4Suite(
             // wait for the TxSubmitting predicate to observe enough hashes to satisfy them. Gap
             // between slow signal and this one = the StackComposer rate-limit delay.
             canonicalStacksForTarget <- sut.mutable.perPeer.state.toList
-                                            .traverse { case (p, c) => c.stacks.get.map(p -> _) }
-                                            .map { byPeer =>
-                                                val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
-                                                sorted.headOption.map(_._2).getOrElse(Vector.empty)
-                                            }
+                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
+                .map { byPeer =>
+                    val sorted = byPeer.toMap.toSeq.sortBy(_._1: Int)
+                    sorted.headOption.map(_._2).getOrElse(Vector.empty)
+                }
             expectations = EffectsLanded.expectations(canonicalStacksForTarget)
             _ <- sut.mutable.effectsLandedTarget.complete(expectations)
             // One-time check: if every relevant expectation is already satisfied by the hashes
             // we've observed so far, fire the signal ourselves (no new TxSubmitting will arrive).
             landedNow <- sut.mutable.landedTxs.state.get
             _ <- IO.whenA(EffectsLanded.isComplete(landedNow, expectations))(
-                     sut.mutable.effectsLandedSignal.complete(())
-                 )
+              sut.mutable.effectsLandedSignal.complete(())
+            )
             _ <- IO.whenA(expectations.nonEmpty)(sut.mutable.effectsLandedSignal.await)
             errors <- sut.mutable.sutErrors.get
             // Snapshot every capture-written Ref ONCE here, after all drain signals have fired,
@@ -263,28 +251,28 @@ case class Stage4Suite(
             // derived from inconsistent snapshots. Freezing once removes that window by
             // construction.
             briefsByPeer <- sut.mutable.perPeer.state.toList
-                                .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
-                                .map(_.toMap)
+                .traverse { case (p, c) => c.blockBriefs.get.map(p -> _) }
+                .map(_.toMap)
             stacksByPeer <- sut.mutable.perPeer.state.toList
-                                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
-                                .map(_.toMap)
+                .traverse { case (p, c) => c.stacks.get.map(p -> _) }
+                .map(_.toMap)
             coilStacksByCoil <- sut.mutable.perCoil.state.toList
-                                    .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
-                                    .map(_.toMap)
+                .traverse { case (c, cap) => cap.stacks.get.map(c -> _) }
+                .map(_.toMap)
             submittedIds <- sut.mutable.submittedRequestIds.get
             sortedPeers = stacksByPeer.keys.toSeq.sortBy(p => p: Int)
             // propEffectsLanded must check exactly what effectsLandedSignal confirmed landed, so it
             // uses the stacks frozen when effectsLandedTarget was armed (above), not the post-signal
             // snapshot — which could include a trailing stack whose txs have not landed yet.
             analysisProp <- analyzeBlockBriefs(
-                              lastState,
-                              sut,
-                              briefsByPeer,
-                              stacksByPeer,
-                              coilStacksByCoil,
-                              submittedIds,
-                              canonicalStacksForTarget,
-                            )
+              lastState,
+              sut,
+              briefsByPeer,
+              stacksByPeer,
+              coilStacksByCoil,
+              submittedIds,
+              canonicalStacksForTarget,
+            )
             persistenceProp <- analyzePersistence(sut, stacksByPeer, sortedPeers)
             props = analysisProp && persistenceProp
         yield
@@ -360,7 +348,6 @@ case class Stage4Suite(
             )
 
             targetBlockNums <- sut.mutable.slowCoverageTarget.get
-
         yield propLiveness(submittedIds, canonicalBriefs) &&
             propDepositTiming(lastState.registeredDeposits, canonicalBriefs) &&
             propValidRatio(lastState, canonicalBriefs) &&
@@ -533,7 +520,7 @@ case class Stage4Suite(
 
     // TODO: side-channel validity-error tracking + propNoStaleRejections
     //
-    // `JointLedger.rejectEvent` records every rejection as `(reqId, ValidityFlag.Invalid)` in
+    // `JointLedger.invalidateRequest` records every rejection as `(reqId, ValidityFlag.Invalid)` in
     // the in-progress block, so propLiveness sees the request landed in a brief — it cannot
     // distinguish:
     //   1. Reordering-induced ledger errors (e.g. `BadAllInputsUTxOException`) — legitimate
@@ -546,7 +533,7 @@ case class Stage4Suite(
     //
     // Plan:
     //   - Add `Stage4Sut.rejections: Ref[IO, Vector[(RequestId, UserRequestError | L1/L2 err)]]`
-    //     populated from a tracer hook in `JointLedger.rejectEvent` (one entry per rejection,
+    //     populated from a tracer hook in `JointLedger.invalidateRequest` (one entry per rejection,
     //     across all peers).
     //   - Add `propNoStaleRejections`: assert no `BlockOutOfRequestValidityInterval` rejections
     //     occurred. Other rejection types are informational only (printed in the analysis
@@ -565,7 +552,7 @@ case class Stage4Suite(
     ): Prop = {
         val processedIds: Set[RequestId] =
             canonicalBriefs
-                .flatMap(b => b.events.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRefunded)
+                .flatMap(b => b.requests.map(_._1) ++ b.depositsAbsorbed ++ b.depositsRejected)
                 .toSet
         val missing = submittedIds.toSet -- processedIds
         Prop(missing.isEmpty) :|
@@ -598,9 +585,9 @@ case class Stage4Suite(
       * permissive than the model. Compared as exact rationals via cross-multiplication.
       *
       * Both sides are restricted to L2-tx reqIds (excluding any deposit reqId — deposits go into
-      * `depositsAbsorbed` / `depositsRefunded` on the SUT side, but a rejected deposit registration
-      * ends up in `events` via `JointLedger.rejectEvent` and would otherwise inflate the SUT total
-      * relative to the model.
+      * `depositsAbsorbed` / `depositsRejected` on the SUT side, but a rejected deposit registration
+      * ends up in `requests` via `JointLedger.invalidateRequest` and would otherwise inflate the
+      * SUT total relative to the model.
       */
     private def propValidRatio(
         lastState: ModelState,
@@ -611,7 +598,7 @@ case class Stage4Suite(
         val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid).toLong
         val modelTotal = l2TxReqIds.size.toLong
         val sutL2Events =
-            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
+            canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) => depositIds.contains(r) }
         val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid).toLong
         val sutTotal = sutL2Events.size.toLong
 
@@ -657,128 +644,130 @@ case class Stage4Suite(
       * the suite's `log` tracer so emit lines for free.
       */
     private object PrettyPrinters:
-      def traceBlockTable(
-        canonicalBriefs: Vector[BlockBrief.Intermediate],
-        sortedPeers: Seq[HeadPeerNumber],
-        briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
-        nPeers: Int,
-        submittedIds: Vector[RequestId],
-        lastState: ModelState,
-    ): IO[Unit] = {
-        val colWidth = 72
-        val divider = s"+${"-" * (colWidth + 2)}+"
-        val header = s"| ${"Block".padTo(colWidth, ' ')} |"
+        def traceBlockTable(
+            canonicalBriefs: Vector[BlockBrief.Intermediate],
+            sortedPeers: Seq[HeadPeerNumber],
+            briefsByPeer: Map[HeadPeerNumber, Vector[BlockBrief.Intermediate]],
+            nPeers: Int,
+            submittedIds: Vector[RequestId],
+            lastState: ModelState,
+        ): IO[Unit] = {
+            val colWidth = 72
+            val divider = s"+${"-" * (colWidth + 2)}+"
+            val header = s"| ${"Block".padTo(colWidth, ' ')} |"
 
-        val rows = canonicalBriefs.map { brief =>
-            val blockType = brief match {
-                case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
+            val rows = canonicalBriefs.map { brief =>
+                val blockType = brief match {
+                    case _: BlockBrief.Minor => "Min"; case _: BlockBrief.Major => "Maj"
+                }
+                val vMaj = brief.blockVersion.major.convert
+                val vMin = brief.blockVersion.minor.convert
+                val leader = (brief.blockNum: Int) % nPeers
+                val evs = brief.requests.map { case (reqId, flag) =>
+                    val f = if flag == ValidityFlag.Valid then "V" else "I"
+                    s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
+                }
+                val abs = brief.depositsAbsorbed.map(r =>
+                    s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
+                )
+                val ref = brief.depositsRejected.map(r =>
+                    s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
+                )
+                val events = (evs ++ abs ++ ref).mkString(" ")
+                val label =
+                    s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
+                s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
             }
-            val vMaj = brief.blockVersion.major.convert
-            val vMin = brief.blockVersion.minor.convert
-            val leader = (brief.blockNum: Int) % nPeers
-            val evs = brief.events.map { case (reqId, flag) =>
-                val f = if flag == ValidityFlag.Valid then "V" else "I"
-                s"p${reqId.peerNum.convert}:r${reqId.requestNum.convert}=$f"
-            }
-            val abs = brief.depositsAbsorbed.map(r =>
-                s"abs:p${r.peerNum.convert}:r${r.requestNum.convert}"
-            )
-            val ref = brief.depositsRefunded.map(r =>
-                s"ref:p${r.peerNum.convert}:r${r.requestNum.convert}"
-            )
-            val events = (evs ++ abs ++ ref).mkString(" ")
-            val label =
-                s"#${brief.blockNum: Int} $blockType v$vMaj.$vMin lead=p$leader | $events"
-            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
+
+            // SUT processing order — each block contributes its absorbed deposits, then its events.
+            val sutOrder: Vector[RequestId] =
+                canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.requests.map(_._1)).toVector
+            val commonPrefixLen =
+                submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+
+            val depositIds = lastState.registeredDeposits.keySet
+            val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
+            val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
+            val modelTotal = l2TxReqIds.size
+            val sutL2Events =
+                canonicalBriefs.flatMap(_.requests).filterNot { case (r, _) =>
+                    depositIds.contains(r)
+                }
+            val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
+            val sutTotal = sutL2Events.size
+
+            val peersLine =
+                s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
+            val prefixLine =
+                s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
+            val ratioLine =
+                s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
+            val legend =
+                "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
+
+            val text = (divider :: header :: divider :: rows.toList ++
+                (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
+                .mkString("\n", "\n", "")
+            log.info(text)
         }
 
-        // SUT processing order — each block contributes its absorbed deposits, then its events.
-        val sutOrder: Vector[RequestId] =
-            canonicalBriefs.flatMap(b => b.depositsAbsorbed ++ b.events.map(_._1)).toVector
-        val commonPrefixLen =
-            submittedIds.zip(sutOrder).takeWhile { case (a, b) => a == b }.length
+        /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on
+          * the canonical peer, showing the stack number, covered block range, partition spine
+          * (Min/Maj/Fin kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
+          * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`.
+          * Followed by a per-peer stack-count line for cross-peer convergence at a glance.
+          */
+        def traceStackTable(
+            canonicalStacks: Vector[Stack.HardConfirmed],
+            sortedPeers: Seq[HeadPeerNumber],
+            stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
+            nPeers: Int,
+        ): IO[Unit] = {
+            val colWidth = 72
+            val divider = s"+${"-" * (colWidth + 2)}+"
+            val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
 
-        val depositIds = lastState.registeredDeposits.keySet
-        val l2TxReqIds = lastState.modelFlags.keySet -- depositIds
-        val modelValid = l2TxReqIds.count(lastState.modelFlags(_) == ValidityFlag.Valid)
-        val modelTotal = l2TxReqIds.size
-        val sutL2Events =
-            canonicalBriefs.flatMap(_.events).filterNot { case (r, _) => depositIds.contains(r) }
-        val sutValid = sutL2Events.count(_._2 == ValidityFlag.Valid)
-        val sutTotal = sutL2Events.size
-
-        val peersLine =
-            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${briefsByPeer(p).length}blks").mkString("  ")}"
-        val prefixLine =
-            s"Common prefix: $commonPrefixLen / ${submittedIds.length} (submission order vs SUT block order)"
-        val ratioLine =
-            s"Valid/total (L2 txs) — model: $modelValid/$modelTotal  SUT: $sutValid/$sutTotal"
-        val legend =
-            "Legend: Min=Minor Maj=Major v=version lead=leader p=peer r=requestNum V=valid I=invalid abs=deposit-absorbed ref=refunded"
-
-        val text = (divider :: header :: divider :: rows.toList ++
-            (divider :: peersLine :: prefixLine :: ratioLine :: legend :: Nil))
-            .mkString("\n", "\n", "")
-        log.info(text)
-    }
-
-      /** Mirror of [[traceBlockTable]] for the slow cycle: one row per hard-confirmed stack on
-        * the canonical peer, showing the stack number, covered block range, partition spine
-        * (Min/Maj/Fin kinds, in stack order), and the round-2 unlock selection (settlement-at-i,
-        * finalization-at-i, or sole-acknowledgment / no unlock). Stack-0 renders as `Init`.
-        * Followed by a per-peer stack-count line for cross-peer convergence at a glance.
-        */
-      def traceStackTable(
-        canonicalStacks: Vector[Stack.HardConfirmed],
-        sortedPeers: Seq[HeadPeerNumber],
-        stacksByPeer: Map[HeadPeerNumber, Vector[Stack.HardConfirmed]],
-        nPeers: Int,
-    ): IO[Unit] = {
-        val colWidth = 72
-        val divider = s"+${"-" * (colWidth + 2)}+"
-        val header = s"| ${"Stack".padTo(colWidth, ' ')} |"
-
-        val rows = canonicalStacks.map { stack =>
-            val brief = stack.brief
-            val sNum = brief.stackNum: Int
-            val first = brief.firstBlockNum: Int
-            val last = brief.lastBlockNum: Int
-            val nBlks = last - first + 1
-            // Slow-consensus leadership schedule is round-robin by stack number, mirroring
-            // fast-consensus block-number round-robin.
-            val leader = sNum % nPeers
-            val label = stack.effects match {
-                case _: StackEffects.HardConfirmed.Initial =>
-                    s"#$sNum Init lead=p$leader | init+fallback"
-                case r: StackEffects.HardConfirmed.Regular =>
-                    val blkLabel = if nBlks == 1 then "blk" else "blks"
-                    val parts = r.partitions.toList.map {
-                        case _: PartitionEffects.Minor[?] => "Min"
-                        case _: PartitionEffects.Major[?] => "Maj"
-                        case _: PartitionEffects.Final    => "Fin"
-                    }
-                    val unlockStr = PartitionEffects.unlock(r.partitions) match {
-                        case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
-                        case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
-                        case None                                          => "sole"
-                    }
-                    s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
-                        s"[${parts.mkString(",")}] u=$unlockStr"
+            val rows = canonicalStacks.map { stack =>
+                val brief = stack.brief
+                val sNum = brief.stackNum: Int
+                val first = brief.firstBlockNum: Int
+                val last = brief.lastBlockNum: Int
+                val nBlks = last - first + 1
+                // Slow-consensus leadership schedule is round-robin by stack number, mirroring
+                // fast-consensus block-number round-robin.
+                val leader = sNum % nPeers
+                val label = stack.effects match {
+                    case _: StackEffects.HardConfirmed.Initial =>
+                        s"#$sNum Init lead=p$leader | init+fallback"
+                    case r: StackEffects.HardConfirmed.Regular =>
+                        val blkLabel = if nBlks == 1 then "blk" else "blks"
+                        val parts = r.partitions.toList.map {
+                            case _: PartitionEffects.Minor[?] => "Min"
+                            case _: PartitionEffects.Major[?] => "Maj"
+                            case _: PartitionEffects.Final    => "Fin"
+                        }
+                        val unlockStr = PartitionEffects.unlock(r.partitions) match {
+                            case Some(PartitionEffects.Unlock.Settlement(i))   => s"sttlmnt@$i"
+                            case Some(PartitionEffects.Unlock.Finalization(i)) => s"fin@$i"
+                            case None                                          => "sole"
+                        }
+                        s"#$sNum [$first..$last] ($nBlks $blkLabel) Reg lead=p$leader | " +
+                            s"[${parts.mkString(",")}] u=$unlockStr"
+                }
+                s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
             }
-            s"| ${label.take(colWidth).padTo(colWidth, ' ')} |"
+
+            val peersLine =
+                s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
+            val legend =
+                "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
+                    "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
+
+            val text = (divider :: header :: divider :: rows.toList ++
+                (divider :: peersLine :: legend :: Nil))
+                .mkString("\n", "\n", "")
+            log.info(text)
         }
-
-        val peersLine =
-            s"Peers: ${sortedPeers.map(p => s"p${p: Int}=${stacksByPeer(p).length}stk").mkString("  ")}"
-        val legend =
-            "Legend: Init=initial stack Reg=regular Min/Maj/Fin=partition kinds " +
-                "u=unlock (set=settlement, fin=finalization, sole=no unlock) @i=partition index"
-
-        val text = (divider :: header :: divider :: rows.toList ++
-            (divider :: peersLine :: legend :: Nil))
-            .mkString("\n", "\n", "")
-        log.info(text)
-    }
 
 // ===================================
 // Initial state generator (canonical location; Runner delegates here for @main)
@@ -794,52 +783,31 @@ object Stage4Suite:
         useTestControl: Boolean = true,
     ): Gen[ModelState] =
         val cardanoNetwork = CardanoNetwork.Preprod
-        val testPeers = TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers)
+        // TestPeers provisions head + coil wallets from the same seed under stable ordinals.
+        // Coil peers are hubbed by head 0 (single-hub topology); their vkeys land in the head
+        // bootstrap so the threshold script requires `coilQuorum` of them, and
+        // `mkCoilNodeConfigs` (below) derives each coil's own node config from the MNC.
+        val testPeers = TestPeers(SeedPhrase.Yaci, cardanoNetwork, nPeers, nCoilPeers)
         val testPeerToUtxos = yaciTestSauceGenesis(cardanoNetwork.network)(testPeers)
+        val coilWallets: List[PeerWallet] = testPeers.coilWallets
+        val coilPeers: CoilPeers = testPeers.coilPeersConfig(hub = HeadPeerNumber(0))
 
-        // Coil wallets are extra keys from the same seed, beyond the head set; each coil peer is hubbed
-        // by head 0. Empty for a pure-head run. Their vkeys go into the head bootstrap so the
-        // threshold script requires `coilQuorum` of them, and `mkCoilConfig` (below) derives each
-        // coil's own node config from the shared head config.
-        val coilWallets: List[PeerWallet] =
-            if nCoilPeers == 0 then Nil
-            else {
-                val withCoils =
-                    TestPeers.apply(SeedPhrase.Yaci, cardanoNetwork, nPeers + nCoilPeers)
-                (0 until nCoilPeers).toList.map(i =>
-                    withCoils.walletFor(HeadPeerNumber(nPeers + i))
-                )
-            }
-        val coilPeers: CoilPeers =
-            CoilPeers.indexed(
-              coilWallets.map(w => CoilPeerData(w.exportVerificationKey, HeadPeerNumber(0)))
-            )
-
-        // For non-TestControl runs we need the head's initial block end-time anchored at a
-        // small wall-clock offset in the future, so `sutResource` can sleep until that anchor
-        // and have the model clock and the wall clock coincide at command 1. 60s matches
-        // stage 1's budget; if 20-peer setup overruns it the test aborts (see sutResource).
-        // Under TestControl we keep the deterministic Jan-1-2026 + 100-day random distribution
-        // — `Instant.now()` would defeat seed-based reproducibility.
+        // Non-TestControl runs anchor the initial block's end-time to a wall-clock offset in
+        // the future so `sutResource` can sleep until that anchor and have the model clock
+        // and the wall clock coincide at command 1. 60s matches stage 1's budget; if 20-peer
+        // setup overruns it the test aborts (see sutResource). Under TestControl the head-config
+        // generator falls back to the deterministic Jan-1-2026 + 100-day random distribution
+        // — reading the wall clock there would defeat seed-based reproducibility.
+        //
+        // TODO: `genInitialState` returns a pure `Gen[ModelState]` so we can't thread
+        // [[MultiPeerHeadHarness.mkTakeoffTime]] (which returns `IO[Option[Instant]]`) here
+        // without lifting the whole model construction into an IO/PropertyM. Callers under
+        // TestControl are unaffected because the wall-clock branch is skipped anyway.
         val takeoffTime: Option[java.time.Instant] =
             if useTestControl then None
             else Some(java.time.Instant.now().plusSeconds(60))
 
-        val generateHeadStartTime = ReaderT((tp: TestPeers) =>
-            takeoffTime match {
-                case Some(t) =>
-                    Gen.const(BlockCreationEndTime(t.quantize(tp.slotConfig)))
-                case None =>
-                    // Date and time (GMT): Thursday, January 1, 2026 at 12:00:00 AM, POSIX seconds
-                    val anchorTime = 1767225600L
-                    // 100 day range, seconds
-                    val range = 86_400 * 100L
-                    for offset <- Gen.choose(0L, range)
-                    yield BlockCreationEndTime(
-                      java.time.Instant.ofEpochSecond(anchorTime + offset).quantize(tp.slotConfig)
-                    )
-            }
-        )
+        val generateHeadStartTime = MultiPeerHeadHarness.generateHeadStartTime(takeoffTime)
 
         val generateHeadConfigBootstrap_ = generateHeadConfigBootstrap(
           generateHeadParams = generateHeadParameters(generateTxTiming = generateYaciTxTiming)
@@ -856,10 +824,17 @@ object Stage4Suite:
 
         val generateHeadConfig_ = generateHeadConfig(
           genHeadConfigBootstrap = generateHeadConfigBootstrap_,
-          generateInitialBlock = bootstrap =>
+          generateInitialBlock = (bootstrap, funding) =>
               generateInitialBlock(
                 genHeadConfigBootstrap = ReaderT
-                    .pure[Gen, TestPeers, hydrozoa.config.head.HeadConfig.Bootstrap](bootstrap),
+                    .pure[
+                      Gen,
+                      TestPeers,
+                      (
+                          hydrozoa.config.head.HeadConfig.Bootstrap,
+                          hydrozoa.bootstrap.InitializationFunding
+                      )
+                    ]((bootstrap, funding)),
                 generateBlockCreationEndTime = generateHeadStartTime
               )
         )
@@ -891,27 +866,7 @@ object Stage4Suite:
             )
 
             preinitPeerUtxosL1 = testPeerToUtxos.map((k, v) => k.headPeerNumber -> v)
-
-            // Each coil's own node config: the shared head config plus the coil identity seam. The
-            // coil is a read-only follower, so it reuses head 0's operational sub-configs (polling
-            // period etc.); none of head 0's wallet-derived fields are exercised on the coil path.
-            head0Private = config.nodePrivateConfigs(HeadPeerNumber(0))
-            coilNodeConfigs = coilWallets.map { w =>
-                NodeConfig
-                    .mkCoilConfig(
-                      headConfig = config.headConfig,
-                      ownCoilWallet = w,
-                      nodeOperationEvacuationConfig = head0Private.nodeOperationEvacuationConfig,
-                      nodeOperationMultisigConfig = head0Private.nodeOperationMultisigConfig,
-                      blockfrostApiKey = "not-a-real-key",
-                      sugarRushUri = "ws://localhost:3001/ws",
-                      adminUsername = "admin",
-                      adminPassword = "welcome",
-                      httpHost = "0.0.0.0",
-                      httpPort = "8080",
-                    )
-                    .get
-            }
+            coilNodeConfigs = config.mkCoilNodeConfigs(coilWallets)
 
             initTx = config.headConfig.initializationTx.tx
             spentInputs = initTx.body.value.inputs.toSet

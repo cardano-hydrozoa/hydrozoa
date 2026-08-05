@@ -96,10 +96,6 @@ object L2TxFixtures {
             peerNum = HeadPeerNumber.zero,
             requestNum = RequestNumber(requestNumber)
           ),
-          userVKey = multiNodeConfig
-              .nodeConfigs(HeadPeerNumber.zero)
-              .ownWallet
-              .exportVerificationKey,
           blockNumber = BlockNumber(blockNumber),
           blockCreationStartTime = time.toPosixTime,
           l2Payload = ByteString.fromArray(tx.toCbor)

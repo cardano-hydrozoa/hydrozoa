@@ -47,19 +47,24 @@ object L2Genesis {
           platform.blake2b_256(ByteString.fromArray(Cbor.encode(ti).toByteArray))
         )
 
+    /** Decode a deposit's `l2Payload` into its genesis — the shared core of deposit screening and
+      * registration, so both run the identical decode. Warning: this is partial, but I'm keeping
+      * with the conventions of the CBOR decoder.
+      */
+    def fromDepositPayload(depositId: TransactionInput, l2Payload: ByteString): L2Genesis = {
+        val genesisObligations = Cbor
+            .decode(l2Payload.bytes)
+            .to[Queue[GenesisObligation]]
+            .value
+        L2Genesis(genesisObligations, mkGenesisId(depositId))
+    }
+
     /** Warning: this is partial, but I'm keeping with the conventions of the CBOR decoder.
       */
     def fromDepositEventRegistration(
         req: L2LedgerCommand.RegisterDeposit,
-    ): L2Genesis = {
-        val genesisObligations = Cbor
-            .decode(req.l2Payload.bytes)
-            .to[Queue[GenesisObligation]]
-            .value
-        val genesisId: TransactionHash =
-            mkGenesisId(req.depositId)
-        L2Genesis(genesisObligations, genesisId)
-    }
+    ): L2Genesis =
+        fromDepositPayload(req.depositId, req.l2Payload)
 
 }
 

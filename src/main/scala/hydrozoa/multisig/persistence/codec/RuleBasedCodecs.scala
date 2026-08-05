@@ -7,7 +7,6 @@ import hydrozoa.rulebased.ledger.l1.utxo.{RuleBasedTreasuryOutput, RuleBasedTrea
 import io.circe.syntax.*
 import io.circe.{Decoder, Encoder, Json}
 import scalus.cardano.ledger.{TransactionInput, Value}
-import scalus.cardano.onchain.plutus.prelude.List as PList
 import scalus.uplc.builtin.ByteString
 
 /** Persistence-layer JSON codecs for the rule-based-regime types that appear inside
@@ -24,44 +23,40 @@ object RuleBasedCodecs:
 
     // --- RuleBasedTreasuryDatum ---
 
-    private def plistToScala[A](xs: PList[A]): List[A] = xs match
-        case PList.Nil              => Nil
-        case PList.Cons(head, tail) => head :: plistToScala(tail)
-
     private given unresolvedEncoder: Encoder[RuleBasedTreasuryDatum.Unresolved] =
         Encoder.instance { u =>
             Json.obj(
+              "headMp" -> (u.headMp: ByteString).asJson,
               "deadlineVoting" -> u.deadlineVoting.asJson,
-              "versionMajor" -> u.versionMajor.asJson,
-              "setupG2" -> plistToScala(u.setupG2).asJson
+              "versionMajor" -> u.versionMajor.asJson
             )
         }
 
     private given unresolvedDecoder: Decoder[RuleBasedTreasuryDatum.Unresolved] =
         Decoder.instance { c =>
             for
+                mp <- c.downField("headMp").as[ByteString]
                 dv <- c.downField("deadlineVoting").as[BigInt]
                 vm <- c.downField("versionMajor").as[BigInt]
-                setupG2 <- c.downField("setupG2").as[List[ByteString]]
-            yield RuleBasedTreasuryDatum.Unresolved(dv, vm, PList.from(setupG2))
+            yield RuleBasedTreasuryDatum.Unresolved(mp, dv, vm)
         }
 
     private given resolvedEncoder: Encoder[RuleBasedTreasuryDatum.Resolved] = Encoder.instance {
         r =>
             Json.obj(
+              "headMp" -> (r.headMp: ByteString).asJson,
               "evacuationActive" -> (r.evacuationActive: ByteString).asJson,
-              "version" -> Json.arr(r.version._1.asJson, r.version._2.asJson),
-              "setupG2" -> plistToScala(r.setupG2).asJson
+              "version" -> Json.arr(r.version._1.asJson, r.version._2.asJson)
             )
     }
 
     private given resolvedDecoder: Decoder[RuleBasedTreasuryDatum.Resolved] = Decoder.instance {
         c =>
             for
+                mp <- c.downField("headMp").as[ByteString]
                 ea <- c.downField("evacuationActive").as[ByteString]
                 v <- c.downField("version").as[(BigInt, BigInt)]
-                setupG2 <- c.downField("setupG2").as[List[ByteString]]
-            yield RuleBasedTreasuryDatum.Resolved(ea, v, PList.from(setupG2))
+            yield RuleBasedTreasuryDatum.Resolved(mp, ea, v)
     }
 
     given ruleBasedTreasuryDatumEncoder: Encoder[RuleBasedTreasuryDatum] = Encoder.instance {

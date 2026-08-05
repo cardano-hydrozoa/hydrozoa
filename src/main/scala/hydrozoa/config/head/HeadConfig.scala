@@ -10,6 +10,7 @@ import hydrozoa.config.ScriptReferenceUtxos
 import hydrozoa.config.ScriptReferenceUtxos.given_Decoder_Unresolved
 import hydrozoa.config.head.HeadConfig.Bootstrap.HeadConfigBootstrapError
 import hydrozoa.config.head.coil.CoilPeers
+import hydrozoa.config.head.coil.CoilPeers.coilPeersDecoder
 import hydrozoa.config.head.initialization.{InitialBlock, InitializationParameters}
 import hydrozoa.config.head.network.CardanoNetwork.{Custom, cardanoNetworkDecoder}
 import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
@@ -26,12 +27,13 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
 import hydrozoa.multisig.ledger.block.{Block, BlockBrief, BlockEffects}
 import hydrozoa.multisig.ledger.joint.EvacuationMap
 import hydrozoa.multisig.ledger.l1.script.multisig.HeadMultisigScript
-import hydrozoa.multisig.ledger.l1.tx.Metadata as MD
+import hydrozoa.multisig.ledger.l1.tx.{FallbackTx, InitializationTx}
 import hydrozoa.multisig.ledger.l1.txseq.InitializationTxSeq
 import io.circe.syntax.*
 import io.circe.{Encoder, *}
 import scala.collection.immutable.SortedSet
 import scalus.cardano.ledger.*
+import scalus.cardano.txbuilder.TransactionBuilder.ResolvedUtxos
 import scalus.crypto.ed25519.VerificationKey
 
 /** Invariant: this _must_ be able to project down to a HeadConfig.Bootstrap
@@ -51,12 +53,11 @@ final case class HeadConfig private (
     override def headConfigBootstrap: HeadConfig.Bootstrap = {
         val initTx = initialBlock.effects.initializationTx
 
+        // The head id is presented explicitly; recover it from the parsed init tx's token names.
         val initializationParameters: InitializationParameters = InitializationParameters(
           initialEvacuationMap = _initialEvacuationMap,
           initialEquityContributions = _initialEquityContributions,
-          seedUtxo = initTx.seedUtxo,
-          additionalFundingUtxos = initTx.additionalFundingUtxos,
-          initialChangeOutputs = initTx.changeUtxos
+          headId = InitializationParameters.HeadId(initTx.headTokenNames.treasuryTokenName)
         )
         new HeadConfig.Bootstrap(
           cardanoNetwork,
@@ -115,10 +116,15 @@ object HeadConfig {
               "coilPeers" -> hc.coilPeers.asJson,
               "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
               "initialEquityContributions" -> hc._initialEquityContributions.asJson,
+              "headId" -> hc.headId.asJson,
               "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.unresolved.asJson,
-              "initialBlock" -> hc.initialBlock.asJson,
-              "seedUtxo" -> hc.seedUtxo.asJson,
-              "additionalFundingUtxos" -> hc.additionalFundingUtxos.asJson
+              // The config carries only the init tx (bare CBOR) + its block brief — no fallback tx
+              // and no Block/BlockEffects envelope; the head derives the fallback on read. The
+              // resolved consumed inputs travel alongside it so the head can parse/evaluate the tx
+              // without querying L1 (the init tx need not be immediately submittable).
+              "blockBrief" -> hc.initialBlock.blockBrief.asJson,
+              "initializationTx" -> hc.initializationTx.asJson,
+              "resolvedUtxos" -> hc.initializationTx.resolvedUtxos.utxos.asJson
             )
         }
     }
@@ -132,37 +138,52 @@ object HeadConfig {
                 hc <- {
                     given CardanoNetwork = network
                     for {
-                        // TODO: parse not re-create, see https://linear.app/gummiworm-labs/issue/GUM-129/enrich-init-tx-metadata-implement-init-tx-parsing
                         brief <- c
-                            .downField("initialBlock")
                             .downField("blockBrief")
                             .as[BlockBrief.Initial]
                         initTx <- c
-                            .downField("initialBlock")
-                            .downField("effects")
                             .downField("initializationTx")
                             .as[Transaction]
-                        hcBootstrap <- c.as[HeadConfig.Bootstrap](using
-                          HeadConfig.Bootstrap.withInitTxDecoder(initTx)
-                        )
+                        resolvedUtxos <- c
+                            .downField("resolvedUtxos")
+                            .as[Utxos]
+                            .map(ResolvedUtxos(_))
+                        hcBootstrap <- c.as[HeadConfig.Bootstrap]
 
-                        initTxSeq <- InitializationTxSeq
-                            .Build(hcBootstrap)(brief.endTime)
+                        // Parse the stored init tx (honouring its bytes) rather than re-building it.
+                        // The fallback is protocol-derived, so we build it from the parsed init tx.
+                        parsedInitTx <- InitializationTx
+                            .Parse(hcBootstrap)(
+                              blockCreationEndTime = brief.endTime,
+                              tx = initTx,
+                              resolvedUtxos = resolvedUtxos
+                            )
                             .result
                             .left
                             .map(e =>
                                 io.circe.DecodingFailure(
-                                  s"Failed to derive InitializationTxSeq: $e",
+                                  s"Failed to parse InitializationTx: $e",
+                                  c.history
+                                )
+                            )
+                        fallbackTx <- FallbackTx
+                            .Build(
+                              hcBootstrap.txTiming.newFallbackStartTime(brief.endTime),
+                              parsedInitTx.treasuryProduced,
+                              parsedInitTx.multisigRegimeProduced
+                            )(using hcBootstrap)
+                            .result
+                            .left
+                            .map(e =>
+                                io.circe.DecodingFailure(
+                                  s"Failed to derive fallback tx: $e",
                                   c.history
                                 )
                             )
                         ib = InitialBlock(
                           Block.Unsigned.Initial(
                             brief,
-                            BlockEffects.Unsigned.Initial(
-                              initTxSeq.initializationTx,
-                              initTxSeq.fallbackTx
-                            )
+                            BlockEffects.Unsigned.Initial(parsedInitTx, fallbackTx)
                           )
                         )
                         hc <- HeadConfig(hcBootstrap, ib).toEither.left.map(e =>
@@ -268,11 +289,19 @@ object HeadConfig {
 
                     parser.decode(bootstrapConfigStr)
                 }
+                coilPeers <- EitherT.fromEither[IO] {
+                    given onlyCoilPeers: Decoder[CoilPeers] =
+                        Decoder.instance(c =>
+                            c.downField("coilPeers").as[CoilPeers](using coilPeersDecoder)
+                        )
+
+                    parser.decode(bootstrapConfigStr)
+                }
 
                 privateConfig <- EitherT.fromEither[IO] {
                     given HeadPeers = headPeers
 
-                    given CardanoNetwork = network
+                    given CoilPeers = coilPeers
 
                     io.circe.parser.decode(nodePrivateConfigStr)(using nodePrivateConfigDecoder)
                 }
@@ -356,9 +385,7 @@ object HeadConfig {
                   "coilPeers" -> hc.coilPeers.asJson,
                   "initialEvacuationMap" -> hc.initialEvacuationMap.asJson,
                   "initialEquityContributions" -> hc.initialEquityContributions.toSortedMap.asJson,
-                  "seedUtxo" -> hc.seedUtxo.asJson,
-                  "additionalFundingUtxos" -> hc.additionalFundingUtxos.asJson,
-                  "initialChangeOutputs" -> hc.initialChangeOutputs.asJson,
+                  "headId" -> hc.headId.asJson,
                   "scriptReferenceUtxos" -> hc.scriptReferenceUtxos.scriptReferenceUtxosUnresolved.asJson
                 )
             }
@@ -421,93 +448,6 @@ object HeadConfig {
             } yield res
         }
 
-        /** A decoder without the `initialChangeOutput` field, parsing them from the raw
-          * initialization tx instead
-          * @param block
-          * @param network
-          * @param resolved
-          * @return
-          */
-        def withInitTxDecoder(initTx: Transaction)(using
-            network: CardanoNetwork.Section,
-            resolved: ScriptReferenceUtxos
-        ): Decoder[HeadConfig.Bootstrap] = Decoder.instance(c =>
-            for {
-                headParams <- c.downField("headParams").as[HeadParameters]
-                headPeers <- c.downField("headPeers").as[HeadPeers]
-                coilPeers <- c.downField("coilPeers").as[CoilPeers]
-                initialEvacuationMap <- c
-                    .downField("initialEvacuationMap")
-                    .as[EvacuationMap]
-                initialEquityContributions <- c
-                    .downField("initialEquityContributions")
-                    .as[NonEmptyMap[HeadPeerNumber, Coin]]
-                seedUtxo <- c.downField("seedUtxo").as[Utxo]
-                srus <- for {
-                    unresolved <- c
-                        .downField("scriptReferenceUtxos")
-                        .as[ScriptReferenceUtxos.Unresolved]
-                    res <-
-                        if unresolved.isValidResolution(resolved)
-                        then Right(resolved)
-                        else
-                            Left(
-                              io.circe.DecodingFailure(
-                                "Failed to resolved script reference utxos",
-                                c.history
-                              )
-                            )
-                } yield res
-
-                additionalFundingUtxos <- c.downField("additionalFundingUtxos").as[Utxos]
-                mdParseResult <- MD.Initialization
-                    .parse(initTx)
-                    .left
-                    .map(e =>
-                        io.circe.DecodingFailure(
-                          s"Failed decode HeadConfig.Bootstrap from the initializationTx: ${e.toString}",
-                          c.history
-                        )
-                    )
-
-                initialChangeOutputs = {
-                    initTx.body.value.outputs
-                        .map(_.value)
-                        .zipWithIndex
-                        .filter((_, idx) =>
-                            idx != mdParseResult._2.multisigRegimeIx && idx != mdParseResult._2.multisigTreasuryIx
-                        )
-                        .map(_._1)
-                        .toList
-                }
-
-                initParams = InitializationParameters(
-                  initialEvacuationMap = initialEvacuationMap,
-                  initialEquityContributions = initialEquityContributions,
-                  seedUtxo = seedUtxo,
-                  additionalFundingUtxos = additionalFundingUtxos,
-                  initialChangeOutputs = initialChangeOutputs
-                )
-                bootstrapConfig <- HeadConfig
-                    .Bootstrap(
-                      network.cardanoNetwork,
-                      headParams,
-                      headPeers,
-                      coilPeers,
-                      initParams,
-                      srus
-                    )
-                    .toEither
-                    .left
-                    .map(e =>
-                        io.circe.DecodingFailure(
-                          "Failed to decode HeadConfig.Bootstrap from the initialization transaction: " ++ e.toString,
-                          c.history
-                        )
-                    )
-            } yield bootstrapConfig
-        )
-
         // TODO: Make this typed better
         type HeadConfigBootstrapError = String
 
@@ -528,12 +468,10 @@ object HeadConfig {
               scriptReferenceUtxos
             )
 
-            val isBalanced = Validated.cond(
-              test = headConfigBootstrap.isBalancedInitializationFunding,
-              a = (),
-              e = "Initialization funding is unbalanced"
-            )
-
+            // Funding-balance is a build-time property, enforced by the bootstrap builder
+            // (InitializationFunding.isBalanced). It is not re-checked here: the funding recipe is
+            // no longer carried in the config, so there is nothing to validate at read time.
+            // (Evaluating the init tx on read is future work — GUM-168.)
             val vKeysCoherent = Validated.cond(
               test =
                   initializationParams.initialEquityContributions.keys == NonEmptySet.fromSetUnsafe(
@@ -544,7 +482,6 @@ object HeadConfig {
             )
 
             List(
-              isBalanced,
               vKeysCoherent
             ).foldLeft(Valid(()): ValidatedNel[String, Unit])((x, y) =>
                 x.combine(y.leftMap(NonEmptyList.one))
@@ -605,6 +542,17 @@ object HeadConfig {
               */
             override def headMultisigScript: HeadMultisigScript =
                 HeadMultisigScript(this, coilPeerVKeys, coilQuorum)
+
+            /** The single-quantity treasury beacon token, under this head's multisig policy with
+              * the CIP-67 treasury asset name derived from the seed utxo. Tests build treasury utxo
+              * values as `evacMap.totalValue + treasuryToken`.
+              */
+            final def treasuryToken: scalus.cardano.ledger.Value =
+                scalus.cardano.ledger.Value.asset(
+                  headMultisigScript.policyId,
+                  headTokenNames.treasuryTokenName,
+                  1
+                )
             def initializationParameters: InitializationParameters =
                 headConfigBootstrap.initializationParameters
             def scriptReferenceUtxos: ScriptReferenceUtxos =

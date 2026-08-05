@@ -11,11 +11,11 @@ import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Validators.nonSigningValidators
 import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, TxFamily}
 import hydrozoa.rulebased.ledger.l1.script.plutus.DisputeResolutionValidator.DisputeRedeemer
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.TreasuryRedeemer
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum
-import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.{Resolved, Unresolved}
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.RuleBasedTreasuryDatum.Unresolved
+import hydrozoa.rulebased.ledger.l1.state.TreasuryState.{RuleBasedTreasuryDatum, resolve}
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus
 import hydrozoa.rulebased.ledger.l1.state.VoteState.VoteStatus.Voted
-import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.{BallotBox, RuleBasedRegimeUtxo, RuleBasedTreasuryOutput, RuleBasedTreasuryUtxo}
 import monocle.*
 import scalus.cardano.ledger.*
 import scalus.cardano.txbuilder.SomeBuildError
@@ -27,7 +27,7 @@ final case class ResolutionTx(
     treasuryResolvedUtxoProduced: RuleBasedTreasuryUtxo,
     override val tx: Transaction,
     override val txLens: Lens[ResolutionTx, Transaction] = Focus[ResolutionTx](_.tx),
-    override val resolvedUtxos: ResolvedUtxos = ResolvedUtxos.empty
+    override val resolvedUtxos: ResolvedUtxos
 ) extends EnrichedTx[ResolutionTx] {}
 
 object ResolutionTx {
@@ -66,6 +66,7 @@ private object ResolutionTxOps {
     final case class Build(
         talliedBallotBox: BallotBox[Voted],
         treasuryUtxo: RuleBasedTreasuryUtxo,
+        regimeUtxo: RuleBasedRegimeUtxo,
         collateralUtxo: CollateralUtxo,
     )(using config: Config) {
         def result: Either[Build.Error, ResolutionTx] =
@@ -96,13 +97,8 @@ private object ResolutionTxOps {
         private def mkResolvedTreasuryDatum(
             unresolved: Unresolved,
             voteDetails: VoteStatus.Voted
-        ): RuleBasedTreasuryDatum = {
-            Resolved(
-              evacuationActive = voteDetails._1,
-              version = (unresolved.versionMajor, voteDetails._2),
-              setupG2 = unresolved.setupG2
-            )
-        }
+        ): RuleBasedTreasuryDatum =
+            unresolved.resolve(evacuationActive = voteDetails._1, versionMinor = voteDetails._2)
 
         private def buildResolutionTx(
             resolvedTreasuryDatum: RuleBasedTreasuryDatum
@@ -123,6 +119,9 @@ private object ResolutionTxOps {
                       List(
                         config.referenceTreasury,
                         config.referenceDispute,
+                        // The treasury validator reads the immutable head-identity fields from
+                        // the regime utxo
+                        regimeUtxo.referenceOutput,
                         // Spend the tallied ballot box
                         talliedBallotBox.spend(voteRedeemer),
                         // Spend the treasury utxo and update its datum to resolved state
@@ -153,7 +152,8 @@ private object ResolutionTxOps {
               talliedBallotBox = talliedBallotBox,
               treasuryUnresolvedUtxoSpent = treasuryUtxo,
               treasuryResolvedUtxoProduced = newTreasuryUtxo,
-              tx = finalized.transaction
+              tx = finalized.transaction,
+              resolvedUtxos = finalized.resolvedUtxos
             )
         }
     }

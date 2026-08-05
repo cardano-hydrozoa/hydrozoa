@@ -9,13 +9,14 @@ import hydrozoa.integration.stage4.EffectsLanded.BlockExpectation
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, trace}
 import hydrozoa.multisig.backend.cardano.CardanoBackend
 import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber}
-import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockBrief
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import hydrozoa.multisig.ledger.stack.Stack
 import hydrozoa.multisig.persistence.BackendStore
+import hydrozoa.multisig.server.SubmissionClient
 import org.scalacheck.commands.SutCommand
 import scalus.cardano.ledger.TransactionHash
 
@@ -23,20 +24,19 @@ import scalus.cardano.ledger.TransactionHash
 // Stage 4 SUT
 // ===================================
 
-/** Per-peer actor handles exposed to SUT commands. */
-case class Stage4PeerHandle(
-    requestSequencer: RequestSequencer.Handle,
-)
-
 /** Immutable, set-once resources of a running stage4 SUT. Allocated during `sutResource`,
   * referenced from anywhere thereafter — no field on this case class ever changes.
+  *
+  * `peers` holds each head peer's [[SubmissionClient]] — built by the harness against that peer's
+  * in-process [[hydrozoa.multisig.server.HydrozoaRoutes]] via `Client.fromHttpApp`, so submissions
+  * exercise the real HTTP/JSON codec surface without binding a socket.
   */
 case class Stage4SutStatic(
     system: ActorSystem[IO],
     cardanoBackend: CardanoBackend[IO],
-    peers: Map[HeadPeerNumber, Stage4PeerHandle],
-    /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA
-      * writes (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
+    peers: Map[HeadPeerNumber, SubmissionClient],
+    /** Per-peer persistence backend store — used by `analyzePersistence` to assert SC + SCA writes
+      * (Treasury + EvacuationMap + HardConfirmation) landed during the scenario.
       */
     backendStores: Map[HeadPeerNumber, BackendStore[IO]],
     log: ContraTracer[IO, Slf4jMsg],
@@ -62,10 +62,10 @@ object PerPeerCaptures:
     def makeMap(peers: Seq[HeadPeerNumber]): IO[Map[HeadPeerNumber, PerPeerCaptures]] =
         peers.toList.traverse(p => make.map(p -> _)).map(_.toMap)
 
-/** Per-coil-peer mutable Refs populated by the [[Stage4Plugins.perCoilCaptures]] writer arm.
-  * Today only the hard-confirmed stacks stream is captured; bundled here so a future coil-side
-  * signal (e.g. coil `TxSubmitting`) lands alongside it without churning the
-  * [[Stage4SutMutable]] field set.
+/** Per-coil-peer mutable Refs populated by the [[Stage4Plugins.perCoilCaptures]] writer arm. Today
+  * only the hard-confirmed stacks stream is captured; bundled here so a future coil-side signal
+  * (e.g. coil `TxSubmitting`) lands alongside it without churning the [[Stage4SutMutable]] field
+  * set.
   */
 case class PerCoilCaptures(
     stacks: Ref[IO, Vector[Stack.HardConfirmed]],
@@ -79,47 +79,44 @@ object PerCoilCaptures:
         coils.toList.traverse(c => make.map(c -> _)).map(_.toMap)
 
 /** Mutable state of a running stage4 SUT. [[Capture]]s wrap Refs populated by writer arms;
-  * [[Signal]]s wrap one-shot Deferreds completed by predicate arms; `*Target` Deferreds are
-  * armed by [[beforeFinalize]] to gate when the matching signal predicate may fire.
+  * [[Signal]]s wrap one-shot Deferreds completed by predicate arms; `*Target` Deferreds are armed
+  * by [[beforeFinalize]] to gate when the matching signal predicate may fire.
   */
 case class Stage4SutMutable(
     sutErrors: Ref[IO, List[String]],
     submittedRequestIds: Ref[IO, Vector[RequestId]],
-
     perPeer: Capture[Map[HeadPeerNumber, PerPeerCaptures]],
     // Per-coil hard-confirmed stacks, captured by each coil peer follower's SCA arm
     // (same mechanism as `perPeer.state(_).stacks` on the head side). Empty for a pure-head run.
     // Used to assert the coil peer participates in the slow cycle.
     perCoil: Capture[Map[CoilPeerNumber, PerCoilCaptures]],
     /** Cross-peer set of L1 tx hashes observed via `CardanoLiaisonEvent.TxSubmitting`. All head
-     * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
-     */
+      * peers submit the same backbone txs in parallel; the `Set` collapses duplicates.
+      */
     landedTxs: Capture[Ref[IO, Set[TransactionHash]]],
-
     fastSettlementSignal: Signal[Unit],
-    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL predicate arm reads it
-     * via `tryGet` and only fires [[fastSettlementSignal]] once the target is populated.
-     * Prevents the signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
-     */
+    /** Set by [[beforeFinalize]] with the final submitted ID set; the JL predicate arm reads it via
+      * `tryGet` and only fires [[fastSettlementSignal]] once the target is populated. Prevents the
+      * signal from firing mid-run against a partial [[submittedRequestIds]] snapshot.
+      */
     fastSettlementTarget: Deferred[IO, Set[RequestId]],
-
     slowCoverageSignal: Signal[Unit],
     /** Set by [[beforeFinalize]] (after fast drain) with the block numbers that must be covered;
       * the SCA predicate arm reads it via `tryGet` and only fires [[slowCoverageSignal]] once set.
       */
     slowCoverageTarget: Deferred[IO, Set[Int]],
 
-    /** Fires when the same condit2ion `EffectsLanded.propEffectsLanded` checks is satisfied —
-      * i.e. every backbone expectation completed via happy path or competing fallback. Anchored
-      * on `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
+    /** Fires when the same condit2ion `EffectsLanded.propEffectsLanded` checks is satisfied — i.e.
+      * every backbone expectation completed via happy path or competing fallback. Anchored on
+      * `CardanoLiaisonEvent.TxSubmitting` (the enactment event), distinct from
       * [[slowCoverageSignal]] which fires on consensus reach. The gap between the two is the
-      * `StackComposer` rate-limit delay; observing both lets us distinguish "stalled at
-      * consensus" from "stalled before enactment".
+      * `StackComposer` rate-limit delay; observing both lets us distinguish "stalled at consensus"
+      * from "stalled before enactment".
       */
     effectsLandedSignal: Signal[Unit],
-    /** Set by [[beforeFinalize]] (after slow drain) with the backbone expectations derived from
-      * the canonical hard-confirmed stacks. The TxSubmitting predicate arm reads via `tryGet`
-      * and only fires [[effectsLandedSignal]] once this is populated.
+    /** Set by [[beforeFinalize]] (after slow drain) with the backbone expectations derived from the
+      * canonical hard-confirmed stacks. The TxSubmitting predicate arm reads via `tryGet` and only
+      * fires [[effectsLandedSignal]] once this is populated.
       */
     effectsLandedTarget: Deferred[IO, List[BlockExpectation]],
 
@@ -147,26 +144,31 @@ object Stage4SutCommands:
         override def run(cmd: DelayCommand, sut: Stage4Sut): IO[Unit] = IO.unit
     }
 
-    // L2 tx: submit directly to the peer's RequestSequencer.
-    // Result is always Valid (trivial); oracle check in shutdownSut compares model
-    // predictions against actual block-brief outcomes.
+    // L2 tx: submit via the peer's SubmissionClient (in-memory http4s round-trip through the
+    // harness's HydrozoaRoutes). Result is always Valid (trivial); oracle check in shutdownSut
+    // compares model predictions against actual block-brief outcomes.
     given SutCommand[L2TxCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: L2TxCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
+                _ <- sut.static.log.trace(
+                  s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}"
+                )
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
             } yield ValidityFlag.Valid
         }
     }
 
-    // Deposit: register with RequestSequencer AND submit the signed deposit tx to the shared
-    // mock L1 backend so CardanoLiaison can observe it on-chain at the correct time.
+    // Deposit: submit via the peer's SubmissionClient (in-memory http4s round-trip) AND submit
+    // the signed deposit tx to the shared mock L1 backend so CardanoLiaison can observe it
+    // on-chain at the correct time.
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Stage4Sut] with {
         override def run(cmd: RegisterAndSubmitDepositCommand, sut: Stage4Sut): IO[ValidityFlag] = {
             for {
-                reqId <- sut.static.peers(cmd.peerNum).requestSequencer ?: cmd.request.asUserRequest
-                _ <- sut.static.log.trace(s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}")
+                reqId <- sut.static.peers(cmd.peerNum).submit(cmd.request.asUserRequest)
+                _ <- sut.static.log.trace(
+                  s"reqId=$reqId, cmd.request.requestId=${cmd.request.requestId}"
+                )
                 _ <- sut.mutable.submittedRequestIds.update(_ :+ cmd.request.requestId)
                 _ <- sut.static.cardanoBackend.submitTx(RawTx(cmd.depositTxBytesSigned))
             } yield ValidityFlag.Valid
@@ -178,15 +180,7 @@ extension (self: UserRequestWithId)
     /** One-way loosing conversion */
     def asUserRequest: UserRequest = self match {
         case UserRequestWithId.DepositRequest(_, r) =>
-            UserRequest.DepositRequest(
-              header = r.header,
-              body = r.body,
-              userVk = r.userVk
-            )
+            UserRequest.DepositRequest(body = r.body)
         case UserRequestWithId.TransactionRequest(_, r) =>
-            UserRequest.TransactionRequest(
-              header = r.header,
-              body = r.body,
-              userVk = r.userVk
-            )
+            UserRequest.TransactionRequest(body = r.body)
     }

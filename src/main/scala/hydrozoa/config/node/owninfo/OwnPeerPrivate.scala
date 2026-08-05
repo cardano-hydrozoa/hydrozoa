@@ -1,5 +1,6 @@
 package hydrozoa.config.node.owninfo
 
+import hydrozoa.config.head.coil.CoilPeers
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.config.node.owninfo.OwnCoilPeerPrivate.dummyOwnCoilPeerPrivateEncoder
 import hydrozoa.config.node.owninfo.OwnHeadPeerPrivate.dummyOwnHeadPeerPrivateEncoder
@@ -30,9 +31,27 @@ object OwnPeerPrivate {
         case c: OwnCoilPeerPrivate => c.asJson(using dummyOwnCoilPeerPrivateEncoder)
     }
 
-    // Coil nodes are constructed programmatically; the JSON decode path currently produces only a
-    // head identity (wrapped in the sum). A coil JSON entry lands with the coil bootstrap path.
-    given ownPeerPrivateDecoder(using HeadPeers.Section): Decoder[OwnPeerPrivate] =
-        OwnHeadPeerPrivate.ownHeadPeerPrivateDecoder
-            .map((p: OwnHeadPeerPrivate) => p: OwnPeerPrivate)
+    /** Decode either peer identity, dispatching on which wallet field is present: `ownHeadWallet`
+      * decodes an [[OwnHeadPeerPrivate]] (vkey located among the head peers), `ownCoilWallet` an
+      * [[OwnCoilPeerPrivate]] (vkey located among the coil peers supplied via [[CoilPeers]]).
+      */
+    given ownPeerPrivateDecoder(using
+        headPeers: HeadPeers.Section,
+        coilPeers: CoilPeers
+    ): Decoder[OwnPeerPrivate] =
+        Decoder.instance { c =>
+            if c.downField("ownHeadWallet").succeeded then
+                OwnHeadPeerPrivate.ownHeadPeerPrivateDecoder
+                    .map((p: OwnHeadPeerPrivate) => p: OwnPeerPrivate)(c)
+            else if c.downField("ownCoilWallet").succeeded then
+                OwnCoilPeerPrivate.ownCoilPeerPrivateDecoder
+                    .map((p: OwnCoilPeerPrivate) => p: OwnPeerPrivate)(c)
+            else
+                Left(
+                  DecodingFailure(
+                    "ownPeerPrivate must carry either ownHeadWallet or ownCoilWallet",
+                    c.history
+                  )
+                )
+        }
 }

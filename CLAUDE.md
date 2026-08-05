@@ -54,19 +54,10 @@ sbtn scalafixAll --check
 sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ```
 
-### Specification
-```bash
-# Build PDF specification
-make spec
-
-# Clean specification files
-make spec-clean
-```
-
 ## Architecture
 
 ### Key Technologies
-- **Scala 3.3.6** with modern language features
+- **Scala 3.3.7** with modern language features
 - **Scalus**: Cardano Plutus integration and on-chain script compilation
 - **Cats Effect**: Functional effect system for IO operations
 - **Cats Actors**: Actor-based concurrency model
@@ -91,6 +82,14 @@ Working design and reference docs live in `docs/`:
   cycles without changing consensus logic.
 - [`transient-tokens.md`](docs/transient-tokens.md) — minting/burning on the L2 ledger: the
   transient-token compartment and projection-based validation.
+- [`l2-isomorphism.md`](docs/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
+  txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
+
+**API**
+- [`l2-query-endpoints.md`](docs/l2-query-endpoints.md) — the user-facing server's read-only L2
+  queries: `GET /l2/cardano-eutxo/utxos/{address}` and `GET /l2/cardano-eutxo/transactions` (EUTXO-only).
+- [`observability-endpoints.md`](docs/observability-endpoints.md) — the user-facing server's
+  `/health` (liveness) and `/ready` (readiness) endpoints and the `NodeStatus` behind them.
 
 **Testing**
 - [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
@@ -162,8 +161,8 @@ See [Comments](docs/style-guide.md#comments) for the full rule. In short:
 
 - When you add a new named logger / tracer route, add a matching `<logger name="…">` line to
   **every** `logback.xml` in the same subproject — keep them in sync. Configs by subproject:
-  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback.xml`
-  - `integration`: `integration/src/test/resources/logback.xml`
+  - root: `src/main/resources/logback.xml` **and** `src/test/resources/logback-test.xml`
+  - `integration`: `integration/src/test/resources/logback-test.xml`
 
 ### Warnings
 

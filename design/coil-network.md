@@ -510,7 +510,7 @@ AllOf(
 
 `MOf` is Scalus's k-of-n `Timelock` constructor (Blockfrost JSON
 `atLeast`/`required`). The one script governs all four uses: minting the `HYDR` /
-`HMRW` beacon tokens, spending the treasury and multisig-regime outputs, and the
+`HRWT` beacon tokens, spending the treasury and multisig-regime outputs, and the
 head address. With **no coil peers configured** the `MOf` branch is omitted and the
 script is **byte-identical** to today's head-only `AllOf(headSigs)` — same script
 hash, address, and policy id — so coil-free heads are unaffected. `requiredSigners`

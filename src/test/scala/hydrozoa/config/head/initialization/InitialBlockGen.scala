@@ -1,6 +1,7 @@
 package hydrozoa.config.head.initialization
 
 import cats.data.ReaderT
+import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.initialization.BlockCreationEndTimeGen.currentTimeBlockCreationEndTime
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime}
@@ -13,18 +14,20 @@ import scala.concurrent.duration.DurationInt
 import test.{GenWithTestPeers, TestPeers, TestPeersSpec, given}
 
 def generateInitialBlock(
-    genHeadConfigBootstrap: GenWithTestPeers[HeadConfig.Bootstrap] = generateHeadConfigBootstrap(),
+    genHeadConfigBootstrap: GenWithTestPeers[(HeadConfig.Bootstrap, InitializationFunding)] =
+        generateHeadConfigBootstrap(),
     generateBlockCreationEndTime: GenWithTestPeers[BlockCreationEndTime] =
         currentTimeBlockCreationEndTime,
 ): GenWithTestPeers[InitialBlock] = {
     for {
         _ <- ReaderT.ask
-        config <- genHeadConfigBootstrap
+        configAndFunding <- genHeadConfigBootstrap
+        (config, funding) = configAndFunding
 
         blockCreationEndTime <- generateBlockCreationEndTime
 
         initTxSeq =
-            InitializationTxSeq.Build(config)(blockCreationEndTime).result match {
+            InitializationTxSeq.Build(config, funding)(blockCreationEndTime).result match {
                 case Left(e) =>
                     throw new RuntimeException(e.toString, e)
                 case Right(x) => x

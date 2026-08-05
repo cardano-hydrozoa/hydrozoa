@@ -3,6 +3,7 @@ package test
 import cats.data.{NonEmptyList, NonEmptyVector}
 import cats.syntax.all.toTraverseOps
 import cats.{Hash as _, *}
+import hydrozoa.bootstrap.InitializationFunding
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.head.peers.HeadPeers
 import hydrozoa.lib.math.Distribution
@@ -84,7 +85,7 @@ object Generators {
         val genHeadTokenName: Gen[AssetName] =
             for {
                 ti <- arbitrary[TransactionInput]
-            } yield CIP67.HeadTokenNames(ti).treasuryTokenName
+            } yield InitializationFunding.mkHeadTokenNames(ti).treasuryTokenName
 
         val genTreasuryDatum: Gen[MultisigTreasuryUtxo.Datum] = {
             for {
@@ -153,7 +154,7 @@ object Generators {
               MultiAsset(
                 SortedMap(
                   config.headMultisigScript.policyId -> SortedMap(
-                    config.headTokenNames.multisigRegimeTokenName -> 1L
+                    config.headTokenNames.regimeWitnessTokenName -> 1L
                   )
                 )
               )

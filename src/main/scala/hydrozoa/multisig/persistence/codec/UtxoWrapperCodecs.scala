@@ -4,12 +4,13 @@ import hydrozoa.lib.cardano.cip116.JsonCodecs.CIP0116.Conway.{transactionInputDe
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{utxoDecoder, utxoEncoder}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.l1.utxo.{MultisigRegimeUtxo, RolloutUtxo}
+import hydrozoa.rulebased.ledger.l1.utxo.RuleBasedRegimeUtxo
 import io.circe.{Decoder, Encoder}
 
 /** Small persistence-layer codecs for the Utxo-wrapper types that several EnrichedTx-wrapper codecs
-  * share: [[RolloutUtxo]] (wraps `Utxo`), [[MultisigRegimeUtxo]] (wraps `TransactionInput`), and
-  * the opaque-`Int` `BlockVersion.Major`. Each is a one-liner so they live together rather than one
-  * tiny file per type.
+  * share: [[RolloutUtxo]] (wraps `Utxo`), [[MultisigRegimeUtxo]] and [[RuleBasedRegimeUtxo]] (wrap
+  * `TransactionInput`), and the opaque-`Int` `BlockVersion.Major`. Each is a one-liner so they live
+  * together rather than one tiny file per type.
   */
 object UtxoWrapperCodecs:
 
@@ -20,6 +21,11 @@ object UtxoWrapperCodecs:
         transactionInputEncoder.contramap(_.input)
     given multisigRegimeUtxoDecoder: Decoder[MultisigRegimeUtxo] =
         transactionInputDecoder.map(MultisigRegimeUtxo.apply)
+
+    given ruleBasedRegimeUtxoEncoder: Encoder[RuleBasedRegimeUtxo] =
+        transactionInputEncoder.contramap(_.input)
+    given ruleBasedRegimeUtxoDecoder: Decoder[RuleBasedRegimeUtxo] =
+        transactionInputDecoder.map(RuleBasedRegimeUtxo.apply)
 
     given blockVersionMajorEncoder: Encoder[BlockVersion.Major] =
         Encoder.encodeInt.contramap(m => m: Int)
