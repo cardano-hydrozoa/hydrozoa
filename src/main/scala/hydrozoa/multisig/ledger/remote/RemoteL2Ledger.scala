@@ -83,8 +83,7 @@ class RemoteL2Ledger private (
         sendRequest(Request.RegisterDeposit(commandNumber, req)).flatMap {
             case r: L2LedgerResponse.Applied.RegisterDeposit  => IO.pure(r)
             case r: L2LedgerResponse.Rejected.RegisterDeposit => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder               => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze             => IO.pure(r)
+            case r: L2LedgerResponse.UnrecoverableError       => IO.pure(r)
             case other => unexpected("RegisterDeposit", other)
         }
 
@@ -93,10 +92,8 @@ class RemoteL2Ledger private (
         req: L2LedgerCommand.ApplyDepositDecisions
     ): IO[ApplyDepositDecisionsResponse] =
         sendRequest(Request.ApplyDepositDecisions(commandNumber, req)).flatMap {
-            case r: L2LedgerResponse.Applied.ApplyDepositDecisions  => IO.pure(r)
-            case r: L2LedgerResponse.Rejected.ApplyDepositDecisions => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder                     => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze                   => IO.pure(r)
+            case r: L2LedgerResponse.Applied.ApplyDepositDecisions => IO.pure(r)
+            case r: L2LedgerResponse.UnrecoverableError            => IO.pure(r)
             case other => unexpected("ApplyDepositDecisions", other)
         }
 
@@ -107,8 +104,7 @@ class RemoteL2Ledger private (
         sendRequest(Request.ApplyTransaction(commandNumber, req)).flatMap {
             case r: L2LedgerResponse.Applied.ApplyTransaction  => IO.pure(r)
             case r: L2LedgerResponse.Rejected.ApplyTransaction => IO.pure(r)
-            case r: L2LedgerResponse.OutOfOrder                => IO.pure(r)
-            case r: L2LedgerResponse.LedgerFreeze              => IO.pure(r)
+            case r: L2LedgerResponse.UnrecoverableError        => IO.pure(r)
             case other => unexpected("ApplyTransaction", other)
         }
 
@@ -124,7 +120,7 @@ class RemoteL2Ledger private (
       * It must not fail — `JointLedger.State.recover` treats a `Left` as fatal, so returning an
       * error would crash a remote-backed node at boot after its first block. A real desync between
       * the restored JointLedger command number and the remote's own position surfaces on the next
-      * command as [[L2LedgerResponse.OutOfOrder]], not here.
+      * command as [[L2LedgerResponse.UnrecoverableError.OutOfOrder]], not here.
       */
     override def restoreTo(commandNumber: L2CommandNumber): EitherT[IO, RestoreError, Unit] =
         EitherT.rightT(())
@@ -132,11 +128,10 @@ class RemoteL2Ledger private (
     /** Send a request and return the remote's total [[L2LedgerResponse]]. Transport failure is
       * retried through by [[exchange]] and never seen here, so a returned response is always a real
       * verdict — [[L2LedgerResponse.Applied]] / [[L2LedgerResponse.Rejected]] /
-      * [[L2LedgerResponse.OutOfOrder]] / [[L2LedgerResponse.LedgerFreeze]] — which JointLedger
-      * interprets. The IO fails only on a broken *transport*: an undecodable frame, or a response
-      * whose echoed command number does not match the request (a stray/duplicated frame). Those are
-      * protocol violations, not verdicts, so they fail-stop rather than being turned into a
-      * response.
+      * [[L2LedgerResponse.UnrecoverableError]] — which JointLedger interprets. The IO fails only on
+      * a broken *transport*: an undecodable frame, or a response whose echoed command number does
+      * not match the request (a stray/duplicated frame). Those are protocol violations, not
+      * verdicts, so they fail-stop rather than being turned into a response.
       */
     private def sendRequest(request: Request): IO[L2LedgerResponse] =
         exchange(request).flatMap { text =>

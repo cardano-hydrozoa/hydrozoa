@@ -5,7 +5,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey}
-import hydrozoa.multisig.ledger.l2.L2LedgerResponse.DepositDecisionRejectReason
+import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerResponse}
 import io.circe.syntax.*
 import org.scalacheck.Gen
@@ -53,12 +53,14 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
         assert(roundTrips(r) && json.contains("evacuationDiffs") && json.contains("payouts"))
     }
 
-    test("OutOfOrder carries the sent and the expected command number") {
-        assert(roundTrips(L2LedgerResponse.OutOfOrder(L2CommandNumber(5L), L2CommandNumber(4L))))
+    test("UnrecoverableError.OutOfOrder carries the sent and the expected command number") {
+        assert(roundTrips(UnrecoverableError.OutOfOrder(L2CommandNumber(5L), L2CommandNumber(4L))))
     }
 
-    test("LedgerFreeze carries the command number and the freezing decision's number") {
-        assert(roundTrips(L2LedgerResponse.LedgerFreeze(L2CommandNumber(9L), L2CommandNumber(4L))))
+    test("UnrecoverableError.LedgerFreeze carries the command number and the freezing number") {
+        assert(
+          roundTrips(UnrecoverableError.LedgerFreeze(L2CommandNumber(9L), L2CommandNumber(4L)))
+        )
     }
 
     test("Rejected.RegisterDeposit (string reason) round-trips") {
@@ -73,24 +75,19 @@ class RemoteL2LedgerCodecsTest extends AnyFunSuite:
         )
     }
 
-    test("Rejected.ApplyDepositDecisions with CompartmentNotFound (typed reason) round-trips") {
+    test("UnrecoverableError.CompartmentsNotFound (missing request ids) round-trips") {
         assert(
           roundTrips(
-            L2LedgerResponse.Rejected.ApplyDepositDecisions(
+            UnrecoverableError.CompartmentsNotFound(
               L2CommandNumber(4L),
-              DepositDecisionRejectReason.CompartmentNotFound(RequestId(0, 9L))
+              List(RequestId(0, 9L), RequestId(1, 3L))
             )
           )
         )
     }
 
-    test("Rejected.ApplyDepositDecisions with InternalLedgerError (typed reason) round-trips") {
+    test("UnrecoverableError.OtherError (string reason) round-trips") {
         assert(
-          roundTrips(
-            L2LedgerResponse.Rejected.ApplyDepositDecisions(
-              L2CommandNumber(5L),
-              DepositDecisionRejectReason.InternalLedgerError("merge failed")
-            )
-          )
+          roundTrips(UnrecoverableError.OtherError(L2CommandNumber(5L), "merge failed"))
         )
     }

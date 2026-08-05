@@ -3,7 +3,7 @@ package hydrozoa.multisig.ledger.eutxol2
 import cats.data.EitherT
 import cats.effect.IO
 import hydrozoa.multisig.ledger.eutxol2.tx.{L2Genesis, L2Tx}
-import hydrozoa.multisig.ledger.l2.{L2LedgerCommand, L2ScreenError, L2Screener}
+import hydrozoa.multisig.ledger.l2.{L2ScreenError, L2Screener}
 import scala.util.Try
 import scalus.uplc.builtin.ByteString
 
@@ -29,7 +29,7 @@ final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]
         } yield ())
 
     override def screenDeposit(
-        req: L2LedgerCommand.ScreenDeposit
+        req: L2Screener.ScreenDeposit
     ): EitherT[IO, L2ScreenError, Unit] =
         EitherT.fromEither[IO](for {
             // The l2Payload must decode to the deposit's GenesisObligations — the utxos this ledger

@@ -75,10 +75,10 @@ final case class JointLedger(
     /** Drive an `ApplyDepositDecisions` command and fold its evacuation diffs into the L2 ledger
       * state, **panicking** on any non-`Applied` response. Unlike a user request (register /
       * apply-tx), whose [[L2LedgerResponse.Rejected]] is a per-request verdict the caller
-      * invalidates, a rejected deposit decision is a coordination bug (an unknown deposit
-      * compartment, or an internal merge error) that also freezes the ledger — there is nothing to
-      * invalidate, so the node fail-stops. Used only on the block-completion path
-      * ([[mkBlockBriefIntermediate]]).
+      * invalidates, a failed deposit decision is an [[L2LedgerResponse.UnrecoverableError]] — a
+      * coordination bug (unknown deposit compartments, or an internal merge error) that also
+      * freezes the ledger — so there is nothing to invalidate and the node fail-stops. Used only on
+      * the block-completion path ([[mkBlockBriefIntermediate]]).
       */
     private def applyDepositDecisionsOrPanic(
         state: JointLedger.Producing,
@@ -91,12 +91,12 @@ final case class JointLedger(
             case other => panicOnL2Response(commandNumber, other)
         }
 
-    /** Fail-stop on a command response JointLedger cannot accept at this site: a
-      * [[L2LedgerResponse.OutOfOrder]] (desync), a [[L2LedgerResponse.LedgerFreeze]] (frozen
-      * ledger), or an `ApplyDepositDecisions` [[L2LedgerResponse.Rejected]] (coordination bug).
-      * Traces and raises; never returns normally. A user-request `Rejected` is *not* routed here —
-      * it is invalidated at the call site. The per-command union return types preclude a mismatched
-      * `Applied` from reaching this handler; a wrong `Applied` variant fail-stops upstream in
+    /** Fail-stop on a command response JointLedger cannot accept at this site: an
+      * [[L2LedgerResponse.UnrecoverableError]] — a desync, a frozen ledger, unknown deposit
+      * compartments, or another internal ledger error. Traces and raises; never returns normally. A
+      * user-request `Rejected` is *not* routed here — it is invalidated at the call site. The
+      * per-command union return types preclude a mismatched `Applied` from reaching this handler; a
+      * wrong `Applied` variant fail-stops upstream in
       * [[hydrozoa.multisig.ledger.remote.RemoteL2Ledger]].
       */
     private def panicOnL2Response(
@@ -216,15 +216,18 @@ final case class JointLedger(
     private def invalidateRequest(
         requestId: RequestId,
         e: JointLedger.UserRequestError | JointLedger.DepositLedgerError | String,
-        advanceTo: Option[L2CommandNumber] = None
+        invalidation: JointLedger.Invalidation = JointLedger.Invalidation.PreCommand
     ): IO[Unit] =
         for {
             oldState <- unsafeGetProducing
             currentBlockNum = oldState.nextBlockNumber
-            // A rejection *after* the L2 command was sent (`advanceTo = Some`) must still advance the
-            // command number: the ledger consumed it on the reject, so JointLedger stays in
-            // lock-step. A rejection *before* any command was sent (parse / timing) advances nothing.
-            advanced = advanceTo.fold(oldState)(oldState.setCommandNumber)
+            // A post-command rejection (the L2 ledger consumed a number on the reject) must still
+            // advance the command number so JointLedger stays in lock-step; a pre-command rejection
+            // (parse / timing, before any command was sent) advances nothing. We never leap: the
+            // advance is exactly one, via `incrementCommandNumber`.
+            advanced = invalidation match
+                case JointLedger.Invalidation.PreCommand  => oldState
+                case JointLedger.Invalidation.PostCommand => oldState.incrementCommandNumber
             newState = advanced
                 .focus(_.userRequestState.requests)
                 .modify(_.appended((requestId, Invalid)))
@@ -315,14 +318,18 @@ final case class JointLedger(
                                 // transport failure — those retry through), so invalidate the request
                                 // and advance the command number the ledger consumed on the reject.
                                 case L2LedgerResponse.Rejected.RegisterDeposit(_, reason) =>
-                                    invalidateRequest(requestId, reason, Some(assigned))
+                                    invalidateRequest(
+                                      requestId,
+                                      reason,
+                                      JointLedger.Invalidation.PostCommand
+                                    )
                                 // RegisterDeposit produces no L2 ledger effects, so the accumulated
                                 // L2 state is unchanged; only the deposit map and request advance.
                                 case _: L2LedgerResponse.Applied.RegisterDeposit =>
                                     for {
                                         _ <- state.set(
                                           p.setDeposits(newDeposits)
-                                              .setCommandNumber(assigned)
+                                              .incrementCommandNumber
                                               .focus(_.userRequestState.requests)
                                               .modify(_.appended((requestId, Valid)))
                                               .focus(_.userRequestState.postDatedRefundTxs)
@@ -377,14 +384,18 @@ final case class JointLedger(
                     res <- l2Ledger.applyTransaction(assigned, l2Command)
                     _ <- res match {
                         case L2LedgerResponse.Rejected.ApplyTransaction(_, reason) =>
-                            invalidateRequest(requestId, reason, Some(assigned))
+                            invalidateRequest(
+                              requestId,
+                              reason,
+                              JointLedger.Invalidation.PostCommand
+                            )
                         case L2LedgerResponse.Applied.ApplyTransaction(_, diffs, payouts) =>
                             val newL2State =
                                 p.l2LedgerState.appendTransactionEffects(diffs, payouts, requestId)
                             for {
                                 _ <- state.set(
                                   p.setL2LedgerState(newL2State)
-                                      .setCommandNumber(assigned)
+                                      .incrementCommandNumber
                                       .focus(_.userRequestState.requests)
                                       .modify(_.appended((requestId, Valid)))
                                 )
@@ -529,7 +540,7 @@ final case class JointLedger(
                             if decisions.rejected.isEmpty then IO.pure(p)
                             else
                                 applyDepositDecisionsOrPanic(p, assigned, depositRequestDecisions)
-                                    .map(s => p.setL2LedgerState(s).setCommandNumber(assigned))
+                                    .map(s => p.setL2LedgerState(s).incrementCommandNumber)
 
                         headerIntermediate <- previousHeader.nextHeaderIntermediate(
                           bhTracer,
@@ -549,7 +560,7 @@ final case class JointLedger(
                           depositRequestDecisions
                         )
                         evacDiffs = newL2State.diffs
-                        newJLState = p.setL2LedgerState(newL2State).setCommandNumber(assigned)
+                        newJLState = p.setL2LedgerState(newL2State).incrementCommandNumber
 
                         headerIntermediate <- previousHeader.nextHeaderMajor(bhTracer)(
                           txTiming,
@@ -925,6 +936,15 @@ object JointLedger {
         }
     }
 
+    /** Whether a request is invalidated *before* the L2 ledger evaluated it (a parse / timing
+      * rejection — no command number was consumed) or *after* (the ledger consumed exactly one on
+      * the reject). A [[PostCommand]] invalidation advances the command number by one so
+      * JointLedger stays in lock-step with the ledger; a [[PreCommand]] one advances nothing. The
+      * advance is always `+1` (via [[Producing.incrementCommandNumber]]), never a leap.
+      */
+    enum Invalidation:
+        case PreCommand, PostCommand
+
     object Requests {
         type Request =
             PreStart.type | UserRequestWithId | StartBlock | CompleteBlockRegular |
@@ -1096,8 +1116,11 @@ object JointLedger {
         def setL2LedgerState(newL2State: L2LedgerInteractionState): Producing =
             this.focus(_.l2LedgerState).replace(newL2State)
 
-        def setCommandNumber(newCommandNumber: L2CommandNumber): Producing =
-            this.focus(_.commandNumber).replace(newCommandNumber)
+        /** Advance the command number by exactly one — never a leap. JointLedger and the L2 ledger
+          * move in lock-step, one command at a time, so the only valid update is `+1`.
+          */
+        def incrementCommandNumber: Producing =
+            this.focus(_.commandNumber).modify(_.increment)
 
         def done(newBlockHeader: BlockHeader): Done =
             Done(newBlockHeader, deposits, commandNumber)

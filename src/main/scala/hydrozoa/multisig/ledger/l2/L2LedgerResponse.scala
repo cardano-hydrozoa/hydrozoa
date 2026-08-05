@@ -5,10 +5,11 @@ import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 
 /** The ledger's **total** response to one command — the coordination contract (see
-  * `docs/l2-ledger-command-coordination.md`). Four outcome kinds; the [[Applied]] and [[Rejected]]
-  * kinds each have a concrete descendant per command (their payloads differ by command). Every
-  * branch echoes the command number it answers. There is no separate error channel: a rejection, a
-  * desync, and a freeze are all response branches, not exceptions.
+  * `docs/l2-ledger-command-coordination.md`). Three outcome kinds: the command [[Applied]], a
+  * recoverable user-request [[Rejected]], or an [[UnrecoverableError]] the caller fail-stops on.
+  * [[Applied]] and [[Rejected]] each have a concrete descendant per command (their payloads differ
+  * by command). Every branch echoes the command number it answers. There is no separate error
+  * channel: a rejection, a desync, and a freeze are all response branches, not exceptions.
   */
 sealed trait L2LedgerResponse:
     def commandNumber: L2CommandNumber
@@ -42,10 +43,10 @@ object L2LedgerResponse:
             payouts: Vector[Payout.Obligation]
         ) extends Applied
 
-    /** A deterministic rejection — a real verdict, not a transport failure. A concrete descendant
-      * per command, mirroring [[Applied]]: a `RegisterDeposit`/`ApplyTransaction` carries a
-      * free-form `reason` the caller invalidates the request on; an `ApplyDepositDecisions` carries
-      * a typed [[DepositDecisionRejectReason]] the caller panics on.
+    /** A deterministic, **recoverable** rejection of a *user* request (register / apply-tx) — a
+      * real verdict, not a transport failure. A concrete descendant per command, carrying a
+      * free-form `reason` the caller invalidates the request on. A deposit-decisions command has no
+      * soft rejection: its only failures are coordination bugs, surfaced as [[UnrecoverableError]].
       */
     sealed trait Rejected extends L2LedgerResponse
 
@@ -54,58 +55,61 @@ object L2LedgerResponse:
             extends Rejected
         final case class ApplyTransaction(commandNumber: L2CommandNumber, reason: String)
             extends Rejected
-        final case class ApplyDepositDecisions(
-            commandNumber: L2CommandNumber,
-            reason: DepositDecisionRejectReason
-        ) extends Rejected
 
-    /** Why the ledger rejected an `ApplyDepositDecisions` — always a coordination bug, never a
-      * deposit-validity failure (deposits are validated at registration). The caller panics on
-      * either for now; later it may branch (retry the recoverable one, fall back to the L1
-      * rule-based regime on the terminal one).
+    /** A failure the caller cannot recover from by invalidating a request: it fail-stops (or, at
+      * boot, rewinds with `restoreTo`). Unifies the coordination faults once split between the
+      * decision-rejection reasons and the standalone desync / freeze branches — a decision naming
+      * unknown deposit compartments, a command-number desync, a frozen ledger, or any other
+      * internal ledger error. Every case echoes the command number it answers.
       */
-    sealed trait DepositDecisionRejectReason
+    sealed trait UnrecoverableError extends L2LedgerResponse
 
-    object DepositDecisionRejectReason:
-        /** The decision named a deposit compartment the ledger never registered — a JointLedger
-          * bug, recoverable.
+    object UnrecoverableError:
+
+        /** An `ApplyDepositDecisions` named deposit compartments the ledger never registered — a
+          * JointLedger bug, never a deposit-validity failure (deposits are validated at
+          * registration). Carries the offending request ids.
           */
-        final case class CompartmentNotFound(requestId: RequestId)
-            extends DepositDecisionRejectReason
+        final case class CompartmentsNotFound(
+            commandNumber: L2CommandNumber,
+            requestIds: List[RequestId]
+        ) extends UnrecoverableError
 
-        /** The ledger could not merge an absorbed compartment — a ledger bug, terminal. */
-        final case class InternalLedgerError(message: String) extends DepositDecisionRejectReason
+        /** The command number is neither fresh (`> tip + 1`) nor the cached last (`< tip`): a
+          * desync. `expected` is the number the ledger wanted next (`tip + 1`); the caller derives
+          * the tip as `expected − 1` and fail-stops.
+          */
+        final case class OutOfOrder(commandNumber: L2CommandNumber, expected: L2CommandNumber)
+            extends UnrecoverableError
 
-    /** The command number is neither fresh (`> tip + 1`) nor the cached last (`< tip`): a desync.
-      * `expected` is the number the ledger wanted next (`tip + 1`); the caller derives the tip as
-      * `expected − 1` and fail-stops.
-      */
-    final case class OutOfOrder(commandNumber: L2CommandNumber, expected: L2CommandNumber)
-        extends L2LedgerResponse
+        /** The reply to every command that arrives *after* a decision the ledger could not apply:
+          * the ledger is **frozen**, and `wrongDecisionCommandNumber` is the
+          * `ApplyDepositDecisions` that broke it. Cleared only by the caller rewinding past the
+          * freeze with `restoreTo`.
+          */
+        final case class LedgerFreeze(
+            commandNumber: L2CommandNumber,
+            wrongDecisionCommandNumber: L2CommandNumber
+        ) extends UnrecoverableError
 
-    /** The reply to every command that arrives *after* a decision the ledger could not apply: the
-      * ledger is **frozen**, and `wrongDecisionCommandNumber` is the `ApplyDepositDecisions` that
-      * broke it. Cleared only by the caller rewinding past the freeze with `restoreTo`. The caller
-      * fail-stops.
-      */
-    final case class LedgerFreeze(
-        commandNumber: L2CommandNumber,
-        wrongDecisionCommandNumber: L2CommandNumber
-    ) extends L2LedgerResponse
+        /** Any other internal ledger failure — e.g. an absorbed compartment that could not be
+          * merged. A ledger bug, terminal.
+          */
+        final case class OtherError(commandNumber: L2CommandNumber, reason: String)
+            extends UnrecoverableError
 
-/** The exact responses each command can produce: its own [[L2LedgerResponse.Applied]] and
-  * [[L2LedgerResponse.Rejected]] descendants, plus the two shared coordination branches. Spelled
-  * out (not a type parameter) so each `L2Ledger` method states precisely what it returns.
+/** The exact responses each command can produce: its own [[L2LedgerResponse.Applied]] descendant,
+  * an optional [[L2LedgerResponse.Rejected]] descendant (user requests only), and the shared
+  * [[L2LedgerResponse.UnrecoverableError]] branch. Spelled out (not a type parameter) so each
+  * `L2Ledger` method states precisely what it returns.
   */
 type RegisterDepositResponse =
     L2LedgerResponse.Applied.RegisterDeposit | L2LedgerResponse.Rejected.RegisterDeposit |
-        L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze
+        L2LedgerResponse.UnrecoverableError
 
 type ApplyDepositDecisionsResponse =
-    L2LedgerResponse.Applied.ApplyDepositDecisions |
-        L2LedgerResponse.Rejected.ApplyDepositDecisions | L2LedgerResponse.OutOfOrder |
-        L2LedgerResponse.LedgerFreeze
+    L2LedgerResponse.Applied.ApplyDepositDecisions | L2LedgerResponse.UnrecoverableError
 
 type ApplyTransactionResponse =
     L2LedgerResponse.Applied.ApplyTransaction | L2LedgerResponse.Rejected.ApplyTransaction |
-        L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze
+        L2LedgerResponse.UnrecoverableError

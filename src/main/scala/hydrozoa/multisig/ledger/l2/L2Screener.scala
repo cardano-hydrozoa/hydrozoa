@@ -1,6 +1,7 @@
 package hydrozoa.multisig.ledger.l2
 
 import cats.data.EitherT
+import scalus.cardano.ledger.{Coin, TransactionInput, Value}
 import scalus.uplc.builtin.ByteString
 
 /** Why the ledger rejected a request at screening — a soft, order-independent rejection the user
@@ -32,5 +33,23 @@ trait L2Screener[F[_]] {
       * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
       * `l2Payload` outputs.
       */
-    def screenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2ScreenError, Unit]
+    def screenDeposit(req: L2Screener.ScreenDeposit): EitherT[F, L2ScreenError, Unit]
+}
+
+object L2Screener {
+
+    /** The deposit-screening request ([[L2Screener.screenDeposit]]):
+      * [[L2LedgerCommand.RegisterDeposit]] minus the consensus-assigned `requestId` / `blockNumber`
+      * / `blockCreationStartTime` — those do not exist yet at screening time. Deliberately not an
+      * [[L2LedgerCommand]] (a state-mutating, command-numbered command): screening is a stateless
+      * query, never logged or replayed, so it lives next to the [[L2Screener]] trait rather than
+      * among the ledger commands.
+      */
+    final case class ScreenDeposit(
+        depositId: TransactionInput,
+        depositFee: Coin,
+        depositL2Value: Value,
+        refundDestination: Destination,
+        l2Payload: ByteString
+    )
 }

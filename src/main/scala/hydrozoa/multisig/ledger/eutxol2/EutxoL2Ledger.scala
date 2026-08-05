@@ -17,7 +17,7 @@ import hydrozoa.multisig.ledger.joint.{EvacuationDiff, EvacuationKey, Evacuation
 import hydrozoa.multisig.ledger.l2.*
 import hydrozoa.multisig.ledger.l2.L2CommandNumber.increment
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand.RegisterDeposit
-import hydrozoa.multisig.ledger.l2.L2LedgerResponse.DepositDecisionRejectReason
+import hydrozoa.multisig.ledger.l2.L2LedgerResponse.UnrecoverableError
 import hydrozoa.rulebased.ledger.l1.script.plutus.RuleBasedTreasuryValidator.evacuationKeyToData
 import io.bullet.borer.Cbor
 import monocle.syntax.all.*
@@ -177,28 +177,28 @@ case class EutxoL2Ledger private (
 
     /** The gate shared by all three command methods: fail-stop unless `commandNumber` is the
       * ledger's next expected number. A **frozen** ledger yields a
-      * [[L2LedgerResponse.LedgerFreeze]] to answer; an out-of-order number yields a
-      * [[L2LedgerResponse.OutOfOrder]] (a desync, not a per-request verdict — JointLedger
-      * fail-stops on it). Otherwise it yields the current state to evaluate the command against.
-      * The command number advances on **every** evaluated command (it is a coordination index, not
-      * ledger state): a fresh command that applies is persisted (log + tip + state); a fresh
-      * command the ledger rejects advances the tip alone. Unreachable while JointLedger drives
-      * strictly single-in-flight and in lock-step, but keeps the invariant self-checking if that
-      * ever breaks.
+      * [[L2LedgerResponse.UnrecoverableError.LedgerFreeze]] to answer; an out-of-order number
+      * yields a [[L2LedgerResponse.UnrecoverableError.OutOfOrder]] (a desync, not a per-request
+      * verdict — JointLedger fail-stops on it). Otherwise it yields the current state to evaluate
+      * the command against. The command number advances on **every** evaluated command (it is a
+      * coordination index, not ledger state): a fresh command that applies is persisted (log + tip
+      * + state); a fresh command the ledger rejects advances the tip alone. Unreachable while
+      * JointLedger drives strictly single-in-flight and in lock-step, but keeps the invariant
+      * self-checking if that ever breaks.
       */
     private def freshOrFail(
         commandNumber: L2CommandNumber
     ): IO[Either[
-      L2LedgerResponse.OutOfOrder | L2LedgerResponse.LedgerFreeze,
+      UnrecoverableError.OutOfOrder | UnrecoverableError.LedgerFreeze,
       EutxoL2Ledger.State
     ]] =
         state.get.map { before =>
             before.frozenAt match
-                case Some(frozen) => Left(L2LedgerResponse.LedgerFreeze(commandNumber, frozen))
+                case Some(frozen) => Left(UnrecoverableError.LedgerFreeze(commandNumber, frozen))
                 case None =>
                     val expected = before.commandNumber.increment
                     if commandNumber != expected then
-                        Left(L2LedgerResponse.OutOfOrder(commandNumber, expected))
+                        Left(UnrecoverableError.OutOfOrder(commandNumber, expected))
                     else Right(before)
         }
 
@@ -389,7 +389,7 @@ case class EutxoL2Ledger private (
                       acc.flatMap(s => applyMutation(s.commandNumber.increment, s, cmd))
                   )
                   .left
-                  .map(RestoreError.InternalLedgerError(_))
+                  .map(RestoreError.OtherError(_))
             )
             // Respect the freeze: it survives only if it happened at or before the target — rewinding
             // to before the freezing decision clears it.
@@ -429,16 +429,25 @@ case class EutxoL2Ledger private (
         freshOrFail(commandNumber).flatMap {
             case Left(failure) => IO.pure(failure)
             case Right(before) =>
-                val attempt = for {
-                    // Unknown deposit compartment: the decision names a deposit the ledger never
-                    // registered (a JointLedger bug, not a deposit-validity failure) — reject + freeze.
-                    absorbed <- req.absorbedDeposits.traverse(id =>
-                        before.pendingDeposits
-                            .get(id)
-                            .toRight(DepositDecisionRejectReason.CompartmentNotFound(id))
-                    )
+                val attempt: Either[
+                  UnrecoverableError,
+                  (EutxoL2Ledger.State, L2LedgerResponse.Applied.ApplyDepositDecisions)
+                ] = for {
+                    // Unknown deposit compartments: the decision names deposits the ledger never
+                    // registered (a JointLedger bug, not a deposit-validity failure) — reject +
+                    // freeze. All missing ids are reported, not just the first.
+                    absorbed <- {
+                        val (missing, found) = req.absorbedDeposits.partitionMap(id =>
+                            before.pendingDeposits.get(id).toRight(id)
+                        )
+                        Either.cond(
+                          missing.isEmpty,
+                          found,
+                          UnrecoverableError.CompartmentsNotFound(commandNumber, missing)
+                        )
+                    }
                     next <- applyMutation(commandNumber, before, req).left
-                        .map(DepositDecisionRejectReason.InternalLedgerError(_))
+                        .map(UnrecoverableError.OtherError(commandNumber, _))
                     // Registration validated each output's min-ada, so this should not fail; if it
                     // does it is an internal merge error (a ledger bug) — reject + freeze.
                     diffs <- absorbed
@@ -452,20 +461,17 @@ case class EutxoL2Ledger private (
                                 )
                         )
                         .leftMap(e =>
-                            DepositDecisionRejectReason.InternalLedgerError(
+                            UnrecoverableError.OtherError(
+                              commandNumber,
                               s"internal merge error: $e"
                             )
                         )
                 } yield (next, L2LedgerResponse.Applied.ApplyDepositDecisions(commandNumber, diffs))
                 // A rejected decision is a coordination bug, so instead of advancing the tip alone it
                 // **freezes** the ledger: every later command then answers LedgerFreeze until
-                // restoreTo rewinds past it. JointLedger panics on the returned Rejected.
+                // restoreTo rewinds past it. JointLedger panics on the returned UnrecoverableError.
                 attempt match
                     case Right((next, applied)) => persist(next, req).as(applied)
-                    case Left(reject) =>
-                        rejectAndFreeze(commandNumber)
-                            .as(
-                              L2LedgerResponse.Rejected.ApplyDepositDecisions(commandNumber, reject)
-                            )
+                    case Left(error)            => rejectAndFreeze(commandNumber).as(error)
         }
 }

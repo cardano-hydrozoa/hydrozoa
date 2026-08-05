@@ -69,32 +69,38 @@ a command would diverge that peer's block from the others'. Therefore the comman
   (bounded exponential backoff) over one persistent, shared-client connection. A request only
   returns once the remote gives a real verdict. There is **no "unavailable" error**.
 - Blind resend is safe because of the command number: a re-sent command the ledger already evaluated
-  replays its **cached last response** verbatim (an `Applied` with its effects, a `Rejected`, or a
-  `LedgerFreeze`), so it is applied at most once and never silently re-evaluated.
+  replays its **cached last response** verbatim (an `Applied` with its effects, a `Rejected`, or an
+  `UnrecoverableError`), so it is applied at most once and never silently re-evaluated.
 - A permanently-unreachable ledger stalls this peer until the Cardano liaison's L1 fallback resolves
   the head. That is correct: a peer that cannot reach its ledger cannot make progress, and stalling
   beats diverging.
 
 Consequently JL only ever sees a deterministic answer. A `Rejected` `RegisterDeposit` /
 `ApplyTransaction` invalidates that user request, uniformly across peers. `ApplyDepositDecisions`
-is **not** a user request, so a failure is never an ordinary verdict: a decision failure is a
-coordination bug — a `CompartmentNotFound` (JL and the ledger disagree on which deposits exist)
-or an `InternalLedgerError` — so JL **panics** on it, and on a `LedgerFreeze`, rather than continue
+is **not** a user request, so a failure is never an ordinary verdict: a decision failure is an
+`UnrecoverableError` — `CompartmentsNotFound` (JL and the ledger disagree on which deposits exist)
+or `OtherError` — so JL **panics** on it, and on any other `UnrecoverableError`, rather than continue
 against a possibly corrupt L2 state (see [Responses](#responses)). Deposits are validated at
 registration, so a decision should never fail on deposit *validity*.
 
 ## Responses
 
-The response is a four-branch ADT. **Every branch echoes the command number it answers**, so
+The response has three outcome kinds — `Applied`, a recoverable user-request `Rejected`, and an
+`UnrecoverableError` (four flat cases). **Every branch echoes the command number it answers**, so
 the client correlates each response to the request it sent and fail-stops on a mismatch. A resend
 (`== T`) replays the ledger's **cached last response** verbatim.
 
 ```typescript
 type GummiwormResponse =
-  | { "Applied":      Applied }   // a concrete descendant per command, below
-  | { "Rejected":     Rejected }  // a concrete descendant per command, below
-  | { "OutOfOrder":   { commandNumber: CommandNumber, expected: CommandNumber } }
-  | { "LedgerFreeze": { commandNumber: CommandNumber, wrongDecisionCommandNumber: CommandNumber } }
+  | { "Applied":              Applied }    // a concrete descendant per command, below
+  | { "Rejected":             Rejected }   // a concrete descendant per command, below
+  // The four flat cases below form the UnrecoverableError family — the caller fail-stops (or, at
+  // boot, rewinds with restoreTo) rather than invalidating a request. Flat single-key tags at the
+  // response level, so OutOfOrder / LedgerFreeze keep the wire tags they always had.
+  | { "CompartmentsNotFound": { commandNumber: CommandNumber, requestIds: RequestId[] } }
+  | { "OutOfOrder":           { commandNumber: CommandNumber, expected: CommandNumber } }
+  | { "LedgerFreeze":         { commandNumber: CommandNumber, wrongDecisionCommandNumber: CommandNumber } }
+  | { "OtherError":           { commandNumber: CommandNumber, reason: string } }
 
 // `Applied` and `Rejected` each have a concrete descendant PER COMMAND — the command is the inner
 // tag, and every descendant still echoes the command number:
@@ -103,50 +109,51 @@ type Applied =
   | { "ApplyDepositDecisions": { commandNumber: CommandNumber, evacuationDiffs: EvacuationDiff[] } }
   | { "ApplyTransaction":      { commandNumber: CommandNumber, evacuationDiffs: EvacuationDiff[], payouts: TransactionOutput[] } }
 
+// Rejected is a recoverable USER-request verdict only (RegisterDeposit / ApplyTransaction), always a
+// free-form message (the failure space is wide). A deposit decision has no soft rejection — its
+// failures are unrecoverable (CompartmentsNotFound / OtherError above).
 type Rejected =
-  | { "RegisterDeposit":       { commandNumber: CommandNumber, reason: string } }
-  | { "ApplyTransaction":      { commandNumber: CommandNumber, reason: string } }
-  | { "ApplyDepositDecisions": { commandNumber: CommandNumber, reason: DepositDecisionRejectReason } }
+  | { "RegisterDeposit":  { commandNumber: CommandNumber, reason: string } }
+  | { "ApplyTransaction": { commandNumber: CommandNumber, reason: string } }
 
-// Only a rejected deposit decision is typed — it is always a coordination bug, never a user verdict.
-// A rejected RegisterDeposit / ApplyTransaction carries a free-form message (the failure space is wide).
-type DepositDecisionRejectReason =
-  | { "CompartmentNotFound": { requestId: RequestId } }   // JL named an unregistered compartment — recoverable
-  | { "InternalLedgerError": { message: string } }        // a ledger bug — terminal
-
-type CommandNumber = number   // u64, monotonic
+type CommandNumber = number   // u64, monotonic — advances by exactly 1 per command, never leaps
 ```
 
 - **`Applied`** — the command applied; a concrete descendant **per command** (the command is the inner
   tag): nothing for `RegisterDeposit`, evacuation diffs for `ApplyDepositDecisions`, diffs + payouts
   for `ApplyTransaction`.
-- **`Rejected`** — a deterministic rejection; also a descendant **per command**. A `RegisterDeposit` /
-  `ApplyTransaction` carries a **free-form message** (unparseable, invalid, sub-min-ada, over-cover…);
-  a rejected `ApplyDepositDecisions` carries a **typed** reason (`CompartmentNotFound` /
-  `InternalLedgerError`, below), since it is always a coordination bug.
-- **`OutOfOrder(commandNumber, expected = T+1)`** — the number is not fresh and not the cached last
-  (`> T+1` or `< T`): a desync. Request-agnostic. `expected` is the number the ledger wanted next; JL
-  derives the tip as `expected − 1`.
-- **`LedgerFreeze(commandNumber, wrongDecisionCommandNumber)`** — the reply to every command that
-  arrives *after* a decision the ledger could not apply: the ledger is **frozen**, and
-  `wrongDecisionCommandNumber` is the `ApplyDepositDecisions` that broke it. Cleared only by JL
-  rewinding past the freeze with `restoreTo`.
+- **`Rejected`** — a deterministic, **recoverable** rejection of a *user* request; a descendant **per
+  command** (`RegisterDeposit` / `ApplyTransaction`), always a **free-form message** (unparseable,
+  invalid, sub-min-ada, over-cover…). A deposit decision has no `Rejected` — its failures are
+  unrecoverable.
+- **`UnrecoverableError`** — a failure the caller cannot recover from by invalidating a request; it
+  **fail-stops** (or, at boot, rewinds with `restoreTo`). Four flat cases:
+  - **`CompartmentsNotFound(commandNumber, requestIds)`** — an `ApplyDepositDecisions` named deposit
+    compartments the ledger never registered (JL and the ledger disagree). Carries **every** missing id.
+  - **`OutOfOrder(commandNumber, expected = T+1)`** — the number is not fresh and not the cached last
+    (`> T+1` or `< T`): a desync. Request-agnostic. `expected` is the number the ledger wanted next; JL
+    derives the tip as `expected − 1`.
+  - **`LedgerFreeze(commandNumber, wrongDecisionCommandNumber)`** — the reply to every command that
+    arrives *after* a decision the ledger could not apply: the ledger is **frozen**, and
+    `wrongDecisionCommandNumber` is the `ApplyDepositDecisions` that broke it. Cleared only by JL
+    rewinding past the freeze with `restoreTo`.
+  - **`OtherError(commandNumber, reason)`** — any other internal ledger failure (e.g. an absorbed
+    compartment that could not be merged). A ledger bug, terminal.
 
 **Deposit decisions can fail, but not as a user verdict.** Deposits are validated at registration
 (screening + the registration gate), so a decision should never fail on deposit *validity*. It can
-still fail on a coordination bug — the failing decision gets `Rejected(ApplyDepositDecisions, reason)` with
-`CompartmentNotFound` (JL named a compartment the ledger never registered — recoverable) or
-`InternalLedgerError` (a ledger bug — terminal) — and the ledger then **freezes** (records a
-`FreezeLedger` event; every *subsequent* command gets `LedgerFreeze`). JL **panics** on either for
-now; later it may branch (retry the recoverable one, fall back to the L1 rule-based regime on the
-terminal one). This reverts an earlier draft that made `ApplyDepositDecisions` infallible — it is
-fallible; its failure is just handled by a panic, not by invalidating a request.
+still fail on a coordination bug — the failing decision answers an `UnrecoverableError`,
+`CompartmentsNotFound` (JL named compartments the ledger never registered) or `OtherError` (a ledger
+bug) — and the ledger then **freezes** (records a `FreezeLedger` event; every *subsequent* command
+gets `LedgerFreeze`). JL **panics** on it for now; later it may branch (retry a recoverable one, fall
+back to the L1 rule-based regime on a terminal one). `ApplyDepositDecisions` is fallible; its failure
+is just handled by a panic, not by invalidating a request.
 
 The client asserts each response's `commandNumber` equals the request's (mismatch → fail-stop), then
 handles the branch: an `Applied`'s effects fold into JointLedger's accumulated state; a `Rejected`
 `RegisterDeposit` / `ApplyTransaction` invalidates the request (advancing the number the ledger
-consumed on the reject); and `OutOfOrder` / `LedgerFreeze` / a `Rejected` `ApplyDepositDecisions` / an
-undecodable frame are a **hard fail-stop** — never a per-request verdict, which would diverge the
+consumed on the reject, by **exactly one** — never a leap); and any `UnrecoverableError` (or an
+undecodable frame) is a **hard fail-stop** — never a per-request verdict, which would diverge the
 peer. A window of one suffices because JL is strictly single-in-flight. The consumer-side command
 number lives on JointLedger; the ledger exposes no `currentCommandNumber` query (JL owns and persists
 the authoritative number).
@@ -217,11 +224,12 @@ type GummiwormCommand =
 Delta from the spec (`/whitepaper/sugar-rush/commands`):
 
 - **Command** — spec `{ "RegisterDeposit": RegisterDeposit }`; ours wraps it with the number (above).
-- **Response** — spec `Success | Failure`; ours is `Applied | Rejected | OutOfOrder | LedgerFreeze`
-  (each a single-key tagged object; `Applied` and `Rejected` nest a further per-command tag).
-  `Applied`/`Rejected` map onto the spec's `Success`/`Failure`; `OutOfOrder`/`LedgerFreeze` are new,
-  required by the coordination contract. A resend replays the cached last response. `restoreTo` is a
-  separate, un-numbered request.
+- **Response** — spec `Success | Failure`; ours is `Applied | Rejected | UnrecoverableError` (each a
+  single-key tagged object; `Applied` and `Rejected` nest a further per-command tag, the
+  `UnrecoverableError` cases — `CompartmentsNotFound` / `OutOfOrder` / `LedgerFreeze` / `OtherError` —
+  are flat). `Applied`/`Rejected` map onto the spec's `Success`/`Failure`; the `UnrecoverableError`
+  cases are new, required by the coordination contract. A resend replays the cached last response.
+  `restoreTo` is a separate, un-numbered request.
 - **Command payloads** — match the spec except **`userVk: ByteString`**: the contract omits it (the
   native L2 tx self-authenticates via its own witnesses, so the spec should drop it), and it omits
   the spec's `ProxyBlockConfirmation` / `ProxyRequestError`.

@@ -153,10 +153,10 @@ class EutxoL2LedgerRecoveryTest extends AnyFunSuite:
                 // While frozen, any subsequent command is answered LedgerFreeze.
                 next <- ledger.applyDepositDecisions(L2CommandNumber(2L), noop(2))
             yield assert(
-              outcome.isInstanceOf[L2LedgerResponse.Rejected]
+              outcome.isInstanceOf[L2LedgerResponse.UnrecoverableError.CompartmentsNotFound]
                   && st.commandNumber == L2CommandNumber(1)
                   && st.frozenAt.contains(L2CommandNumber(1))
-                  && next.isInstanceOf[L2LedgerResponse.LedgerFreeze]
+                  && next.isInstanceOf[L2LedgerResponse.UnrecoverableError.LedgerFreeze]
             )
         }
     }

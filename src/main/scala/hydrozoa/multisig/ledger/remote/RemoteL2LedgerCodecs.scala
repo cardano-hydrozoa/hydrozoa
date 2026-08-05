@@ -3,6 +3,7 @@ package hydrozoa.multisig.ledger.remote
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.scalus.codecs.json.Codecs.{keepRawTransactionOutputDecoder, keepRawTransactionOutputEncoder}
 import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
@@ -140,30 +141,40 @@ object RemoteL2LedgerCodecs {
                 }
         }
 
-    // Rejected is a per-command family; ApplyDepositDecisions carries a typed reason. circe's
-    // sealed-trait derivation nests both by variant name (same tagged shape as Applied).
-    given depositDecisionRejectReasonEncoder
-        : Encoder[L2LedgerResponse.DepositDecisionRejectReason] =
-        deriveEncoder
-    given depositDecisionRejectReasonDecoder
-        : Decoder[L2LedgerResponse.DepositDecisionRejectReason] =
-        deriveDecoder
-
+    // Rejected is a per-command family (RegisterDeposit / ApplyTransaction), each carrying a
+    // free-form reason. circe's sealed-trait derivation nests by variant name (same shape as Applied).
     given rejectedEncoder: Encoder[L2LedgerResponse.Rejected] = deriveEncoder
     given rejectedDecoder: Decoder[L2LedgerResponse.Rejected] = deriveDecoder
 
-    given outOfOrderEncoder: Encoder[L2LedgerResponse.OutOfOrder] = deriveEncoder
-    given outOfOrderDecoder: Decoder[L2LedgerResponse.OutOfOrder] = deriveDecoder
+    // UnrecoverableError cases. Each is emitted as a flat, single-key object at the response level
+    // (below), so OutOfOrder / LedgerFreeze keep the exact wire tags they had before the
+    // decision-reject reasons and the desync / freeze branches were unified under one type.
+    import L2LedgerResponse.UnrecoverableError
+    given compartmentsNotFoundEncoder: Encoder[UnrecoverableError.CompartmentsNotFound] = {
+        import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+        deriveEncoder
+    }
+    given compartmentsNotFoundDecoder: Decoder[UnrecoverableError.CompartmentsNotFound] = {
+        import RequestId.i64.given // L2-ledger / SugarRush wire form (i64), not the default object
+        deriveDecoder
+    }
+    given outOfOrderEncoder: Encoder[UnrecoverableError.OutOfOrder] = deriveEncoder
+    given outOfOrderDecoder: Decoder[UnrecoverableError.OutOfOrder] = deriveDecoder
+    given ledgerFreezeEncoder: Encoder[UnrecoverableError.LedgerFreeze] = deriveEncoder
+    given ledgerFreezeDecoder: Decoder[UnrecoverableError.LedgerFreeze] = deriveDecoder
+    given otherErrorEncoder: Encoder[UnrecoverableError.OtherError] = deriveEncoder
+    given otherErrorDecoder: Decoder[UnrecoverableError.OtherError] = deriveDecoder
 
-    given ledgerFreezeEncoder: Encoder[L2LedgerResponse.LedgerFreeze] = deriveEncoder
-    given ledgerFreezeDecoder: Decoder[L2LedgerResponse.LedgerFreeze] = deriveDecoder
-
-    // Each response is a single-key object tagging the outcome kind (Applied is itself nested).
+    // Each response is a single-key object tagging the outcome kind (Applied / Rejected are nested
+    // families; the UnrecoverableError cases are flat so OutOfOrder / LedgerFreeze keep their tags).
     given responseEncoder: Encoder[L2LedgerResponse] = {
-        case a: L2LedgerResponse.Applied      => io.circe.Json.obj("Applied" -> a.asJson)
-        case r: L2LedgerResponse.Rejected     => io.circe.Json.obj("Rejected" -> r.asJson)
-        case o: L2LedgerResponse.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> o.asJson)
-        case f: L2LedgerResponse.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> f.asJson)
+        case a: L2LedgerResponse.Applied  => io.circe.Json.obj("Applied" -> a.asJson)
+        case r: L2LedgerResponse.Rejected => io.circe.Json.obj("Rejected" -> r.asJson)
+        case e: UnrecoverableError.CompartmentsNotFound =>
+            io.circe.Json.obj("CompartmentsNotFound" -> e.asJson)
+        case o: UnrecoverableError.OutOfOrder   => io.circe.Json.obj("OutOfOrder" -> o.asJson)
+        case f: UnrecoverableError.LedgerFreeze => io.circe.Json.obj("LedgerFreeze" -> f.asJson)
+        case e: UnrecoverableError.OtherError   => io.circe.Json.obj("OtherError" -> e.asJson)
     }
 
     given responseDecoder(using CardanoNetwork.Section): Decoder[L2LedgerResponse] =
@@ -174,11 +185,17 @@ object RemoteL2LedgerCodecs {
                   io.circe.DecodingFailure("Response must have exactly one field", c.history)
                 )
                 .flatMap {
-                    case "Applied"    => c.downField("Applied").as[L2LedgerResponse.Applied]
-                    case "Rejected"   => c.downField("Rejected").as[L2LedgerResponse.Rejected]
-                    case "OutOfOrder" => c.downField("OutOfOrder").as[L2LedgerResponse.OutOfOrder]
+                    case "Applied"  => c.downField("Applied").as[L2LedgerResponse.Applied]
+                    case "Rejected" => c.downField("Rejected").as[L2LedgerResponse.Rejected]
+                    case "CompartmentsNotFound" =>
+                        c.downField("CompartmentsNotFound")
+                            .as[UnrecoverableError.CompartmentsNotFound]
+                    case "OutOfOrder" =>
+                        c.downField("OutOfOrder").as[UnrecoverableError.OutOfOrder]
                     case "LedgerFreeze" =>
-                        c.downField("LedgerFreeze").as[L2LedgerResponse.LedgerFreeze]
+                        c.downField("LedgerFreeze").as[UnrecoverableError.LedgerFreeze]
+                    case "OtherError" =>
+                        c.downField("OtherError").as[UnrecoverableError.OtherError]
                     case other =>
                         Left(io.circe.DecodingFailure(s"Unknown response type: $other", c.history))
                 }

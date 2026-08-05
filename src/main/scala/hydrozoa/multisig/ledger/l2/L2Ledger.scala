@@ -19,8 +19,10 @@ object RestoreError:
     final case class CommandNumberTooHigh(requested: L2CommandNumber, tip: L2CommandNumber)
         extends RestoreError
 
-    /** Replaying the logged commands failed — a ledger bug or store corruption. */
-    final case class InternalLedgerError(message: String) extends RestoreError
+    /** Replaying the logged commands failed — a ledger bug or store corruption. Named to mirror
+      * [[L2LedgerResponse.UnrecoverableError.OtherError]], the command-path counterpart.
+      */
+    final case class OtherError(message: String) extends RestoreError
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
@@ -86,13 +88,15 @@ object L2LedgerInteractionState:
   * commands, so a non-deterministic ledger diverges across peers and breaks consensus.
   *
   * Each command method returns a **total** [[L2LedgerResponse]] — its own
-  * [[L2LedgerResponse.Applied]] descendant plus the three shared coordination branches (see the
-  * per-command `*Response` unions). An outcome (applied / rejected / desync / freeze) is always a
+  * [[L2LedgerResponse.Applied]] descendant, an optional [[L2LedgerResponse.Rejected]] descendant
+  * (user requests only), and the shared [[L2LedgerResponse.UnrecoverableError]] branch (see the
+  * per-command `*Response` unions). An outcome (applied / rejected / unrecoverable) is always a
   * response branch, never a raised exception. JointLedger interprets the branch — folding an
   * `Applied` outcome's payload into an [[L2LedgerInteractionState]], invalidating the request on a
-  * user-command `Rejected`, and fail-stopping on `OutOfOrder` / `LedgerFreeze` / a rejected
-  * decision. (A `RemoteL2Ledger` may still raise on a broken *transport* — an undecodable frame or
-  * a command-number mismatch — which is a protocol violation, not one of the four verdicts.)
+  * user-command `Rejected`, and fail-stopping on an `UnrecoverableError` (a desync, a freeze, an
+  * unknown deposit compartment, or another internal ledger error). (A `RemoteL2Ledger` may still
+  * raise on a broken *transport* — an undecodable frame or a command-number mismatch — which is a
+  * protocol violation, not one of the verdicts.)
   *
   * NOTE:
   *   - The constructor of [[L2LedgerInteractionState]] is private. The only way to construct a new
@@ -123,14 +127,14 @@ trait L2Ledger[F[_]] {
       * A deposit decision is not a user request, so a failure is not an ordinary verdict: deposits
       * are validated at registration, so a decision should never fail on deposit *validity* — only
       * on a coordination bug (a decision for a deposit compartment the ledger never registered, or
-      * an internal merge error). Such a failure answers [[L2LedgerResponse.Rejected]] **and freezes
-      * the ledger**: every subsequent command then answers [[L2LedgerResponse.LedgerFreeze]] until
-      * `restoreTo` rewinds past the freeze. JointLedger panics on the rejection. See
-      * `docs/l2-ledger-command-coordination.md`.
+      * an internal merge error). Such a failure answers an [[L2LedgerResponse.UnrecoverableError]]
+      * **and freezes the ledger**: every subsequent command then answers
+      * [[L2LedgerResponse.UnrecoverableError.LedgerFreeze]] until `restoreTo` rewinds past the
+      * freeze. JointLedger panics on the error. See `docs/l2-ledger-command-coordination.md`.
       *
       * @return
       *   [[L2LedgerResponse.Applied.ApplyDepositDecisions]] (the evacuation diffs the absorbed
-      *   deposits produce), or a [[L2LedgerResponse.Rejected]] the caller panics on.
+      *   deposits produce), or an [[L2LedgerResponse.UnrecoverableError]] the caller panics on.
       */
     def applyDepositDecisions(
         commandNumber: L2CommandNumber,
@@ -157,7 +161,7 @@ trait L2Ledger[F[_]] {
       * own recovery) may make this a no-op.
       *
       * Unlike the command path, this stays an [[EitherT]]: it is a boot-time reconstruction, not a
-      * numbered command, so its failure is a [[RestoreError]] rather than one of the four verdicts.
+      * numbered command, so its failure is a [[RestoreError]] rather than one of the verdicts.
       */
     def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, Unit]
 }

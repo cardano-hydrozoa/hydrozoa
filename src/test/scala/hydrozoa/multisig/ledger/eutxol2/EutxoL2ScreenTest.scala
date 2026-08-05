@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.block.BlockNumber
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Genesis}
 import hydrozoa.multisig.ledger.event.RequestId
-import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse}
+import hydrozoa.multisig.ledger.l2.{Destination, L2CommandNumber, L2LedgerCommand, L2LedgerResponse, L2Screener}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
@@ -64,8 +64,8 @@ class EutxoL2ScreenTest extends AnyFunSuite:
     private def mkScreenDeposit(
         depositL2Value: Value,
         payload: ByteString = l2Payload
-    ): L2LedgerCommand.ScreenDeposit =
-        L2LedgerCommand.ScreenDeposit(
+    ): L2Screener.ScreenDeposit =
+        L2Screener.ScreenDeposit(
           depositId = TransactionInput(
             L2Genesis.mkGenesisId(
               TransactionInput(
