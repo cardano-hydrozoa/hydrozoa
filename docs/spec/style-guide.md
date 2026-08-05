@@ -296,7 +296,7 @@ logger.error(message) >> IO.raiseError(new IllegalStateException(message))
 ```
 
 Use the component's existing logger / `Tracer` route (don't coin a new one just for this —
-[Logging](../CLAUDE.md#logging)). Build the message once and share it between the log line
+[Logging](../../CLAUDE.md#logging)). Build the message once and share it between the log line
 and the exception so they never drift. This applies to genuine error raises; it is not
 needed for control-flow `raiseError`s that a caller is expected to handle as a normal
 outcome (those should not be surprising in a log).

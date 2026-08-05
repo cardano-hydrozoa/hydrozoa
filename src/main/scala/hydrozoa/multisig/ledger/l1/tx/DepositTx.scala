@@ -84,7 +84,7 @@ private object DepositTxOps {
               MD.Deposit(
                 depositIx = 0, // This builder produces the deposit utxo at index 0
                 depositFee = depositFee,
-                // Pin the out-of-band L2 payload to this tx (docs/l2-isomorphism.md).
+                // Pin the out-of-band L2 payload to this tx (docs/spec/l2-isomorphism.md).
                 l2PayloadHash = blake2b_256(l2Payload)
               ).asAuxData(config.headId)
             )
@@ -216,7 +216,7 @@ private object DepositTxOps {
                         // The metadata must pin the out-of-band L2 payload: its l2PayloadHash
                         // equals blake2b_256(l2Payload). Once the deposit tx is signed, its
                         // witnesses commit to the pin via the auxiliary-data hash
-                        // (docs/l2-isomorphism.md).
+                        // (docs/spec/l2-isomorphism.md).
                         expectedL2PayloadHash = blake2b_256(l2Payload)
                         _ <- Either.cond(
                           l2PayloadHash == expectedL2PayloadHash,

@@ -150,7 +150,7 @@ The deposit path, in order (client steps marked):
    ([Opening state](#opening-state) uses the same convention).
 
 `src/main/scala/hydrozoa/app/cli/SubmitDeposit.scala` (`just submit-deposit`,
-DEPLOYMENT.md §5) is the reference deposit client.
+docs/user-guide/DEPLOYMENT.md §5) is the reference deposit client.
 
 ### Deposit timing: the head derives the accept-by deadline from the tx TTL
 

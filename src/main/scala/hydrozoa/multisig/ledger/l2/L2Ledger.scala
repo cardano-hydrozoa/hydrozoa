@@ -104,9 +104,9 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
-      * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
-      * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
+    /** Stateless pre-RequestId screening of a transaction request (docs/spec/l2-isomorphism.md):
+      * decide whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning
+      * out to consensus — reject a malformed or replay-pinned tx before it consumes resources. A
       * transaction has no L1 screening stage: it self-authenticates through its own witnesses, so
       * this is the whole of its screening. Conservative: only definite, stateless failures;
       * stateful checks (balance, inputs, completeness) stay at submission.

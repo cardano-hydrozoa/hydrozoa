@@ -40,7 +40,7 @@ operational substrate of a Hydrozoa head.
 * Read the [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction)
   (the protocol spec), or browse the in-repo design specs — see
   [Specification](#specification) below.
-* Deploy a multi-party head — [`DEPLOYMENT.md`](DEPLOYMENT.md) is an end-to-end
+* Deploy a multi-party head — [`DEPLOYMENT.md`](docs/user-guide/DEPLOYMENT.md) is an end-to-end
   runbook: fleet configuration, node image, head initialization on a Cardano
   testnet, and running the peers.
 * Join the discussion =>
