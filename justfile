@@ -211,6 +211,14 @@ integration-e2e-docker:
   trap 'just notify "integration-e2e-docker"' EXIT
   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
+# Heavy Docker propagation test on a 4-head, 0-coil head — a topology we do NOT ship, run to assert
+# propagation across four HTTP-observable peers (the shipped one has only two). Same prerequisites
+# as integration-e2e-docker; the two cannot run at the same time (shared host ports).
+integration-e2e-docker-400:
+  #!/usr/bin/env bash
+  trap 'just notify "integration-e2e-docker-400"' EXIT
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.Docker400PropagationTest"
+
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"
 

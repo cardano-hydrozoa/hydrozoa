@@ -1,0 +1,75 @@
+# A 4-head-peer, 0-coil-peer head — the `keygen-fleet 4 0 0` topology, hence the file name
+# (HEADS-COILS-QUORUM, matching the argument order). Used only by Docker400PropagationTest.
+#
+# This is deliberately *not* what we ship. `docker-compose.yml` at the repo root describes the
+# deployment DEPLOYMENT.md walks through (2 head peers + 4 coil peers) and DockerSmokeTest exercises
+# that one. This file exists to test a property the shipped topology cannot: propagation across four
+# peers that are all HTTP-observable, since only head peers publish the user API. Keep the two
+# apart — a test-shaped topology masquerading as the shipped one is what this split fixes.
+#
+# The quorum is 0 because there are no coil peers to reach one: the head multisig is all head peers
+# plus MOf(coilQuorum, coilPeerVKeys), and HeadConfig refuses a coilQuorum above the coil count.
+#
+# Compose it with the devnet overlay, from the repo root:
+#
+#   docker compose -p hydrozoa-e2e-400 \
+#     -f integration/src/test/resources/e2e/docker-compose.4-0-0.yml \
+#     -f docker-compose.yaci.yml up -d
+#
+# HYDROZOA_HOME points at the generated configs; HYDROZOA_IMAGE overrides the image.
+
+name: hydrozoa-4-0-0
+
+networks:
+  mesh:
+    driver_opts:
+      # Rootless docker (slirp4netns) can drop outbound TLS at the default MTU.
+      com.docker.network.driver.mtu: 1400
+
+x-hydrozoa: &hydrozoa
+  image: ${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:0.1.1}
+  # root: the image's non-root user cannot write the RocksDB stores / logs under the /opt/docker
+  # workdir. State is ephemeral here (no volumes) — restarting re-initializes a fresh head.
+  user: root
+  environment:
+    JAVA_OPTS: -Xmx1g -Xms256m
+  command: ["serve", "/configs/head-config.json", "/configs/private.json"]
+  networks: [mesh]
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
+  stop_grace_period: 120s
+  restart: on-failure
+
+services:
+  head-0:
+    <<: *hydrozoa
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./head/demo}/private/head-0/private.json:/configs/private.json:ro
+
+  head-1:
+    <<: *hydrozoa
+    ports:
+      - "8081:8080"
+    volumes:
+      - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./head/demo}/private/head-1/private.json:/configs/private.json:ro
+
+  head-2:
+    <<: *hydrozoa
+    ports:
+      - "8082:8080"
+    volumes:
+      - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./head/demo}/private/head-2/private.json:/configs/private.json:ro
+
+  head-3:
+    <<: *hydrozoa
+    ports:
+      - "8083:8080"
+    volumes:
+      - ${HYDROZOA_HOME:-./head/demo}/head-config/head-config.json:/configs/head-config.json:ro
+      - ${HYDROZOA_HOME:-./head/demo}/private/head-3/private.json:/configs/private.json:ro

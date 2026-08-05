@@ -242,7 +242,8 @@ lazy val integration: Project = (project in file("integration"))
                  Tests.Exclude(
                    Seq(
                      "hydrozoa.integration.stage1.Stage1PropertiesYaci",
-                     "hydrozoa.integration.e2e.DockerSmokeTest"
+                     "hydrozoa.integration.e2e.DockerSmokeTest",
+                     "hydrozoa.integration.e2e.Docker400PropagationTest"
                    )
                  )
                )),
