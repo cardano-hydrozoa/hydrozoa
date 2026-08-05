@@ -1,21 +1,28 @@
 package hydrozoa.multisig.ledger.l2
 
-import cats.*
-import cats.data.*
+import cats.Monad
+import cats.data.EitherT
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
-import scalus.uplc.builtin.ByteString
 
-private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
-// See: "Kendo" from the test library
-private type KEF[F[_]] = data.Kleisli[[X] =>> EF[F, X], L2LedgerState, L2LedgerState]
-
-/** Errors occurring from interaction with the L2 Ledger (i.e., as seen from the Joint Ledger)
+/** Why [[L2Ledger.restoreTo]] could not reconstruct the committed state. Extends `Throwable` so the
+  * one fatal caller (`JointLedger.State.recover`, at boot) can raise it directly; it is still a
+  * typed `Either` value the caller matches on, never thrown from `restoreTo` itself.
   */
-case class L2LedgerError(message: String) extends Throwable {
-    override def toString: String = s"L2 ledger error: $message"
-}
+sealed trait RestoreError extends Throwable
+
+object RestoreError:
+    /** The requested command number is beyond the ledger's durable tip — a corruption tripwire (the
+      * co-anchoring ordering normally prevents it).
+      */
+    final case class CommandNumberTooHigh(requested: L2CommandNumber, tip: L2CommandNumber)
+        extends RestoreError
+
+    /** Replaying the logged commands failed — a ledger bug or store corruption. Named to mirror
+      * [[L2LedgerResponse.UnrecoverableError.OtherError]], the command-path counterpart.
+      */
+    final case class OtherError(message: String) extends RestoreError
 
 /** State changes accumulated via interaction with the L2 Ledger (i.e., as seen from the Joint
   * Ledger).
@@ -32,24 +39,46 @@ case class L2LedgerError(message: String) extends Throwable {
   *   `ApplyTransaction` share its `requestId`). Local-only provenance for withdrawal-effect
   *   tracking; never on the wire or on-chain.
   */
-final case class L2LedgerState private (
+final case class L2LedgerInteractionState private (
     diffs: Vector[EvacuationDiff],
     payouts: Vector[Payout.Obligation],
     payoutRequestIds: Vector[RequestId]
-)
+):
+    /** Fold in an [[L2LedgerResponse.Applied.ApplyDepositDecisions]]'s effects: append its
+      * evacuation diffs.
+      */
+    def appendDecisionEffects(extraDiffs: Vector[EvacuationDiff]): L2LedgerInteractionState =
+        L2LedgerInteractionState(diffs ++ extraDiffs, payouts, payoutRequestIds)
 
-object L2LedgerState:
-    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty, Vector.empty)
+    /** Fold in an [[L2LedgerResponse.Applied.ApplyTransaction]]'s effects: append its diffs and
+      * payouts, tagging each payout with the producing `requestId` — the ledger-agnostic
+      * withdrawal-effect provenance (all payouts of one transaction share its request).
+      */
+    def appendTransactionEffects(
+        extraDiffs: Vector[EvacuationDiff],
+        extraPayouts: Vector[Payout.Obligation],
+        requestId: RequestId
+    ): L2LedgerInteractionState =
+        L2LedgerInteractionState(
+          diffs ++ extraDiffs,
+          payouts ++ extraPayouts,
+          payoutRequestIds ++ Vector.fill(extraPayouts.length)(requestId)
+        )
+
+object L2LedgerInteractionState:
+    def empty: L2LedgerInteractionState =
+        L2LedgerInteractionState(Vector.empty, Vector.empty, Vector.empty)
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
-      * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerCommand]].
+      * state. You _must_ begin with the empty state and evolve it with the `append*` methods
+      * (driven by the ledger's [[L2LedgerResponse.Applied]] effects).
       */
     protected[l2] def apply(
         diffs: Vector[EvacuationDiff],
         payouts: Vector[Payout.Obligation],
         payoutRequestIds: Vector[RequestId]
     ) =
-        new L2LedgerState(diffs, payouts, payoutRequestIds)
+        new L2LedgerInteractionState(diffs, payouts, payoutRequestIds)
 
 /** A trait defining an interface to interact with a black-box ledger component (i.e., via the Joint
   * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
@@ -58,13 +87,20 @@ object L2LedgerState:
   * Every implementation must be deterministic: consensus feeds each peer's replica the same ordered
   * commands, so a non-deterministic ledger diverges across peers and breaks consensus.
   *
+  * Each command method returns a **total** [[L2LedgerResponse]] — its own
+  * [[L2LedgerResponse.Applied]] descendant, an optional [[L2LedgerResponse.Rejected]] descendant
+  * (user requests only), and the shared [[L2LedgerResponse.UnrecoverableError]] branch (see the
+  * per-command `*Response` unions). An outcome (applied / rejected / unrecoverable) is always a
+  * response branch, never a raised exception. JointLedger interprets the branch — folding an
+  * `Applied` outcome's payload into an [[L2LedgerInteractionState]], invalidating the request on a
+  * user-command `Rejected`, and fail-stopping on an `UnrecoverableError` (a desync, a freeze, an
+  * unknown deposit compartment, or another internal ledger error). (A `RemoteL2Ledger` may still
+  * raise on a broken *transport* — an undecodable frame or a command-number mismatch — which is a
+  * protocol violation, not one of the verdicts.)
+  *
   * NOTE:
-  *   - The constructor of [[L2LedgerState]] is private. The only way to construct a new state is
-  *     via the [[L2LedgerState.empty]] method in the companion object.
-  *   - The only way to _evolve_ the state is by using the "applyXYZ" methods in the
-  *     [[L2LedgerAction]] companion object. These methods are declared final and ensure that the
-  *     state is properly updated (so that you can't forget to accumulate the [[EvacuationDiff]]s or
-  *     [[Payout.Obligation]]s correctly)
+  *   - The constructor of [[L2LedgerInteractionState]] is private. The only way to construct a new
+  *     state is via [[L2LedgerInteractionState.empty]], evolved with its `append*` methods.
   *   - Implementors of this trait only need to define the actual methods of sending the requests.
   *
   * @tparam F
@@ -77,129 +113,55 @@ trait L2Ledger[F[_]] {
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       * @return
-      *   Either an error blob if the request could not be applied, or unit on success.
+      *   [[L2LedgerResponse.Applied.RegisterDeposit]] (no effects) on success, or a
+      *   [[L2LedgerResponse.Rejected]] the caller invalidates the request on.
       */
-    def sendRegisterDeposit(
+    def registerDeposit(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.RegisterDeposit
-    ): EitherT[F, L2LedgerError, Unit]
+    ): F[RegisterDepositResponse]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#deposit-events
       *
+      * A deposit decision is not a user request, so a failure is not an ordinary verdict: deposits
+      * are validated at registration, so a decision should never fail on deposit *validity* — only
+      * on a coordination bug (a decision for a deposit compartment the ledger never registered, or
+      * an internal merge error). Such a failure answers an [[L2LedgerResponse.UnrecoverableError]]
+      * **and freezes the ledger**: every subsequent command then answers
+      * [[L2LedgerResponse.UnrecoverableError.LedgerFreeze]] until `restoreTo` rewinds past the
+      * freeze. JointLedger panics on the error. See `docs/l2-ledger-command-coordination.md`.
+      *
       * @return
-      *   Either an error blob if the request could not be applied, or a vector of evacuation diffs
-      *   on success.
+      *   [[L2LedgerResponse.Applied.ApplyDepositDecisions]] (the evacuation diffs the absorbed
+      *   deposits produce), or an [[L2LedgerResponse.UnrecoverableError]] the caller panics on.
       */
-    def sendApplyDepositDecisions(
+    def applyDepositDecisions(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyDepositDecisions
-    ): EitherT[F, L2LedgerError, Vector[EvacuationDiff]]
+    ): F[ApplyDepositDecisionsResponse]
 
     /** See:
       * https://gummiwormlabs.github.io/gummiworm-writing-room/gummiworm-poc/sugar-rush-overview/ledger-events#l2-events
       * @return
-      *   Either an error blob if the request could not be applied, or a vector of diffs to apply to
-      *   the JointLedger's evacuation map and a vector of payout obligations.
+      *   [[L2LedgerResponse.Applied.ApplyTransaction]] (the evacuation diffs to apply to the
+      *   JointLedger's evacuation map plus the payout obligations), or a
+      *   [[L2LedgerResponse.Rejected]] the caller invalidates the request on.
       */
-    def sendApplyTransaction(
+    def applyTransaction(
+        commandNumber: L2CommandNumber,
         req: L2LedgerCommand.ApplyTransaction
-    ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
-
-    /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
-      * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
-      * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
-      * transaction has no L1 screening stage: it self-authenticates through its own witnesses, so
-      * this is the whole of its screening. Conservative: only definite, stateless failures;
-      * stateful checks (balance, inputs, completeness) stay at submission.
-      */
-    def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
-
-    /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
-      * Hydrozoa's deposit L1 screening (the l2Payload pin check + the accept-by check) has passed.
-      * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
-      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
-      * `l2Payload` outputs.
-      */
-    def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
-
-    /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per
-      * successful state-mutating command (the "real" commands), so the consumer (JointLedger) can
-      * read it right after a commit and record which commandNumber that block corresponds to.
-      * Genesis is [[L2CommandNumber.zero]].
-      */
-    def currentCommandNumber: F[L2CommandNumber]
+    ): F[ApplyTransactionResponse]
 
     /** Reconstruct the committed L2 state as of `commandNumber`, from the ledger's own durable
-      * record (`(initial state, commandNumber)`; see `design/recovery-implementation-plan.md` R2b).
-      * After this the ledger's [[currentCommandNumber]] equals `commandNumber`. Used only on
-      * crash-recovery boot. Implementations that do not persist (e.g. a remote black box that owns
-      * its own recovery) may leave this unsupported.
+      * record (`(initial state, commandNumber)`; see `docs/l2-ledger-command-coordination.md`).
+      * After this the ledger is positioned at `commandNumber`. Used only on crash-recovery boot.
+      * JointLedger owns and persists the authoritative command number, so the ledger exposes no
+      * read-back query. Implementations that do not persist (e.g. a remote black box that owns its
+      * own recovery) may make this a no-op.
+      *
+      * Unlike the command path, this stays an [[EitherT]]: it is a boot-time reconstruction, not a
+      * numbered command, so its failure is a [[RestoreError]] rather than one of the verdicts.
       */
-    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, L2LedgerError, Unit]
-
-    /** Actions (effectful endomorphisms) on the L2Ledger state. They may return an error or a new
-      * state, and run effects in the base monad [[F]].
-      */
-    sealed trait L2LedgerAction {
-        def unLedgerAction: KEF[F]
-    }
-
-    object L2LedgerAction {
-
-        final class Real private[l2] (override val unLedgerAction: KEF[F]) extends L2LedgerAction {
-            def run(state: L2LedgerState): F[Either[L2LedgerError, L2LedgerState]] =
-                this.unLedgerAction.run(state).value
-        }
-
-        def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
-            case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDeposit(e)
-            case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
-            case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransaction(e)
-        }
-
-        private def fromRegisterDeposit(
-            req: L2LedgerCommand.RegisterDeposit
-        ): L2LedgerAction.Real =
-            L2LedgerAction.Real(
-              Kleisli(ledgerState =>
-                  for {
-                      _ <- sendRegisterDeposit(req)
-                  } yield ledgerState
-              )
-            )
-
-        private def fromApplyDepositDecisions(
-            req: L2LedgerCommand.ApplyDepositDecisions
-        ): L2LedgerAction.Real =
-            L2LedgerAction.Real(
-              Kleisli(ledgerState =>
-                  for {
-                      resDiffs <- sendApplyDepositDecisions(req)
-                      newState = L2LedgerState(
-                        ledgerState.diffs ++ resDiffs,
-                        ledgerState.payouts,
-                        ledgerState.payoutRequestIds
-                      )
-                  } yield newState
-              )
-            )
-
-        private def fromApplyTransaction(
-            req: L2LedgerCommand.ApplyTransaction
-        ): L2LedgerAction.Real = L2LedgerAction.Real(
-          Kleisli(ledgerState =>
-              for {
-                  res <- sendApplyTransaction(req)
-                  // All of this tx's payouts share its requestId — the ledger-agnostic provenance
-                  // tag for withdrawal-effect tracking (works for any L2 ledger backend).
-                  newState = L2LedgerState(
-                    ledgerState.diffs ++ res._1,
-                    ledgerState.payouts ++ res._2,
-                    ledgerState.payoutRequestIds ++ Vector.fill(res._2.length)(req.requestId)
-                  )
-              } yield newState
-          )
-        )
-
-    }
-
+    def restoreTo(commandNumber: L2CommandNumber): EitherT[F, RestoreError, Unit]
 }
