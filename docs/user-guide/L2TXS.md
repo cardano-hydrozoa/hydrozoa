@@ -2,8 +2,8 @@
 
 An L2 transaction on the reference **EUTXO L2 ledger** is an **ordinary Cardano `Transaction`** —
 same bytes, same signing, same script model — with a small amount of mandatory head metadata and a
-few conformance rules. You submit its raw CBOR to the head; there is no request envelope beyond that
-and no head-specific signature. It self-authenticates through ordinary vkey witnesses over the tx id.
+few conformance rules. You submit the signed tx (its CBOR) to the head in a small JSON request body —
+no head-specific signature. It self-authenticates through ordinary vkey witnesses over the tx id.
 
 This guide covers **basic** transactions: spending and sending L2 UTxOs, and **withdrawals** (moving
 value back to L1). Minting/burning is a superset — see [L2MINTING.md](L2MINTING.md).
@@ -41,11 +41,15 @@ The ledger strips a tx down to a fixed shape; a tx that violates these is reject
 
 - **Zero fee** — `fee = 0`, and inputs must **exactly** balance outputs (value conserved). Build with
   the protocol params' fees zeroed and a pre-balanced diff handler so nothing is left for a fee.
-- Outputs are **Babbage**, at **Shelley** addresses with **no delegation part**, **inline datums
-  only**, reference scripts only Native or PlutusV3.
+- Outputs are **Babbage**, **inline datums only**, reference scripts only Native or PlutusV3. **Every
+  output** — destination, change, and withdrawal alike — must clear the protocol **min-ADA**, or the
+  tx is rejected.
 - **No** collateral, certificates, protocol withdrawals field, voting/proposal procedures, treasury
   value/donation, bootstrap witnesses, or PlutusV1/V2 scripts. (A withdrawal on L2 is expressed by an
   `Int(1)` output marker — *not* by Cardano's `withdrawals` body field, which must be empty.)
+- Outputs should use **Shelley payment addresses** (no delegation part) — the intended L2 shape, and
+  what the CLI produces. (The ledger's address-shape check is currently unwired, so a non-conforming
+  address is not actually rejected *today*; build to the intended shape regardless.)
 
 ## Withdrawals
 

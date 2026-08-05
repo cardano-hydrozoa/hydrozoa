@@ -32,7 +32,8 @@ Only **transient** tokens. The rules, enforced by value conservation (no policy-
 - You **cannot** mint or burn L1-native (main-compartment) tokens — the arithmetic makes it
   impossible.
 - Per transaction: `overlay_in + mint = total declared transient`. (This balances for free because L2
-  has zero fees and no withdrawals of transient tokens.)
+  forces `fee = 0` and forbids reward withdrawals and certificates, so the combined-view and
+  main-projection conservation checks together pin the transient delta.)
 - Each declared bundle must be **≤** the assets actually on that output.
 - A **withdrawal** output (marked `Int(1)`; see [L2TXS.md](L2TXS.md)) **must not** declare transient
   tokens — transient tokens cannot leave the head.
@@ -56,7 +57,7 @@ The `transientOutputs` declarations map an output index to the transient bundle 
 transientOutputs = Map(
   Int(outputIndex) → Map(
     Bytes(policyId /* 28 bytes */) → Map(
-      Bytes(assetName /* ≤ 32 bytes */) → Int(quantity /* ≥ 1 */)
+      Bytes(assetName /* ≤ 32 bytes */) → Int(quantity /* 1 … Long.MaxValue (i64) */)
     )
   )
 )
@@ -82,7 +83,11 @@ So: keep ADA and L1-native value conserved in the main projection, and let the `
 ## Preparing a minting tx
 
 1. Build a basic L2 tx (spend an L2 UTxO, add outputs, `fee = 0`) — but **spend/quote values in the
-   combined view** (main + any transient the input already holds).
+   combined view** (main + any transient the input already holds). ⚠️ The L2 utxo query
+   (`GET /l2/cardano-eutxo/utxos/{address}`) returns **main-compartment value only** — the transient
+   tokens overlaid on a utxo are *not* shown. You must track a utxo's transient content yourself
+   (from what you minted or last declared onto it) and add it in, or the combined view won't balance
+   and the tx is rejected.
 2. Add a Cardano **`mint`** step under your minting policy (native or PlutusV3): positive to mint,
    negative to burn.
 3. Put the minted (or remaining) transient tokens on an **L2-bound** output (`Int(2)`), and declare
@@ -99,4 +104,4 @@ There is currently **no finalization gate** that blocks closing a head while tra
 outstanding. If a head closes with a non-empty transient compartment, those tokens simply cease to
 exist — holders receive only the backing ADA of the UTxO, not the transient tokens. Burn transient
 tokens back before closing if their disappearance would matter. See
-[`../spec/transient-tokens.md`](../spec/transient-tokens.md) (Limitations).
+[`../spec/transient-tokens.md`](../spec/transient-tokens.md) (§ Not implemented).

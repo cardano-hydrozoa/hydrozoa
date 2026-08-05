@@ -36,7 +36,8 @@ must cover it (below).
 The deposit tx is an ordinary Cardano transaction with these head-specific requirements:
 
 - **Deposit output** — a Babbage output at the head's multisig address, value = `l2Value +
-  depositFee`, with an **inline datum** `DepositUtxo.Datum(refundInstructions)`. The refund
+  depositFee`, with an **inline datum** `DepositUtxo.Datum(Refund.Instructions.Onchain(...))` (the
+  refund instructions in their on-chain form). The refund
   instructions (address + optional datum + refund-start time) let anyone reclaim the funds if the
   deposit is never absorbed; they live in the datum, not the metadata, so the refund cannot be
   intercepted.
@@ -46,8 +47,10 @@ The deposit tx is an ordinary Cardano transaction with these head-specific requi
   derives the accept-by deadline from the TTL: `acceptBy = ttl − depositSubmissionDuration`. A
   missing or malformed TTL is rejected. See [`../spec/l2-isomorphism.md`](../spec/l2-isomorphism.md)
   § *Deposit timing*.
-- **Metadata — the pin.** Under the head metadata label **`4937`** (CIP-67 `HYDR` tag), nested by
-  tx-type and head id:
+- **Metadata — the pin.** Under the head metadata label **`4937`** — a *plain integer* key (the
+  phone-keypad code for `HYDR`), used as a raw top-level metadata label. It is **not** CIP-67-encoded
+  (and not yet CIP-67-compliant — see hydrozoa#260), so use the literal number `4937`; do not encode
+  it. Nested by tx-type and head id:
 
   ```text
   4937 → { "Deposit" → { <headId hex> → {
