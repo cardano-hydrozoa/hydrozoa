@@ -7,7 +7,7 @@ are transient.
 
 Read [L2TXS.md](L2TXS.md) first — a minting tx is a basic L2 tx with extra metadata. Background and
 the full design: [`../spec/transient-tokens.md`](../spec/transient-tokens.md). A complete worked
-example lives in [`../../examples/tutorials/transient-tokens.md`](../../examples/tutorials/transient-tokens.md)
+example lives in [`examples/tutorials/transient-tokens.md`](https://github.com/cardano-hydrozoa/hydrozoa/blob/main/examples/tutorials/transient-tokens.md)
 (driven by `examples/src/test/scala/hydrozoa/examples/transient/TransientTokenDemo.scala`).
 
 ## The model: two compartments

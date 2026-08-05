@@ -33,7 +33,7 @@ hard-confirmation.
 ## Reverse-index column families
 
 All effect queries resolve through small reverse-index CFs (see
-[`persistence-and-crash-recovery`](../../design/persistence-and-crash-recovery.md) §7 for the CF model).
+[`persistence-and-crash-recovery`](https://github.com/cardano-hydrozoa/hydrozoa/blob/main/design/persistence-and-crash-recovery.md) §7 for the CF model).
 Each is keyed for its query and written in the same atomic batch as the data it indexes; none is read
 by recovery — they exist only to serve these queries.
 
