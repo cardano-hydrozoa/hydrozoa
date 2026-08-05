@@ -1,5 +1,6 @@
 package hydrozoa.integration.rbr.mbt
 
+import cats.data.Validated
 import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
@@ -133,9 +134,9 @@ case class RbrMbtSuite(
         }
 
     /** Build the stage4 `ModelState` from a generated dispute `MultiNodeConfig` (mirrors
-      * `Stage4Suite.genInitialState`'s post-config construction). `testPeers` and
-      * `testPeerToUtxos` come from the caller (they differ between the Mock and Yaci backend
-      * paths — Mock fabricates from `yaciTestSauceGenesis`, Yaci queries the real devnet).
+      * `Stage4Suite.genInitialState`'s post-config construction). `testPeers` and `testPeerToUtxos`
+      * come from the caller (they differ between the Mock and Yaci backend paths — Mock fabricates
+      * from `yaciTestSauceGenesis`, Yaci queries the real devnet).
       */
     private def mkModelState(
         config: MultiNodeConfig,
@@ -295,7 +296,13 @@ case class RbrMbtSuite(
             (1 to maxVersionMinor)
                 .map(v => BigInt(v) -> RbrSeed.committedOutputs(obligationCount))
                 .toMap
-        val seed = RBRHlNet(nHeadPeers, obligations).toOption.get
+        val seed = RBRHlNet(nHeadPeers, obligations) match
+            case Validated.Valid(net) => net
+            case Validated.Invalid(errs) =>
+                throw RuntimeException(
+                  s"RBRHlNet failed (nHeadPeers=$nHeadPeers, obligationCount=$obligationCount, " +
+                      s"versions=${obligations.keySet}): ${errs.toList.mkString("; ")}"
+                )
         ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
     /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the
@@ -339,9 +346,9 @@ case class RbrMbtSuite(
 
 object RbrMbtSuite:
 
-    /** L1 backend selector. `Mock` runs in-memory. `Yaci` runs against a real Testcontainers-managed
-      * devnet — one JVM-wide container (see [[YaciDevnet.acquireShared]]), reset + redeployed per
-      * ScalaCheck iteration. The `YaciConfig` selects the container's config
+    /** L1 backend selector. `Mock` runs in-memory. `Yaci` runs against a real
+      * Testcontainers-managed devnet — one JVM-wide container (see [[YaciDevnet.acquireShared]]),
+      * reset + redeployed per ScalaCheck iteration. The `YaciConfig` selects the container's config
       * (image tag, log enable, container reuse) — see `scalus.testing.yaci.YaciConfig`.
       */
     enum BackendSpec:

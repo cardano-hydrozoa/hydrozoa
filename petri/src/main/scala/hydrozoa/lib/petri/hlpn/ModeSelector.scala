@@ -58,8 +58,13 @@ object ModeSelector {
       * or `versionNew` in a ratchet) cannot be matched, so those alone are enumerated.
       *
       * Complete: every enabled mode `β` has `W(p,t)⟦β⟧ ≤ M(p)`, so each input leaf's color under
-      * `β` is a present token that the unification recovers; the free part is enumerated. It may
-      * over-propose (multiplicity and the guard are not checked here) — [[HlSimulator]] filters.
+      * `β` is a present token that the unification recovers; the free part is enumerated. Leaf
+      * unification alone would over-propose (a candidate can satisfy every leaf yet fail the
+      * multiplicity test — e.g. two `Union` leaves bind the same singleton token — or the guard),
+      * so each candidate is checked here directly against both the multiplicity rule (Concept 23)
+      * and the transition guard before it is proposed. Dropping only un-fireable candidates keeps
+      * completeness. Inhibitor arcs and output-place invariants are still the net's to enforce at
+      * [[HlNet.fire]].
       */
     def unifying[PlaceId, TransitionId, C]: ModeSelector[PlaceId, TransitionId, C] =
         (net, tid) =>
@@ -92,9 +97,33 @@ object ModeSelector {
                     val boundVars = demands.flatMap((term, _) => termVars(term)).toSet
                     val freeVars = transition.variables.filterNot(boundVars.contains)
 
+                    // TODO: multiplicity + guard are checked here, but inhibitor arcs and
+                    // output-place marking invariants are not — so this selector can still propose a
+                    // mode that HlNet.fire rejects, and is not yet fully "only-fireable". Fold those
+                    // two checks in here to make the unifying selector complete on its own.
                     partials
                         .flatMap(complete(_, freeVars))
                         .flatMap(bindCollections(net, tid, _))
+                        .filter(b => Binding.evalGuard(transition.guard, b).getOrElse(false))
+                        .filter(inputsCovered(net, tid, _))
+
+    /** The `W(p,t)⟦β⟧ ≤ M(p)` multiplicity test (ISO Concept 23): every input arc's annotation,
+      * evaluated under `binding`, is covered by its place's marking. An annotation that fails to
+      * evaluate (an unbound variable) counts as not covered. `Read`/`Collect` arcs evaluate to the
+      * tokens they require; `Inhibit` arcs evaluate empty (they gate at [[HlNet.fire]], not here).
+      */
+    private def inputsCovered[PlaceId, TransitionId, C](
+        net: HlNet[PlaceId, TransitionId, C],
+        tid: TransitionId,
+        binding: Binding
+    ): Boolean =
+        net.arcsMap.forall {
+            case (Arc.Flow.Pt(place, t), arc) if t == tid =>
+                Binding.evalInscription(arc.inscription, binding) match
+                    case Right(w) => multisetAlgebra[C].covers(net.marking(place), w)
+                    case Left(_)  => false
+            case _ => true
+        }
 
     /** Extend `partial` by binding each variable in `vars` to every color of its carrier — the
       * cartesian completion shared by [[enumerating]] (all variables) and [[unifying]] (only the
