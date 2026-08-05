@@ -925,8 +925,8 @@ object JointLedger {
 
     /** Failure registering a deposit into the fast-side L1 deposits map — either the deposit tx
       * fails to parse, or its submission deadline doesn't match the one expected from its
-      * validity-end. Rejected via `invalidateRequest` (stringified into the L2LedgerError), never
-      * raised, so it need not extend `Throwable`.
+      * validity-end. Rejected via `invalidateRequest` (stringified into the request-invalidation
+      * reason), never raised, so it need not extend `Throwable`.
       */
     sealed trait DepositLedgerError
     object DepositLedgerError {

@@ -112,13 +112,13 @@ Effect-presence semantics — the assertion that the right txs landed on L1 — 
 
 ```bash
 # Default run (Mock + Public Preview included)
-sbtn "integration / test"
+sbt "integration / test"
 
 # Specific suite
-sbtn "integration / testOnly *Stage1Suite*"
+sbt "integration / testOnly *Stage1Suite*"
 
 # Yaci-backed (requires a Yaci DevKit container running locally)
-sbtn "integration / Test / runMain hydrozoa.integration.stage1.YaciRunner"
+sbt "integration / Test / runMain hydrozoa.integration.stage1.YaciRunner"
 ```
 
 The `Mock` runs in seconds, `Yaci`/`Blockfrost` take minutes per scenario depending on network latency.
@@ -257,10 +257,10 @@ Happy txs landed: 6/6  Fallback txs landed: 0/2
 
 ```bash
 # Default (Direct + TestControl)
-sbtn "integration / testOnly *Stage4Suite*"
+sbt "integration / testOnly *Stage4Suite*"
 
 # WebSocket transport (real clock)
-sbtn "integration / Test / runMain hydrozoa.integration.stage4.WsRunner"
+sbt "integration / Test / runMain hydrozoa.integration.stage4.WsRunner"
 ```
 
 The default 2-peer run takes seconds; 10-peer WS runs at `commits=500` take a few minutes.

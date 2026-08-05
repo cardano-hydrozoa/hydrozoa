@@ -10,54 +10,61 @@ Hydrozoa is a lightweight multi-party state channels implementation for Cardano,
 
 ### Building and Testing
 ```bash
-# Enter sbt shell (use sbtn for faster execution)
-sbtn
+# Enter sbt shell
+sbt
 
 # Compile the project
-sbtn compile
+sbt compile
 
 # Run tests
-sbtn test
+sbt test
 
 # Run specific test suites
-sbtn "testOnly *SpecificTestSuite*"
+sbt "testOnly *SpecificTestSuite*"
 ```
 
-**Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbtn` and other tools are available directly — no `nix develop --command` prefix needed.
+**Note on `sbt` vs `sbtn`**: the build runs on **sbt 2** (`project/build.properties`). The bundled
+`sbtn` thin client is sbt 1.x and cannot drive an sbt 2 server (it reports
+`unknown event: sbt/exec`), so use `sbt`, not `sbtn`, until nixpkgs ships an sbt 2 launcher. If a
+warm server from a previous sbt 1.x session is still running, `sbt shutdown` (or `sbtn shutdown`)
+first, then re-launch `sbt` so it reboots into the version named in `build.properties`.
+
+**Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbt` and other tools
+are available directly — no `nix develop --command` prefix needed.
 
 ### Code Quality
 ```bash
 # Format code
 just fmt
 # or
-sbtn scalafmtAll
+sbt scalafmtAll
 
 # Check formatting
 just fmt-check
 # or
-sbtn scalafmtCheck
+sbt scalafmtCheck
 
 # Apply linting fixes
 just lint
 # or
-sbtn scalafixAll
+sbt scalafixAll
 
 # Check linting
 just lint-check
 # or
-sbtn scalafixAll --check
+sbt "scalafixAll --check"
 ```
 
 ### Benchmarks
 ```bash
 # Run JMH benchmarks
-sbtn "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
+sbt "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 ```
 
 ## Architecture
 
 ### Key Technologies
-- **Scala 3.3.6** with modern language features
+- **Scala 3.3.7** with modern language features
 - **Scalus**: Cardano Plutus integration and on-chain script compilation
 - **Cats Effect**: Functional effect system for IO operations
 - **Cats Actors**: Actor-based concurrency model
@@ -80,6 +87,8 @@ Working design and reference docs live in `docs/`:
   blocks into a multisigned, L1-submittable set of effect transactions over stacks.
 - [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
   cycles without changing consensus logic.
+- [`transient-tokens.md`](docs/transient-tokens.md) — minting/burning on the L2 ledger: the
+  transient-token compartment and projection-based validation.
 - [`l2-isomorphism.md`](docs/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
   txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
 
@@ -104,7 +113,7 @@ Working design and reference docs live in `docs/`:
 ## Development Environment
 
 ### Using Nix
-The project uses a Nix flake for a reproducible dev environment. Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbtn`, `just`, etc.) are on `PATH`:
+The project uses a Nix flake for a reproducible dev environment. Launch IDEA (and Claude Code) from within the Nix shell so all tools (`sbt`, `just`, etc.) are on `PATH`:
 ```bash
 nix develop
 # then launch your editor from here
