@@ -16,7 +16,11 @@ carry* is the authoritative reference. The `hydrozoa submit-l2-tx` subcommand
 
 Attach auxiliary-data metadata with **two** entries:
 
-- **Output designation — label `4937`** (CIP-67 `HYDR` tag). Marks, per output, whether it stays on
+- **HeadId pin — label `4936`** = `Metadatum.Text(<headId hex>)`. Binds the tx to this head so it
+  can't be replayed against another — the first thing the ledger screens. Required unless the head
+  runs with identity isomorphism. Like the deposit pin, it's authenticated for free via the tx's
+  `auxiliaryDataHash`.
+- **Output designation — label `4937`** (the `HYDR` tag). Marks, per output, whether it stays on
   L2 or leaves for L1. Either shape is accepted for a basic tx:
   - a bare `Metadatum.List` of one marker per output, in output order; or
   - a `Metadatum.Map` with `"outputs" → List(...)` (the map shape is required only when you also
@@ -30,10 +34,6 @@ Attach auxiliary-data metadata with **two** entries:
   | `Int(1)` | output is a **withdrawal** (bound for L1) |
 
   The list length must equal the number of outputs, or the tx is rejected.
-
-- **HeadId pin — label `4936`** = `Metadatum.Text(<headId hex>)`. Binds the tx to this head so it
-  can't be replayed against another. Required unless the head runs with identity isomorphism. Like
-  the deposit pin, it's authenticated for free via the tx's `auxiliaryDataHash`.
 
 ## Conformance rules
 

@@ -42,15 +42,15 @@ The deposit tx is an ordinary Cardano transaction with these head-specific requi
   deposit is never absorbed; they live in the datum, not the metadata, so the refund cannot be
   intercepted.
 - **Reference input** — reference the head's multisig-regime UTxO, so the deposit rolls back cleanly
-  if the head's initialization is rolled back.
+  if the head's initialization is rolled back. Get it from `GET /head/info` — the
+  `multisigRegimeUtxo` field (`{transaction_id, index}`). That same endpoint also serves the
+  `headAddress`, `headId`, and `submissionDurationSeconds` the other requirements here need.
 - **Validity (TTL)** — set `ValidityEndSlot` to the deposit **submission deadline**. The head
   derives the accept-by deadline from the TTL: `acceptBy = ttl − depositSubmissionDuration`. A
   missing or malformed TTL is rejected. See [`../spec/l2-isomorphism.md`](../spec/l2-isomorphism.md)
   § *Deposit timing*.
-- **Metadata — the pin.** Under the head metadata label **`4937`** — a *plain integer* key (the
-  phone-keypad code for `HYDR`), used as a raw top-level metadata label. It is **not** CIP-67-encoded
-  (and not yet CIP-67-compliant — see hydrozoa#260), so use the literal number `4937`; do not encode
-  it. Nested by tx-type and head id:
+- **Metadata — the pin.** Under the head metadata label **`4937`** (the `HYDR` tag), nested by
+  tx-type and head id:
 
   ```text
   4937 → { "Deposit" → { <headId hex> → {
