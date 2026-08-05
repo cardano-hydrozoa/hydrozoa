@@ -10,8 +10,8 @@
       READMEs (their url ends in `/`, not `.html`) are the section landing pages,
       linked from the section headers rather than listed as items.
     {%- endcomment -%}
-    {%- assign guides = site.html_pages | where_exp: "p", "p.url contains '/user-guide/' and p.url contains '.html'" | sort: "title" -%}
-    {%- assign specs = site.html_pages | where_exp: "p", "p.url contains '/spec/' and p.url contains '.html'" | sort: "title" -%}
+    {%- assign guides = site.html_pages | where_exp: "p", "p.url contains '/user-guide/'" | where_exp: "p", "p.url contains '.html'" | sort: "title" -%}
+    {%- assign specs = site.html_pages | where_exp: "p", "p.url contains '/spec/'" | where_exp: "p", "p.url contains '.html'" | sort: "title" -%}
 
     <div class="layout">
       <aside class="sidebar" aria-label="Documentation navigation">
