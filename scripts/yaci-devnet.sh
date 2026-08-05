@@ -91,20 +91,35 @@ cmd_up() {
 #   scripts/yaci-devnet.sh network network.json
 #   hydrozoa keygen-fleet 2 4 2 --cardano-network-file network.json
 #
-# Nothing here is devnet-specific: the chain is read the same way any Blockfrost-compatible backend
-# is read. `up` always creates the chain fresh, so `/genesis` describes the chain that is running —
-# the case where it goes stale is a devnet `reset`, which this harness never performs. If that
-# assumption ever breaks, it breaks loudly: a misplaced slot zero puts every transaction's validity
-# interval outside what the chain accepts, so the head fails to initialize rather than misbehaving
-# quietly. Correct it at the source or in `discover-network` — never by editing this file's output.
+# The protocol parameters come off the Blockfrost API like any other backend's. The chain's slot
+# geometry cannot: Yaci's store answers 404 for `/genesis`, so the four numbers that would come
+# from there are read from the admin API and handed to `discover-network` as arguments — where they
+# are typed, and validated with everything else. Nothing edits the file it writes.
 cmd_network() {
     local out=${1:-network.json}
+    need jq
     [[ -x $hydrozoa ]] ||
         die "the 'hydrozoa' launcher isn't built at $hydrozoa — run 'just stage' first"
 
-    say "describing the devnet chain…"
-    "$hydrozoa" discover-network --blockfrost-url "$blockfrost_url" --out "$out" ||
-        die "could not describe the chain at $blockfrost_url — is the devnet up? (run 'up' first)"
+    local devnet
+    devnet=$(probe "$admin_url/admin/devnet") ||
+        die "the devnet admin API isn't answering at $admin_url — run 'up' first"
+
+    local start slot epoch magic
+    read -r start slot epoch magic < <(
+        jq -r '[.startTime, .slotLength, .epochLength, .protocolMagic] | @tsv' <<<"$devnet"
+    )
+    [[ -n ${magic:-} ]] || die "the admin API did not report the devnet's geometry: $devnet"
+
+    say "describing the devnet chain (magic $magic, ${slot}s slots)…"
+    "$hydrozoa" discover-network \
+        --blockfrost-url "$blockfrost_url" \
+        --system-start "$start" \
+        --slot-length "$slot" \
+        --epoch-length "$epoch" \
+        --protocol-magic "$magic" \
+        --out "$out" ||
+        die "could not describe the chain at $blockfrost_url"
 }
 
 # Fund an address from the admin API — a devnet has no faucet. Returns once the funds are spendable,
@@ -169,7 +184,9 @@ wait_until() {
     local what=$1 timeout=$2
     shift 2
     local deadline=$((SECONDS + timeout))
-    say "waiting for $what…"
+    # Braced: bash folds the following multibyte character into the name otherwise, and `set -u`
+    # then dies on the variable that does not exist.
+    say "waiting for ${what}…"
     until "$@"; do
         ((SECONDS < deadline)) || die "timed out after ${timeout}s waiting for $what"
         sleep 2

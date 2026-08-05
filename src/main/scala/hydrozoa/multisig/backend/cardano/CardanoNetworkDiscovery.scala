@@ -26,32 +26,72 @@ object CardanoNetworkDiscovery {
 
     private given ExecutionContext = ExecutionContext.global
 
+    /** When a chain starts and how its slots run — everything about a chain's identity that is not
+      * its protocol parameters. A Blockfrost `/genesis` reports exactly this, and [[fromGenesis]]
+      * converts one; a backend that serves no `/genesis` has to be told instead.
+      *
+      * @param systemStartSeconds
+      *   when slot 0 began, in epoch seconds — as both `/genesis` and Cardano tooling report it.
+      * @param slotLengthSeconds
+      *   seconds per slot, fractional allowed: a fast devnet may run sub-second slots.
+      * @param epochLength
+      *   slots per epoch.
+      */
+    final case class ChainGeometry(
+        systemStartSeconds: Long,
+        slotLengthSeconds: Double,
+        epochLength: Long,
+        protocolMagic: Long
+    )
+
+    object ChainGeometry {
+
+        /** The geometry a Blockfrost-compatible `/genesis` reported. */
+        def fromGenesis(genesis: GenesisInfo): ChainGeometry = ChainGeometry(
+          systemStartSeconds = genesis.systemStart,
+          slotLengthSeconds = genesis.slotLength.toDouble,
+          epochLength = genesis.epochLength,
+          protocolMagic = genesis.networkMagic.toLong
+        )
+    }
+
     /** Query a running Blockfrost-compatible backend and assemble the chain it serves.
       *
       * @param blockfrostUrl
       *   Blockfrost-compatible API base URL, e.g. `http://localhost:18080/api/v1`.
       * @param apiKey
       *   Blockfrost API key; empty for a keyless endpoint.
+      * @param geometry
+      *   the chain's slot geometry and magic, for a backend that serves no `/genesis` — a Yaci
+      *   devnet answers 404 there, and a minimal Blockfrost implementation may too. Left empty,
+      *   `/genesis` is asked, which is the norm.
       */
-    def discover(blockfrostUrl: String, apiKey: String = ""): IO[CardanoNetwork.Custom] =
+    def discover(
+        blockfrostUrl: String,
+        apiKey: String = "",
+        geometry: Option[ChainGeometry] = None
+    ): IO[CardanoNetwork.Custom] =
         for {
             // Normalize a trailing slash so the sub-clients don't build `…/api/v1//epochs`.
             url <- IO.pure(blockfrostUrl.stripSuffix("/"))
-            // `create` needs *some* slot config to fetch params; `/genesis` then supplies the real
-            // one, so the placeholder never reaches the result.
+            // `create` needs *some* slot config to fetch params; the real one comes from the
+            // geometry below, so the placeholder never reaches the result.
             provider <- IO.fromFuture(
               IO(BlockfrostProvider.create(apiKey, url, Network.Testnet, SlotConfig.preview))
             )
-            genesis <- IO.fromFuture(IO(provider.fetchGenesis))
+            resolved <- geometry.fold(
+              IO.fromFuture(IO(provider.fetchGenesis)).map(ChainGeometry.fromGenesis)
+            )(IO.pure)
             custom <- IO.fromEither(
-              mkCustomNetwork(genesis, provider.cardanoInfo.protocolParams).left
+              mkCustomNetwork(resolved, provider.cardanoInfo.protocolParams).left
                   .map(IllegalStateException(_))
             )
         } yield custom
 
-    /** Assemble the chain description from what the backend reported. Separated from the fetch so
+    /** Assemble the chain description from its geometry and parameters. Separated from the fetch so
       * the interesting decisions — the address tag, the seconds-to-milliseconds scaling, and the
-      * refusal to impersonate a standard chain — are testable without a running backend.
+      * refusal to impersonate a standard chain — are testable without a running backend, and so
+      * that a told geometry and a discovered one are assembled and validated identically.
       *
       * Assumes a **Shelley-at-genesis** chain (`zeroSlot = 0`, `zeroTime = systemStart`). That
       * holds for a freshly created devnet and fails for a Byron-prefixed one, where the Shelley era
@@ -59,18 +99,19 @@ object CardanoNetworkDiscovery {
       * since those are the standard chains and they have baked-in slot geometry already.
       */
     private[cardano] def mkCustomNetwork(
-        genesis: GenesisInfo,
+        geometry: ChainGeometry,
         protocolParams: ProtocolParams
     ): Either[String, CardanoNetwork.Custom] = {
-        val magic = genesis.networkMagic.toLong
+        val magic = geometry.protocolMagic
         val network =
             if magic == CardanoNetwork.Mainnet.protocolMagic then Network.Mainnet
             else Network.Testnet
         val slotConfig = SlotConfig(
-          zeroTime = genesis.systemStart * 1000L,
+          zeroTime = geometry.systemStartSeconds * 1000L,
           zeroSlot = 0L,
-          slotLength = genesis.slotLength * 1000L,
-          epochLength = genesis.epochLength
+          // Rounded, not truncated: a 0.5s slot has to become 500ms, and 1.0 must not land on 999.
+          slotLength = Math.round(geometry.slotLengthSeconds * 1000.0),
+          epochLength = geometry.epochLength
         )
         val custom: CardanoNetwork.Custom =
             CardanoNetwork.Custom(CardanoInfo(protocolParams, network, slotConfig), magic)

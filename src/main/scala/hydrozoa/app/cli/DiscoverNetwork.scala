@@ -1,5 +1,6 @@
 package hydrozoa.app.cli
 
+import cats.data.Validated
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
 import com.monovore.decline.{Command, Opts}
@@ -53,20 +54,53 @@ object DiscoverNetwork:
             .map(Path.of(_))
             .orNone
 
+    /** The chain's slot geometry and magic, for a backend that serves no `/genesis` — all four
+      * together or none at all.
+      *
+      * All-or-nothing rather than field-by-field defaulting: a chain half described by the backend
+      * and half by the command line is the patched-together artifact this exists to avoid, and
+      * there is no sound default for the missing half. Either the backend describes its chain, or
+      * the caller does.
+      */
+    private val geometryOpt: Opts[Option[CardanoNetworkDiscovery.ChainGeometry]] =
+        (
+          Opts.option[Long](
+            "system-start",
+            "When slot 0 began, in epoch seconds (as `/genesis` reports it)"
+          ).orNone,
+          Opts.option[Double]("slot-length", "Seconds per slot; may be fractional").orNone,
+          Opts.option[Long]("epoch-length", "Slots per epoch").orNone,
+          Opts.option[Long]("protocol-magic", "The chain's network magic").orNone
+        ).mapN((start, slot, epoch, magic) => (start, slot, epoch, magic))
+            .mapValidated {
+                case (Some(start), Some(slot), Some(epoch), Some(magic)) =>
+                    Validated.validNel(
+                      Some(CardanoNetworkDiscovery.ChainGeometry(start, slot, epoch, magic))
+                    )
+                case (None, None, None, None) => Validated.validNel(None)
+                case _ =>
+                    Validated.invalidNel(
+                      "--system-start, --slot-length, --epoch-length and --protocol-magic must be " +
+                          "given together (or all omitted, to read them from the backend's /genesis)"
+                    )
+            }
+
     /** The `discover-network` subcommand. */
     lazy val command: Command[IO[ExitCode]] =
         Command(
           name = "discover-network",
           header = "Describe the chain a Blockfrost-compatible backend serves, as JSON"
-        )((blockfrostUrlOpt, apiKeyOpt, outOpt).mapN(discoverNetwork))
+        )((blockfrostUrlOpt, apiKeyOpt, outOpt, geometryOpt).mapN(discoverNetwork))
 
     private def discoverNetwork(
         blockfrostUrl: String,
         mbApiKey: Option[String],
-        out: Option[Path]
+        out: Option[Path],
+        geometry: Option[CardanoNetworkDiscovery.ChainGeometry]
     ): IO[ExitCode] =
         for {
-            custom <- CardanoNetworkDiscovery.discover(blockfrostUrl, mbApiKey.getOrElse(""))
+            custom <- CardanoNetworkDiscovery
+                .discover(blockfrostUrl, mbApiKey.getOrElse(""), geometry)
             json = (custom: CardanoNetwork).asJson.spaces2
             _ <- out.fold(IO.println(json))(path =>
                 writeAtomically(path, json) *>
