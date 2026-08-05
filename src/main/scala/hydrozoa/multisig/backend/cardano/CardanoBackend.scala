@@ -46,21 +46,24 @@ trait CardanoBackend[F[_]]:
       * rule-based regime. Gets all transaction in the reverse order (newest first, oldest last)
       * starting from some known transaction with txHash=[[after]] EXCLUDING it, such that a tx
       * contains a continuing output with an asset (a treasury beacon token is going to be used).
-      * Returns the tx hashes along with the spending redeemer for the corresponding input. This is
-      * written in terms of common Scalus types, to keep it more general, but maybe we can switch to
-      * concrete Hydrozoa types - like HeadMultisigScript/TokenNames/RuleBasedTreasuryDatum.
+      * Each entry carries the continuing output (as a resolvable utxo) and the redeemer that spent
+      * the previous continuing input. This is written in terms of common Scalus types, to keep it
+      * more general, but maybe we can switch to concrete Hydrozoa types - like
+      * HeadMultisigScript/TokenNames/RuleBasedTreasuryDatum.
       *
       * @param asset
       *   the asset id that marks the continuing input
       * @param after
       *   the lower bound of the list, usually the fallback tx.
       * @return
-      *   On success, a tuple of (txHash, redeemer, continuedOutputDatum)
+      *   On success, the continuing chain newest-first (see [[ContinuingTx]]). The newest entry's
+      *   `continuingOutput` is the current treasury utxo, so callers derive it from this list
+      *   rather than reading the utxo set separately.
       */
     def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash
-    ): F[Either[CardanoBackend.Error, List[(TransactionHash, Data, Data)]]]
+    ): F[Either[CardanoBackend.Error, List[ContinuingTx]]]
 
     /** Submits a transaction. The caller passes an [[EnrichedTx]] so wrappers (e.g. the firewall)
       * can statically dispatch on the tx family — implementations extract `etx.tx` before hitting
@@ -73,6 +76,19 @@ trait CardanoBackend[F[_]]:
     def fetchLatestParams: F[Either[Error, ProtocolParams]]
 
 object CardanoBackend:
+
+    /** One transaction in the treasury's continuing chain, as surfaced by [[lastContinuingTxs]].
+      *
+      * @param continuingOutput
+      *   the continuing (asset-bearing) output this tx produced, as a resolvable utxo. Its input is
+      *   the output's own outref, so the newest chain entry's `continuingOutput` is the current
+      *   treasury utxo. Deriving the treasury utxo from the chain (rather than a separate utxo-set
+      *   read) keeps it coherent with the rest of the chain on an eventually-consistent backend,
+      *   where the two projections can lag independently and disagree.
+      * @param spendingRedeemer
+      *   the redeemer that spent the previous continuing input in this tx.
+      */
+    final case class ContinuingTx(continuingOutput: Utxo, spendingRedeemer: Data)
 
     enum Error(msg: String) extends Throwable:
         case Timeout(msg: String) extends Error(msg)

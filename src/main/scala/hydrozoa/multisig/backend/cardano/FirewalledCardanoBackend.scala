@@ -2,11 +2,10 @@ package hydrozoa.multisig.backend.cardano
 
 import cats.effect.IO
 import hydrozoa.lib.logging.ContraTracer
-import hydrozoa.multisig.backend.cardano.CardanoBackend.Error
+import hydrozoa.multisig.backend.cardano.CardanoBackend.{ContinuingTx, Error}
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{AssetName, PolicyId, ProtocolParams, TransactionHash, TransactionInput, Utxo, Utxos}
-import scalus.uplc.builtin.Data
 
 /** Wraps a [[CardanoBackend]] and drops outbound [[submitTx]] calls when `shouldDrop` says so.
   * Every other method delegates unchanged. Emits
@@ -44,7 +43,7 @@ final class FirewalledCardanoBackend(
     override def lastContinuingTxs(
         asset: (PolicyId, AssetName),
         after: TransactionHash,
-    ): IO[Either[Error, List[(TransactionHash, Data, Data)]]] =
+    ): IO[Either[Error, List[ContinuingTx]]] =
         underlying.lastContinuingTxs(asset, after)
 
     override def submitTx(etx: EnrichedTx[?]): IO[Either[Error, Unit]] =

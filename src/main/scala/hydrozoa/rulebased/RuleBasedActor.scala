@@ -40,7 +40,7 @@ import hydrozoa.rulebased.ledger.l1.tx.*
 import hydrozoa.rulebased.ledger.l1.utxo.*
 import scala.util.{Failure, Success, Try}
 import scalus.cardano.address.ShelleyAddress
-import scalus.cardano.ledger.{Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
+import scalus.cardano.ledger.{DatumOption, Transaction, TransactionHash, TransactionInput, TransactionOutput, Utxo, Utxos}
 import scalus.uplc.builtin.Data
 import scalus.uplc.builtin.Data.fromData
 
@@ -137,7 +137,7 @@ final case class RuleBasedActor(
 
         def continuingTreasuryTxsAfter(
             after: TransactionHash
-        ): EitherT[IO, Error.RecoverableErrors, List[(TransactionHash, Data, Data)]] =
+        ): EitherT[IO, Error.RecoverableErrors, List[CardanoBackend.ContinuingTx]] =
             run(
               cardanoBackend.lastContinuingTxs(
                 asset =
@@ -785,16 +785,17 @@ final case class RuleBasedActor(
 
     private object Evacuation {
 
-        /** Evacuation branch — treasury is Resolved. Determines the remaining evacuation map (the
-          * full map at resolution time, minus already-evacuated keys), then builds + submits an
-          * [[EvacuationTx]] for whatever is left.
+        /** Evacuation branch — treasury is Resolved. From a single `continuingTreasuryTxsAfter`
+          * read it derives both the current treasury utxo and the remaining evacuation map (see
+          * [[loadEvacuationState]]), then builds + submits an [[EvacuationTx]] for whatever is
+          * left.
           */
         def handle(
-            treasuryUtxo: RuleBasedTreasuryUtxo,
             regimeUtxo: RuleBasedRegimeUtxo
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
-                toEvacuate <- getEvacuationMap
+                state <- loadEvacuationState
+                (treasuryUtxo, toEvacuate) = state
                 _ <-
                     if toEvacuate.isEmpty
                     then
@@ -824,10 +825,19 @@ final case class RuleBasedActor(
                 }
             } yield ()
 
-        /** Query continuing treasury txs after the fallback and derive the current evacuation map
-          * = (map at resolution time) − (keys already evacuated by past withdrawal txs).
+        /** From a single `continuingTreasuryTxsAfter` read, derive both the current treasury utxo
+          * and the remaining evacuation map = (map at resolution time) − (keys already evacuated by
+          * past withdrawal txs).
+          *
+          * Deriving both from the *same* read is deliberate. The current treasury utxo is the
+          * continuing output of the newest tx in the chain, so reading it from the utxo set
+          * separately (as [[getTreasury]] does for the dispatch) races the chain history on an
+          * eventually-consistent backend: the two projections lag independently, and a treasury
+          * utxo that disagrees with the map/history produces an [[EvacuationTx]] the ledger rejects
+          * at script evaluation.
           */
-        def getEvacuationMap: EitherT[IO, Error.RecoverableErrors, EvacuationMap] =
+        def loadEvacuationState
+            : EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, EvacuationMap)] =
             for {
                 inputs <- EitherT.liftF[
                   IO,
@@ -836,10 +846,12 @@ final case class RuleBasedActor(
                 ](loadEvacuationInputs)
 
                 // The resolution tx is the last (oldest) tx after the fallback that spends the
-                // treasury; the preceding entries are withdrawal transactions. `parsePastRedeemers`
-                // gates non-empty, parses each withdrawal's redeemer, and extracts the
-                // resolution-time kzg from the oldest datum in one pass.
+                // treasury; the preceding entries are withdrawal transactions, and the first
+                // (newest) entry's continuing output is the current treasury utxo.
+                // `parsePastRedeemers` gates non-empty, parses each withdrawal's redeemer, and
+                // extracts the resolution-time kzg from the oldest datum in one pass.
                 treasuryTxs <- Backend.continuingTreasuryTxsAfter(inputs.fallbackTxHash)
+                treasuryUtxo <- currentTreasury(treasuryTxs)
                 parsed <- parsePastRedeemers(treasuryTxs)
                 (pastEvacuateRedeemers, resolutionKzg) = parsed
 
@@ -851,7 +863,29 @@ final case class RuleBasedActor(
                 previouslyEvacuated: Set[EvacuationKey] = pastEvacuateRedeemers.foldLeft(
                   Set.empty[EvacuationKey]
                 )((acc, redeemer) => acc ++ redeemer.evacuationKeys.toScalaList)
-            } yield evacuationMapAtResolution.removedAll(previouslyEvacuated)
+            } yield (treasuryUtxo, evacuationMapAtResolution.removedAll(previouslyEvacuated))
+
+        /** The current treasury utxo = the continuing output of the newest tx in the chain.
+          * Deriving it here (rather than a separate utxo-set read) keeps it coherent with the
+          * evacuation map derived from the same list. An empty list means the backend hasn't
+          * surfaced the resolution tx yet (race vs the resolved datum we dispatched on, or a
+          * rollback) — recoverable. A parse failure means the on-chain continuing output diverged
+          * from the treasury spec — fatal, matching [[getTreasury]].
+          */
+        private def currentTreasury(
+            treasuryTxs: List[CardanoBackend.ContinuingTx]
+        ): EitherT[IO, Error.RecoverableErrors, RuleBasedTreasuryUtxo] =
+            treasuryTxs.headOption match {
+                case None =>
+                    EitherT.leftT[IO, RuleBasedTreasuryUtxo](
+                      Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
+                    )
+                case Some(newest) =>
+                    RuleBasedTreasuryUtxo.parse(newest.continuingOutput) match {
+                        case Right(u) => pure(u)
+                        case Left(e)  => raiseError(e)
+                    }
+            }
 
         /** Parse the past withdrawal redeemers and the resolution-time evacuation kzg from
           * `treasuryTxs`. The list's last (oldest) entry is the resolution tx: no evacuate
@@ -861,7 +895,7 @@ final case class RuleBasedActor(
           * datum we already parsed, or a rollback) — recoverable.
           */
         def parsePastRedeemers(
-            treasuryTxs: List[(TransactionHash, Data, Data)]
+            treasuryTxs: List[CardanoBackend.ContinuingTx]
         ): EitherT[IO, Error.RecoverableErrors, (List[EvacuateRedeemer], KzgCommitment)] =
             NonEmptyList.fromList(treasuryTxs) match {
                 case None =>
@@ -869,11 +903,11 @@ final case class RuleBasedActor(
                       Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
                     )
                 case Some(nel) =>
-                    val resolutionDatum = nel.last._3
                     val withdrawalTxs = nel.init
                     for {
-                        redeemers <- withdrawalTxs.traverse { case (_, redeemerData, _) =>
-                            Try(fromData[TreasuryRedeemer](redeemerData)) match {
+                        resolutionDatum <- inlineDatumOf(nel.last.continuingOutput.output)
+                        redeemers <- withdrawalTxs.traverse { ct =>
+                            Try(fromData[TreasuryRedeemer](ct.spendingRedeemer)) match {
                                 case Failure(t) =>
                                     raiseError(
                                       Error.ParseError.TreasuryEvacuationRedeemerParseError(t)
@@ -898,6 +932,20 @@ final case class RuleBasedActor(
                                 raiseError(Error.ParseError.TreasuryNotResolved)
                         }
                     } yield (redeemers, kzg)
+            }
+
+        /** Extract the inline datum from a continuing output. A non-inline or absent datum means
+          * the backend surfaced a malformed continuing output — recoverable (retry).
+          */
+        private def inlineDatumOf(
+            output: TransactionOutput
+        ): EitherT[IO, Error.RecoverableErrors, Data] =
+            output.datumOption match {
+                case Some(DatumOption.Inline(d)) => pure(d)
+                case _ =>
+                    EitherT.leftT[IO, Data](
+                      Error.QueryError.NoTreasuryFound: Error.RecoverableErrors
+                    )
             }
 
         /** Look up the evacuation-map preimage that the resolution committed to. */
@@ -957,7 +1005,7 @@ final case class RuleBasedActor(
                 case _: RuleBasedTreasuryDatum.Unresolved =>
                     getRegime.flatMap(Dispute.handle(treasuryUtxo, _))
                 case _: RuleBasedTreasuryDatum.Resolved =>
-                    getRegime.flatMap(Evacuation.handle(treasuryUtxo, _))
+                    getRegime.flatMap(Evacuation.handle(_))
             }
         } yield ()
         et.value
