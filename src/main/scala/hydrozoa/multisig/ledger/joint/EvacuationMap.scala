@@ -174,7 +174,7 @@ object EvacuationMap:
             |> (_.bytes)
             |> Scalar().from_bendian
 
-    def from(i: IterableOnce[(EvacuationKey, Payout.Obligation)]) =
+    def from(i: IterableOnce[(EvacuationKey, Payout.Obligation)]): EvacuationMap =
         EvacuationMap(TreeMap.from(i))
 
 enum EvacuationDiff:

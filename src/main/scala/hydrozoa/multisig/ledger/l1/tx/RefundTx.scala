@@ -57,7 +57,7 @@ private object RefundTxOps {
             override val requestId: RequestId
         ) extends Build[RefundTx.PostDated] {
 
-            override val stepRefundMetadata =
+            override val stepRefundMetadata: ModifyAuxiliaryData =
                 ModifyAuxiliaryData(_ => Some(MD.Refund().asAuxData(config.headId)))
 
             override def result: Either[(SomeBuildError, String), RefundTx.PostDated] =
