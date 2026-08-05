@@ -206,9 +206,14 @@ object CommandGenerators:
         // Optional inline datum stamped on each L2 output — e.g. the RBR MBT passes the "evacuation"
         // sentinel so its RBRClassifier can bucket deposit-derived evacuation outputs on L1.
         l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
+        // Optional override for the L2 output address; defaults to the depositing peer's address.
+        // The RBR MBT pins this to a dedicated script address so evacuation outputs can never be
+        // reselected as a peer's fee/collateral (which would consume them and drop the L1 count).
+        l2OutputAddress: Option[ShelleyAddress] = None,
     )(state: ModelState): Gen[Option[RegisterAndSubmitDepositCommand]] = {
         val config = state.params.multiNodeConfig
         val peerAddress = config.addressOf(peerNum)
+        val outputAddress = l2OutputAddress.getOrElse(peerAddress)
         val cardanoNetwork = config.headConfig.cardanoNetwork
         val generateCappedValueC = generateCappedValue(cardanoNetwork)
         val ensureMinAdaLenientC = ensureMinAdaLenient(cardanoNetwork)
@@ -254,7 +259,7 @@ object CommandGenerators:
                                         outputs <- Gen
                                             .sequence[List[TransactionOutput], TransactionOutput](
                                               outputValues.map(v =>
-                                                  Gen.const(peerAddress)
+                                                  Gen.const(outputAddress)
                                                       .map(a =>
                                                           Babbage(a, v, datumOption = l2OutputDatum)
                                                       )

@@ -2,6 +2,7 @@ package hydrozoa.integration.rbr.mbt
 
 import cats.effect.IO
 import hydrozoa.integration.rbr.mbt.SutCommands.given
+import hydrozoa.integration.rbr.property.RbrSeed
 import hydrozoa.integration.stage4.CommandGenerators
 import hydrozoa.integration.stage4.Commands.given
 import hydrozoa.integration.stage4.Model.{ModelState, given}
@@ -36,7 +37,12 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
                   if state.peerUtxosL1(peer).isEmpty then Gen.const(noOp[ModelState, Sut])
                   else
                       CommandGenerators
-                          .genRegisterDepositCommand(peer, 1.second, evacuationDatum)(state)
+                          .genRegisterDepositCommand(
+                            peer,
+                            1.second,
+                            evacuationDatum,
+                            l2OutputAddress = Some(RbrSeed.payoutAddress)
+                          )(state)
                           .map(_.map(AnyCommand.apply(_)).getOrElse(noOp[ModelState, Sut]))
           yield cmd
         )
