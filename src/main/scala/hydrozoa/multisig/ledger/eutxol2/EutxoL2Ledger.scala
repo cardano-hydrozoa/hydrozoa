@@ -68,6 +68,11 @@ object EutxoL2Ledger {
 
     case class State(
         activeUtxos: Utxos,
+        /** The transient-token compartment overlaying `activeUtxos` (the main compartment). Only
+          * the combined view is visible to the ledger rules; evacuation diffs and payouts derive
+          * from `activeUtxos` alone.
+          */
+        transientTokens: TransientTokens,
         pendingDeposits: Map[RequestId, L2Genesis],
         headId: Option[HeadId],
         /** Monotonic commit counter — the recovery anchor (§R2b). Bumped once per successful
@@ -84,6 +89,7 @@ object EutxoL2Ledger {
         def genesis(config: EutxoL2Ledger.Config): State =
             State(
               activeUtxos = config.initialEvacuationMap.toUtxos,
+              transientTokens = TransientTokens.empty,
               pendingDeposits = Map.empty,
               headId = None,
               commandNumber = L2CommandNumber.zero
@@ -150,19 +156,21 @@ case class EutxoL2Ledger private (
         case req: L2LedgerCommand.ApplyTransaction =>
             for
                 l2Tx <- L2Tx.parse(req.l2Payload.bytes, config).left.map(L2LedgerError(_))
-                newActiveUtxos <- HydrozoaTransactionMutator
+                compartments <- HydrozoaTransactionMutator
                     .transit(
                       config = config,
                       time = QuantizedInstant
                           .fromPlutusPosixTime(config.slotConfig, req.blockCreationStartTime),
-                      state = s.activeUtxos,
+                      state = Compartments(s.activeUtxos, s.transientTokens),
                       l2Tx = l2Tx
                     )
                     .left
                     .map(error => L2LedgerError(error.toString))
             yield s
                 .focus(_.activeUtxos)
-                .replace(newActiveUtxos)
+                .replace(compartments.main)
+                .focus(_.transientTokens)
+                .replace(compartments.transientTokens)
                 .focus(_.commandNumber)
                 .modify(_.increment)
 
@@ -347,7 +355,7 @@ case class EutxoL2Ledger private (
         } yield ()
 
     /** Rebuild a full [[EutxoL2Ledger.State]] from a persisted snapshot — `activeUtxos`,
-      * `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
+      * `transientTokens`, `pendingDeposits`, and `commandNumber` come from the snapshot (§R2b).
       */
     private def restoreFromSnapshot(entry: (L2CommandNumber, L2Snapshot)): EutxoL2Ledger.State =
         val snapshot = entry._2
@@ -355,6 +363,7 @@ case class EutxoL2Ledger private (
             .genesis(config)
             .copy(
               activeUtxos = snapshot.activeUtxos,
+              transientTokens = snapshot.transientTokens,
               pendingDeposits = snapshot.pendingDeposits,
               commandNumber = snapshot.commandNumber
             )
