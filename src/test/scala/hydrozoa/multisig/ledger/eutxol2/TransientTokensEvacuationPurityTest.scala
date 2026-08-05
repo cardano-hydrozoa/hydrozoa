@@ -1,34 +1,39 @@
 package hydrozoa.multisig.ledger.eutxol2
 
-import cats.data.EitherT
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import hydrozoa.multisig.ledger.eutxol2.L2TxFixtures.*
+import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
-import hydrozoa.multisig.ledger.l2.L2LedgerError
+import hydrozoa.multisig.ledger.joint.obligation.Payout
+import hydrozoa.multisig.ledger.l2.{ApplyTransactionResponse, L2CommandNumber, L2LedgerResponse}
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.ledger.*
 import scalus.cardano.ledger.TransactionOutput.Babbage
 
-/** Evacuation purity at the [[EutxoL2Ledger.sendApplyTransaction]] level: the evacuation diffs and
+/** Evacuation purity at the [[EutxoL2Ledger.applyTransaction]] level: the evacuation diffs and
   * payout obligations a minting transaction produces never carry transient bundles — every `Update`
   * obligation holds the projected (main-compartment) output value, and a withdrawal of the freed
   * backing value is token-free.
   */
 class TransientTokensEvacuationPurityTest extends AnyFunSuite {
 
-    /** Unwrap the ledger reply, failing with the wrapped message (not just the class name). */
-    private def orFail[A](
-        reply: EitherT[IO, L2LedgerError, A]
-    ): IO[A] =
-        reply.value.flatMap {
-            case Right(a)    => IO.pure(a)
-            case Left(error) => IO.raiseError(RuntimeException(error.toString))
+    /** Unwrap an `Applied.ApplyTransaction` into its diffs + payouts, failing on any other reply.
+      */
+    private def expectAppliedTx(
+        response: IO[ApplyTransactionResponse]
+    ): IO[(Vector[EvacuationDiff], Vector[Payout.Obligation])] =
+        response.flatMap {
+            case L2LedgerResponse.Applied.ApplyTransaction(_, diffs, payouts) =>
+                IO.pure((diffs, payouts))
+            case other =>
+                IO.raiseError(RuntimeException(s"expected Applied.ApplyTransaction, got $other"))
         }
 
     test("mint + withdraw: diffs and payouts stay free of transient bundles") {
         val program = for {
-            ledger <- EutxoL2Ledger(ledgerConfig)
+            store <- InMemoryL2Store.create
+            ledger <- EutxoL2Ledger(ledgerConfig, store)
             genesisState <- ledger.peekState
             _ = assert(
               genesisState.activeUtxos.nonEmpty,
@@ -48,7 +53,9 @@ class TransientTokensEvacuationPurityTest extends AnyFunSuite {
               mints = List(mkMintDemoStep(5)),
               transientOutputs = Map(0 -> mkDemoBundle(5))
             )
-            mintResult <- orFail(ledger.sendApplyTransaction(mkApplyTransaction(1, 1, mintTx)))
+            mintResult <- expectAppliedTx(
+              ledger.applyTransaction(L2CommandNumber(1L), mkApplyTransaction(1, 1, mintTx))
+            )
             (mintDiffs, mintPayouts) = mintResult
 
             overlaidUtxoId = TransactionInput(mintTx.id, 0)
@@ -62,8 +69,11 @@ class TransientTokensEvacuationPurityTest extends AnyFunSuite {
               sends = List((Babbage(peerAddress, potValue), 1)),
               mints = List(mkMintDemoStep(-5))
             )
-            burnResult <- orFail(
-              ledger.sendApplyTransaction(mkApplyTransaction(2, 2, burnAndWithdrawTx))
+            burnResult <- expectAppliedTx(
+              ledger.applyTransaction(
+                L2CommandNumber(2L),
+                mkApplyTransaction(2, 2, burnAndWithdrawTx)
+              )
             )
             (burnDiffs, burnPayouts) = burnResult
 

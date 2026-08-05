@@ -132,10 +132,10 @@ object RuleBasedTreasuryValidator extends Validator {
     private inline val DeinitTreasuryShouldBeEmpty =
         "All utxos should be evacuated before deinitializing"
 
-    def cip67BeaconTokenPrefix = hex"01349900"
+    def cip67BeaconTokenPrefix: ByteString = hex"01349900"
 
     // CIP-67 prefix of the HRWT (Hydrozoa regime witness token), tag 4798
-    def cip67RegimeTokenPrefix = hex"012be4e0"
+    def cip67RegimeTokenPrefix: ByteString = hex"012be4e0"
 
     /** Finds the rule-based regime reference input — the one holding exactly one `headMp` token
       * with the HRWT CIP-67 prefix — and parses its inline datum. The token policy is the
