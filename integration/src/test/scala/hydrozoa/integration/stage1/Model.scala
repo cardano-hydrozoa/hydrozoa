@@ -20,8 +20,8 @@ import hydrozoa.multisig.consensus.UserRequestWithId
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.*
 import hydrozoa.multisig.ledger.block.BlockBrief.{Final, Major, Minor}
-import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.eutxol2.tx.L2Tx
+import hydrozoa.multisig.ledger.eutxol2.{Compartments, HydrozoaTransactionMutator, TransientTokens}
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag.Valid
 import hydrozoa.multisig.ledger.event.RequestNumber.increment
