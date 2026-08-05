@@ -10,7 +10,7 @@ import scalus.uplc.builtin.ByteString
 final case class L2ScreenError(message: String)
 
 /** Stateless, fail-soft screening of a user request before a [[RequestId]] is assigned
-  * (docs/l2-isomorphism.md). Split from [[L2Ledger]] because the two concerns have opposite
+  * (docs/spec/l2-isomorphism.md). Split from [[L2Ledger]] because the two concerns have opposite
   * semantics: screening is order-independent, query-like, and shares no mutable state with the
   * state-mutating command stream, so a failure is a soft rejection (the user retries) rather than
   * something that must land. Keeping it on its own trait lets it ride its own connection and keeps

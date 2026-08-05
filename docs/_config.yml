@@ -1,0 +1,17 @@
+# Jekyll config for the GitHub Pages docs site (built from docs/ by
+# .github/workflows/docs.yml). GitHub Pages enables jekyll-optional-front-matter
+# (renders these plain .md files), jekyll-readme-index (each README.md becomes its
+# directory index), and jekyll-relative-links (rewrites the relative *.md links) by
+# default — so the docs publish as-is with no per-file front matter.
+
+title: Hydrozoa Documentation
+description: >-
+  How-tos and design reference for Hydrozoa — a lightweight multi-party state
+  channels implementation for Cardano.
+
+theme: minima
+
+# Project site served under the repository path. Update both if the repo is
+# renamed or a custom domain is configured.
+url: "https://cardano-hydrozoa.github.io"
+baseurl: "/hydrozoa"

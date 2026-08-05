@@ -7,10 +7,10 @@ import hydrozoa.multisig.ledger.l2.{L2ScreenError, L2Screener}
 import scala.util.Try
 import scalus.uplc.builtin.ByteString
 
-/** Stateless EUTXO screening (docs/l2-isomorphism.md), split from [[EutxoL2Ledger]] so it shares no
-  * mutable state with the state-mutating command stream and can ride its own connection — mirroring
-  * the remote side ([[hydrozoa.multisig.ledger.remote.RemoteL2Screener]]). Needs only `config`; the
-  * two deposit gates it shares with the command path live in [[EutxoDepositGates]].
+/** Stateless EUTXO screening (docs/spec/l2-isomorphism.md), split from [[EutxoL2Ledger]] so it
+  * shares no mutable state with the state-mutating command stream and can ride its own connection —
+  * mirroring the remote side ([[hydrozoa.multisig.ledger.remote.RemoteL2Screener]]). Needs only
+  * `config`; the two deposit gates it shares with the command path live in [[EutxoDepositGates]].
   */
 final class EutxoL2Screener(config: EutxoL2Ledger.Config) extends L2Screener[IO]:
 

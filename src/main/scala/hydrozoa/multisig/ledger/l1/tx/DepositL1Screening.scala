@@ -13,7 +13,7 @@ import scala.language.implicitConversions
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scalus.uplc.builtin.ByteString
 
-/** Deposit L1 screening — Hydrozoa's stage of deposit screening (docs/l2-isomorphism.md), run
+/** Deposit L1 screening — Hydrozoa's stage of deposit screening (docs/spec/l2-isomorphism.md), run
   * before the ledger's [[hydrozoa.multisig.ledger.l2.L2Screener.screenDeposit]]. A deposit is not
   * an L2 tx, and its `l2Payload` arrives out-of-band, so unlike transactions (which have no L1
   * screening stage) it is payload-checked and time-gated here:

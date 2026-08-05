@@ -12,7 +12,7 @@ import io.circe.{Codec, Decoder, Encoder}
   * a committed L2 state purely by command number: [[L2Ledger.restoreTo]] reconstructs the state as
   * of a given command number from `(initial state, command number)`.
   *
-  * See `docs/l2-ledger-command-coordination.md`.
+  * See `docs/spec/l2-ledger-command-coordination.md`.
   */
 type L2CommandNumber = L2CommandNumber.L2CommandNumber
 

@@ -7,7 +7,7 @@ import scalus.uplc.builtin.ByteString
 
 /** Screening for a remote L2 ledger. A passthrough for now: a remote ledger accepts every request
   * pre-RequestId and does its own screening at submission. A dedicated remote screening endpoint
-  * (docs/l2-isomorphism.md, Limitations) replaces this with a real, independently-connected
+  * (docs/spec/l2-isomorphism.md, Limitations) replaces this with a real, independently-connected
   * screener so a remote node also rejects pre-RequestId — and because screening rides its own trait
   * now, that endpoint gets its own connection without touching the mutation transport.
   */

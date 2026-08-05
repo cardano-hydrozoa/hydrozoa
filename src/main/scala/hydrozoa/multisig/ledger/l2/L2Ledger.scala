@@ -130,7 +130,7 @@ trait L2Ledger[F[_]] {
       * an internal merge error). Such a failure answers an [[L2LedgerResponse.UnrecoverableError]]
       * **and freezes the ledger**: every subsequent command then answers
       * [[L2LedgerResponse.UnrecoverableError.LedgerFreeze]] until `restoreTo` rewinds past the
-      * freeze. JointLedger panics on the error. See `docs/l2-ledger-command-coordination.md`.
+      * freeze. JointLedger panics on the error. See `docs/spec/l2-ledger-command-coordination.md`.
       *
       * @return
       *   [[L2LedgerResponse.Applied.ApplyDepositDecisions]] (the evacuation diffs the absorbed
@@ -154,11 +154,11 @@ trait L2Ledger[F[_]] {
     ): F[ApplyTransactionResponse]
 
     /** Reconstruct the committed L2 state as of `commandNumber`, from the ledger's own durable
-      * record (`(initial state, commandNumber)`; see `docs/l2-ledger-command-coordination.md`).
-      * After this the ledger is positioned at `commandNumber`. Used only on crash-recovery boot.
-      * JointLedger owns and persists the authoritative command number, so the ledger exposes no
-      * read-back query. Implementations that do not persist (e.g. a remote black box that owns its
-      * own recovery) may make this a no-op.
+      * record (`(initial state, commandNumber)`; see
+      * `docs/spec/l2-ledger-command-coordination.md`). After this the ledger is positioned at
+      * `commandNumber`. Used only on crash-recovery boot. JointLedger owns and persists the
+      * authoritative command number, so the ledger exposes no read-back query. Implementations that
+      * do not persist (e.g. a remote black box that owns its own recovery) may make this a no-op.
       *
       * Unlike the command path, this stays an [[EitherT]]: it is a boot-time reconstruction, not a
       * numbered command, so its failure is a [[RestoreError]] rather than one of the verdicts.

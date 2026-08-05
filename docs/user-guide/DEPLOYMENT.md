@@ -81,7 +81,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
     `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
 
   Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is
-  [`docs/openapi.yaml`](docs/openapi.yaml) (regenerated from the endpoint definitions).
+  [`docs/openapi.yaml`](../spec/openapi.yaml) (regenerated from the endpoint definitions).
 
 ### Network matrix
 
@@ -464,7 +464,7 @@ just submit-l2-tx        # local; or: just submit-l2-tx head/demo http://localho
 Pick a peer (its key signs), pick one of its L2 utxos (fetched from `GET /l2/cardano-eutxo/utxos/{address}`
 — the opening `l2-cardano-eutxo.json` outputs sit at the head peers' addresses), enter a
 destination (bech32, or a peer name like `head-1`) and a value. The tool builds the zero-fee
-native tx (with the CIP-67 output designations and the headId pin in the metadata), signs it with
+native tx (with the output designations and the headId pin in the metadata), signs it with
 the peer wallet, and posts it to `POST /head/requests`. An example session — send 2 of head-0's
 opening 5 ADA to head-1:
 

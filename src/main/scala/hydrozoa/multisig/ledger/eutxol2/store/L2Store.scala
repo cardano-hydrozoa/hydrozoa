@@ -18,7 +18,8 @@ import hydrozoa.multisig.ledger.l2.{L2CommandNumber, L2LedgerCommand}
   *
   * Plus a single **tip** (highest command number seen, applied or rejected) so `restoreTo` can
   * reject a target beyond what was processed. `restoreTo(S)` reads `latestSnapshotAtOrBefore(S)`
-  * (or genesis) and re-folds `logRange(from, S]`. See `docs/l2-ledger-command-coordination.md`.
+  * (or genesis) and re-folds `logRange(from, S]`. See
+  * `docs/spec/l2-ledger-command-coordination.md`.
   */
 trait L2Store[F[_]]:
     /** Append `command` to the log at `commandNumber`. Called once per committed real command. */

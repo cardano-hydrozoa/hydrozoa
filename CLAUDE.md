@@ -78,37 +78,43 @@ they are written — none are committed on this branch yet.
 
 ## Documentation
 
-Working design and reference docs live in `docs/`:
+Documentation lives under `docs/` in two sections:
+
+- **[`docs/user-guide/`](docs/user-guide/README.md)** — task-oriented how-tos: deployment, building
+  deposits, L2 transactions, and L2 minting.
+- **`docs/spec/`** — design and reference docs (below).
+
+Working design and reference docs (`docs/spec/`):
 
 **Consensus & protocol**
-- [`fast-consensus.md`](docs/fast-consensus.md) — fast cycle: per-block soft-confirmation via
+- [`fast-consensus.md`](docs/spec/fast-consensus.md) — fast cycle: per-block soft-confirmation via
   per-peer header signatures.
-- [`slow-consensus.md`](docs/slow-consensus.md) — slow cycle: turning a run of soft-confirmed
+- [`slow-consensus.md`](docs/spec/slow-consensus.md) — slow cycle: turning a run of soft-confirmed
   blocks into a multisigned, L1-submittable set of effect transactions over stacks.
-- [`rate-limiter.md`](docs/rate-limiter.md) — generic throttling actor that slows the consensus
+- [`rate-limiter.md`](docs/spec/rate-limiter.md) — generic throttling actor that slows the consensus
   cycles without changing consensus logic.
-- [`transient-tokens.md`](docs/transient-tokens.md) — minting/burning on the L2 ledger: the
+- [`transient-tokens.md`](docs/spec/transient-tokens.md) — minting/burning on the L2 ledger: the
   transient-token compartment and projection-based validation.
-- [`l2-isomorphism.md`](docs/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
+- [`l2-isomorphism.md`](docs/spec/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
   txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
 
 **API**
-- [`l2-query-endpoints.md`](docs/l2-query-endpoints.md) — the user-facing server's read-only L2
+- [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) — the user-facing server's read-only L2
   queries: `GET /l2/cardano-eutxo/utxos/{address}` and `GET /l2/cardano-eutxo/transactions` (EUTXO-only).
-- [`observability-endpoints.md`](docs/observability-endpoints.md) — the user-facing server's
+- [`observability-endpoints.md`](docs/spec/observability-endpoints.md) — the user-facing server's
   `/health` (liveness) and `/ready` (readiness) endpoints and the `NodeStatus` behind them.
 
 **Testing**
-- [`integration-stages.md`](docs/integration-stages.md) — the stage1/stage4 integration test
+- [`integration-stages.md`](docs/spec/integration-stages.md) — the stage1/stage4 integration test
   levels: what each exercises and where to add a test.
-- [`testcontrol-driver.md`](docs/testcontrol-driver.md) — how `ModelBasedSuite` drives tests on a
+- [`testcontrol-driver.md`](docs/spec/testcontrol-driver.md) — how `ModelBasedSuite` drives tests on a
   cats-effect `TestControl` virtual clock.
 
 **Reference**
-- [`style-guide.md`](docs/style-guide.md) — hand-applied Scala conventions (see [Code
+- [`style-guide.md`](docs/spec/style-guide.md) — hand-applied Scala conventions (see [Code
   Style](#code-style)).
-- [`logging-tracing.md`](docs/logging-tracing.md) — contextual logging and Tracer design.
-- [`Codecs.md`](docs/Codecs.md) — codec conventions (WIP notes).
+- [`logging-tracing.md`](docs/spec/logging-tracing.md) — contextual logging and Tracer design.
+- [`codecs.md`](docs/spec/codecs.md) — codec conventions (WIP notes).
 
 ## Development Environment
 
@@ -129,20 +135,20 @@ Mechanical settings (auto-enforced by scalafmt/scalafix):
 - **Scalafix rules**: ExplicitResultTypes, OrganizeImports, RemoveUnused, etc.
 
 Hand-applied conventions — full rules and worked examples in
-[`docs/style-guide.md`](docs/style-guide.md):
+[`docs/spec/style-guide.md`](docs/spec/style-guide.md):
 
 - **Naming**: functions are verb phrases (`mk*` counts); no ad-hoc contractions (use the
   established term or full word; `tx`/`id`/`VKey`/`SEC` exempt); never "genesis" for stack 0;
   "broadcast" = cross-peer network sends only (local fan-out is "announce"/"fan out").
-  — [Naming](docs/style-guide.md#naming)
+  — [Naming](docs/spec/style-guide.md#naming)
 - **Organization**: every public def has a doc comment; privates come after publics, ordered
   caller-before-callee; every `extension` lives inside an `object`; no inline FQNs (always
   import); give functions the minimal data they need (fields > section > whole config).
-  — [Code organization](docs/style-guide.md#code-organization)
+  — [Code organization](docs/spec/style-guide.md#code-organization)
 - **Types/givens**: prefer an explicit `Unsigned`/`HardConfirmed` split over a phantom `+S`
   type parameter; opaque-tuple `Conversion` givens must `.convert` each element; never write
   `given x: T = summon` (resolves to itself → infinite loop).
-  — [Types and givens](docs/style-guide.md#types-and-givens)
+  — [Types and givens](docs/spec/style-guide.md#types-and-givens)
 
 ### Terminology
 
@@ -156,7 +162,7 @@ Hand-applied conventions — full rules and worked examples in
 
 ### Comments
 
-See [Comments](docs/style-guide.md#comments) for the full rule. In short:
+See [Comments](docs/spec/style-guide.md#comments) for the full rule. In short:
 
 - Describe the code **as it is now** — no historical perspective ("formerly X", "moved to the
   slow side", "as of step N", "renamed from"). History lives in Git and memory.

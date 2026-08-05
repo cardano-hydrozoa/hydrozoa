@@ -5,7 +5,7 @@ import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
 
 /** The ledger's **total** response to one command — the coordination contract (see
-  * `docs/l2-ledger-command-coordination.md`). Three outcome kinds: the command [[Applied]], a
+  * `docs/spec/l2-ledger-command-coordination.md`). Three outcome kinds: the command [[Applied]], a
   * recoverable user-request [[Rejected]], or an [[UnrecoverableError]] the caller fail-stops on.
   * [[Applied]] and [[Rejected]] each have a concrete descendant per command (their payloads differ
   * by command). Every branch echoes the command number it answers. There is no separate error
