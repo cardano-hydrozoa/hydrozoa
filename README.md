@@ -1,17 +1,11 @@
 # Hydrozoa
 
-[![spec: hydrozoa.pdf](https://img.shields.io/badge/spec-hydrozoa.pdf-blue)](https://cardano-hydrozoa.github.io/hydrozoa/hydrozoa.pdf)
+[![spec: Gummiworm whitepaper](https://img.shields.io/badge/spec-whitepaper-blue)](https://gummiworm.net/whitepaper/introduction)
 [![code license: Apache-2.0](https://img.shields.io/badge/code%20license-Apache--2.0-seagreen)](https://www.apache.org/licenses/LICENSE-2.0)
-[![docs + spec license: CC BY-SA 4.0](https://img.shields.io/badge/docs%2Fspec%20license-CC%20BY--SA%204.0-seagreen)](https://creativecommons.org/licenses/by-sa/4.0/)
+[![docs license: CC BY-SA 4.0](https://img.shields.io/badge/docs%20license-CC%20BY--SA%204.0-seagreen)](https://creativecommons.org/licenses/by-sa/4.0/)
 
 Hydrozoa is a lightweight multi-party state channel implementation for Cardano,
 written in Scala 3.
-
-> [!WARNING]
->
-> Hydrozoa is **pre-alpha** and under active development. It is not
-> production-ready, internal and public APIs are unstable, and some
-> instructions below may lag the code. Expect breaking changes.
 
 ## What is Hydrozoa?
 
@@ -43,8 +37,12 @@ operational substrate of a Hydrozoa head.
 
 ## Getting Started
 
-* Read the latest specification — see [Specification](#specification) below
-  (pre-built PDF, build it locally, or browse the in-repo design specs).
+* Read the [Gummiworm whitepaper](https://gummiworm.net/whitepaper/introduction)
+  (the protocol spec), or browse the in-repo design specs — see
+  [Specification](#specification) below.
+* Deploy a multi-party head — [`DEPLOYMENT.md`](DEPLOYMENT.md) is an end-to-end
+  runbook: fleet configuration, node image, head initialization on a Cardano
+  testnet, and running the peers.
 * Join the discussion =>
   goto [discussions](https://github.com/cardano-hydrozoa/hydrozoa/discussions)
 * Start hacking by picking up an issue =>
@@ -52,28 +50,12 @@ operational substrate of a Hydrozoa head.
 
 ## Specification
 
-Design documentation is currently in flux. There are two sources, at different
-stages of maturity:
+The authoritative protocol description is the **Gummiworm whitepaper**:
+<https://gummiworm.net/whitepaper/introduction>.
 
-* **Original Hydrozoa specification (deprecated)** — the LaTeX source under
-  `specification/`, published as a PDF:
-  [hydrozoa.pdf](https://cardano-hydrozoa.github.io/hydrozoa/hydrozoa.pdf).
-  This document predates the current protocol direction and is kept for
-  historical reference; treat it as superseded rather than authoritative. You
-  can still build it locally (requires [Nix](https://nixos.org/download/#download-nix)
-  with [flakes enabled](https://nixos.wiki/wiki/Flakes)):
-
-  ```bash
-  make spec        # build the PDF
-  make spec-clean  # remove generated files
-  ```
-
-  See `specification/README.md` for contributor guidelines and more build
-  options.
-
-* **New Hydrozoa whitepaper (work in progress)** — the new authoritative
-  protocol description, succeeding the original spec. It is being authored in a
-  separate repository and is not yet ready for public release.
+In-repo design documentation complements it: [`design/`](design/) holds
+forward-looking design specs for individual features, and [`docs/`](docs/)
+documents the system as built.
 
 ## Developer's Guide
 

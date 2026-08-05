@@ -2,9 +2,10 @@ package hydrozoa.multisig.ledger.l2
 
 import cats.*
 import cats.data.*
-import cats.syntax.all.*
+import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.EvacuationDiff
 import hydrozoa.multisig.ledger.joint.obligation.Payout
+import scalus.uplc.builtin.ByteString
 
 private type EF[F[_], A] = EitherT[F, L2LedgerError, A]
 // See: "Kendo" from the test library
@@ -25,32 +26,37 @@ case class L2LedgerError(message: String) extends Throwable {
   *
   * @param payouts
   *   Payouts generated from [[L2LedgerCommand.ApplyTransaction]]
+  *
+  * @param payoutRequestIds
+  *   The producing request of each entry in `payouts`, in the same order (all payouts of one
+  *   `ApplyTransaction` share its `requestId`). Local-only provenance for withdrawal-effect
+  *   tracking; never on the wire or on-chain.
   */
 final case class L2LedgerState private (
     diffs: Vector[EvacuationDiff],
-    payouts: Vector[Payout.Obligation]
+    payouts: Vector[Payout.Obligation],
+    payoutRequestIds: Vector[RequestId]
 )
 
 object L2LedgerState:
-    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty)
-
-    def executeProxyCommand[F[_]](
-        l2Ledger: L2Ledger[F],
-        command: L2LedgerCommand.Proxy
-    ): F[Unit] = {
-        val action = l2Ledger.L2LedgerAction.fromL2LedgerCommandProxy(command)
-        action.run()
-    }
+    def empty: L2LedgerState = L2LedgerState(Vector.empty, Vector.empty, Vector.empty)
 
     /** Protected _specifically_ because we want to prevent arbitrary evolution from the empty
       * state. You _must_ begin with the empty state and evolve it using [[applyL2LedgerCommand]].
       */
-    protected[l2] def apply(diffs: Vector[EvacuationDiff], payouts: Vector[Payout.Obligation]) =
-        new L2LedgerState(diffs, payouts)
+    protected[l2] def apply(
+        diffs: Vector[EvacuationDiff],
+        payouts: Vector[Payout.Obligation],
+        payoutRequestIds: Vector[RequestId]
+    ) =
+        new L2LedgerState(diffs, payouts, payoutRequestIds)
 
 /** A trait defining an interface to interact with a black-box ledger component (i.e., via the Joint
   * Ledger). The L2Ledger and the state associated with the interactions via the interface are named
   * from the perspective of the _consumer_.
+  *
+  * Every implementation must be deterministic: consensus feeds each peer's replica the same ordered
+  * commands, so a non-deterministic ledger diverges across peers and breaks consensus.
   *
   * NOTE:
   *   - The constructor of [[L2LedgerState]] is private. The only way to construct a new state is
@@ -98,13 +104,22 @@ trait L2Ledger[F[_]] {
         req: L2LedgerCommand.ApplyTransaction
     ): EitherT[F, L2LedgerError, (Vector[EvacuationDiff], Vector[Payout.Obligation])]
 
-    def sendProxyBlockConfirmation(
-        req: L2LedgerCommand.ProxyBlockConfirmation
-    ): EitherT[F, L2LedgerError, Unit]
+    /** Stateless pre-RequestId screening of a transaction request (docs/l2-isomorphism.md): decide
+      * whether the native L2 tx in `l2Payload` is worth assigning a RequestId and fanning out to
+      * consensus — reject a malformed or replay-pinned tx before it consumes resources. A
+      * transaction has no L1 screening stage: it self-authenticates through its own witnesses, so
+      * this is the whole of its screening. Conservative: only definite, stateless failures;
+      * stateful checks (balance, inputs, completeness) stay at submission.
+      */
+    def sendScreenTx(l2Payload: ByteString): EitherT[F, L2LedgerError, Unit]
 
-    def sendProxyHydrozoaRequestError(
-        req: L2LedgerCommand.ProxyRequestError
-    ): EitherT[F, L2LedgerError, Unit]
+    /** Stateless pre-RequestId screening of a deposit request — the ledger's stage, after
+      * Hydrozoa's deposit L1 screening (the l2Payload pin check + the accept-by check) has passed.
+      * The ledger checks that the `l2Payload` is well-formed for it and consistent with the
+      * deposit's reference data — for the EUTXO ledger, that `depositL2Value` covers the
+      * `l2Payload` outputs.
+      */
+    def sendScreenDeposit(req: L2LedgerCommand.ScreenDeposit): EitherT[F, L2LedgerError, Unit]
 
     /** The ledger's current commit commandNumber — the recovery anchor (§R2b). Bumped once per
       * successful state-mutating command (the "real" commands), so the consumer (JointLedger) can
@@ -135,32 +150,11 @@ trait L2Ledger[F[_]] {
                 this.unLedgerAction.run(state).value
         }
 
-        final class Proxy private[l2] (override val unLedgerAction: KEF[F]) extends L2LedgerAction {
-            def run(): F[Unit] =
-                this.unLedgerAction.run(L2LedgerState.empty).value.void
-        }
-
         def fromL2LedgerCommandReal(e: L2LedgerCommand.Real): L2LedgerAction.Real = e match {
             case e: L2LedgerCommand.RegisterDeposit       => fromRegisterDeposit(e)
             case e: L2LedgerCommand.ApplyDepositDecisions => fromApplyDepositDecisions(e)
             case e: L2LedgerCommand.ApplyTransaction      => fromApplyTransaction(e)
         }
-
-        def fromL2LedgerCommandProxy(e: L2LedgerCommand.Proxy): L2LedgerAction.Proxy = e match {
-            case e: L2LedgerCommand.ProxyBlockConfirmation => fromProxyBlockConfirmation(e)
-            case e: L2LedgerCommand.ProxyRequestError      => fromProxyHydrozoaRequestError(e)
-        }
-
-        /** Execute the given EitherT (returning Unit), but return the original state
-          */
-        private def kConst(e: EitherT[F, L2LedgerError, Unit]): L2LedgerAction.Proxy =
-            L2LedgerAction.Proxy(
-              Kleisli(ledgerState =>
-                  for {
-                      _ <- e
-                  } yield ledgerState
-              )
-            )
 
         private def fromRegisterDeposit(
             req: L2LedgerCommand.RegisterDeposit
@@ -180,7 +174,11 @@ trait L2Ledger[F[_]] {
               Kleisli(ledgerState =>
                   for {
                       resDiffs <- sendApplyDepositDecisions(req)
-                      newState = L2LedgerState(ledgerState.diffs ++ resDiffs, ledgerState.payouts)
+                      newState = L2LedgerState(
+                        ledgerState.diffs ++ resDiffs,
+                        ledgerState.payouts,
+                        ledgerState.payoutRequestIds
+                      )
                   } yield newState
               )
             )
@@ -191,21 +189,17 @@ trait L2Ledger[F[_]] {
           Kleisli(ledgerState =>
               for {
                   res <- sendApplyTransaction(req)
-                  newState =
-                      L2LedgerState(ledgerState.diffs ++ res._1, ledgerState.payouts ++ res._2)
+                  // All of this tx's payouts share its requestId — the ledger-agnostic provenance
+                  // tag for withdrawal-effect tracking (works for any L2 ledger backend).
+                  newState = L2LedgerState(
+                    ledgerState.diffs ++ res._1,
+                    ledgerState.payouts ++ res._2,
+                    ledgerState.payoutRequestIds ++ Vector.fill(res._2.length)(req.requestId)
+                  )
               } yield newState
           )
         )
 
-        private def fromProxyBlockConfirmation(
-            req: L2LedgerCommand.ProxyBlockConfirmation
-        ): L2LedgerAction.Proxy =
-            kConst(sendProxyBlockConfirmation(req))
-
-        private def fromProxyHydrozoaRequestError(
-            req: L2LedgerCommand.ProxyRequestError
-        ): L2LedgerAction.Proxy =
-            kConst(sendProxyHydrozoaRequestError(req))
     }
 
 }

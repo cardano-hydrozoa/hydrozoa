@@ -9,6 +9,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.Json
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -50,6 +51,7 @@ class ReadyEndpointTest extends AnyFunSuite:
                       requestSequencerStub,
                       blockWeaverStub,
                       IO.pure(status),
+                      ConsensusStoreReader.empty,
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

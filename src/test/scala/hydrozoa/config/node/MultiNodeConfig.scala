@@ -43,7 +43,7 @@ case class MultiNodeConfig private (
                       nodeOperationEvacuationConfig = pc.nodeOperationEvacuationConfig,
                       nodeOperationMultisigConfig = pc.nodeOperationMultisigConfig,
                       pc.blockfrostApiKey,
-                      pc.sugarRushUri,
+                      pc.remoteLedgerUri,
                       pc.adminUsername,
                       pc.adminPassword,
                       pc.httpHost,
@@ -81,6 +81,19 @@ case class MultiNodeConfig private (
         coilWallets.zipWithIndex.map { (w, i) =>
             if i < quorum then Some(w.mkHeaderSignature(serialized)) else None
         }
+
+    /** The dense header-signature list persisted for a hard-confirmed SEC: every head peer's
+      * signature followed by the first `coilQuorum` coil signatures. Matches the order
+      * `HardAckAggregator.collectSecSignatures` produces and `RuleBasedActor.loadAction` splits at
+      * `nHeadPeers` to recover head vs coil signatures.
+      */
+    def multisignHeaderDense(
+        blockHeader: StandaloneEvacuationCommitment.Onchain
+    ): List[BlockHeader.Minor.HeaderSignature] =
+        val serialized = StandaloneEvacuationCommitment.Onchain.Serialized(blockHeader)
+        val headSigs = nodePrivateConfigs.map(_._2.ownWallet.mkHeaderSignature(serialized)).toList
+        val coilSigs = coilWallets.take(headConfig.coilQuorum).map(_.mkHeaderSignature(serialized))
+        headSigs ++ coilSigs
 
     def addressOf(peerNumber: HeadPeerNumber): ShelleyAddress = nodeConfigs(
       peerNumber
@@ -128,7 +141,7 @@ object MultiNodeConfig {
                           .copy(ruleBasedWallet = w),
                       nodeOperationMultisigConfig = templatePrivate.nodeOperationMultisigConfig,
                       blockfrostApiKey = "not-a-real-key",
-                      sugarRushUri = "ws://localhost:3001/ws",
+                      remoteLedgerUri = Some("ws://localhost:3001/ws"),
                       adminUsername = "admin",
                       adminPassword = "welcome",
                       httpHost = "0.0.0.0",
@@ -257,7 +270,7 @@ object MultiNodeConfig {
                           nodeOperationEvacuationConfig = noec,
                           nodeOperationMultisigConfig = nomc,
                           blockfrostApiKey = "not a real blockfrost api key",
-                          sugarRushUri = "ws://localhost:3001/ws",
+                          remoteLedgerUri = Some("ws://localhost:3001/ws"),
                           adminUsername = "admin",
                           adminPassword = "welcome",
                           httpHost = "0.0.0.0",

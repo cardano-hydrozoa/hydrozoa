@@ -15,6 +15,7 @@ import hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger
 import hydrozoa.multisig.ledger.eutxol2.store.InMemoryL2Store
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import io.circe.{Json, Printer}
 import org.http4s.circe.*
 import org.http4s.implicits.*
@@ -24,11 +25,11 @@ import org.scalacheck.rng.Seed
 import org.scalatest.funsuite.AnyFunSuite
 import scalus.cardano.address.ShelleyAddress
 
-/** End-to-end demo + test for the L2 query endpoints (`GET /api/l2/utxos/{address}`,
-  * `GET /api/l2/transactions`). Boots an in-memory [[EutxoL2Ledger]], seeds it (genesis utxos plus
-  * a few applied commands), builds the real [[HydrozoaRoutes]] against it with stub consensus
-  * actors, and drives both endpoints through the HTTP layer — asserting the responses and printing
-  * the JSON so the flow can be shown in a screen recording.
+/** End-to-end demo + test for the L2 query endpoints (`GET /l2/cardano-eutxo/utxos/{address}`,
+  * `GET /l2/cardano-eutxo/transactions`). Boots an in-memory [[EutxoL2Ledger]], seeds it (genesis
+  * utxos plus a few applied commands), builds the real [[HydrozoaRoutes]] against it with stub
+  * consensus actors, and drives both endpoints through the HTTP layer — asserting the responses and
+  * printing the JSON so the flow can be shown in a screen recording.
   */
 class L2QueryEndpointsTest extends AnyFunSuite:
 
@@ -42,19 +43,20 @@ class L2QueryEndpointsTest extends AnyFunSuite:
             .pureApply(Gen.Parameters.default, Seed(0L))
     private val nodeConfig = multiNodeConfig.nodeConfigs(HeadPeerNumber.zero)
 
-    /** A refunded-deposit decision at `blockNum` — a real command that logs (so it shows up in
-      * `/api/l2/transactions`) without needing a constructed deposit/tx payload: `refundedDeposits`
-      * are only removed from the pending set, which tolerates ids that were never registered.
+    /** A rejected-deposit decision at `blockNum` — a real command that logs (so it shows up in
+      * `/l2/cardano-eutxo/transactions`) without needing a constructed deposit/tx payload:
+      * `rejectedDeposits` are only removed from the pending set, which tolerates ids that were
+      * never registered.
       */
-    private def refundDecision(
+    private def rejectDecision(
         blockNum: Int,
-        refunded: RequestId
+        rejected: RequestId
     ): L2LedgerCommand.ApplyDepositDecisions =
         L2LedgerCommand.ApplyDepositDecisions(
           blockNumber = BlockNumber(blockNum),
           blockCreationEndTime = BigInt(blockNum),
           absorbedDeposits = Nil,
-          refundedDeposits = List(refunded)
+          rejectedDeposits = List(rejected)
         )
 
     /** Build the routes against a seeded ledger + stub actors, then run `check` with the HTTP app
@@ -68,10 +70,10 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 for {
                     store <- InMemoryL2Store.create
                     ledger <- EutxoL2Ledger(nodeConfig, store)
-                    // Seed a small transaction log: three refunded-deposit decisions, blocks 1..3.
+                    // Seed a small transaction log: three rejected-deposit decisions, blocks 1..3.
                     _ <- List(1, 2, 3).traverse_ { n =>
                         ledger
-                            .sendApplyDepositDecisions(refundDecision(n, RequestId(0, n.toLong)))
+                            .sendApplyDepositDecisions(rejectDecision(n, RequestId(0, n.toLong)))
                             .value
                             .flatMap(IO.fromEither)
                     }
@@ -90,12 +92,46 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                       requestSequencerStub,
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
+                      ConsensusStoreReader.empty,
                       Some(ledger),
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
                       ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
                     )
                     _ <- check(routes.routes.orNotFound, ledger)
+                } yield ()
+            }
+            .unsafeRunSync()
+
+    /** Build the routes with **no** L2 reader — the wiring an `any-remote` node gets — and run
+      * `check`. No ledger is seeded because a remote-ledger node exposes no L2-query state.
+      */
+    private def withNoReaderRoutes(check: HttpApp[IO] => IO[Unit]): Unit =
+        ActorSystem[IO]("L2QueryEndpointsTest-noReader")
+            .use { system =>
+                for {
+                    requestSequencerStub <- system.actorOf(
+                      new Actor[IO, RequestSequencer.Request] {
+                          override def receive: Receive[IO, RequestSequencer.Request] =
+                              _ => IO.pure(())
+                      }
+                    )
+                    blockWeaverStub <- system.actorOf(
+                      new Actor[IO, BlockWeaver.Request] {
+                          override def receive: Receive[IO, BlockWeaver.Request] = _ => IO.pure(())
+                      }
+                    )
+                    routes <- HydrozoaRoutes(
+                      requestSequencerStub,
+                      blockWeaverStub,
+                      IO.pure(NodeStatus.Active),
+                      ConsensusStoreReader.empty,
+                      None,
+                      multiNodeConfig.headConfig,
+                      HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),
+                      ContraTracer[IO, HydrozoaHttpEvent](_ => IO.unit)
+                    )
+                    _ <- check(routes.routes.orNotFound)
                 } yield ()
             }
             .unsafeRunSync()
@@ -117,16 +153,18 @@ class L2QueryEndpointsTest extends AnyFunSuite:
             .collect { case s: ShelleyAddress => s }
             .toList
 
-    test("GET /api/l2/utxos/{address} returns the address's current L2 utxos, CIP-0116-style") {
+    test(
+      "GET /l2/cardano-eutxo/utxos/{address} returns the address's current L2 utxos, CIP-0116-style"
+    ) {
         val shelley = genesisShelleyAddresses.headOption
             .getOrElse(fail("genesis produced no Shelley L2 utxos to query"))
         val bech32 = shelley.toBech32.getOrElse(shelley.toHex)
         withSeededRoutes { (app, ledger) =>
             for {
                 expected <- ledger.utxosByAddress(shelley)
-                result <- get(app, s"/api/l2/utxos/$bech32")
+                result <- get(app, s"/l2/cardano-eutxo/utxos/$bech32")
                 (status, body) = result
-                _ <- IO.println(s"[demo] GET /api/l2/utxos/$bech32")
+                _ <- IO.println(s"[demo] GET /l2/cardano-eutxo/utxos/$bech32")
                 _ <- IO.println(printer.print(body))
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(expected.nonEmpty, "the chosen genesis address controls no utxos"))
@@ -154,14 +192,14 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/utxos/{valid address with no utxos} returns an empty array") {
+    test("GET /l2/cardano-eutxo/utxos/{valid address with no utxos} returns an empty array") {
         // A well-formed bech32 address the ledger holds nothing for: the head's own L1 multisig
         // address, which is never an L2 output address.
         val unfunded = multiNodeConfig.headConfig.headMultisigAddress.toBech32
             .getOrElse(fail("head multisig address is not bech32-encodable"))
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, s"/api/l2/utxos/$unfunded")
+                result <- get(app, s"/l2/cardano-eutxo/utxos/$unfunded")
                 (status, body) = result
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(body.asArray.exists(_.isEmpty), s"expected [], got $body"))
@@ -169,22 +207,24 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/utxos/{malformed} is a 400, not a 500") {
+    test("GET /l2/cardano-eutxo/utxos/{malformed} is a 400, not a 500") {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/utxos/not-a-real-address")
+                result <- get(app, "/l2/cardano-eutxo/utxos/not-a-real-address")
                 (status, _) = result
                 _ <- IO(assert(status == Status.BadRequest))
             } yield ()
         }
     }
 
-    test("GET /api/l2/transactions returns recent applied L2 transactions, newest first") {
+    test(
+      "GET /l2/cardano-eutxo/transactions returns recent applied L2 transactions, newest first"
+    ) {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/transactions?count=10")
+                result <- get(app, "/l2/cardano-eutxo/transactions?count=10")
                 (status, body) = result
-                _ <- IO.println("[demo] GET /api/l2/transactions?count=10")
+                _ <- IO.println("[demo] GET /l2/cardano-eutxo/transactions?count=10")
                 _ <- IO.println(printer.print(body))
                 _ <- IO(assert(status == Status.Ok))
                 entries = body.asArray.getOrElse(Vector.empty)
@@ -193,7 +233,7 @@ class L2QueryEndpointsTest extends AnyFunSuite:
                 blockNums = entries.flatMap(_.hcursor.downField("blockNumber").as[Int].toOption)
                 _ <- IO(assert(blockNums == Vector(3, 2, 1), s"block order was $blockNums"))
                 kinds = entries.flatMap(_.hcursor.downField("kind").as[String].toOption)
-                _ <- IO(assert(kinds.forall(_ == "depositRefunded"), s"kinds were $kinds"))
+                _ <- IO(assert(kinds.forall(_ == "depositRejected"), s"kinds were $kinds"))
                 // requestId is the object shape {headPeerNumber, requestNumber} (the HTTP default).
                 _ <- IO(
                   assert(
@@ -208,10 +248,10 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/transactions?count=1 honors the limit") {
+    test("GET /l2/cardano-eutxo/transactions?count=1 honors the limit") {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/transactions?count=1")
+                result <- get(app, "/l2/cardano-eutxo/transactions?count=1")
                 (status, body) = result
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(body.asArray.exists(_.size == 1)))
@@ -219,10 +259,12 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/transactions with no ?count returns all seeded entries (default limit)") {
+    test(
+      "GET /l2/cardano-eutxo/transactions with no ?count returns all seeded entries (default limit)"
+    ) {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/transactions")
+                result <- get(app, "/l2/cardano-eutxo/transactions")
                 (status, body) = result
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(body.asArray.exists(_.size == 3)))
@@ -230,10 +272,10 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/transactions?count=0 returns an empty array") {
+    test("GET /l2/cardano-eutxo/transactions?count=0 returns an empty array") {
         withSeededRoutes { (app, _) =>
             for {
-                result <- get(app, "/api/l2/transactions?count=0")
+                result <- get(app, "/l2/cardano-eutxo/transactions?count=0")
                 (status, body) = result
                 _ <- IO(assert(status == Status.Ok))
                 _ <- IO(assert(body.asArray.exists(_.isEmpty)))
@@ -256,16 +298,64 @@ class L2QueryEndpointsTest extends AnyFunSuite:
         }
     }
 
-    test("GET /api/l2/transactions?count=abc is a 400, not a 404") {
+    test("GET /l2/cardano-eutxo/transactions?count=abc is a 400, not a 404") {
         withSeededRoutes { (app, _) =>
             // tapir rejects an un-decodable query param with a 400 and a plain-text body, so check
             // the status directly rather than through the JSON helper.
             for {
                 resp <- app.run(
-                  Request[IO](Method.GET, Uri.unsafeFromString("/api/l2/transactions?count=abc"))
+                  Request[IO](
+                    Method.GET,
+                    Uri.unsafeFromString("/l2/cardano-eutxo/transactions?count=abc")
+                  )
                 )
                 _ <- IO(
                   assert(resp.status == Status.BadRequest, s"expected 400, got ${resp.status}")
+                )
+            } yield ()
+        }
+    }
+
+    test("with no L2 reader (an any-remote node), the L2 query routes are absent (404)") {
+        // A well-formed bech32 address the L2 endpoints would happily answer (200) if mounted; with
+        // reader=None the routes are not mounted at all, so it must be a 404. A core route (admin)
+        // still answers with a 401 challenge, proving only the L2 endpoints were dropped.
+        val validAddr = multiNodeConfig.headConfig.headMultisigAddress.toBech32
+            .getOrElse(fail("head multisig address is not bech32-encodable"))
+        val badAuth =
+            org.http4s.headers.Authorization(org.http4s.BasicCredentials("admin", "wrong"))
+        withNoReaderRoutes { app =>
+            for {
+                utxos <- app.run(
+                  Request[IO](
+                    Method.GET,
+                    Uri.unsafeFromString(s"/l2/cardano-eutxo/utxos/$validAddr")
+                  )
+                )
+                _ <- IO(
+                  assert(
+                    utxos.status == Status.NotFound,
+                    s"expected 404 for /l2/cardano-eutxo/utxos with no reader, got ${utxos.status}"
+                  )
+                )
+                txs <- app.run(
+                  Request[IO](Method.GET, Uri.unsafeFromString("/l2/cardano-eutxo/transactions"))
+                )
+                _ <- IO(
+                  assert(
+                    txs.status == Status.NotFound,
+                    s"expected 404 for /l2/cardano-eutxo/transactions with no reader, got ${txs.status}"
+                  )
+                )
+                admin <- app.run(
+                  Request[IO](Method.POST, Uri.unsafeFromString("/api/admin/finalize"))
+                      .putHeaders(badAuth)
+                )
+                _ <- IO(
+                  assert(
+                    admin.status == Status.Unauthorized,
+                    s"a core route should still be mounted (401), got ${admin.status}"
+                  )
                 )
             } yield ()
         }

@@ -1,32 +1,23 @@
 package hydrozoa.multisig.server
 
-import com.bloxbean.cardano.client.cip.cip30.{CIP30DataSigner, DataSignature}
-import hydrozoa.config.head.initialization.InitializationParameters
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.{*, given}
-import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.lib.cardano.cip116
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
-import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody, UserRequestHeader}
+import hydrozoa.multisig.consensus.{UserRequest, UserRequestBody}
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
 import hydrozoa.multisig.ledger.l2.{L2TxKind, L2TxSummary}
-import hydrozoa.multisig.server.ApiResponse.{Error, HeadInfo, RequestAccepted}
+import hydrozoa.multisig.server.ApiResponse.RequestAccepted
 import io.bullet.borer.Cbor
-import io.circe.generic.semiauto.*
 import io.circe.syntax.*
 import io.circe.{Decoder, DecodingFailure, Encoder, Json}
-import scala.util.Try
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.*
-import scalus.crypto.ed25519.VerificationKey
 import scalus.uplc.builtin.ByteString
 
 /** JSON encoders and decoders for API types */
 object JsonCodecs {
 
     import cip116.JsonCodecs.CIP0116.Conway.given
-    import hydrozoa.config.head.initialization.InitializationParameters.HeadId.{given Decoder[HeadId], given Encoder[HeadId]}
 
     //// Make TransactionInput codecs available as given instances
     // given Encoder[TransactionInput] = transactionInputEncoder
@@ -59,31 +50,6 @@ object JsonCodecs {
               } yield UserRequestBody.TransactionRequestBody(l2Payload)
             )
 
-    // UserRequestHeader codec
-    given Encoder[UserRequestHeader] =
-        (header: UserRequestHeader) =>
-            Json.obj(
-              "headId" -> header.headId.asJson,
-              "validityStart" -> header.validityStart.asJson,
-              "validityEnd" -> header.validityEnd.asJson,
-              "bodyHash" -> header.bodyHash.asJson
-            )
-
-    given (using config: CardanoNetwork.Section): Decoder[UserRequestHeader] = c =>
-        for {
-            headId <- c
-                .downField("headId")
-                .as[HeadId](using InitializationParameters.HeadId.given_Decoder_HeadId)
-            validityStart <- c.downField("validityStart").as[RequestValidityStartTime]
-            validityEnd <- c.downField("validityEnd").as[RequestValidityEndTime]
-            bodyHash <- c.downField("bodyHash").as[Hash32]
-        } yield UserRequestHeader(
-          headId,
-          validityStart,
-          validityEnd,
-          bodyHash
-        )
-
     // UserRequest cannot be encoded - we can only decode it, since the signatures are not needed
     // once the parsing is done.
 
@@ -96,119 +62,24 @@ object JsonCodecs {
     //  ...
     // }
 
-    case class UserRequestDecoder()(using CardanoNetwork.Section) extends Decoder[UserRequest] {
+    case class UserRequestDecoder() extends Decoder[UserRequest] {
 
-        object Error {
-            trait ValidationError extends Throwable {
-                override def getMessage: String = toString
-            }
-
-            /** The [[UserRequestHeader.body]] does not match the [[blake2b_256]] hash of the
-              * [[UserRequestBody]]
-              */
-            case object BodyHashMismatch extends ValidationError {
-                override def toString: String = "Body hash mismatch"
-            }
-
-            /** The COSE signature of the header does not match
-              */
-            case object SignatureMismatch extends ValidationError {
-                override def toString: String = "Signature mismatch"
-            }
-
-            case object VerificationKeyParsingFailure extends ValidationError {
-                override def toString: String = "Verification key parsing failure"
-            }
-
-            case object WrongPayload extends ValidationError {
-                override def toString: String = "Signed payload should match the request header"
-            }
-        }
-
-        /** Validates COSE signature.
-          *
-          * @param bodyHash
-          * @param coseKeyCborHex
-          * @param coseSignatureCborHex
-          * @return
-          *   the verification key and signed payload from the COSEKey/COSESignature if valid, an
-          *   error otherwise
-          */
-        def validateCoseSignature(
-            coseKeyCborHex: String,
-            coseSignatureCborHex: String
-        ): Either[Error.ValidationError, (VerificationKey, ByteString)] = {
-            val bbDataSignature = DataSignature(coseSignatureCborHex, coseKeyCborHex)
-            for {
-                // Verify the signature
-                _ <- Either.cond(
-                  CIP30DataSigner.INSTANCE.verify(bbDataSignature),
-                  (),
-                  Error.SignatureMismatch
-                )
-                // Extract the public key from COSE key parameter -2 (x-coordinate for OKP/Ed25519 keys)
-                vKey <- Try(
-                  VerificationKey.unsafeFromArray(bbDataSignature.coseKey().otherHeaderAsBytes(-2))
-                ).toEither.left.map(_ => Error.VerificationKeyParsingFailure)
-                payload = ByteString.fromArray(bbDataSignature.coseSign1().payload())
-            } yield (vKey, payload)
-        }
-
+        // The request is internally tagged: a `type` field (`deposit` / `transaction`) selects the
+        // kind, with the body fields (`l1Payload` deposits only, `l2Payload` all) alongside it.
+        // Authentication is not done here: the L2 payload is a native, self-authenticating tx, and
+        // the ledger's stateless screening verifies its signatures before a RequestId is assigned.
         def apply(c: io.circe.HCursor): Decoder.Result[UserRequest] =
-            for {
-                // QUESTION: What exactly are these "ops" in DecodingFailure cons?
-                header <- c.downField("header").as[UserRequestHeader]
-                // Try both "deposit" and "transaction" fields
-                body <- c
-                    .downField("deposit")
-                    .as[DepositRequestBody]
-                    .orElse(c.downField("transaction").as[TransactionRequestBody])
-                // Check body hash
-                _ <- Either.cond(
-                  body.hash == header.bodyHash,
-                  (),
-                  DecodingFailure(Error.BodyHashMismatch.getMessage, ops = List.empty)
-                )
-                // Validate the COSE signature
-                coseKeyCborHex <- c.downField("coseKey").as[String]
-                cosedSignatureCborHex <- c.downField("coseSignature").as[String]
-                ret <- validateCoseSignature(
-                  coseKeyCborHex,
-                  cosedSignatureCborHex
-                ).left
-                    .map(e => DecodingFailure(e.getMessage, ops = List.empty))
-                (vKey, payload) = ret
-                // Check that payload is actually the serialized header from the request
-                payloadHeader <- io.circe.parser
-                    .decode[UserRequestHeader](
-                      new String(payload.bytes, java.nio.charset.StandardCharsets.UTF_8)
-                    )
-                    .left
-                    .map(e =>
-                        DecodingFailure(
-                          s"Failed to parse payload as UserRequestHeader: ${e.getMessage}",
-                          ops = List.empty
-                        )
-                    )
-                _ <- Either.cond(
-                  payloadHeader == header,
-                  (),
-                  DecodingFailure(Error.WrongPayload.getMessage, ops = List.empty)
-                )
-                // Construct the result
-                userRequest = body match {
-                    case d: DepositRequestBody =>
-                        UserRequest
-                            .DepositRequest(header, d, vKey)
-                    case t: TransactionRequestBody =>
-                        UserRequest
-                            .TransactionRequest(header, t, vKey)
-                }
-
-            } yield userRequest
+            c.downField("type").as[String].flatMap {
+                case "deposit" =>
+                    c.as[DepositRequestBody].map(UserRequest.DepositRequest(_))
+                case "transaction" =>
+                    c.as[TransactionRequestBody].map(UserRequest.TransactionRequest(_))
+                case other =>
+                    Left(DecodingFailure(s"unknown request type: $other", c.history))
+            }
     }
 
-    given (using config: CardanoNetwork.Section): Decoder[UserRequest] = UserRequestDecoder()
+    given Decoder[UserRequest] = UserRequestDecoder()
 
     // Specific body type encoders/decoders
     given Encoder[UserRequestBody.DepositRequestBody] =
@@ -255,45 +126,7 @@ object JsonCodecs {
         c.downField("requestId").as[RequestId].map(RequestAccepted.apply)
     }
 
-    given errorEncoder: Encoder[Error] = deriveEncoder[Error]
-
-    given errorDecoder: Decoder[Error] = deriveDecoder[Error]
-
-    // CardanoNativeToken codec - serialized as "{policyIdHex}.{assetNameHex}"
-    given cardanoNativeTokenEncoder: Encoder[ApiResponse.CardanoNativeToken] =
-        (token: ApiResponse.CardanoNativeToken) => {
-            val policyIdHex = token.policyId.toHex
-            val assetNameHex = token.tokenName.bytes.toHex
-            Json.fromString(s"$policyIdHex.$assetNameHex")
-        }
-
-    given cardanoNativeTokenDecoder: Decoder[ApiResponse.CardanoNativeToken] =
-        Decoder.decodeString.emap { str =>
-            str.split('.') match {
-                case Array(policyIdHex, assetNameHex) =>
-                    scala.util
-                        .Try {
-                            val policyIdBytes = ByteString.fromHex(policyIdHex)
-                            val assetNameBytes = ByteString.fromHex(assetNameHex)
-                            val policyId = ScriptHash.fromByteString(policyIdBytes)
-                            val assetName = AssetName(assetNameBytes)
-                            ApiResponse.CardanoNativeToken(policyId, assetName)
-                        }
-                        .toEither
-                        .left
-                        .map(e => s"Failed to decode CardanoNativeToken: ${e.getMessage}")
-                case _ =>
-                    Left(
-                      s"Invalid CardanoNativeToken format, expected '{policyIdHex}.{assetNameHex}', got: $str"
-                    )
-            }
-        }
-
-    given headInfoEncoder: Encoder[HeadInfo] = deriveEncoder[HeadInfo]
-
-    given headInfoDecoder: Decoder[HeadInfo] = deriveDecoder[HeadInfo]
-
-    // ---- L2 query endpoints (GET /api/l2/utxos, /api/l2/transactions) ----
+    // ---- L2 query endpoints (GET /l2/cardano-eutxo/utxos, /l2/cardano-eutxo/transactions) ----
     // CIP-0116-structured utxo encoding. `transactionInputEncoder` and `valueEncoder` come from the
     // CIP-0116 givens imported above; only the output object is assembled here, since CIP-0116
     // defines no `TransactionOutput` encoder.
@@ -340,7 +173,7 @@ object JsonCodecs {
             case L2TxKind.Transaction       => "transaction"
             case L2TxKind.DepositRegistered => "depositRegistered"
             case L2TxKind.DepositAbsorbed   => "depositAbsorbed"
-            case L2TxKind.DepositRefunded   => "depositRefunded"
+            case L2TxKind.DepositRejected   => "depositRejected"
         }
 
     given l2TxSummaryEncoder: Encoder[L2TxSummary] =

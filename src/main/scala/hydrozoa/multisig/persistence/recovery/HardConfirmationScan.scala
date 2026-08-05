@@ -30,4 +30,4 @@ object HardConfirmationScan:
           Cf.HardConfirmation,
           seek,
           keyBytes => StoreKey.HardConfirmation(StackNumber(ByteBuffer.wrap(keyBytes).getInt))
-        )((key, valueBytes) => key.decodeValue(valueBytes))
+        )((key, valueBytes) => key.decodeValue(valueBytes).payload)

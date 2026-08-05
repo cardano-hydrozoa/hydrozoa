@@ -80,12 +80,12 @@ private object DepositTxOps {
 
             val ttl = ValidityEndSlot(submissionDeadline.toSlot.slot)
 
-            val payloadHash: Hash32 = Hash(blake2b_256(l2Payload))
             val metadata = Some(
               MD.Deposit(
                 depositIx = 0, // This builder produces the deposit utxo at index 0
                 depositFee = depositFee,
-                l2PayloadHash = payloadHash
+                // Pin the out-of-band L2 payload to this tx (docs/l2-isomorphism.md).
+                l2PayloadHash = blake2b_256(l2Payload)
               ).asAuxData(config.headId)
             )
             val addRefundMetadata =
@@ -149,9 +149,9 @@ private object DepositTxOps {
         enum Error extends Throwable {
             case MetadataParseError(e: MD.ParseError)
             case AlienDeposit(headAddress: ShelleyAddress)
-            case HashMismatchL2Payload(
-                l2Payload: ByteString,
-                hash: Hash32
+            case L2PayloadHashMismatch(
+                metadataHash: ByteString,
+                expectedL2PayloadHash: ByteString
             )
             case MissingDepositOutputAtIndex(e: Int)
             case DepositUtxoError(e: DepositUtxo.DepositUtxoConversionError)
@@ -167,8 +167,9 @@ private object DepositTxOps {
                     s"MetadataParseError: $e"
                 case AlienDeposit(headAddress) =>
                     s"AlienDeposit: deposit sent to wrong head address: $headAddress"
-                case HashMismatchL2Payload(l2Payload, hash) =>
-                    s"HashMismatchL2Payload: L2 payload hash mismatch (payload: ${l2Payload.toHex}, expected hash: ${hash.toHex})"
+                case L2PayloadHashMismatch(metadataHash, expectedL2PayloadHash) =>
+                    s"L2PayloadHashMismatch: the metadata carries ${metadataHash.toHex}, " +
+                        s"expected blake2b_256(l2Payload) = ${expectedL2PayloadHash.toHex}"
                 case MissingDepositOutputAtIndex(e) =>
                     s"MissingDepositOutputAtIndex: no deposit output found at index $e"
                 case DepositUtxoError(e) =>
@@ -194,8 +195,7 @@ private object DepositTxOps {
       */
     final case class Parse(config: Config)(
         txBytes: EnrichedTx.Serialized,
-        l2Payload: ByteString,
-        requestValidityEndTime: RequestValidityEndTime
+        l2Payload: ByteString
     ) {
         import Parse.*
         import Parse.Error.*
@@ -211,16 +211,17 @@ private object DepositTxOps {
                         // Pull metadata
                         mdParseResult <- MD.Deposit.parse(tx).left.map(MetadataParseError(_))
                         (_, md) = mdParseResult
-                        Metadata.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
+                        MD.Deposit(depositUtxoIx, depositFee, l2PayloadHash) = md
 
-                        // Compare hash with virtual outputs
-                        calculatedL2PayloadHash: Hash32 = Hash(
-                          blake2b_256(l2Payload)
-                        )
+                        // The metadata must pin the out-of-band L2 payload: its l2PayloadHash
+                        // equals blake2b_256(l2Payload). Once the deposit tx is signed, its
+                        // witnesses commit to the pin via the auxiliary-data hash
+                        // (docs/l2-isomorphism.md).
+                        expectedL2PayloadHash = blake2b_256(l2Payload)
                         _ <- Either.cond(
-                          l2PayloadHash == calculatedL2PayloadHash,
+                          l2PayloadHash == expectedL2PayloadHash,
                           (),
-                          HashMismatchL2Payload(l2Payload, l2PayloadHash)
+                          L2PayloadHashMismatch(l2PayloadHash, expectedL2PayloadHash)
                         )
 
                         // Grab the deposit output at the index specified in the metadata
@@ -241,11 +242,8 @@ private object DepositTxOps {
                             case _ => Left(InvalidDatumType)
                         }
 
-                        expectedSubmissionDeadline = config.txTiming.depositSubmissionDeadline(
-                          requestValidityEndTime
-                        )
-
-                        // Check that ttl was properly quantized
+                        // Read the deposit tx's mandatory TTL and recover its submission deadline
+                        // (the tx's validity-interval end). A missing/malformed TTL fails here.
                         submissionDeadline <- Try {
                             val ttlSlot = tx.body.value.ttl.get
                             val ttlPosixMillis = config.slotConfig.slotToTime(ttlSlot)
@@ -256,7 +254,12 @@ private object DepositTxOps {
                             case Success(v)         => Right(v)
                         }
 
-                        _ = expectedSubmissionDeadline.toSlot.slot
+                        // Derive the accept-by deadline from the TTL: a deposit's validityEnd sits
+                        // submissionDuration below its tx TTL (inverse of
+                        // TxTiming.depositSubmissionDeadline).
+                        requestValidityEndTime = RequestValidityEndTime(
+                          submissionDeadline - config.depositSubmissionDuration.convert
+                        )
 
                         // Check the multisig regime witness utxo was referenced
                         _ <- Either.cond(

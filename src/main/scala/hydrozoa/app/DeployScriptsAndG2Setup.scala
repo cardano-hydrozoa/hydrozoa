@@ -3,10 +3,10 @@ package hydrozoa.app
 import cats.data.NonEmptyList
 import cats.effect.{ExitCode, IO}
 import cats.syntax.all.*
-import com.monovore.decline.Opts
-import com.monovore.decline.effect.CommandIOApp
+import com.monovore.decline.{Command, Opts}
+import hydrozoa.bootstrap.Bootstrap
 import hydrozoa.config.ScriptReferenceUtxos.given
-import hydrozoa.config.head.network.CardanoNetwork
+import hydrozoa.config.head.network.{CardanoNetwork, StandardCardanoNetwork}
 import hydrozoa.config.{HydrozoaBlueprint, ScriptReferenceUtxos}
 import hydrozoa.lib.cardano.scalus.VerificationKeyExtra.shelleyAddress
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
@@ -27,79 +27,111 @@ import scalus.uplc.builtin.ByteString
   *
   * Usage:
   * {{{
-  *   sbt "runMain hydrozoa.app.DeployScriptsAndG2Setup \
-  *     --wallet config/demo/head-0/private.json \
-  *     [--ladder-refs script-refs.json] [--out script-refs.json]"
+  *   hydrozoa deploy-scripts-and-g2-setup [--home head/demo] [--wallet <private.json>] \
+  *     [--ladder-refs <ref-utxos.json>]
   * }}}
   *
   * The G2 setup ladder never changes, so it is deployed exactly once; the validator scripts change
-  * per release. Pass `--ladder-refs <existing script-refs.json>` to reuse an already-deployed
-  * ladder and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
+  * per release. Pass `--ladder-refs <existing ref-utxos.json>` to reuse an already-deployed ladder
+  * and redeploy only the two validators. Without it, the ladder is deployed too (bootstrap).
   *
   * Builds and submits chained [[DeploymentTx]]s funded from the wallet carried by the given keygen
   * private config (change returns to the wallet, so the head funding survives): one per validator
   * script, plus — unless the ladder is reused — one carrying all seven [[SetupLadder]] rungs at
   * outputs 0-6, all locked at the unspendable burn address. Waits until every reference UTxO is
-  * visible on L1, then writes their inputs as `--out` in the shape [[BuildHeadConfig]] consumes via
-  * `--script-refs`.
+  * visible on L1, then writes their inputs to `<home>/bootstrap/ref-utxos.json` in the shape
+  * [[BuildHeadConfig]] consumes.
   *
   * Reference UTxOs at the burn address can never be spent, so one deployment serves every head on
   * the network until the compiled scripts change (a hash mismatch at config-build or node start
-  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`.
+  * means: redeploy). The Blockfrost key comes from `--blockfrost-key` or `$BLOCKFROST_API_KEY`, and
+  * the target network is derived from the key's network prefix (`preview…` / `preprod…` /
+  * `mainnet…`).
   */
-object DeployScriptsAndG2Setup
-    extends CommandIOApp(
-      name = "deploy-scripts-and-g2-setup",
-      header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on Preview"
-    ):
+object DeployScriptsAndG2Setup:
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(
           Slf4jMsgFormat.humanFormat("hydrozoa.app.DeployScriptsAndG2Setup")
         )
 
-    private val cardanoNetwork: CardanoNetwork = CardanoNetwork.Preview
-
-    private val walletOpt: Opts[Path] =
+    private val walletOpt: Opts[Option[Path]] =
         Opts.option[String](
           "wallet",
-          "A keygen private config whose ownHeadWallet funds the deployment (e.g. head-0's)",
+          "Private config whose ownHeadWallet funds the deployment (default: head-0's, under --home)",
           short = "w"
         ).map(Path.of(_))
+            .orNone
 
-    private val blockfrostKeyOpt: Opts[String] =
+    private val blockfrostKeyOpt: Opts[Option[String]] =
         Opts.option[String](
           "blockfrost-key",
-          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY)",
+          "Blockfrost API key for the Cardano backend (falls back to $BLOCKFROST_API_KEY, then the " +
+              "template's blockfrostApiKey)",
           short = "k"
         ).orElse(
           Opts.env[String]("BLOCKFROST_API_KEY", "Blockfrost API key for the Cardano backend")
-        )
+        ).orNone
 
     private val ladderRefsOpt: Opts[Option[Path]] =
         Opts.option[String](
           "ladder-refs",
-          "Existing script-refs.json whose G2 setup ladder to reuse (skips redeploying it)",
+          "Existing ref-utxos.json whose G2 setup ladder to reuse (skips redeploying it)",
           short = "l"
         ).map(Path.of(_))
             .orNone
 
-    private val outOpt: Opts[Path] =
-        Opts.option[String]("out", "Output path (default script-refs.json)", short = "o")
-            .map(Path.of(_))
-            .withDefault(Path.of("script-refs.json"))
+    /** The `deploy-scripts-and-g2-setup` subcommand. */
+    lazy val command: Command[IO[ExitCode]] =
+        Command(
+          name = "deploy-scripts-and-g2-setup",
+          header = "Deploy the treasury + dispute validators, and the G2 setup ladder, on L1"
+        )(runOpts)
 
-    override def main: Opts[IO[ExitCode]] =
-        (walletOpt, blockfrostKeyOpt, ladderRefsOpt, outOpt).mapN(deployScriptsAndG2Setup)
+    private def runOpts: Opts[IO[ExitCode]] =
+        (Bootstrap.homeOpt, walletOpt, blockfrostKeyOpt, ladderRefsOpt).mapN(
+          (home, walletOverride, mbKey, ladder) =>
+              deployScriptsAndG2Setup(
+                walletOverride.getOrElse(Bootstrap.HomeLayout.privateConfig(home, "head-0")),
+                mbKey,
+                ladder,
+                Bootstrap.HomeLayout.refUtxos(home)
+              )
+        )
 
     private def deployScriptsAndG2Setup(
+        walletPath: Path,
+        mbBlockfrostKey: Option[String],
+        ladderRefsPath: Option[Path],
+        outPath: Path
+    ): IO[ExitCode] =
+        for {
+            // No --blockfrost-key / $BLOCKFROST_API_KEY → fall back to the key set in the template.
+            blockfrostKey <- mbBlockfrostKey.fold(
+              log.info(
+                "no --blockfrost-key / $BLOCKFROST_API_KEY; using blockfrostApiKey from " +
+                    s"${Bootstrap.defaultPrivateTemplate}"
+              ) *> Bootstrap.blockfrostKeyFrom(Bootstrap.defaultPrivateTemplate)
+            )(IO.pure)
+            cardanoNetwork <- IO.fromEither[StandardCardanoNetwork](
+              networkOfBlockfrostKey(blockfrostKey)
+            )
+            exit <- {
+                given CardanoNetwork.Section = cardanoNetwork
+                deployOn(cardanoNetwork, walletPath, blockfrostKey, ladderRefsPath, outPath)
+            }
+        } yield exit
+
+    private def deployOn(
+        cardanoNetwork: StandardCardanoNetwork,
         walletPath: Path,
         blockfrostKey: String,
         ladderRefsPath: Option[Path],
         outPath: Path
-    ): IO[ExitCode] = {
-        given CardanoNetwork.Section = cardanoNetwork
+    )(using CardanoNetwork.Section): IO[ExitCode] = {
         for {
+            _ <- log.info(s"Target network (from the Blockfrost key): $cardanoNetwork")
+
             wallet <- readWallet(walletPath)
             address = wallet.exportVerificationKey.shelleyAddress()(using cardanoNetwork)
             _ <- log.info(s"Funding wallet address: ${address.toBech32.get}")
@@ -107,7 +139,7 @@ object DeployScriptsAndG2Setup
             reusedLadderInputs <- ladderRefsPath.traverse(readLadderInputs)
 
             backend <- CardanoBackendBlockfrost(
-              Left(CardanoNetwork.Preview),
+              Left(cardanoNetwork),
               blockfrostKey,
               tracer = Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat)
             )
@@ -208,10 +240,31 @@ object DeployScriptsAndG2Setup
             }
             _ <- log.info(s"Wrote script reference inputs to $outPath")
             _ <- log.info(
-              s"Explorer: https://preview.cexplorer.io/tx/${treasuryTx.deployedUtxos.head.transactionId.toHex}"
+              s"Explorer: https://$explorerHost/tx/${treasuryTx.deployedUtxos.head.transactionId.toHex}"
             )
         } yield ExitCode.Success
     }
+
+    /** Derive the target network from the Blockfrost key's network prefix. */
+    private def networkOfBlockfrostKey(key: String): Either[Throwable, StandardCardanoNetwork] =
+        if key.startsWith("preview") then Right(CardanoNetwork.Preview)
+        else if key.startsWith("preprod") then Right(CardanoNetwork.Preprod)
+        else if key.startsWith("mainnet") then Right(CardanoNetwork.Mainnet)
+        else
+            Left(
+              RuntimeException(
+                "cannot derive the network from the Blockfrost key: expected a preview…/preprod…/" +
+                    "mainnet… project key"
+              )
+            )
+
+    /** The cexplorer host for the target network. */
+    private def explorerHost(using network: CardanoNetwork.Section): String =
+        network.cardanoNetwork match {
+            case CardanoNetwork.Preview => "preview.cexplorer.io"
+            case CardanoNetwork.Preprod => "preprod.cexplorer.io"
+            case _                      => "cexplorer.io"
+        }
 
     /** Load the signing wallet from a keygen private config, reading only the `ownHeadWallet`
       * fields — a full [[hydrozoa.config.node.NodePrivateConfig]] decode would require the head
@@ -235,8 +288,8 @@ object DeployScriptsAndG2Setup
         )
     } yield wallet
 
-    /** Read the G2 setup ladder's reference inputs from an existing `script-refs.json`, to reuse
-      * the already-deployed ladder instead of redeploying it.
+    /** Read the G2 setup ladder's reference inputs from an existing `ref-utxos.json`, to reuse the
+      * already-deployed ladder instead of redeploying it.
       */
     private def readLadderInputs(path: Path): IO[List[TransactionInput]] = for {
         json <- IO.blocking(Files.readString(path)).flatMap(s => IO.fromEither(parser.parse(s)))

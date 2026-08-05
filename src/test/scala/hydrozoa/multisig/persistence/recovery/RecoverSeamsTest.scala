@@ -545,7 +545,7 @@ class RecoverSeamsTest extends AnyFunSuite:
           blockNumber = BlockNumber(n),
           blockCreationEndTime = BigInt(n),
           absorbedDeposits = Nil,
-          refundedDeposits = Nil
+          rejectedDeposits = Nil
         )
 
     /** A minimal `BlockBrief.Next` (a Minor) at `blockNum` — mirrors `BlockWeaverTest`'s builder.
@@ -566,7 +566,7 @@ class RecoverSeamsTest extends AnyFunSuite:
             forcedMajorBlockWakeupTime = headConfig.txTiming.forcedMajorBlockWakeupTime(fallback),
             mDepositDecisionWakeupTime = None
           ),
-          BlockBody.Minor(events = List.empty, depositsRefunded = List.empty)
+          BlockBody.Minor(requests = List.empty, depositsRejected = List.empty)
         )
     }
 
@@ -577,6 +577,7 @@ class RecoverSeamsTest extends AnyFunSuite:
               brief = minorBrief(blockNum, now),
               evacuationMapDiff = Nil,
               payoutObligations = Nil,
+              payoutRequestIds = Nil,
               postDatedRefundTxs = Nil,
               absorbedDeposits = Nil,
               competingFallbackTxTime = headConfig.txTiming.newFallbackStartTime(end)

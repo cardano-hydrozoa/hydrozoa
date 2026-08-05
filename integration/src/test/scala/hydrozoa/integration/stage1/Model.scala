@@ -125,11 +125,12 @@ object Model:
         /** Calculate the current major block wakeup time according to the current state of the
           * deposits. This is the earliest DepositAbsorptionStateTime of any deposit that hydrozoa
           * will check for absorption
-         * */
+          */
         def mAbsorptionStartTime: Option[DepositAbsorptionStartTime] = {
             val absorptionBounds: Queue[(DepositAbsorptionStartTime, DepositAbsorptionEndTime)] =
                 deposits.hydrozoaKnownRegisteredDeposits.map(cmd =>
-                    val validityEnd = cmd.request.request.header.validityEnd
+                    val validityEnd =
+                        cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
                     (
                       multiNodeConfig.txTiming.depositAbsorptionStartTime(validityEnd),
                       multiNodeConfig.txTiming.depositAbsorptionEndTime(validityEnd)
@@ -247,7 +248,9 @@ object Model:
             StateT.modifyF[M, State] { state =>
                 val newBlockM = state.blockCycle match {
                     case BlockCycle.Done(blockNumber, version) =>
-                        MonadThrow[M].pure(BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version))
+                        MonadThrow[M].pure(
+                          BlockCycle.Ready(blockNumber = blockNumber, prevVersion = version)
+                        )
                     case _ =>
                         MonadThrow[M].raiseError(
                           Error.UnexpectedState("DelayCommand requires BlockCycle.Done")
@@ -261,7 +264,9 @@ object Model:
                     _ <- newState.getCurrentTime match {
                         case CurrentTime.InSilencePeriod(_) |
                             CurrentTime.AfterCompetingFallbackStartTime(_) =>
-                            log.warn("MODEL>> DelayCommand: model time entering silence/fallback zone")
+                            log.warn(
+                              "MODEL>> DelayCommand: model time entering silence/fallback zone"
+                            )
                         case _ => MonadThrow[M].pure(())
                     }
                 yield newState
@@ -331,34 +336,34 @@ object Model:
                         val events: List[(RequestId, ValidityFlag)] =
                             accumulator.map((le, _, flag) => le.requestId -> flag)
                         for
-                            _                   <- StateT.liftF(
-                                                     log.debug(
-                                                       s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
-                                                     )
-                                                   )
-                            _                   <- registerOrReject[M](events)
-                            absorbedThisBlock   <- absorb[M](cmd.blockCreationEndTime)
-                            refundedThisBlock   <- refund[M](cmd.isFinal, cmd.blockCreationEndTime)
-                            blockBrief          <- mkBlockBrief[M](
-                                                     cmd.isFinal,
-                                                     cmd.blockCreationEndTime,
-                                                     cmd.blockNumber,
-                                                     prevVersion,
-                                                     accumulator,
-                                                     absorbedThisBlock,
-                                                     refundedThisBlock
-                                                   )
+                            _ <- StateT.liftF(
+                              log.debug(
+                                s"MODEL>> CompleteBlockCommand for block number: ${cmd.blockNumber}"
+                              )
+                            )
+                            _ <- registerOrReject[M](events)
+                            absorbedThisBlock <- absorb[M](cmd.blockCreationEndTime)
+                            refundedThisBlock <- refund[M](cmd.isFinal, cmd.blockCreationEndTime)
+                            blockBrief <- mkBlockBrief[M](
+                              cmd.isFinal,
+                              cmd.blockCreationEndTime,
+                              cmd.blockNumber,
+                              prevVersion,
+                              accumulator,
+                              absorbedThisBlock,
+                              refundedThisBlock
+                            )
                             // tick time
-                            _                   <- StateT.modify[M, State](
-                                                     _.advanceCurrentTime(cmd.blockCreationEndTime.convert)
-                                                   )
+                            _ <- StateT.modify[M, State](
+                              _.advanceCurrentTime(cmd.blockCreationEndTime.convert)
+                            )
                             // update block cycle
-                            _                   <- StateT.modify[M, State] { state =>
-                                                     val nextBlockCycle =
-                                                         if cmd.isFinal then BlockCycle.HeadFinalized
-                                                         else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
-                                                     state.copy(blockCycle = nextBlockCycle)
-                                                   }
+                            _ <- StateT.modify[M, State] { state =>
+                                val nextBlockCycle =
+                                    if cmd.isFinal then BlockCycle.HeadFinalized
+                                    else BlockCycle.Done(cmd.blockNumber, blockBrief.blockVersion)
+                                state.copy(blockCycle = nextBlockCycle)
+                            }
                         yield blockBrief
                     case _ =>
                         StateT.liftF(
@@ -369,12 +374,16 @@ object Model:
                 }
             yield brief
 
-        private def getBlockCreationStartTime[M[_]: Applicative]: StateT[M, State, BlockCreationStartTime] =
+        private def getBlockCreationStartTime[M[_]: Applicative]
+            : StateT[M, State, BlockCreationStartTime] =
             StateT.inspect(state => BlockCreationStartTime(state.getCurrentTime.instant))
 
-        private def getNewSettlementValidityEnd[M[_]: Applicative]: StateT[M, State, SettlementTxEndTime] =
+        private def getNewSettlementValidityEnd[M[_]: Applicative]
+            : StateT[M, State, SettlementTxEndTime] =
             StateT.inspect(state =>
-                state.multiNodeConfig.txTiming.newSettlementEndTime(state.competingFallbackStartTime)
+                state.multiNodeConfig.txTiming.newSettlementEndTime(
+                  state.competingFallbackStartTime
+                )
             )
 
         /** Register or reject [[Enqueued]] deposits depending on their [[ValidityFlag]], as derived
@@ -483,11 +492,11 @@ object Model:
                         refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
                         || refundable.depositAbsorptionStart.convert <= blockCreationEndTime
                     )
-                    // Previous predicate (restore when the slow cycle wires absorption back in):
-                    //
-                    // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
-                    // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
-                    //     .isInstanceOf[Submitted])
+            // Previous predicate (restore when the slow cycle wires absorption back in):
+            //
+            // refundable.depositAbsorptionEnd.convert < settlementValidityEnd.convert
+            // || (refundable.depositAbsorptionStart.convert <= blockCreationEndTime && !refundable
+            //     .isInstanceOf[Submitted])
             refunded <- liftS(DepositStatus.Refunded.refund(depositsToRefund))
         } yield refunded
 
@@ -523,9 +532,9 @@ object Model:
                     mDepositDecisionWakeupTime = newDepositDecisionWakeupTime
                   ),
                   body = BlockBody.Major(
-                    events = events,
+                    requests = events,
                     depositsAbsorbed = absorbedThisBlock.map(_.cmd.request.requestId).toList,
-                    depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                    depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
                   )
                 )
 
@@ -562,8 +571,8 @@ object Model:
                 mDepositDecisionWakeupTime = mDepositDecisionWakeupTime
               ),
               body = BlockBody.Minor(
-                events = events,
-                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                requests = events,
+                depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
         } yield minorBlock
@@ -586,8 +595,8 @@ object Model:
                 endTime = blockEndTime,
               ),
               body = BlockBody.Final(
-                events = events,
-                depositsRefunded = refundedThisBlock.map(_.cmd.request.requestId).toList
+                requests = events,
+                depositsRejected = refundedThisBlock.map(_.cmd.request.requestId).toList
               )
             )
         } yield finalBlock
@@ -735,15 +744,15 @@ object Model:
 
                 val BlockCycle.InProgress(_, blockStartTime, _, _) = state.blockCycle: @unchecked
 
-                val requestValidityEndTime = req.request.header.validityEnd
+                val requestValidityEndTime =
+                    cmd.depositRefundTxSeq.depositTx.depositProduced.requestValidityEndTime
 
                 for
                     seq <- DepositRefundTxSeq
                         .Parse(config.headConfig)(
                           depositTxBytes = req.request.body.l1Payload,
                           l2Payload = req.request.body.l2Payload,
-                          requestId = req.requestId,
-                          requestValidityEndTime = requestValidityEndTime
+                          requestId = req.requestId
                         )
                         .result
                         .fold(
@@ -754,11 +763,11 @@ object Model:
                         config.headConfig.txTiming.depositAbsorptionEndTime(requestValidityEndTime)
                     // For now, all deposits request should be valid by construction
                     _ <- MonadThrow[M].raiseUnless(
-                           blockStartTime < seq.depositTx.submissionDeadline
-                         )(RuntimeException("deposit past submissionDeadline"))
+                      blockStartTime < seq.depositTx.submissionDeadline
+                    )(RuntimeException("deposit past submissionDeadline"))
                     _ <- MonadThrow[M].raiseUnless(blockStartTime < depositAbsorptionEndTime)(
-                           RuntimeException("deposit past absorptionEndTime")
-                         )
+                      RuntimeException("deposit past absorptionEndTime")
+                    )
                     depositUtxo = seq.depositTx.depositProduced
                     newState = state
                         .pipe(
@@ -790,11 +799,11 @@ object Model:
                 _ <- liftS(DepositStatus.Submitted.submit(cmd.depositsForSubmission))
                 _ <- liftS(DepositStatus.Declined.decline(cmd.depositsToDecline))
                 _ <- StateT.liftF(
-                       log.debug(
-                         s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
-                             s"for rejection: ${cmd.depositsToDecline.size}"
-                       )
-                     )
+                  log.debug(
+                    s"MODEL>> SubmitDepositCommand, for submission: ${cmd.depositsForSubmission.size}, " +
+                        s"for rejection: ${cmd.depositsToDecline.size}"
+                  )
+                )
             yield ()
     }
 

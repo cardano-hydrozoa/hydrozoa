@@ -74,10 +74,7 @@ class CardanoBackendBlockfrost private (
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, pageSize, page, OrderEnum.asc)
-        ).flatMap {
-            case Left(error)  => IO.pure(Left(error))
-            case Right(utxos) => convertUtxosWithScripts(utxos)
-        }
+        ).map(_.map(convertUtxosWithoutScripts))
 
     override def utxosAt(
         address: ShelleyAddress,
@@ -87,13 +84,26 @@ class CardanoBackendBlockfrost private (
         paginate(page =>
             backendService.getUtxoService
                 .getUtxos(address.toBech32.get, unit, pageSize, page, OrderEnum.asc)
-        ).flatMap {
-            case Left(error)  => IO.pure(Left(error))
-            case Right(utxos) => convertUtxosWithScripts(utxos)
-        }
+        ).map(_.map(convertUtxosWithoutScripts))
     }
 
+    /** Converts UTXOs without fetching their reference scripts: any `scriptRef` on the resulting
+      * outputs is left as `None`.
+      *
+      * Used by [[utxosAt]]. None of its callers read the reference script off the returned UTXOs
+      * (they use only value/datum/input), so fetching scripts here would be pure waste — one extra
+      * Blockfrost /scripts request per ref-script UTXO, on a hot polling path. The one consumer
+      * that genuinely needs the script (the reference-script checker in
+      * `ScriptReferenceUtxos.resolve`) goes through [[resolve]], which keeps
+      * [[convertUtxosWithScripts]].
+      */
+    private def convertUtxosWithoutScripts(utxos: List[Utxo]): Utxos =
+        utxos.map(convert(_, scriptRef = None)).toMap
+
     /** Converts UTXOs with script fetching. Fetches reference scripts if needed before converting.
+      *
+      * Only used by [[resolve]], which backs the reference-script checker; the polling [[utxosAt]]
+      * path deliberately avoids the per-UTXO /scripts request via [[convertUtxosWithoutScripts]].
       */
     private def convertUtxosWithScripts(
         utxos: List[Utxo]

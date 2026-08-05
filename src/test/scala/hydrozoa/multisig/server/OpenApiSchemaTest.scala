@@ -9,6 +9,7 @@ import hydrozoa.config.node.MultiNodeConfig
 import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.NodeStatus
 import hydrozoa.multisig.consensus.{BlockWeaver, RequestSequencer}
+import hydrozoa.multisig.persistence.ConsensusStoreReader
 import java.nio.file.{Files, Path}
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
@@ -56,6 +57,7 @@ class OpenApiSchemaTest extends AnyFunSuite:
                       requestSequencerStub,
                       blockWeaverStub,
                       IO.pure(NodeStatus.Active),
+                      ConsensusStoreReader.empty,
                       None,
                       multiNodeConfig.headConfig,
                       HydrozoaServer.Config(adminUsername = "admin", adminPassword = "admin"),

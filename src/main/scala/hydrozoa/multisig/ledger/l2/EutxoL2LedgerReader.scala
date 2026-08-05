@@ -4,7 +4,7 @@ import scalus.cardano.address.Address
 import scalus.cardano.ledger.Utxos
 
 /** The read-only L2-ledger queries the user-facing HTTP server exposes for the **EUTXO reference
-  * ledger** (`GET /api/l2/utxos`, `GET /api/l2/transactions`).
+  * ledger** (`GET /l2/cardano-eutxo/utxos`, `GET /l2/cardano-eutxo/transactions`).
   *
   * Implemented only by [[hydrozoa.multisig.ledger.eutxol2.EutxoL2Ledger]], which holds its state
   * locally. A node wired to a remote ledger has no such reader, so the server is handed `None` and

@@ -5,7 +5,8 @@ import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l1.tx.EnrichedTx.Type
 import scala.util.Try
 import scalus.cardano.ledger.AuxiliaryData.Metadata as MD
-import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Hash32, Metadatum, ProtocolVersion, Transaction, Word64}
+import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Metadatum, ProtocolVersion, Transaction, Word64}
+import scalus.uplc.builtin.ByteString
 
 /** The metadata associated with hydrozoa L1 transactions serves two purposes:
   *
@@ -22,25 +23,20 @@ import scalus.cardano.ledger.{AssetName, AuxiliaryData, Coin, Hash32, Metadatum,
   *   - The CIP67 Head Tag (WARNING: this currently isn't compliant with the specification:
   *     https://github.com/cardano-hydrozoa/hydrozoa/issues/260)
   *   - The name of the transaction type
-  *   - A cbor-encoded payload, represented as a Metadatum.List of Metadatum.Bytes, where each
-  *     element is at most 64 bytes long.
+  *   - The head id
+  *   - A map of the transaction type's fields; each byte-string value must fit Cardano's 64-byte
+  *     metadatum cap.
   *
   * It should look something like:
   *
-  * { $CIP67HeadTag: { $TransactionTypeName: [ $cborChunk1, $cborChunk2, $cborChunk3, ...] } }
+  * { $CIP67HeadTag: { $TransactionTypeName: { $headId: { $field1: $value1, ... } } } }
   */
 sealed trait Metadata(val txType: EnrichedTx.Type) {
     def asMap: Map[Metadatum, Metadatum] = Map.empty
 
-    /** Create the auxiliary data for a specific transaction by cbor-encoding the desired metadata
-      * and chunking it into a list of bytes, where each element is no more than 64 bytes long.
-      *
-      * @param md
-      * @return
-      *
-      * The common structure is a metadata map, labeled by the CIP67 "HYDR" tag, pointing a map with
-      * the transaction type name, pointing at a map with the head ID, pointing at the actual
-      * Hydrozoa tx metadata.
+    /** Create the auxiliary data for a specific transaction: a metadata map, labeled by the CIP67
+      * "HYDR" tag, pointing at a map with the transaction type name, pointing at a map with the
+      * head ID, pointing at the actual Hydrozoa tx metadata ([[asMap]]).
       */
     final def asAuxData(headId: HeadId): AuxiliaryData = {
         val txTypeName = txType.toString
@@ -86,18 +82,20 @@ object Metadata {
       * @param depositFee
       *   The deposit fee, which the head will absorb from the deposit into equity.
       * @param l2PayloadHash
-      *   The L2 payload is passed out-of-band. This is the blake2b_256 hash of that payload
+      *   `blake2b_256` of the deposit's L2 payload — the payload itself is passed out-of-band, and
+      *   the parse verifies this hash pins it to the deposit. Once the deposit tx is signed, its
+      *   witnesses commit to the pin via the auxiliary-data hash (docs/l2-isomorphism.md).
       */
     case class Deposit(
         depositIx: Int,
         depositFee: Coin,
-        l2PayloadHash: Hash32,
+        l2PayloadHash: ByteString,
     ) extends Metadata(EnrichedTx.Type.Deposit) {
         override def asMap: Map[Metadatum, Metadatum] = Map.from(
           List(
             Metadatum.Text("depositIx") -> Metadatum.Int(depositIx),
             Metadatum.Text("depositFee") -> Metadatum.Int(depositFee.value),
-            Metadatum.Text("l2PayloadHash") -> Metadatum.Text(l2PayloadHash.toHex)
+            Metadatum.Text("l2PayloadHash") -> Metadatum.Bytes(l2PayloadHash)
           )
         )
     }
@@ -105,32 +103,21 @@ object Metadata {
     object Deposit extends Parser[Deposit](EnrichedTx.Type.Deposit) {
         override def parseInner(innerMap: Metadatum.Map): Either[ParseError, Deposit] = {
             val innerMapEntries = innerMap.entries
-            for {
-                depositIxRaw <- innerMapEntries
-                    .get(Metadatum.Text("depositIx"))
+
+            def required(key: String): Either[ParseError, Metadatum] =
+                innerMapEntries
+                    .get(Metadatum.Text(key))
                     .toRight(
                       MissingMetadataKeyForTransactionType(
-                        "depositIx",
+                        key,
                         innerMapEntries.keys.map(_.toString).toList
                       )
                     )
 
-                depositFeeRaw <- innerMapEntries
-                    .get(Metadatum.Text("depositFee"))
-                    .toRight(
-                      MissingMetadataKeyForTransactionType(
-                        "depositFee",
-                        innerMapEntries.keys.map(_.toString).toList
-                      )
-                    )
-                l2PayloadHashRaw <- innerMapEntries
-                    .get(Metadatum.Text("l2PayloadHash"))
-                    .toRight(
-                      MissingMetadataKeyForTransactionType(
-                        "l2PayloadHash",
-                        innerMapEntries.keys.map(_.toString).toList
-                      )
-                    )
+            for {
+                depositIxRaw <- required("depositIx")
+                depositFeeRaw <- required("depositFee")
+                l2PayloadHashRaw <- required("l2PayloadHash")
 
                 depositIx <- depositIxRaw match {
                     case i: Metadatum.Int => Right(i.value.intValue)
@@ -143,13 +130,13 @@ object Metadata {
                 }
 
                 l2PayloadHash <- l2PayloadHashRaw match {
-                    case i: Metadatum.Text => Right(i)
+                    case Metadatum.Bytes(b) => Right(b)
                     case _ => Left(WrongMetadataValue("l2PayloadHash", l2PayloadHashRaw))
                 }
             } yield Deposit(
               depositIx = depositIx,
               depositFee = Coin(depositFee),
-              l2PayloadHash = Hash32.fromHex(l2PayloadHash.value)
+              l2PayloadHash = l2PayloadHash
             )
         }
     }

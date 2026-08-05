@@ -34,7 +34,7 @@ class RocksDbL2StoreTest extends AnyFunSuite:
           blockNumber = BlockNumber(n),
           blockCreationEndTime = BigInt(n),
           absorbedDeposits = Nil,
-          refundedDeposits = Nil
+          rejectedDeposits = Nil
         )
 
     /** A fresh RocksDB store in a temp directory, cleaned up on release. */

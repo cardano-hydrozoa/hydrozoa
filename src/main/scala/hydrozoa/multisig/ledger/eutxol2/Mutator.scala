@@ -50,6 +50,9 @@ object HydrozoaTransactionMutator {
             )
         for
             _ <- L2ConformanceValidator.validate(config, state, l2Tx)
+            // Cross-head-replay pin: the L2 tx must carry this head's headId (unless identity
+            // isomorphism is on). Stateless — reclassified into screening in a later phase.
+            _ <- HeadIdPinValidator.validate(config, l2Tx.tx)
             // Upstream validators (applied alphabetically for ease of comparison in a file browser
             // FIXME/Note (Peter, 2025-07-22): I don't know if all of these will apply or if this list is exhaustive,
             // but I've removed the rules that I'm certain won't apply
@@ -81,6 +84,23 @@ object HydrozoaTransactionMutator {
             state = EvacuatingMutator.transit(config, scalusState.utxos, l2Tx)
         yield state
     }
+
+    /** Stateless auth pre-check for ledger screening: verify the L2 tx's vkey witnesses over its
+      * id, reusing the exact validator [[transit]] runs at submission
+      * ([[VerifiedSignaturesInWitnessesValidator]]). Signature verification reads neither the utxo
+      * state nor the block time, so an empty state and a placeholder time are safe (and keep the
+      * result byte-identical to the submission-time check).
+      */
+    def screenSignatures(
+        config: Config,
+        l2Tx: L2Tx
+    ): Either[String | TransactionException, Unit] =
+        VerifiedSignaturesInWitnessesValidator.validate(
+          CardanoLedgerContext
+              .fromCardanoNetwork(config, QuantizedInstant.fromSlot(config.slotConfig, 0L)),
+          L1State(utxos = Map.empty),
+          l2Tx.tx
+        )
 }
 
 /** TODO: Update
