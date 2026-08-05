@@ -3,7 +3,7 @@ package hydrozoa.lib.cardano.scalus.ledger
 import monocle.Focus
 import monocle.syntax.all.focus
 import scalus.cardano.address.{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart}
-import scalus.cardano.ledger.{AddrKeyHash, ProtocolParams, ScriptHash, StakeKeyHash, TaggedSortedSet, Transaction, TransactionWitnessSet, Utxo, Utxos, VKeyWitness}
+import scalus.cardano.ledger.{AddrKeyHash, ExUnitPrices, NonNegativeInterval, ProtocolParams, ScriptHash, StakeKeyHash, TaggedSortedSet, Transaction, TransactionWitnessSet, Utxo, Utxos, VKeyWitness}
 import scalus.cardano.onchain.plutus.prelude.Option as ScalusOption
 import scalus.cardano.onchain.plutus.v1.{Credential, StakingCredential}
 import scalus.cardano.onchain.plutus.v3.Address
@@ -24,8 +24,20 @@ extension (self: Transaction)
         .replace(TaggedSortedSet.empty[VKeyWitness])
 
 extension (self: ProtocolParams)
+    /** Zero out every fee component — base, per-byte, script-execution prices, and the
+      * reference-script cost. L2 transactions are fee-free including Plutus execution, so a builder
+      * balancing against these params leaves the fee at zero even when scripts run.
+      */
     def withZeroFees: ProtocolParams =
-        self.copy(txFeeFixed = 0, txFeePerByte = 0)
+        self.copy(
+          txFeeFixed = 0,
+          txFeePerByte = 0,
+          minFeeRefScriptCostPerByte = 0,
+          executionUnitPrices = ExUnitPrices(
+            priceMemory = NonNegativeInterval.zero,
+            priceSteps = NonNegativeInterval.zero
+          )
+        )
 
 def plutusAddressToShelley(addr: Address, network: Network): ShelleyAddress =
     val payment = addr.credential match
