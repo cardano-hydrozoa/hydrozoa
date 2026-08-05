@@ -251,11 +251,13 @@ case class RbrMbtSuite(
             utxos <- sut.harness.l1Snapshot
             payouts <- sut.firstPayoutsLeft.get
             errors <- sut.harness.sutErrors.get
-            obligationCount = committedObligationCount(lastState)
+            (initialObligations, depositedObligations) = obligationBreakdown(lastState)
+            obligationCount = initialObligations + depositedObligations
             alpha = alphaTerminal(obligationCount)
             betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
-              s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount\n" +
+              s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
+                  s"(initial=$initialObligations deposited=$depositedObligations)\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
         yield
@@ -283,11 +285,14 @@ case class RbrMbtSuite(
     /** The committed obligations the head will evacuate: the initial evacuation map plus the L2
       * outputs of every registered deposit (all committed by the commit-wait above).
       */
-    private def committedObligationCount(state: Model.ModelState): Int =
+    /** `(initial-map obligations, deposit-derived obligations)`. The initial evacuation map is the
+      * genesis L2 seed; the deposits are the datum-marked obligations the classifier can observe.
+      */
+    private def obligationBreakdown(state: Model.ModelState): (Int, Int) =
         val initial =
             state.params.multiNodeConfig.headConfig.initializationParameters.initialEvacuationMap.size
         val deposited = state.registeredDeposits.values.map(depositOutputCount).sum
-        initial + deposited
+        (initial, deposited)
 
     private def depositOutputCount(pd: Model.PendingDeposit): Int =
         Cbor.decode(pd.l2Payload.bytes).to[Queue[GenesisObligation]].value.size

@@ -513,6 +513,7 @@ object MultiPeerHeadHarness:
                 preinitPeerUtxosL1,
                 multiNodeConfig.headConfig.scriptReferenceUtxos,
                 multiNodeConfig.headConfig.cardanoInfo,
+                multiNodeConfig.headConfig.headMultisigAddress,
                 Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat),
               )
             )
@@ -734,6 +735,7 @@ object MultiPeerHeadHarness:
             preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
             scriptReferenceUtxos: hydrozoa.config.ScriptReferenceUtxos,
             cardanoInfo: CardanoInfo,
+            headMultisigAddress: ShelleyAddress,
             tracer: ContraTracer[IO, CardanoBackendEvent],
         ): IO[(L1Backend[IO], IO[Utxos])] =
             mode match
@@ -742,9 +744,12 @@ object MultiPeerHeadHarness:
                     // Blockfrost has no "all UTxOs" query, so scope the snapshot to the addresses
                     // that hold head-relevant UTxOs: the pre-init peer wallets (from
                     // `preinitPeerUtxosL1`), the treasury + dispute script addresses (where head
-                    // funds and open disputes sit), and the deploy-time burn address (where the
-                    // treasury + dispute reference scripts and the G2 setup ladder rungs live).
-                    // That matches the mock backend's whole-ledger view for the head's slice.
+                    // funds and open disputes sit), the deploy-time burn address (where the
+                    // treasury + dispute reference scripts and the G2 setup ladder rungs live), and
+                    // the head multisig address (where the regime witness utxo lives, both before
+                    // and after fallback — the treasury moves to the rule-based address on fallback
+                    // but the regime witness stays). That matches the mock backend's whole-ledger
+                    // view for the head's slice.
                     val peerAddresses = preinitPeerUtxosL1.values
                         .flatMap(_.values.map(_.address))
                         .collect { case a: ShelleyAddress => a }
@@ -754,6 +759,7 @@ object MultiPeerHeadHarness:
                       HydrozoaBlueprint.mkTreasuryAddress(cardanoInfo.network),
                       HydrozoaBlueprint.mkDisputeAddress(cardanoInfo.network),
                       DeploymentTx.mkBurnAddress(cardanoInfo.network),
+                      headMultisigAddress,
                     )
                     mkYaci(network, url, peerAddresses ++ scriptAddresses, tracer)
 
