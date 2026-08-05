@@ -203,13 +203,13 @@ integration-yaci:
   trap 'just notify "integration-yaci"' EXIT
   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly hydrozoa.integration.stage1.Stage1PropertiesYaci"
 
-# Heavy 4-node Docker e2e L2-propagation test (Yaci devnet): builds the image, stages the launcher,
-# then runs the CI-excluded DockerPropagationTest. Needs a running Docker; minutes-long. See the
-# E2E section of docs/integration-stages.md.
+# Heavy Docker smoke-test on the shipped topology — 2 head + 4 coil peers against a local Yaci
+# devnet: builds the image, stages the launcher, then runs the CI-excluded DockerSmokeTest. Needs a
+# running Docker; minutes-long. See the E2E section of docs/integration-stages.md.
 integration-e2e-docker:
   #!/usr/bin/env bash
   trap 'just notify "integration-e2e-docker"' EXIT
-  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.DockerPropagationTest"
+  HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt Docker/publishLocal stage "integration/testOnly hydrozoa.integration.e2e.DockerSmokeTest"
 
 precommit: lint-check fmt-check nixfmt-check
   just notify "precommit"

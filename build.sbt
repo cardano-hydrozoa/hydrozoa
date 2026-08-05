@@ -234,7 +234,7 @@ lazy val integration: Project = (project in file("integration"))
       // named explicitly by `testOnly <FQN>`, so the exclusion is lifted when
       // HYDROZOA_INCLUDE_HEAVY_TESTS=1 is set — that is how the `just` recipes run one by FQN:
       //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …Stage1PropertiesYaci"   (just integration-yaci)
-      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …DockerPropagationTest"  (just integration-e2e-docker)
+      //   HYDROZOA_INCLUDE_HEAVY_TESTS=1 sbt "integration/testOnly …DockerSmokeTest"  (just integration-e2e-docker)
       Test / testOptions ++=
           (if (sys.env.get("HYDROZOA_INCLUDE_HEAVY_TESTS").contains("1")) Seq.empty
            else
@@ -242,7 +242,7 @@ lazy val integration: Project = (project in file("integration"))
                  Tests.Exclude(
                    Seq(
                      "hydrozoa.integration.stage1.Stage1PropertiesYaci",
-                     "hydrozoa.integration.e2e.DockerPropagationTest"
+                     "hydrozoa.integration.e2e.DockerSmokeTest"
                    )
                  )
                )),
