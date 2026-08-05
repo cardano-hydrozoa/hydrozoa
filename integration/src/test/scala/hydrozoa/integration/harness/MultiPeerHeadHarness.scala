@@ -402,10 +402,7 @@ object MultiPeerHeadHarness:
                           )
                         ),
                     generateNodeOperationMultisigConfig = hc =>
-                        generateNodeOperationMultisigConfig(
-                          // Slow the CL poll to 1s for Yaci so it doesn't hammer the yaci-store; the
-                          // Yaci path pairs this with `yaciTxTiming`'s longer deposit maturity to
-                          // satisfy the `CL <= depositMaturityDuration / 5` invariant.
+                        val nomc = generateNodeOperationMultisigConfig(
                           maxPollingPeriod =
                               if scriptReferenceUtxos.isDefined then 1.second
                               else hc.maxCardanoLiaisonPollingPeriod / 2,
@@ -414,6 +411,13 @@ object MultiPeerHeadHarness:
                             hardStackMinPeriod = 250.millis,
                           ),
                         )
+                        // Yaci: pin the CL poll to exactly 1s (not a uniform sample up to 1s) so it
+                        // doesn't storm the yaci-store with sub-second resubmits of an in-flight
+                        // effect. `yaciTxTiming`'s 6s deposit maturity keeps this within the
+                        // `CL <= depositMaturityDuration / 5` invariant.
+                        if scriptReferenceUtxos.isDefined then
+                            nomc.map(_.copy(cardanoLiaisonPollingPeriod = 1.second))
+                        else nomc
                   )
                   .label("MultiNodeConfig")
             )
@@ -548,7 +552,6 @@ object MultiPeerHeadHarness:
                           coilNum,
                           system,
                           hooks.wrapBackend(PeerId.Coil(coilNum), cardanoBackend),
-                          multiNodeConfig,
                           transports.coilUplinks(coilNum),
                           hooks.tracer.contramap(Event.Coil(coilNum, _)),
                         )
@@ -1158,11 +1161,6 @@ object MultiPeerHeadHarness:
             callerTracer: ContraTracer[IO, HeadRegimeManagerEvent],
         ): Resource[IO, Peer] =
             val nodeConfig = multiNodeConfig.nodeConfigs(peerNum)
-            val slf4jMrm: ContraTracer[IO, HeadRegimeManagerEvent] =
-                Slf4jTracer.sink.contramap(
-                  HeadMultisigRegimeManagerEventFormat.humanFormat(peerNum)
-                )
-            val mrmTracer = slf4jMrm |+| callerTracer
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             val peerFactory: Resource[IO, Transport.ContextFn[PeerTransport]] =
                 Resource.pure((_: Transport.ContextArg) => network.peerTransport)
@@ -1191,7 +1189,7 @@ object MultiPeerHeadHarness:
                           cardanoBackend,
                           l2Ledger,
                           persistence,
-                          mrmTracer,
+                          callerTracer,
                           peerFactory,
                           hubFactory,
                         )
@@ -1204,20 +1202,9 @@ object MultiPeerHeadHarness:
             coilNum: CoilPeerNumber,
             system: ActorSystem[IO],
             cardanoBackend: L1Backend[IO],
-            multiNodeConfig: MultiNodeConfig,
             uplink: Transport.ContextFn[CoilTransport],
             callerTracer: ContraTracer[IO, CoilRegimeManagerEvent],
         ): Resource[IO, Coil] =
-            val nHeadPeers = multiNodeConfig.nHeadPeers
-            // Synthetic `HeadPeerNumber` label so coil log lines stay distinguishable from head
-            // ones in the same run; passes through `CoilMultisigRegimeManagerEventFormat` which
-            // still delegates to the head per-actor formatters (per the TODO inside that object).
-            val labelNum = HeadPeerNumber(nHeadPeers + coilNum.convert)
-            val slf4jMrm: ContraTracer[IO, CoilRegimeManagerEvent] =
-                Slf4jTracer.sink.contramap(
-                  CoilMultisigRegimeManagerEventFormat.humanFormat(labelNum, coilNum)
-                )
-            val mrmTracer = slf4jMrm |+| callerTracer
             val persistenceTracer = Slf4jTracer.sink.contramap(PersistenceEventFormat.humanFormat)
             val uplinkFactory: Resource[IO, Transport.ContextFn[CoilTransport]] =
                 Resource.pure(uplink)
@@ -1233,7 +1220,7 @@ object MultiPeerHeadHarness:
                       cardanoBackend,
                       l2Ledger,
                       persistence,
-                      mrmTracer,
+                      callerTracer,
                       uplinkFactory,
                     )
                     _ <- Resource.eval(system.actorOf(mrm, s"cmrm-${coilNum.convert}"))

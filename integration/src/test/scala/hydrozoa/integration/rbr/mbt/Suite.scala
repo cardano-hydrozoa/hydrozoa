@@ -211,16 +211,6 @@ case class RbrMbtSuite(
                   ),
               cardanoBackendMode = state.params.cardanoBackendMode,
             )
-            // Force block/major production so deposits settle and (post-arming) fallback trips.
-            // Stop kicking once fallback is dispatched: post-fallback the RBR flow runs
-            // autonomously, and continued kicks keep hard-confirming stacks that drive the
-            // CardanoLiaison's (ungated) `runEffects` polling into a store-hammering loop.
-            _ <- Resource.make(
-              IO.race(
-                fallbackDispatched.get,
-                (MultiPeerHeadHarness.submitKickRequest(harness) >> IO.sleep(1.second)).foreverM,
-              ).start
-            )(_.cancel)
         yield Sut(
           harness,
           fallbackDispatched,

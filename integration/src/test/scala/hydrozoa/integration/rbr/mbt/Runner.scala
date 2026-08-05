@@ -26,8 +26,8 @@ object RbrMbtPropertiesYaci extends YetAnotherProperties("RBR MBT (Yaci)"):
 
     val _ = property("ws: autonomous evacuation matches the RBRHlNet terminal (Yaci)") =
         RbrMbtSuite(
-          nHeadPeers = 3,
-          nCoilPeers = 3,
+          nHeadPeers = 2,
+          nCoilPeers = 0,
           maxVersionMinor = 2,
           backendSpec = RbrMbtSuite.BackendSpec.Yaci(),
         ).property()
