@@ -23,9 +23,16 @@
         jdk = pkgs.openjdk25;
         # The nixpkgs sbt launcher (1.x) reads project/build.properties and bootstraps whatever
         # sbt version it names — including sbt 2.x — so no launcher pin is needed here.
-        # NB: the bundled `sbtn` thin client is sbt 1.x and cannot drive an sbt 2 server
-        # (it reports `unknown event: sbt/exec`); use `sbt`, not `sbtn`, until nixpkgs ships sbt 2.
         sbt0 = pkgs.sbt.override { jre = jdk; };
+        # The nixpkgs `sbt` package also bundles the `sbtn` thin client (sbt 1.x), which cannot
+        # drive an sbt 2 server (it reports `unknown event: sbt/exec`). Strip it so only `sbt` is on
+        # PATH — nobody should reach for the broken client by habit. Restore once nixpkgs ships an
+        # sbt 2 `sbtn`.
+        sbtNoSbtn = pkgs.symlinkJoin {
+          name = "sbt-no-sbtn";
+          paths = [ sbt0 ];
+          postBuild = "rm -f $out/bin/sbtn";
+        };
         visualvm = pkgs.visualvm.override { jdk = jdk; };
         # Define the hooks
         pre-commit-check = git-hooks.lib.${system}.run {
@@ -56,7 +63,7 @@
             libnotify # used in justfile
             ltex-ls # Language server for markdown: https://github.com/valentjn/ltex-ls
             nixfmt
-            sbt0
+            sbtNoSbtn
             scala-cli
             scalafix
             scalafmt

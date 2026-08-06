@@ -86,7 +86,7 @@ object Export {
 
     /** Main method for standalone execution.
       *
-      * Run with: nix develop --command sbtn "runMain
+      * Run with: nix develop --command sbt "runMain
       * hydrozoa.rulebased.ledger.l1.script.plutus.Export"
       */
     def main(args: Array[String]): Unit = {

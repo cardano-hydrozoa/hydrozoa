@@ -142,7 +142,7 @@ not using Nix (the runtime passes `--sun-misc-unsafe-memory-access=allow`).
 
 ```bash
 nix develop            # or direnv (.envrc = use flake .)
-sbt compile            # sbtn for the resident client
+sbt compile            # compile the project
 just test              # unit tests
 just integration-fast  # multi-peer integration subset
 ```
