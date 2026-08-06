@@ -24,6 +24,12 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
 
     private val evacuationDatum = RbrDatumSentinels.inline("evacuation")
 
+    /** Short deposit validity so a deposit is absorbable ~this + maturity (7s) after submission —
+      * well inside the suite's commit window — instead of the stage4 default 2min, which always
+      * outlasts the window and forces deposits down the refund path.
+      */
+    private val depositValidityDuration = 20.seconds
+
     // TODO: L2 tx coverage. This generator only submits L1 deposits; stage4's `genL2TxCommand`
     // (stage4/Generator.scala) is not wired in. Mix it into the picker via `Gen.frequency`
     // alongside `genRegisterDepositCommand` (mirroring stage4/Generator.scala's ~10:1 weighting)
@@ -41,7 +47,8 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
                             peer,
                             1.second,
                             evacuationDatum,
-                            l2OutputAddress = Some(RbrSeed.payoutAddress)
+                            l2OutputAddress = Some(RbrSeed.payoutAddress),
+                            depositValidityDuration = depositValidityDuration
                           )(state)
                           .map(_.map(AnyCommand.apply(_)).getOrElse(noOp[ModelState, Sut]))
           yield cmd

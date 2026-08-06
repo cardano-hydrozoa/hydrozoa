@@ -210,6 +210,11 @@ object CommandGenerators:
         // The RBR MBT pins this to a dedicated script address so evacuation outputs can never be
         // reselected as a peer's fee/collateral (which would consume them and drop the L1 count).
         l2OutputAddress: Option[ShelleyAddress] = None,
+        // Deposit validity window: the deposit becomes absorbable only at
+        // `validityEnd + depositSubmission + depositMaturity`, i.e. ~this duration after submission.
+        // The RBR MBT shortens it so deposits absorb within its commit window instead of taking the
+        // refund path.
+        depositValidityDuration: FiniteDuration = 2.minutes,
     )(state: ModelState): Gen[Option[RegisterAndSubmitDepositCommand]] = {
         val config = state.params.multiNodeConfig
         val peerAddress = config.addressOf(peerNum)
@@ -285,7 +290,7 @@ object CommandGenerators:
                                         requestValidityEndTime = RequestValidityEndTime(
                                           QuantizedInstant.ofEpochSeconds(
                                             config.slotConfig,
-                                            (submissionTime + 2.minutes).getEpochSecond
+                                            (submissionTime + depositValidityDuration).getEpochSecond
                                           )
                                         )
 
