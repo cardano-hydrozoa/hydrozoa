@@ -7,11 +7,19 @@ import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWi
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
+import scalus.cardano.ledger.TransactionInput
 
 /** The running system-under-test: the multi-peer head harness, the milestone `Deferred`s the
   * observer completes, and `settlementFirewallArmed` — the dynamic gate the firewall consults. It
   * stays disarmed while the generated deposits settle (so their majors commit on-chain), then
   * `beforeFinalize` arms it to trip fallback.
+  *
+  * `submittedSettlementInputs` accumulates the L1 inputs of every settlement the SUT actually put
+  * on the wire (observed at the firewall — a submitted settlement, not a mere ledger decision to
+  * absorb). Crossed against the L1 snapshot at fallback it tells `beforeFinalize` which deposits
+  * were genuinely committed (spent by a landed settlement) versus left pending for the
+  * cardano-liaison refund path — so the model can agree with the SUT on each deposit's fate without
+  * racing "peer submitted the tx" against "the tx appears on chain".
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -19,6 +27,7 @@ final case class Sut(
     evacuationDone: Deferred[IO, Unit],
     firstPayoutsLeft: Ref[IO, Option[Int]],
     settlementFirewallArmed: Ref[IO, Boolean],
+    submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
 )
 
 /** SUT-side command execution. */

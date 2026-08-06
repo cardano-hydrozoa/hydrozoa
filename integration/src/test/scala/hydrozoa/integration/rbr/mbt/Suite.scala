@@ -5,15 +5,15 @@ import cats.effect.{Deferred, IO, Ref, Resource}
 import cats.syntax.all.*
 import hydrozoa.config.head.network.CardanoNetwork
 import hydrozoa.config.node.MultiNodeConfig
-import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.harness.MultiPeerHeadHarness.CardanoBackend as HarnessCardanoBackend
 import hydrozoa.integration.harness.MultiPeerHeadHarness.Transport.Mode as TransportMode
+import hydrozoa.integration.harness.{DiagnosticTracers, MultiPeerHeadHarness}
 import hydrozoa.integration.rbr.model.petri.hlpn.RBRHlNet
 import hydrozoa.integration.rbr.property.{ObservableMarking, RbrSeed}
 import hydrozoa.integration.stage4.Model
 import hydrozoa.integration.yaci.{DevKit, YaciDevnet, YaciSetup}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
-import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, yaciTestSauceGenesis}
+import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
 import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
@@ -60,6 +60,13 @@ case class RbrMbtSuite(
 
     private val scenarioTimeout: FiniteDuration = 7.minutes
     private val quiescenceDelay: FiniteDuration = 2.seconds
+
+    /** How long `beforeFinalize` waits, best-effort, for the generated deposits to commit before
+      * arming the firewall. Long enough to clear deposit maturity + one settlement so the common
+      * path exercises deposit evacuation; on expiry we arm anyway and the stragglers take the
+      * refund path (the committed-set computation keeps the model in agreement either way).
+      */
+    private val depositCommitWindow: FiniteDuration = 90.seconds
 
     private val log: ContraTracer[IO, Slf4jMsg] =
         Slf4jTracer.sink.contramap(Slf4jMsgFormat.humanFormat("RbrMbt.Suite"))
@@ -187,6 +194,7 @@ case class RbrMbtSuite(
             firstPayoutsLeft <- Resource.eval(Ref[IO].of(Option.empty[Int]))
             settlementFirewallArmed <- Resource.eval(Ref[IO].of(false))
             peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
+            submittedSettlementInputs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
@@ -194,23 +202,34 @@ case class RbrMbtSuite(
               testPeers = state.params.testPeers,
               takeoffTime = state.takeoffTime,
               tracer = MultiPeerHeadHarness.humanFormatTracer(nHeadPeers) |+|
+                  // Reusable test-side diagnostic tracer (composed, not baked into production
+                  // formatting) that surfaces the RBA's candidate-map / resolved-kzg detail.
+                  DiagnosticTracers.rbrDiagnostics |+|
                   observerTracer(
                     fallbackDispatched,
                     evacuationDone,
                     peersEvacuationDone,
                     firstPayoutsLeft,
                   ),
-              // Dynamic gate: drop settlements only once armed (in beforeFinalize, after the
-              // generated deposits have settled on-chain) — so their majors commit before fallback.
+              // Dynamic gate: drop settlements only once armed (in beforeFinalize, once the
+              // generated deposits are in a determinate on-chain state) — tripping fallback.
               wrapBackend = (peerId, backend) =>
                   FirewalledCardanoBackend(
                     underlying = backend,
                     shouldDrop = (etx: EnrichedTx[?]) =>
                         settlementFirewallArmed.get
                             .map(_ && etx.transactionFamily == "SettlementTx"),
-                    firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId),
+                    // Record the inputs of every settlement that clears the firewall, so the
+                    // committed-deposit set can be derived at fallback (see [[Sut]]).
+                    firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+|
+                        settlementAbsorptionObserver(submittedSettlementInputs),
                   ),
               cardanoBackendMode = state.params.cardanoBackendMode,
+              // Evacuation payouts land at `RbrSeed.payoutAddress`, which is neither a peer wallet
+              // nor a head script address — so the Yaci `l1Snapshot` would otherwise miss every
+              // evacuation output and `beta` would undercount. (The mock backend sees the whole
+              // ledger and ignores this.)
+              extraSnapshotAddresses = List(RbrSeed.payoutAddress),
             )
         yield Sut(
           harness,
@@ -218,37 +237,65 @@ case class RbrMbtSuite(
           evacuationDone,
           firstPayoutsLeft,
           settlementFirewallArmed,
+          submittedSettlementInputs,
         )
 
-    // TODO: refund-path sibling suite. The current flow awaits every registered deposit before
-    // arming the firewall, so `registeredDeposits ≡ committedByFallback` and the cardano-liaison
-    // refund path (deposits still pending at fallback get refunded to the originating peer's L1
-    // address) is never exercised. Add a sibling `ModelBasedSuite` that arms the firewall while
-    // deposits are in flight; split `registeredDeposits` into `committedByFallback` +
-    // `pendingAtFallback` and assert (a) alpha with `initial + committedByFallback` matches beta
-    // on the treasury side, and (b) each `pendingAtFallback` deposit's L1 utxo reappears at the
-    // originating peer's address.
+    /** Firewall observer that records the L1 inputs of every settlement the SUT actually submits
+      * (i.e. clears the firewall and reaches the backend). Crossed against the L1 snapshot at
+      * fallback, `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed
+      * settlement from one whose deposit tx simply hasn't surfaced yet — the distinction the old
+      * "utxo absent from the snapshot" check could not make.
+      */
+    private def settlementAbsorptionObserver(
+        submittedSettlementInputs: Ref[IO, Set[TransactionInput]]
+    ): ContraTracer[IO, FirewalledCardanoBackendEvent] =
+        ContraTracer[IO, FirewalledCardanoBackendEvent] {
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx, _)
+                if etx.transactionFamily == "SettlementTx" =>
+                submittedSettlementInputs.update(_ ++ etx.tx.body.value.inputs.toSet)
+            case _ => IO.unit
+        }
+
+    // TODO: assert the refund path explicitly. Deposits still pending at fallback (not absorbed
+    // into a committed major) are excluded from `alpha` here and left to the cardano-liaison refund
+    // path, which this suite exercises but does not verify. Deliberately inject racing (arm the
+    // firewall while deposits are in flight) and assert each pending deposit's value reappears at
+    // the originating peer's L1 address — likely by stamping deposits with a refund sentinel datum
+    // so `beta` can bucket refunds directly rather than inferring them from addresses.
     override def beforeFinalize(lastState: Model.ModelState, sut: Sut): IO[Prop] =
         val depositUtxos = lastState.registeredDeposits.values.map(_.depositProduced).toSet
         for
-            _ <- log.info(s"beforeFinalize: awaiting ${depositUtxos.size} deposit(s) to commit")
-            // 1. Wait until every deposit L1 utxo is consumed by a settlement (committed on-chain).
-            _ <- awaitDepositsCommitted(sut, depositUtxos).timeout(scenarioTimeout)
+            _ <- log.info(
+              s"beforeFinalize: awaiting up to $depositCommitWindow for " +
+                  s"${depositUtxos.size} deposit(s) to commit"
+            )
+            // 1. Best-effort: wait for the deposits to commit (so the common path evacuates them),
+            //    but arm anyway once the window elapses — stragglers then take the refund path.
+            _ <- awaitDepositsCommitted(sut, depositUtxos).timeoutTo(
+              depositCommitWindow,
+              log.info("beforeFinalize: commit window elapsed; arming with deposit(s) pending"),
+            )
             // 2. Arm the firewall → the next settlement is dropped → fallback.
             _ <- sut.settlementFirewallArmed.set(true)
             _ <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
+            // 3. Snapshot at fallback (before refunds/evacuation move things) to fix the committed
+            //    set: a deposit is committed iff a submitted settlement spent it AND it is now gone.
+            fallbackUtxos <- sut.harness.l1Snapshot
+            submittedInputs <- sut.submittedSettlementInputs.get
             _ <- sut.evacuationDone.get.timeout(scenarioTimeout)
             _ <- IO.sleep(quiescenceDelay)
             utxos <- sut.harness.l1Snapshot
             payouts <- sut.firstPayoutsLeft.get
             errors <- sut.harness.sutErrors.get
-            (initialObligations, depositedObligations) = obligationBreakdown(lastState)
+            (initialObligations, depositedObligations) =
+                obligationBreakdown(lastState, submittedInputs, fallbackUtxos)
             obligationCount = initialObligations + depositedObligations
             alpha = alphaTerminal(obligationCount)
             betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
-                  s"(initial=$initialObligations deposited=$depositedObligations)\n" +
+                  s"(initial=$initialObligations committed-deposits=$depositedObligations " +
+                  s"of ${depositUtxos.size} deposit(s))\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
         yield
@@ -262,27 +309,43 @@ case class RbrMbtSuite(
                             s"autonomous match failed (SUT RBA saw $payouts payouts):\n" +
                             s"  alpha (model): $alpha\n  beta  (L1):    $beta"
 
-    /** Poll the shared L1 until none of the deposit utxos remain — each was consumed by the
-      * settlement that absorbed it into a committed major.
+    /** Poll the shared L1 until every deposit is committed: a settlement the SUT actually submitted
+      * spent its utxo (`submittedSettlementInputs`) AND that utxo is gone from L1 (the settlement
+      * landed). Requiring both — rather than "utxo absent from the snapshot" — avoids mistaking a
+      * deposit that simply hasn't surfaced on L1 yet for a committed one. The caller bounds this
+      * with `depositCommitWindow` and arms anyway on expiry, so an un-committed straggler is left
+      * to the refund path rather than hanging the test.
       */
     private def awaitDepositsCommitted(sut: Sut, depositUtxos: Set[TransactionInput]): IO[Unit] =
         def loop: IO[Unit] =
-            sut.harness.l1Snapshot.flatMap { utxos =>
-                if depositUtxos.intersect(utxos.keySet).isEmpty then IO.unit
-                else IO.sleep(500.millis) >> loop
-            }
+            for
+                utxos <- sut.harness.l1Snapshot
+                submittedInputs <- sut.submittedSettlementInputs.get
+                committed = depositUtxos.forall(d =>
+                    submittedInputs.contains(d) && !utxos.contains(d)
+                )
+                _ <- IO.unlessA(committed)(IO.sleep(500.millis) >> loop)
+            yield ()
         if depositUtxos.isEmpty then IO.unit else loop
 
-    /** The committed obligations the head will evacuate: the initial evacuation map plus the L2
-      * outputs of every registered deposit (all committed by the commit-wait above).
+    /** `(initial-map obligations, committed-deposit obligations)`. The initial evacuation map is
+      * the genesis L2 seed (always evacuated). A registered deposit contributes its obligations
+      * only if it was committed by fallback: a settlement the SUT submitted spent its L1 utxo
+      * (`submittedInputs`) AND that utxo is gone from the fallback snapshot (the settlement
+      * landed). Deposits failing either test were left pending and are refunded, not evacuated.
       */
-    /** `(initial-map obligations, deposit-derived obligations)`. The initial evacuation map is the
-      * genesis L2 seed; the deposits are the datum-marked obligations the classifier can observe.
-      */
-    private def obligationBreakdown(state: Model.ModelState): (Int, Int) =
+    private def obligationBreakdown(
+        state: Model.ModelState,
+        submittedInputs: Set[TransactionInput],
+        fallbackUtxos: Utxos,
+    ): (Int, Int) =
         val initial =
             state.params.multiNodeConfig.headConfig.initializationParameters.initialEvacuationMap.size
-        val deposited = state.registeredDeposits.values.map(depositOutputCount).sum
+        val committed = state.registeredDeposits.values.filter(pd =>
+            submittedInputs.contains(pd.depositProduced) &&
+                !fallbackUtxos.contains(pd.depositProduced)
+        )
+        val deposited = committed.map(depositOutputCount).sum
         (initial, deposited)
 
     private def depositOutputCount(pd: Model.PendingDeposit): Int =

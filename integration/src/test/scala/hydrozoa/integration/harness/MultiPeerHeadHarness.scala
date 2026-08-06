@@ -271,6 +271,7 @@ object MultiPeerHeadHarness:
         tracer: ContraTracer[IO, Event],
         wrapBackend: (PeerId, L1Backend[IO]) => L1Backend[IO],
         cardanoBackendMode: CardanoBackend.Mode = CardanoBackend.Mode.Mock,
+        extraSnapshotAddresses: List[ShelleyAddress] = Nil,
     ): Resource[IO, Harness[Option[RequestSequencer.Handle]]] =
         val preinitPeerUtxosL1 =
             yaciTestSauceGenesis(testPeers.cardanoNetwork.network)(testPeers).map {
@@ -295,6 +296,7 @@ object MultiPeerHeadHarness:
             preinitPeerUtxosL1 = preinitPeerUtxosL1,
             takeoffTime = takeoffTime,
             startEpochMs = startEpochMs,
+            extraSnapshotAddresses = extraSnapshotAddresses,
           ),
           Hooks[Option[RequestSequencer.Handle]](
             tracer = tracer,
@@ -437,6 +439,10 @@ object MultiPeerHeadHarness:
         preinitPeerUtxosL1: Map[HeadPeerNumber, Utxos],
         takeoffTime: Option[Instant],
         startEpochMs: Long,
+        // Extra addresses to union into the Yaci `l1Snapshot` beyond the auto-derived peer/script
+        // set — for UTxOs a test needs to observe that live elsewhere (e.g. the RBR MBT's evacuation
+        // payout address). Ignored by the mock backend, which already sees the whole ledger.
+        extraSnapshotAddresses: List[ShelleyAddress] = Nil,
     )
 
     /** Roll-up of every event emitted by the regime managers the harness owns.
@@ -519,6 +525,7 @@ object MultiPeerHeadHarness:
                 multiNodeConfig.headConfig.cardanoInfo,
                 multiNodeConfig.headConfig.headMultisigAddress,
                 Slf4jTracer.sink.contramap(CardanoBackendEventFormat.humanFormat),
+                extraSnapshotAddresses,
               )
             )
             (cardanoBackend, l1Snapshot) = backendAndSnapshot
@@ -707,8 +714,8 @@ object MultiPeerHeadHarness:
 
         /** The Yaci devnet's `Custom` network from a live `devKit.devnetInfo` query: its slot
           * config (zeroTime/slotLength) and protocol magic, with the devnet's live protocol params
-          * (incl. cost models — fetched from Blockfrost, not the bundled `DevKit.yaciParams`, so the
-          * tx builder's cost models match the image and Plutus txs don't fail
+          * (incl. cost models — fetched from Blockfrost, not the bundled `DevKit.yaciParams`, so
+          * the tx builder's cost models match the image and Plutus txs don't fail
           * `PPViewHashesDontMatch`). Call after `devKit.reset()` so the slot anchor matches the
           * fresh chain. Pass `protocolParams` explicitly to override the live fetch.
           */
@@ -740,6 +747,7 @@ object MultiPeerHeadHarness:
             cardanoInfo: CardanoInfo,
             headMultisigAddress: ShelleyAddress,
             tracer: ContraTracer[IO, CardanoBackendEvent],
+            extraSnapshotAddresses: List[ShelleyAddress],
         ): IO[(L1Backend[IO], IO[Utxos])] =
             mode match
                 case Mode.Mock => mkMock(preinitPeerUtxosL1, scriptReferenceUtxos, cardanoInfo)
@@ -751,8 +759,9 @@ object MultiPeerHeadHarness:
                     // treasury + dispute reference scripts and the G2 setup ladder rungs live), and
                     // the head multisig address (where the regime witness utxo lives, both before
                     // and after fallback — the treasury moves to the rule-based address on fallback
-                    // but the regime witness stays). That matches the mock backend's whole-ledger
-                    // view for the head's slice.
+                    // but the regime witness stays), plus any `extraSnapshotAddresses` the test
+                    // supplies (e.g. the RBR evacuation payout address). That matches the mock
+                    // backend's whole-ledger view for the head's slice.
                     val peerAddresses = preinitPeerUtxosL1.values
                         .flatMap(_.values.map(_.address))
                         .collect { case a: ShelleyAddress => a }
@@ -764,7 +773,12 @@ object MultiPeerHeadHarness:
                       DeploymentTx.mkBurnAddress(cardanoInfo.network),
                       headMultisigAddress,
                     )
-                    mkYaci(network, url, peerAddresses ++ scriptAddresses, tracer)
+                    mkYaci(
+                      network,
+                      url,
+                      (peerAddresses ++ scriptAddresses ++ extraSnapshotAddresses).distinct,
+                      tracer
+                    )
 
         /** Real Yaci devnet backend over its Blockfrost-compatible API, shared by every peer (the
           * devnet is the shared ledger). The `l1Snapshot` unions the UTxOs at each address the
