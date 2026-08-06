@@ -63,7 +63,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
 - **Roles.** Head peers: full consensus participants (lead blocks/stacks, sign soft- and
   hard-acks, serve the user HTTP API). Coil peers: constant followers that sign hard-acks only;
   they run no HTTP server and no WS server — each dials its hub head peer's `/hub` route
-  (`design/coil-network.md` §2, §4.3). The L1 multisig is
+  (`docs/spec/coil-network.md` §2, §4.3). The L1 multisig is
   `AllOf(headVKeys) ∧ AtLeast(coilQuorum, coilVKeys)`.
 - **State.** Each node keeps two RocksDB stores under its data dir: the consensus store
   (`peer-<label>/rocksdb`) and the EUTXO ledger store
@@ -91,7 +91,7 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
 | 8081 | head-1 user/admin HTTP API | users, admins | `peer-private.json` (`httpHost`/`httpPort`) — in-container `8080`, published to host `8081` |
 | 4001 | hydrozoa mesh WS server: `/head` (mesh), `/hub` (hub→coil) | other head peers; hubbed coil peers | `webSocketAddress` in the shared head config — **bind address == dialed address** |
 
-Head-mesh dialing convention: lower-numbered peer dials higher (`design/coil-network.md` §4.3).
+Head-mesh dialing convention: lower-numbered peer dials higher (`docs/spec/coil-network.md` §4.3).
 Coil peers dial out only; they need no inbound port at all. Every node also needs outbound HTTPS
 to Blockfrost (`blockfrostApiKey` in `peer-private.json`).
 
@@ -361,7 +361,7 @@ Caveats:
   `/opt/docker/.hydrozoa-data`.
 - **The head initializes only when all head peers + at least `coilQuorum` coil peers are up.** Start
   order doesn't matter (dialers retry); stack 0 hard-confirms with all head signatures +
-  `coilQuorum` coil signatures (`design/coil-network.md` §5.7).
+  `coilQuorum` coil signatures (`docs/spec/coil-network.md` §5.7).
 - **Rootless docker (NixOS):** the mesh network pins `com.docker.network.driver.mtu: 1400` and each
   node sets an upstream `dns:` — with slirp4netns's default MTU / resolver, outbound TLS to
   Blockfrost can fail. If containers have no outbound connectivity at all, restart the daemon

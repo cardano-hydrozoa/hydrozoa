@@ -73,8 +73,9 @@ sbt "benchmark / Jmh / run -i 5 -wi 5 -f1 -t1"
 
 ## Design specifications
 
-Durable design specifications live in `design/` (a top-level directory). Specs are added here as
-they are written — none are committed on this branch yet.
+`design/` (a top-level directory) is a scratchpad for **in-flight** feature design: a spec lives
+there while its feature is being built, then graduates into `docs/spec/` as an as-built reference
+once it lands. It is currently empty (a `.gitkeep` holds the directory).
 
 ## Documentation
 
@@ -97,6 +98,12 @@ Working design and reference docs (`docs/spec/`):
   transient-token compartment and projection-based validation.
 - [`l2-isomorphism.md`](docs/spec/l2-isomorphism.md) — driving the EUTXO L2 ledger with native Cardano
   txs: headId pin, screening vs submission, how deposits pin their L2 payload, backend selection.
+- [`coil-network.md`](docs/spec/coil-network.md) — coil-ready peers: the follower-only node type, hub
+  fan-out (`CoilRelay`/`CoilAckSequencer`), threshold multisig, and head↔coil liaison lanes.
+- [`persistence-and-crash-recovery.md`](docs/spec/persistence-and-crash-recovery.md) — durable
+  consensus data + crash recovery: per-actor persistence, RocksDB CFs/journals, snapshot + replay.
+- [`init-tx-parsing.md`](docs/spec/init-tx-parsing.md) — the head parses its init tx from config
+  instead of rebuilding it; the builder lives in the `hydrozoa.bootstrap` submodule.
 
 **API**
 - [`l2-query-endpoints.md`](docs/spec/l2-query-endpoints.md) — the user-facing server's read-only L2
@@ -168,7 +175,8 @@ See [Comments](docs/spec/style-guide.md#comments) for the full rule. In short:
   slow side", "as of step N", "renamed from"). History lives in Git and memory.
 - Keep a comment **scoped to the local code's concern** — don't explain downstream or
   other-actor internals from a method that doesn't do that work.
-- Don't reference `.scratch/` (gitignored); link committed `design/` docs or inline the point.
+- Don't reference `.scratch/` (gitignored); link a committed `docs/spec/` doc (or an in-flight
+  `design/` one) or inline the point.
 
 ### Logging
 

@@ -3,7 +3,7 @@
 A release publishes the `hydrozoa` Docker image to the GitHub Container Registry
 (`ghcr.io/cardano-hydrozoa/hydrozoa`). The image bundles the whole CLI — the head-node server
 (`serve`) and every deployment command — so it is the single artifact a deployer needs (see
-[DEPLOYMENT.md](DEPLOYMENT.md)).
+[DEPLOYMENT.md](docs/user-guide/DEPLOYMENT.md)).
 
 Publishing is automated: pushing a `v*` tag triggers `.github/workflows/release.yml`, which stages
 the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push` is needed.
@@ -17,7 +17,7 @@ the image with `sbt Docker/stage` and pushes it to ghcr. No manual `docker push`
 
    - `hydrozoa.sh` — `HYDROZOA_VERSION` default
    - `docker-compose.yml` — the default `${HYDROZOA_IMAGE:-ghcr.io/cardano-hydrozoa/hydrozoa:X.Y.Z}`
-   - `DEPLOYMENT.md` — the `…/hydrozoa:X.Y.Z` pull/run examples
+   - `docs/user-guide/DEPLOYMENT.md` — the `…/hydrozoa:X.Y.Z` pull/run examples
 
    Catch stragglers with `grep -rn "hydrozoa:<previous-version>"` (and the bare previous version in
    `hydrozoa.sh`). Not bumped: `HydrozoaRoutes.apiVersion` + `docs/openapi*.yaml` (the API-contract
