@@ -2,7 +2,7 @@ package hydrozoa.integration.rbr.mbt
 
 import cats.effect.{Deferred, IO, Ref}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
-import hydrozoa.integration.stage4.Commands.{DelayCommand, RegisterAndSubmitDepositCommand}
+import hydrozoa.integration.stage4.Commands.{DelayCommand, L2TxCommand, RegisterAndSubmitDepositCommand}
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
@@ -52,6 +52,16 @@ object SutCommands:
     given SutCommand[DelayCommand, Unit, Sut] with
         // The framework sleeps `ModelCommand.delay` before running; the SUT step itself is a no-op.
         override def run(cmd: DelayCommand, sut: Sut): IO[Unit] = IO.unit
+
+    given SutCommand[L2TxCommand, ValidityFlag, Sut] with
+        // Submit the L2 tx to the peer's SubmissionClient; the head applies it to the joint L2
+        // ledger and commits its outputs at the next minor block (no L1 side effect).
+        override def run(cmd: L2TxCommand, sut: Sut): IO[ValidityFlag] =
+            sut.harness
+                .peers(cmd.peerNum)
+                .submissionClient
+                .submit(cmd.request.asUserRequest)
+                .as(ValidityFlag.Valid)
 
     given SutCommand[RegisterAndSubmitDepositCommand, ValidityFlag, Sut] with
         // Submit the deposit request to the peer and put its signed deposit tx on the shared L1 —

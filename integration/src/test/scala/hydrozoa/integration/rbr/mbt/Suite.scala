@@ -342,22 +342,23 @@ case class RbrMbtSuite(
         if depositUtxos.isEmpty then IO.unit else loop
 
     /** The committed evacuation map size the head resolves to under fallback, read from the
-      * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`);
-      * `N` is the size at the max-minor committed block of major `M`. Majors above `M` (e.g. the
-      * hard-confirmed-but-dropped fallback major) are excluded, so this tracks the on-chain treasury
-      * rather than the off-chain hard-confirmation frontier. `None` if nothing settled or no
-      * committed map for `M` was observed.
+      * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`), or
+      * 0 (the bootstrap major) when nothing settled — the treasury sits at whichever major it last
+      * settled, and the dispute resolves scoped to that major. `N` is the size at the max-minor
+      * committed block of major `M`: the head resolves to the latest minor SEC of `M` (or the base
+      * `(M, 0)` when there are none). Majors above `M` (e.g. the hard-confirmed-but-dropped fallback
+      * major) are excluded, so this tracks the on-chain treasury rather than the off-chain
+      * hard-confirmation frontier. `None` only if no committed map for `M` was ever traced.
       */
     private def observedCommittedSize(
         committedMaps: List[(BlockVersion.Full, Int)],
         settledMajors: Set[Int],
     ): Option[Int] =
-        settledMajors.maxOption.flatMap { m =>
-            committedMaps
-                .filter((v, _) => (v.major: Int) == m)
-                .maxByOption((v, _) => (v.minor: Int))
-                .map((_, size) => size)
-        }
+        val m = settledMajors.maxOption.getOrElse(0)
+        committedMaps
+            .filter((v, _) => (v.major: Int) == m)
+            .maxByOption((v, _) => (v.minor: Int))
+            .map((_, size) => size)
 
     /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with
       * `obligationCount` committed outputs and drive it through the dispute to full evacuation.

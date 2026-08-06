@@ -132,7 +132,11 @@ object CommandGenerators:
         peerNum: HeadPeerNumber,
         interArrivalDelay: FiniteDuration,
         txStrategy: TxStrategy,
-        txMutator: TxMutator
+        txMutator: TxMutator,
+        // Optional inline datum stamped on each L2 output — e.g. the RBR MBT passes the "evacuation"
+        // sentinel so its RBRClassifier buckets L2-tx-derived evacuation outputs on L1, mirroring
+        // `genRegisterDepositCommand`'s `l2OutputDatum`.
+        l2OutputDatum: Option[scalus.cardano.ledger.DatumOption] = None,
     )(state: ModelState): Gen[Option[L2TxCommand]] = {
         val config = state.params.multiNodeConfig
         val cardanoNetwork = config.headConfig.cardanoNetwork
@@ -152,7 +156,11 @@ object CommandGenerators:
 
                 outputValues <- genOutputValues(totalValue, txStrategy, generateCappedValueC)
                 outputs <- Gen.sequence[List[TransactionOutput], TransactionOutput](
-                  outputValues.map(v => Gen.oneOf(l2AddressesInUse.toSeq).map(a => Babbage(a, v)))
+                  outputValues.map(v =>
+                      Gen.oneOf(l2AddressesInUse.toSeq).map(a =>
+                          Babbage(a, v, datumOption = l2OutputDatum)
+                      )
+                  )
                 )
 
                 auxiliaryData <- genAuxiliaryData(outputs, txStrategy).map(Some.apply)
