@@ -1,6 +1,6 @@
 # Transient L2 tokens
 
-*Runs with:* `sbtn "examples/testOnly *TransientTokenDemo*"` — fully in-process against a mock L1.
+*Runs with:* `sbt "examples/testOnly *TransientTokenDemo*"` — fully in-process against a mock L1.
 
 ## What this demo shows
 

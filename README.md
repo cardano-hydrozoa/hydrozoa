@@ -81,8 +81,7 @@ Launch IDEA from within the Nix shell so `sbt` and the other tools are on `PATH`
 
 ### Building and testing
 
-Enter the sbt shell with `sbt` (or `sbtn` for a faster, resident server inside
-the Nix shell):
+Enter the sbt shell with `sbt`:
 
 ```shell
 sbt

@@ -6,13 +6,13 @@ transcript (a "tutorial") of what happens when you run it.
 Every example runs **fully in-process against a mock L1** — no Yaci DevKit, no testnet, no keys, no
 network. It reuses the integration test harness (`MultiPeerHeadHarness`, `TestPeers`), so a reviewer
 can bring up a real multi-peer head with genuine fast + slow consensus and watch it drive L1
-operations, all from one `sbtn` command.
+operations, all from one `sbt` command.
 
 ## Examples
 
 | Example | What it shows | Run | Tutorial |
 | --- | --- | --- | --- |
-| Transient tokens | Minting and burning tokens inside the L2 ledger, scoped to the head's lifetime | `sbtn "examples/testOnly *TransientTokenDemo*"` | [tutorials/transient-tokens.md](tutorials/transient-tokens.md) |
+| Transient tokens | Minting and burning tokens inside the L2 ledger, scoped to the head's lifetime | `sbt "examples/testOnly *TransientTokenDemo*"` | [tutorials/transient-tokens.md](tutorials/transient-tokens.md) |
 
 ## How the examples are built
 
