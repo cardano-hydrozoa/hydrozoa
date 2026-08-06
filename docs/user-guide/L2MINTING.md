@@ -20,7 +20,7 @@ The L2 ledger keeps each UTxO's value in two compartments:
   transient.**
 
 Cardano ledger rules and your scripts only ever see the **combined** view (main + transient). The
-`transientOutputs` metadata declaration is the *only* thing that tells the two apart — nothing keys
+`l2TransientTokens` metadata declaration is the *only* thing that tells the two apart — nothing keys
 off the policy id, so the same policy id can name an L1-native token in main and a transient token in
 the overlay at once.
 
@@ -35,26 +35,29 @@ Only **transient** tokens. The rules, enforced by value conservation (no policy-
   forces `fee = 0` and forbids reward withdrawals and certificates, so the combined-view and
   main-projection conservation checks together pin the transient delta.)
 - Each declared bundle must be **≤** the assets actually on that output.
-- A **withdrawal** output (marked `Int(1)`; see [L2TXS.md](L2TXS.md)) **must not** declare transient
-  tokens — transient tokens cannot leave the head.
+- A **withdrawal** output (its index listed in `l1BoundOutputs`; see [L2TXS.md](L2TXS.md)) **must
+  not** declare transient tokens — transient tokens cannot leave the head.
 
-## Metadata: declaring transient outputs
+## Metadata: declaring transient tokens
 
-A minting tx uses the **map** shape of the `4937` output-designation metadatum (the bare-list shape
-is for non-minting txs only), plus the `4936` headId pin from [L2TXS.md](L2TXS.md):
+A minting tx uses the same `4937` `L2` metadata as any L2 tx (see [L2TXS.md](L2TXS.md)), adding the
+optional `l2TransientTokens` field alongside `l1BoundOutputs` and the headId pin:
 
 ```text
 4937 → {
-  "outputs":          List(Int, …),   // one L1/L2 marker per output (Int(1)=withdrawal, Int(2)=L2)
-  "transientOutputs": <declarations>,  // which minted tokens are transient, per output
+  "L2": {
+    <headId hex>: {
+      "l1BoundOutputs":    List(Int, …),   // indices of withdrawal outputs (empty if none)
+      "l2TransientTokens": <declarations>,  // which minted tokens are transient, per output
+    }
+  }
 }
-4936 → Text(<headId hex>)
 ```
 
-The `transientOutputs` declarations map an output index to the transient bundle it carries:
+The `l2TransientTokens` declarations map an output index to the transient bundle it carries:
 
 ```text
-transientOutputs = Map(
+l2TransientTokens = Map(
   Int(outputIndex) → Map(
     Bytes(policyId /* 28 bytes */) → Map(
       Bytes(assetName /* ≤ 32 bytes */) → Int(quantity /* 1 … Long.MaxValue (i64) */)
@@ -78,7 +81,7 @@ The ledger runs conservation **twice**:
    smuggling overlay tokens into the main compartment.
 
 So: keep ADA and L1-native value conserved in the main projection, and let the `mint` field plus the
-`transientOutputs` declarations account for exactly the transient delta.
+`l2TransientTokens` declarations account for exactly the transient delta.
 
 ## Preparing a minting tx
 
@@ -90,13 +93,13 @@ So: keep ADA and L1-native value conserved in the main projection, and let the `
    and the tx is rejected.
 2. Add a Cardano **`mint`** step under your minting policy (native or PlutusV3): positive to mint,
    negative to burn.
-3. Put the minted (or remaining) transient tokens on an **L2-bound** output (`Int(2)`), and declare
-   them in `transientOutputs` for that output index.
-4. Attach the `4937` map metadatum (`"outputs"` + `"transientOutputs"`) and the `4936` headId pin.
+3. Put the minted (or remaining) transient tokens on an **L2-bound** output (its index left out of
+   `l1BoundOutputs`), and declare them in `l2TransientTokens` for that output index.
+4. Attach the `4937` `L2` metadata (`l1BoundOutputs` + `l2TransientTokens`, under the headId pin).
 5. Sign (the policy may require specific signatures) and submit as in [L2TXS.md](L2TXS.md).
 
 To **burn**, spend the UTxO holding the transient tokens, set `mint` negative for the burned amount,
-and declare only what remains (or `transientOutputs = {}` if none remains).
+and declare only what remains (or `l2TransientTokens = {}` if none remains).
 
 ## Caveat: closing a head with live transient tokens
 

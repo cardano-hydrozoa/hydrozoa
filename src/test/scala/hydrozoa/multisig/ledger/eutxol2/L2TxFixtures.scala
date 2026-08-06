@@ -8,9 +8,8 @@ import hydrozoa.lib.cardano.scalus.ledger.withZeroFees
 import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiffHandler
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.multisig.ledger.eutxol2.tx.TransientOutputs
+import hydrozoa.multisig.ledger.eutxol2.tx.L2Metadata
 import hydrozoa.multisig.ledger.event.{RequestId, RequestNumber}
-import hydrozoa.multisig.ledger.l1.token.CIP67
 import hydrozoa.multisig.ledger.l2.L2LedgerCommand
 import org.scalacheck.Gen
 import org.scalacheck.rng.Seed
@@ -32,8 +31,8 @@ object AlwaysValidMintPolicy {
 
 /** Shared fixture for transient-token tests: a deterministic multi-peer config, a single-key native
   * minting policy owned by peer 0, an always-succeeding compiled Plutus V3 policy, and a builder
-  * for real, fully signed L2 transactions carrying the head-label metadata in either shape (legacy
-  * marker list or the current map with optional `transientOutputs` declarations).
+  * for real, fully signed L2 transactions carrying the [[L2Metadata]] head-label metadata (the
+  * headId pin, the L1-bound output indices, and optional transient-token declarations).
   */
 object L2TxFixtures {
 
@@ -109,48 +108,34 @@ object L2TxFixtures {
     def mkPeerUtxo(seed: Int, value: Value): (TransactionInput, TransactionOutput) =
         mkInput(seed) -> Babbage(peerAddress, value)
 
-    /** Build the head-label auxiliary data: per-output L1/L2 markers plus optional transient
-      * declarations, in the requested metadatum shape.
+    /** Build the [[L2Metadata]] head-label auxiliary data: the fixture's headId pin, the L1-bound
+      * output indices, and optional transient-token declarations.
       */
     def mkHeadMetadata(
-        markers: List[Int],
-        transientOutputs: Map[Int, MultiAsset] = Map.empty,
-        legacyShape: Boolean = false
-    ): AuxiliaryData = {
-        val markerList =
-            Metadatum.List(markers.map(marker => Metadatum.Int(marker.toLong)).toIndexedSeq)
-        val headMetadatum =
-            if legacyShape then markerList
-            else {
-                val outputsField: Map[Metadatum, Metadatum] =
-                    Map(Metadatum.Text("outputs") -> markerList)
-                val transientField: Map[Metadatum, Metadatum] =
-                    if transientOutputs.isEmpty then Map.empty
-                    else
-                        Map(
-                          Metadatum.Text("transientOutputs") ->
-                              TransientOutputs.encodeMetadatum(transientOutputs)
-                        )
-                Metadatum.Map(outputsField ++ transientField)
-            }
-        AuxiliaryData.Metadata(Map(Word64(CIP67.Tags.head) -> headMetadatum))
-    }
+        l1BoundOutputs: List[Int],
+        transientOutputs: Map[Int, MultiAsset] = Map.empty
+    ): AuxiliaryData =
+        L2Metadata.asAuxData(
+          ledgerConfig.headId,
+          L2Metadata(l1BoundOutputs = l1BoundOutputs, l2TransientTokens = transientOutputs)
+        )
 
     /** Build and multisign an L2 transaction: spend `spends` as pub-key inputs, produce `sends`
-      * outputs with their L1(1)/L2(2) markers, apply `mints` steps, reference `references` utxos,
-      * and declare `transientOutputs` in the metadata. Spend values must be the combined (main +
-      * transient) view — the same values the ledger rules resolve.
+      * outputs each tagged L1-bound(1)/L2(2) for the fixture's convenience, apply `mints` steps,
+      * reference `references` utxos, and declare `transientOutputs` in the metadata. The `1`/`2`
+      * tag is a fixture shorthand only — it is translated into the metadata's `l1BoundOutputs`
+      * index list. Spend values must be the combined (main + transient) view — the same values the
+      * ledger rules resolve.
       */
     def buildSignedL2Tx(
         spends: List[(TransactionInput, TransactionOutput)],
         sends: List[(TransactionOutput, Int)],
         mints: List[MintStep] = Nil,
         references: List[(TransactionInput, TransactionOutput)] = Nil,
-        transientOutputs: Map[Int, MultiAsset] = Map.empty,
-        legacyMetadataShape: Boolean = false
+        transientOutputs: Map[Int, MultiAsset] = Map.empty
     ): Transaction = {
-        val auxiliaryData =
-            mkHeadMetadata(sends.map(_._2), transientOutputs, legacyMetadataShape)
+        val l1BoundOutputs = sends.zipWithIndex.collect { case ((_, 1), index) => index }
+        val auxiliaryData = mkHeadMetadata(l1BoundOutputs, transientOutputs)
         val steps: List[TransactionBuilderStep] =
             spends.map((input, output) => Spend(Utxo(input, output), PubKeyWitness))
                 ++ references.map((input, output) => ReferenceOutput(Utxo(input, output)))

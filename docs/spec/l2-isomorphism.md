@@ -11,7 +11,8 @@ isomorphic), and how a head selects its L2 backend.
 ## Terminology
 
 - **Format isomorphism** (always on): the head speaks the native Cardano tx format. The tx must
-  carry head-specific *metadata*: the designation list and, by default, the headId pin (below).
+  carry head-specific *metadata*: the L2 head-label metadatum (label 4937) — the list of L1-bound
+  outputs and, by default, the headId pin (below).
 - **Identity isomorphism** (`HeadParameters.identityIsomorphism`, opt-in, default off): the goal
   of running the *exact* tx an application already uses on L1, byte-identical. The toggle
   disables only the headId-pin check (see [Limitations](#limitations)).
@@ -29,8 +30,9 @@ Isomorphism is a property of L2 *transactions* — moving value within L2. Depos
 L2) and withdrawals (funds leaving) have no L1 counterpart — the boundary crossings are precisely
 what stops an L2 from being just another L1 — so they cannot be isomorphic. Each keeps its own
 machinery: a deposit pins its L2 payload in tx metadata
-([Deposits](#deposits-pinned-to-their-l2-payload)); a withdrawal is an L2 output marked L1-bound in
-the designation list, and a subsequent settlement tx pays it out on L1.
+([Deposits](#deposits-pinned-to-their-l2-payload)); a withdrawal is an L2 output whose index is
+listed in the head-label metadata's `l1BoundOutputs`, and a subsequent settlement tx pays it out on
+L1.
 
 Both crossings are avoidable to a degree: a head can open with an initial utxo set instead of
 taking deposits ([Opening state](#opening-state)), and can return funds via
@@ -39,10 +41,10 @@ finalization/evacuation instead of per-tx withdrawals.
 ## The headId pin and cross-head replay
 
 A man-in-the-middle can forward an L2 tx to another head (or to L1) hoping it validates there. By
-default the EUTXO ledger therefore requires each L2 tx to carry a **headId pin**: a dedicated
-metadatum, label **4936**, value `Metadatum.Text(headId.toHex)`
-(`multisig/ledger/eutxol2/HeadIdPin.scala`). `HeadIdPinValidator` rejects at screening any tx
-whose pin is missing or names another head. The pin is authenticated for free: metadata is covered
+default the EUTXO ledger therefore requires each L2 tx to carry a **headId pin**: the `<headId hex>`
+key of the label-**4937** L2 head-label metadata (`multisig/ledger/eutxol2/tx/L2Metadata.scala`).
+`HeadIdPinValidator` rejects at screening any tx whose pin names another head. The pin is
+authenticated for free: metadata is covered
 by the tx's `auxiliaryDataHash`, which is in the signed body, so it cannot be stripped or swapped
 without breaking the witnesses.
 
@@ -60,8 +62,8 @@ the application already bakes a headId-like domain separator into its own txs. L
 | Element | Requirement | Checked by |
 |---|---|---|
 | Tx format | native Cardano tx (Babbage outputs), CBOR bytes as the request payload | `L2Tx.parse` |
-| Designation list | metadatum label **4937** (`CIP67.Tags.head`): `Metadatum.List` with one `Int` per output, in output order — `1` = L1-bound (withdrawal), `2` = stays on L2. Mandatory on every tx | `L2Tx.utxoPartition` (parse fails without it) |
-| headId pin | metadatum label **4936**, `Metadatum.Text(headId.toHex)` — mandatory unless `identityIsomorphism` | `HeadIdPinValidator` at screening |
+| L2 head-label metadata | metadatum label **4937** (`CIP67.Tags.head`), reusing the L1 layout: `{ "L2": { <headId hex>: { "l1BoundOutputs": List(Int), "l2TransientTokens": Map } } }`. `l1BoundOutputs` lists the withdrawal output indices (others stay on L2); `l2TransientTokens` is minting-only and omitted when empty. Mandatory on every tx | `L2Metadata.parse` (parse fails without it) |
+| headId pin | the `<headId hex>` key of the label-**4937** metadata — mandatory unless `identityIsomorphism` | `HeadIdPinValidator` at screening |
 | Authentication | the tx's own vkey witnesses; no other signature exists | screening (stateless), against the tx id |
 | Validity | the tx's own slot interval, interpreted with the head's `SlotConfig`; block-creation start must fall inside it | submission (stateful) |
 | Fee | the fee field must be `0`, so inputs must exactly balance outputs — the L2 ledger has no fee pot (Scalus builders: `withZeroFees` + a prebalanced diff handler) | `L2ConformanceValidator` (`fee == 0`) at submission |
@@ -100,7 +102,7 @@ user ──POST /head/requests──► RequestSequencer
 **Screening** (`L2Ledger.sendScreenTx` / `sendScreenDeposit`,
 `multisig/ledger/l2/L2Ledger.scala`) checks only what the payload alone supports — no ledger
 state, no clock. For the EUTXO ledger (`EutxoL2Ledger.sendScreenTx`): parse (including the
-designation list), the headId pin, and the witness signatures (each witness must verify over the
+L1-bound output list), the headId pin, and the witness signatures (each witness must verify over the
 tx id). Screening cannot resolve inputs, check balance, or test the validity window — those need
 state. It returns pass/fail with an error reason; Hydrozoa itself never inspects or compares head
 identities — the pin check lives entirely inside the ledger. Passing is what assigns the
@@ -218,9 +220,8 @@ divergence, not a spec change.
 ## Limitations
 
 - **Identity isomorphism is not yet byte-identical.** The toggle skips the pin check, but
-  `L2Tx.utxoPartition` still requires the designation list (label 4937) on every tx, so an
-  unmodified L1 tx does not parse. Full identity isomorphism needs a designation default for
-  pin-less txs.
+  `L2Metadata.parse` still requires the label-4937 L2 metadata on every tx, so an unmodified L1 tx
+  does not parse. Full identity isomorphism needs a metadata default for pin-less txs.
 - **`any-remote` screening is a passthrough stub.** `RemoteL2Ledger.sendScreenTx` /
   `sendScreenDeposit` accept everything; the screening endpoint on `remoteLedgerUri` is not
   implemented, so nothing screens a remote payload. `any-remote` is not a safe backend until it

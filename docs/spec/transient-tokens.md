@@ -22,7 +22,7 @@ is the source design; this doc describes the implementation in `multisig/ledger/
 - **combined view** — the per-utxo sum of both compartments
   (`TransientTokens.mkCombinedUtxos`). The only view the Cardano ledger rules and scripts
   ever see.
-- **declaration** — the `transientOutputs` metadata field: per output index, the transient
+- **declaration** — the `l2TransientTokens` metadata field: per output index, the transient
   content of that output. The declarations are the only thing that tells the compartments
   apart.
 
@@ -32,15 +32,19 @@ overlay; nothing anywhere dispatches on policy id.
 
 ## Transaction metadata
 
-The head-label metadatum (`Word64(CIP67.Tags.head)`, tag 4937) accepts two shapes, parsed in
-`L2Tx.parse` (`eutxol2/tx/L2Tx.scala`):
+The head-label metadatum (`Word64(CIP67.Tags.head)`, tag 4937) reuses the L1 transaction layout —
+role map → head-id map → fields — parsed in `L2Metadata.parse` (`eutxol2/tx/L2Metadata.scala`):
 
-- **bare list** — `List(Int(1|2) per output)`, the per-output L1-bound/L2-bound markers.
-  Means "no transient outputs"; every pre-existing transaction is in this shape.
-- **map** — `Map(Text("outputs") -> List(...), Text("transientOutputs") -> ...)`, where the
-  `outputs` marker list is required and `transientOutputs` is optional.
+```
+4937 -> { "L2": { <headId hex>: {
+  "l1BoundOutputs":    List(Int),               // withdrawal output indices (others stay on L2)
+  "l2TransientTokens": Map(Int -> <bundle>)     // optional; omitted when empty
+} } }
+```
 
-The `transientOutputs` codec lives in `eutxol2/tx/TransientOutputs.scala`:
+`l1BoundOutputs` replaces the old per-output `Int(1|2)` marker list: only the L1-bound indices are
+listed, and every output absent from the list stays on L2. The `l2TransientTokens` codec lives in
+`eutxol2/tx/TransientOutputs.scala`:
 
 ```
 Map(Int(outputIndex) -> Map(Bytes(policyId /*28B*/) -> Map(Bytes(assetName /*<=32B*/) -> Int(quantity))))
