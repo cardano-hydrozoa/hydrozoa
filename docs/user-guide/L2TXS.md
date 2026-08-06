@@ -8,8 +8,8 @@ no head-specific signature. It self-authenticates through ordinary vkey witnesse
 This guide covers **basic** transactions: spending and sending L2 UTxOs, and **withdrawals** (moving
 value back to L1). Minting/burning is a superset — see [L2MINTING.md](L2MINTING.md).
 
-Background: [`../spec/l2-isomorphism.md`](../spec/l2-isomorphism.md) § *What an L2 transaction must
-carry* is the authoritative reference. The `hydrozoa submit-l2-tx` subcommand
+Background — *what an L2 transaction must carry* — is covered below. The `hydrozoa submit-l2-tx`
+subcommand
 (`src/main/scala/hydrozoa/app/cli/SubmitL2Transaction.scala`) is the runnable worked example.
 
 ## Mandatory metadata
@@ -65,7 +65,7 @@ receives the value at the output's address on L1.
 ## Steps
 
 1. **Find your L2 UTxOs**: `GET {headUri}/l2/cardano-eutxo/utxos/{yourAddress}`
-   (see [`../spec/l2-query-endpoints.md`](../spec/l2-query-endpoints.md)).
+   (see the [API reference](../api/)).
 2. **Build** a native Cardano tx: spend one or more L2 UTxOs; add outputs (destination + change);
    set `fee = 0`; attach the metadata above (mark every output `Int(2)`, or `Int(1)` for a
    withdrawal). Keep inputs and outputs balanced.
