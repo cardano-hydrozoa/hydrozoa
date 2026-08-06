@@ -23,11 +23,11 @@ sbt test
 sbt "testOnly *SpecificTestSuite*"
 ```
 
-**Note on `sbt` vs `sbtn`**: the build runs on **sbt 2** (`project/build.properties`). The bundled
-`sbtn` thin client is sbt 1.x and cannot drive an sbt 2 server (it reports
-`unknown event: sbt/exec`), so use `sbt`, not `sbtn`, until nixpkgs ships an sbt 2 launcher. If a
-warm server from a previous sbt 1.x session is still running, `sbt shutdown` (or `sbtn shutdown`)
-first, then re-launch `sbt` so it reboots into the version named in `build.properties`.
+**Note on `sbt`**: the build runs on **sbt 2** (`project/build.properties`). The `sbtn` thin client
+bundled with nixpkgs `sbt` is sbt 1.x and cannot drive an sbt 2 server (it reports
+`unknown event: sbt/exec`), so the devshell **removes `sbtn`** — use `sbt`. If a warm server from a
+previous session is still running on the wrong version, `sbt shutdown` first, then re-launch `sbt`
+so it reboots into the version named in `build.properties`. (Restore `sbtn` once nixpkgs ships sbt 2.)
 
 **Note**: IDEA (and Claude Code) are launched from within the Nix shell, so `sbt` and other tools
 are available directly — no `nix develop --command` prefix needed.

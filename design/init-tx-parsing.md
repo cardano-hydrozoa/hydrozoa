@@ -92,7 +92,7 @@ the config, not L1.
 ## Implementation plan
 
 Steps map to the five tasks: A→T1, C+«codec»→T4, D→T3, E+F→T2, G→T5. Ordered so each compiles and is
-testable (`just build-werror`; `sbtn "testOnly *InitializationTxSeq* *ConfigurationCodec* *Metadata*"`).
+testable (`just build-werror`; `sbt "testOnly *InitializationTxSeq* *ConfigurationCodec* *Metadata*"`).
 
 **A. Metadata: add `totalEquity`** (T1) — **done.** `Metadata.Initialization` gained `totalEquity: Coin`
 (`asMap` + `parseInner`); `InitializationTx.Build` writes `config.initialEquityContributed`.
