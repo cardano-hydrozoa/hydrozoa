@@ -1,6 +1,6 @@
 package hydrozoa.multisig.consensus
 
-import hydrozoa.multisig.ledger.block.BlockNumber
+import hydrozoa.multisig.ledger.block.{BlockNumber, BlockVersion}
 import hydrozoa.multisig.ledger.stack.StackNumber
 
 /** Typed events emitted by [[StackComposer]]. Pure data; formatters in [[StackComposerEventFormat]]
@@ -12,6 +12,12 @@ object StackComposerEvent:
 
     /** Stack 0 (init + fallback) bootstrapped and handed to SlowConsensusActor at startup. */
     case object InitialStackBootstrapped extends StackComposerEvent
+
+    /** A committed block's evacuation-map snapshot: its `version` and the number of obligations the
+      * map holds. Emitted per committed block as the running evacuation map is persisted, so an
+      * observer can read the committed map size the head will resolve to under that version.
+      */
+    final case class CommittedMap(version: BlockVersion.Full, size: Int) extends StackComposerEvent
 
     /** A stack was closed and handed off to SlowConsensusActor. `isLeader` distinguishes the leader
       * deriving the brief vs. a follower accepting the leader's brief.

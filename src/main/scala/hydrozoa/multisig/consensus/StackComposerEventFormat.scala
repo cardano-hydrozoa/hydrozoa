@@ -13,6 +13,8 @@ object StackComposerEventFormat:
         e match {
             case InitialStackBootstrapped =>
                 info("bootstrapping initial stack 0 (init + fallback)")
+            case CommittedMap(version, size) =>
+                debug(s"committed evacuation map at $version holds $size obligation(s)")
             case StackClosed(sn, first, last, isLeader) =>
                 val role = if isLeader then "Leader" else "Follower"
                 info(

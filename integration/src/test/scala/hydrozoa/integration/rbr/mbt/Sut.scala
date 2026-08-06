@@ -4,6 +4,7 @@ import cats.effect.{Deferred, IO, Ref}
 import hydrozoa.integration.harness.MultiPeerHeadHarness
 import hydrozoa.integration.stage4.Commands.{DelayCommand, RegisterAndSubmitDepositCommand}
 import hydrozoa.multisig.consensus.{RequestSequencer, UserRequest, UserRequestWithId}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.event.RequestId.ValidityFlag
 import hydrozoa.multisig.ledger.l1.tx.RawTx
 import org.scalacheck.commands.SutCommand
@@ -20,6 +21,12 @@ import scalus.cardano.ledger.TransactionInput
   * were genuinely committed (spent by a landed settlement) versus left pending for the
   * cardano-liaison refund path — so the model can agree with the SUT on each deposit's fate without
   * racing "peer submitted the tx" against "the tx appears on chain".
+  *
+  * `committedMaps` accumulates every `StackComposer.CommittedMap` peer trace — the `(version, size)`
+  * of each committed evacuation map. `settledMajors` accumulates the majors of every settlement that
+  * cleared the firewall (i.e. settled on-chain). Together they let `beforeFinalize` read the
+  * committed map size the head resolves to under the last on-chain major `M` directly from the peer
+  * traces, instead of reconstructing it from the model's deposit accounting.
   */
 final case class Sut(
     harness: MultiPeerHeadHarness.Harness[Option[RequestSequencer.Handle]],
@@ -28,6 +35,8 @@ final case class Sut(
     firstPayoutsLeft: Ref[IO, Option[Int]],
     settlementFirewallArmed: Ref[IO, Boolean],
     submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
+    committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
+    settledMajors: Ref[IO, Set[Int]],
 )
 
 /** SUT-side command execution. */

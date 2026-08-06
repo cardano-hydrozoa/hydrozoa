@@ -15,7 +15,7 @@ import hydrozoa.lib.logging.ContraTracer
 import hydrozoa.multisig.HeadMultisigRegimeManager
 import hydrozoa.multisig.consensus.ack.{HardAck, HardAckId, HardAckNumber}
 import hydrozoa.multisig.consensus.peer.PeerId
-import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult}
+import hydrozoa.multisig.ledger.block.{Block, BlockNumber, BlockResult, BlockVersion}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.joint.{EvacuationMap, JointLedger}
 import hydrozoa.multisig.ledger.l1.utxo.MultisigTreasuryUtxo
@@ -288,19 +288,30 @@ final case class StackComposer(
                     b.put(StoreKey.WithdrawalEffectIndex(requestId, l1TxId))(Array.emptyByteArray)
                 }
             }
-            // Snapshots: rotated treasury + committed evacuation maps, onto the same batch.
-            (_, fullBatch) =
+            // Snapshots: rotated treasury + committed evacuation maps, onto the same batch. Collect
+            // each committed block's (version, map size) to trace after the write, so an observer
+            // can read the committed map size the head will resolve to under that version.
+            (_, fullBatch, committedMaps) =
                 orderedResults.foldLeft(
-                  (startMap, laneBatch.put(StoreKey.Treasury)(newTreasury))
-                ) { case ((runMap, batch), result) =>
+                  (
+                    startMap,
+                    laneBatch.put(StoreKey.Treasury)(newTreasury),
+                    List.empty[(BlockVersion.Full, Int)]
+                  )
+                ) { case ((runMap, batch, maps), result) =>
                     val nextMap = EvacuationMap.applyDiffs(runMap, result.evacuationMapDiff)
-                    val nextBatch =
-                        if committed.contains(result.brief.blockNum) then
-                            batch.put(StoreKey.EvacuationMap(result.brief.blockNum))(nextMap)
-                        else batch
-                    (nextMap, nextBatch)
+                    if committed.contains(result.brief.blockNum) then
+                        (
+                          nextMap,
+                          batch.put(StoreKey.EvacuationMap(result.brief.blockNum))(nextMap),
+                          maps :+ (result.brief.blockVersion -> nextMap.size)
+                        )
+                    else (nextMap, batch, maps)
                 }
             _ <- persistence.write(fullBatch)
+            _ <- committedMaps.traverse_ { case (version, size) =>
+                tracer.traceWith(StackComposerEvent.CommittedMap(version, size))
+            }
         } yield ()
     }
 

@@ -14,12 +14,16 @@ import hydrozoa.integration.stage4.Model
 import hydrozoa.integration.yaci.{DevKit, YaciDevnet, YaciSetup}
 import hydrozoa.lib.logging.{ContraTracer, Slf4jMsg, Slf4jMsgFormat, Slf4jTracer, info}
 import hydrozoa.multisig.backend.cardano.{FirewalledCardanoBackend, FirewalledCardanoBackendEvent, yaciTestSauceGenesis}
-import hydrozoa.multisig.consensus.CardanoLiaisonEvent
 import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
+import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, StackComposerEvent}
+import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, genesisObligationDecoder}
 import hydrozoa.multisig.ledger.event.RequestNumber
-import hydrozoa.multisig.ledger.l1.tx.EnrichedTx
+import hydrozoa.multisig.ledger.l1.tx.{
+  EnrichedTx,
+  SettlementTx
+}
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
 import io.bullet.borer.Cbor
@@ -195,6 +199,8 @@ case class RbrMbtSuite(
             settlementFirewallArmed <- Resource.eval(Ref[IO].of(false))
             peersEvacuationDone <- Resource.eval(Ref[IO].of(Set.empty[PeerId]))
             submittedSettlementInputs <- Resource.eval(Ref[IO].of(Set.empty[TransactionInput]))
+            committedMaps <- Resource.eval(Ref[IO].of(List.empty[(BlockVersion.Full, Int)]))
+            settledMajors <- Resource.eval(Ref[IO].of(Set.empty[Int]))
             harness <- MultiPeerHeadHarness.disputeHarnessResource(
               label = s"$label-ws",
               transportMode = TransportMode.WebSocket,
@@ -210,6 +216,7 @@ case class RbrMbtSuite(
                     evacuationDone,
                     peersEvacuationDone,
                     firstPayoutsLeft,
+                    committedMaps,
                   ),
               // Dynamic gate: drop settlements only once armed (in beforeFinalize, once the
               // generated deposits are in a determinate on-chain state) — tripping fallback.
@@ -222,7 +229,7 @@ case class RbrMbtSuite(
                     // Record the inputs of every settlement that clears the firewall, so the
                     // committed-deposit set can be derived at fallback (see [[Sut]]).
                     firewallTracer = MultiPeerHeadHarness.firewallSlf4jSink(peerId) |+|
-                        settlementAbsorptionObserver(submittedSettlementInputs),
+                        settlementAbsorptionObserver(submittedSettlementInputs, settledMajors),
                   ),
               cardanoBackendMode = state.params.cardanoBackendMode,
               // Evacuation payouts land at `RbrSeed.payoutAddress`, which is neither a peer wallet
@@ -238,21 +245,25 @@ case class RbrMbtSuite(
           firstPayoutsLeft,
           settlementFirewallArmed,
           submittedSettlementInputs,
+          committedMaps,
+          settledMajors,
         )
 
-    /** Firewall observer that records the L1 inputs of every settlement the SUT actually submits
-      * (i.e. clears the firewall and reaches the backend). Crossed against the L1 snapshot at
-      * fallback, `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed
-      * settlement from one whose deposit tx simply hasn't surfaced yet — the distinction the old
-      * "utxo absent from the snapshot" check could not make.
+    /** Firewall observer that records, for every settlement the SUT actually submits (i.e. clears
+      * the firewall and reaches the backend), its L1 inputs (`submittedSettlementInputs`) and its
+      * produced major (`settledMajors`). Crossed against the L1 snapshot at fallback,
+      * `submittedSettlementInputs` distinguishes a deposit genuinely absorbed by a landed settlement
+      * from one whose deposit tx simply hasn't surfaced yet; `settledMajors.max` is the last major
+      * that settled on-chain — the fallback major `M` the head resolves against.
       */
     private def settlementAbsorptionObserver(
-        submittedSettlementInputs: Ref[IO, Set[TransactionInput]]
+        submittedSettlementInputs: Ref[IO, Set[TransactionInput]],
+        settledMajors: Ref[IO, Set[Int]],
     ): ContraTracer[IO, FirewalledCardanoBackendEvent] =
         ContraTracer[IO, FirewalledCardanoBackendEvent] {
-            case FirewalledCardanoBackendEvent.SubmittedTx(etx, _)
-                if etx.transactionFamily == "SettlementTx" =>
-                submittedSettlementInputs.update(_ ++ etx.tx.body.value.inputs.toSet)
+            case FirewalledCardanoBackendEvent.SubmittedTx(etx: SettlementTx, _) =>
+                submittedSettlementInputs.update(_ ++ etx.tx.body.value.inputs.toSet) *>
+                    settledMajors.update(_ + (etx.majorVersionProduced: Int))
             case _ => IO.unit
         }
 
@@ -292,10 +303,19 @@ case class RbrMbtSuite(
             obligationCount = initialObligations + depositedObligations
             alpha = alphaTerminal(obligationCount)
             betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
+            // Diagnostic (non-breaking): the committed map size read straight from the peer traces.
+            // `M` is the last major settled on-chain; `N` is the size of the committed evacuation map
+            // at the max-minor block of that major — the map the head resolves to under fallback.
+            // On deposits-only this must equal `obligationCount`; verify before it replaces alpha.
+            committedMaps <- sut.committedMaps.get
+            settledMajors <- sut.settledMajors.get
+            observedN = observedCommittedSize(committedMaps, settledMajors)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
                   s"(initial=$initialObligations committed-deposits=$depositedObligations " +
                   s"of ${depositUtxos.size} deposit(s))\n" +
+                  s"  observed N (traces): $observedN (M=${settledMajors.maxOption}, " +
+                  s"committedMaps=${committedMaps.sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
         yield
@@ -348,6 +368,24 @@ case class RbrMbtSuite(
         val deposited = committed.map(depositOutputCount).sum
         (initial, deposited)
 
+    /** The committed evacuation map size the head resolves to under fallback, read from the
+      * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`);
+      * `N` is the size at the max-minor committed block of major `M`. Majors above `M` (e.g. the
+      * hard-confirmed-but-dropped fallback major) are excluded, so this tracks the on-chain treasury
+      * rather than the off-chain hard-confirmation frontier. `None` if nothing settled or no
+      * committed map for `M` was observed.
+      */
+    private def observedCommittedSize(
+        committedMaps: List[(BlockVersion.Full, Int)],
+        settledMajors: Set[Int],
+    ): Option[Int] =
+        settledMajors.maxOption.flatMap { m =>
+            committedMaps
+                .filter((v, _) => (v.major: Int) == m)
+                .maxByOption((v, _) => (v.minor: Int))
+                .map((_, size) => size)
+        }
+
     private def depositOutputCount(pd: Model.PendingDeposit): Int =
         Cbor.decode(pd.l2Payload.bytes).to[Queue[GenesisObligation]].value.size
 
@@ -377,12 +415,18 @@ case class RbrMbtSuite(
         evacuationDone: Deferred[IO, Unit],
         peersEvacuationDone: Ref[IO, Set[PeerId]],
         firstPayoutsLeft: Ref[IO, Option[Int]],
+        committedMaps: Ref[IO, List[(BlockVersion.Full, Int)]],
     ): ContraTracer[IO, MultiPeerHeadHarness.Event] =
         val onEvent: PeerId => Any => IO[Unit] = peer => {
             case CommonChildEvent.CardanoLiaison(
                   _: CardanoLiaisonEvent.FallbackToRuleBasedDispatched
                 ) =>
                 fallbackDispatched.complete(()).void
+
+            case CommonChildEvent.StackComposer(
+                  StackComposerEvent.CommittedMap(version, size)
+                ) =>
+                committedMaps.update((version -> size) :: _)
 
             case RuleBasedOnlyChildEvent.RuleBasedActor(
                   RuleBasedActorEvent.Evacuation.PayoutsLeft(n)
