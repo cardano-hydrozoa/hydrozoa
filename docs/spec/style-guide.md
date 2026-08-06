@@ -107,10 +107,10 @@ minimal set — leave it.
   other-actor internals from a method that doesn't do that work — a fast-side
   `JointLedger` path should not describe slow-side KZG/SEC/settlement mechanics; say only
   what's locally true.
-- **Don't cite `design/` paths that may move, and never reference `.scratch/`** (it is
-  gitignored). To point at a design doc, link a committed file under `design/`; if the
-  note lives only in scratch, inline the relevant point instead of leaving a dangling
-  pointer.
+- **Don't cite in-flight `design/` paths (they move into `docs/spec/` once built), and never
+  reference `.scratch/`** (it is gitignored). To point at a durable design/reference doc, link a
+  committed file under `docs/spec/`; if the note lives only in scratch, inline the relevant point
+  instead of leaving a dangling pointer.
 
 ## Types and givens
 

@@ -25,7 +25,7 @@ import org.scalacheck.{Prop, Properties}
 import scala.concurrent.duration.{Duration, DurationInt, FiniteDuration}
 import test.{SeedPhrase, TestPeers, genMonad}
 
-/** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§5 of `design/coil-network.md`)
+/** Pc3/Pc4 plumbing tests for the coil-peer hard-ack relay (§5 of `docs/spec/coil-network.md`)
   * [doc-ref], one hub head peer serving N coil peers. A coil peer's hard-ack travels up its
   * [[PeerLiaisonCoilToHub]] to the hub's [[PeerLiaisonHubToCoil]], which routes it to BOTH the
   * hub's slow-consensus actor and the [[CoilAckSequencer]]; the sequencer stamps it and hands the

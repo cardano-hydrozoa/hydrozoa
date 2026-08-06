@@ -8,7 +8,7 @@ import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.stack.{StackBrief, StackNumber}
 
 /** The batch messages for the three liaison links — one set per link (§5.5 of
-  * `design/coil-network.md`) [doc-ref]. Each `GetMsgBatch` is a product of **next-expected
+  * `docs/spec/coil-network.md`) [doc-ref]. Each `GetMsgBatch` is a product of **next-expected
   * cursors**, one per lane the puller wants; each `NewMsgBatch` is the matching product of
   * **payload slices**, one per lane the server holds. There is no fat one-size-fits-all batch —
   * each link carries exactly its own lanes, and lanes that exist per author are `Map`s keyed by the

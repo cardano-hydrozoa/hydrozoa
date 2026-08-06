@@ -26,9 +26,9 @@ import java.nio.ByteBuffer
   * ack the hub already holds, and a stale re-serve is rejected by `verify`). It stamps each with a
   * monotonic hub-local [[HubHardAckNumber]] and fans the resulting [[HardAckWithId]] out to all the
   * hub's [[hydrozoa.multisig.consensus.liaison.PeerLiaisonHeadToHead]]s, which carry it on the
-  * contiguous `HubHardAck` journal (§5.3 of `design/coil-network.md`) [doc-ref] — to the head-peer
-  * mesh and onward to coil peers. The sequence number is transport ordering only; the embedded ack
-  * is verified end-to-end by each receiving `SlowConsensusActor`.
+  * contiguous `HubHardAck` journal (§5.3 of `docs/spec/coil-network.md`) [doc-ref] — to the
+  * head-peer mesh and onward to coil peers. The sequence number is transport ordering only; the
+  * embedded ack is verified end-to-end by each receiving `SlowConsensusActor`.
   *
   * **Persistence / recovery** (`persistence-and-crash-recovery.md` §6 CoilAckSequencer). Each
   * sequenced `HardAckWithId` is written to its own-hub `HubHardAck` journal in the **same atomic

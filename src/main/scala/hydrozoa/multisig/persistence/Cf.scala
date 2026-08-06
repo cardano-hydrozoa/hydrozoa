@@ -16,7 +16,7 @@ import hydrozoa.multisig.consensus.peer.{CoilPeerNumber, HeadPeerNumber, PeerId}
   * A `Cf` is used as a `Map` key (the backend's handle map), so the cases rely on case object /
   * case class structural equality.
   *
-  * See `design/persistence-and-crash-recovery.md` §7 / §7.1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §7 / §7.1.
   */
 sealed trait Cf:
     /** Stable on-disk column-family name (UTF-8). Per-author satellite names embed the author. */

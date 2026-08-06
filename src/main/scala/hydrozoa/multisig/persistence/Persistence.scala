@@ -26,7 +26,7 @@ import java.time.Instant
   * **Tracing.** Every op (get / put / delete / write) is emitted as a [[PersistenceEvent]] through
   * the supplied [[ContraTracer]]. The default human format routes under `"Persistence"`.
   *
-  * See `design/persistence-and-crash-recovery.md` §7.
+  * See `docs/spec/persistence-and-crash-recovery.md` §7.
   */
 trait Persistence[F[_]]:
     /** Read the typed value at `key`. `None` if absent. */

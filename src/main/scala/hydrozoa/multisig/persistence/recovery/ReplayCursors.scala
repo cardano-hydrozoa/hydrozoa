@@ -60,8 +60,7 @@ import hydrozoa.multisig.persistence.{JournalKey, Markers}
   *     the head `HardAck` floors; §10 Q10). A head peer carries no own coil floor (`None`) — its
   *     own journal is already in `hardAcks` (own is one of `peers`).
   *
-  * See `design/persistence-and-crash-recovery.md` §5.3 and `design/recovery-implementation-plan.md`
-  * R1.
+  * See `docs/spec/persistence-and-crash-recovery.md` §5.3.
   */
 final case class ReplayCursors(
     blockSpineForAggregator: JournalKey.Block,

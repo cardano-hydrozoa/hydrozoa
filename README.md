@@ -53,9 +53,11 @@ operational substrate of a Hydrozoa head.
 The authoritative protocol description is the **Gummiworm whitepaper**:
 <https://gummiworm.net/whitepaper/introduction>.
 
-In-repo design documentation complements it: [`design/`](design/) holds
-forward-looking design specs for individual features, and [`docs/`](docs/)
-documents the system as built.
+In-repo documentation complements it: [`docs/`](docs/) documents the system as
+built — [`docs/user-guide/`](docs/user-guide/) task-oriented how-tos and
+[`docs/spec/`](docs/spec/) design/reference. The top-level [`design/`](design/)
+directory is a scratchpad for in-flight feature specs, which graduate into
+`docs/spec/` once built.
 
 ## Developer's Guide
 
