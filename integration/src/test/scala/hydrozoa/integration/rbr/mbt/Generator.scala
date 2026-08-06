@@ -2,7 +2,6 @@ package hydrozoa.integration.rbr.mbt
 
 import cats.effect.IO
 import hydrozoa.integration.rbr.mbt.SutCommands.given
-import hydrozoa.integration.rbr.property.RbrSeed
 import hydrozoa.integration.stage4.CommandGenerators
 import hydrozoa.integration.stage4.Commands.given
 import hydrozoa.integration.stage4.Model.{ModelState, given}
@@ -47,7 +46,10 @@ object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
                             peer,
                             1.second,
                             evacuationDatum,
-                            l2OutputAddress = Some(RbrSeed.payoutAddress),
+                            // L2 outputs go to the peer's own address (default), so the deposits and
+                            // initial seed are peer-owned and spendable by L2 txs. They still carry
+                            // the "evacuation" marker, so beta counts them at the (snapshot-queried)
+                            // peer addresses.
                             depositValidityDuration = depositValidityDuration
                           )(state)
                           .map(_.map(AnyCommand.apply(_)).getOrElse(noOp[ModelState, Sut]))
