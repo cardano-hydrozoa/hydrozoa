@@ -175,7 +175,8 @@ See [Comments](docs/spec/style-guide.md#comments) for the full rule. In short:
   slow side", "as of step N", "renamed from"). History lives in Git and memory.
 - Keep a comment **scoped to the local code's concern** — don't explain downstream or
   other-actor internals from a method that doesn't do that work.
-- Don't reference `.scratch/` (gitignored); link committed `design/` docs or inline the point.
+- Don't reference `.scratch/` (gitignored); link a committed `docs/spec/` doc (or an in-flight
+  `design/` one) or inline the point.
 
 ### Logging
 
