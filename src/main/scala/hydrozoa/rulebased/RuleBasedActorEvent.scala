@@ -8,6 +8,12 @@ sealed trait RuleBasedActorEvent
 
 object RuleBasedActorEvent:
 
+    /** Marker for events emitted only to aid debugging. Production formatting treats them as a
+      * single silent (trace-level) case; rich rendering lives in a test-side diagnostic tracer
+      * composed with `|+|` (see the integration harness's diagnostic formats).
+      */
+    sealed trait Diagnostic extends RuleBasedActorEvent
+
     object Backend:
         final case class ErrorDisputeUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
         final case class ErrorTreasuryUtxos(e: CardanoBackend.Error) extends RuleBasedActorEvent
@@ -75,3 +81,28 @@ object RuleBasedActorEvent:
     object Evacuation:
         case object NoMore extends RuleBasedActorEvent
         final case class PayoutsLeft(n: Int) extends RuleBasedActorEvent
+
+        /** DIAGNOSTIC: the candidate evacuation-map commitments loaded at evacuation time, and the
+          * latest hard-confirmed stack they were derived from — logged to compare against the
+          * commitment the treasury actually resolved to (see [[ResolvedKzg]]).
+          */
+        final case class CandidateMaps(latestHardConfirmed: String, candidateKzgs: List[String])
+            extends Diagnostic
+
+        /** DIAGNOSTIC: the commitment the resolution wrote into the treasury, looked up against the
+          * candidate set. A miss is the `UnknownResolvedKzg` crash.
+          */
+        final case class ResolvedKzg(kzg: String) extends Diagnostic
+
+        /** DIAGNOSTIC: where the evacuation candidate walk anchored — the Major stack it landed on
+          * (vs. the latest hard-confirmed stack), the default-vote map's source block + commitment,
+          * and every SEC commitment it collected (as `block=<n> kzg=<hex>`). Shows whether a
+          * resolved commitment was excluded because a later minor-only stack was skipped or because
+          * the default map is mis-keyed.
+          */
+        final case class EvacuationAnchor(
+            anchorStack: String,
+            defaultMapBlock: String,
+            defaultKzg: String,
+            secs: List[String]
+        ) extends Diagnostic

@@ -25,7 +25,7 @@ import hydrozoa.multisig.ledger.commitment.KzgCommitment.KzgCommitment
 import hydrozoa.multisig.ledger.commitment.Membership
 import hydrozoa.multisig.ledger.joint.{EvacuationKey, EvacuationMap}
 import hydrozoa.multisig.ledger.l1.token.CIP67.HasTokenNames
-import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, FallbackTx, TxFamily}
+import hydrozoa.multisig.ledger.l1.tx.{EnrichedTx, FallbackTx, SettlementTx, TxFamily}
 import hydrozoa.multisig.ledger.stack.{PartitionEffects, StackEffects, StackNumber, StandaloneEvacuationCommitment}
 import hydrozoa.multisig.persistence.{Markers, Persistence, StoreKey}
 import hydrozoa.rulebased.RuleBasedActor.Error.NoSuitableCollateralUtxosFound
@@ -275,54 +275,61 @@ final case class RuleBasedActor(
       * dispute-resolution script pins `sec.versionMajor` to the treasury reference input's, so a
       * vote whose SEC came from a stack ahead of the on-chain settlement fails Plutus validation.
       *
-      * Walks backward from `markers.hardConfirmed` down to `StackNumber.first`, at each stack
-      * picking the last SEC (partition reverse order) whose `blockVersion.major` matches
-      * `treasuryVersionMajor`. Stops at the first match. Returns `Abstain` if none exists — the
-      * dispute is tallied/resolved from there.
+      * Votes the latest votable SEC (the head of [[votableSecs]], which is latest-first). Returns
+      * `Abstain` if there is none — the dispute is tallied/resolved from there.
       */
     private def loadAction(treasuryVersionMajor: BigInt): IO[DisputeAction] =
+        votableSecs(treasuryVersionMajor).map {
+            case Nil =>
+                DisputeAction.Abstain
+            case multiSec :: _ =>
+                // `HardAckAggregator.collectSecSignatures` stores sigs in `secSigners` order =
+                // `allHeadPeers.sorted ++ coilPeers.sorted.take(coilQuorum)`. Head sigs occupy the
+                // first `nHeadPeers` positions; the tail is the coil quorum, dense (only signers
+                // appear — no `None` slots).
+                val (head, coil) = multiSec.headerMultiSigned.splitAt(config.nHeadPeers.convert)
+                DisputeAction.Vote(
+                  sec = RuleBasedActor.toOnchain(multiSec.commitment),
+                  signatures = head,
+                  coilSignatures = coil.map(Some(_))
+                )
+        }
+
+    /** The votable SEC set for `versionMajor`, latest-first: walk the hard-confirmed stacks
+      * backward from `markers.hardConfirmed`, collecting every SEC whose `blockVersion.major`
+      * matches, and stop as soon as a stack also carries an earlier-major SEC (the previous major
+      * block — see [[secsAtVersion]]) or the Initial stack is reached. This is exactly the set
+      * peers can tally onto and the dispute can resolve to, so both [[loadAction]] (which votes the
+      * head) and [[loadEvacuationInputs]] (which must hold a preimage for every one) draw from it.
+      */
+    private def votableSecs(
+        versionMajor: BigInt
+    ): IO[List[StandaloneEvacuationCommitment.MultiSigned]] =
         for {
             markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
               MissingState("no hard-confirmed stack on disk")
             )
-            action <- Monad[IO].tailRecM[StackNumber, DisputeAction](latest) { stack =>
+            secs <- Monad[IO].tailRecM[
+              (StackNumber, List[StandaloneEvacuationCommitment.MultiSigned]),
+              List[StandaloneEvacuationCommitment.MultiSigned]
+            ]((latest, Nil)) { case (stack, acc) =>
                 persistence.get(StoreKey.HardConfirmation(stack)).map(_.map(_.payload)).flatMap {
                     case None =>
                         IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
-                    case Some(_: StackEffects.HardConfirmed.Initial) =>
-                        // Stack 0 is Initial by construction: no SEC-bearing partition, no
-                        // deeper walk. Even if the treasury's `versionMajor` were 0 here,
-                        // Initial stacks don't carry standalone evacuation commitments.
-                        IO.pure(Right(DisputeAction.Abstain))
+                    // Stack 0 is Initial by construction: no SEC-bearing partition. Terminate.
+                    case Some(_: StackEffects.HardConfirmed.Initial) => IO.pure(Right(acc))
                     case Some(r: StackEffects.HardConfirmed.Regular) =>
-                        RuleBasedActor
-                            .lastSecMatchingVersion(r.partitions, treasuryVersionMajor) match {
-                            case Some(multiSec) =>
-                                // `HardAckAggregator.collectSecSignatures` stores sigs in
-                                // `secSigners` order = `allHeadPeers.sorted ++
-                                // coilPeers.sorted.take(coilQuorum)`. Head sigs occupy the
-                                // first `nHeadPeers` positions; the tail is the coil quorum,
-                                // dense (only signers appear — no `None` slots).
-                                val (head, coil) = multiSec.headerMultiSigned
-                                    .splitAt(config.nHeadPeers.convert)
-                                IO.pure(
-                                  Right(
-                                    DisputeAction.Vote(
-                                      sec = RuleBasedActor.toOnchain(multiSec.commitment),
-                                      signatures = head,
-                                      coilSignatures = coil.map(Some(_))
-                                    )
-                                  )
-                                )
-                            case None if stack == StackNumber.first =>
-                                IO.pure(Right(DisputeAction.Abstain))
-                            case None =>
-                                IO.pure(Left(stack.decrement))
-                        }
+                        val (matched, reachedPreviousMajor) =
+                            RuleBasedActor.secsAtVersion(r.partitions, versionMajor)
+                        val acc2 = acc ++ matched
+                        // A Regular stack is always >= 1, so `decrement` never underflows.
+                        if reachedPreviousMajor || stack == StackNumber.first then
+                            IO.pure(Right(acc2))
+                        else IO.pure(Left((stack.decrement, acc2)))
                 }
             }
-        } yield action
+        } yield secs
 
     /** Re-read the evacuation-side rule-based inputs from persistence. Called on each tick that
       * runs the evacuation branch. Walks backward through hard-confirmed stacks (like
@@ -331,7 +338,7 @@ final case class RuleBasedActor(
       * after the last Major are skipped; the initial stack terminates the walk with
       * `config.initialEvacuationMap` + the initial fallback.
       */
-    private def loadEvacuationInputs: IO[EvacuationInputs] =
+    private def loadEvacuationInputs(versionMajor: BigInt): IO[EvacuationInputs] =
         for {
             markers <- Markers.derive(persistence.backend, config.ownPeerId)
             latest <- markers.hardConfirmed.liftTo[IO](
@@ -362,61 +369,132 @@ final case class RuleBasedActor(
                                 // never underflows.
                                 IO.pure(Left(stack.decrement))
                             case Some(fallbackTx) =>
-                                loadRegularEvacuationInputs(stack, r, fallbackTx).map(Right(_))
+                                loadRegularEvacuationInputs(stack, fallbackTx, versionMajor)
+                                    .map(Right(_))
                         }
                 }
             }
+            _ <- tracer.traceWith(
+              RuleBasedActorEvent.Evacuation.CandidateMaps(
+                s"$latest",
+                res.candidateEvacMaps.keySet.map(k => s"$k").toList
+              )
+            )
         } yield res
 
-    /** Collect the evacuation inputs for a specific `Regular` stack that carries a fallback: the
-      * default evacuation map (keyed by the stack's `lastBlockNum`) and one entry per SEC carried
-      * by its partitions, keyed by kzg commitment. Extracted so the tailRec walk stays thin.
+    /** Collect the evacuation inputs anchored on a `Regular` stack that carries the fallback: its
+      * fallback tx (the continuing-chain anchor) plus the full candidate map set — the base
+      * `(versionMajor, 0)` map the dispute resolves to on an all-abstain ([[defaultVoteMap]]), and
+      * one entry per **votable** minor SEC peers could ratchet onto ([[votableSecs]]). Together
+      * they cover everything resolvable, so no resolved commitment is ever missing a preimage.
       */
     private def loadRegularEvacuationInputs(
         stackNum: StackNumber,
-        r: StackEffects.HardConfirmed.Regular,
         fallbackTx: FallbackTx,
+        versionMajor: BigInt,
     ): IO[EvacuationInputs] =
         for {
-            // Default-vote map — what the multisig treasury was committed to at fallback
-            // time. The default vote utxo carries this kzg, so if peers never tally onto a
-            // newer SEC the resolution will land here. The closing stack's `lastBlockNum`
-            // comes from the `UnsignedStack` every peer persists on every close (atomic
-            // with the hard-ack), so it is present for any hard-confirmed stack — unlike
-            // the StackLane brief (leader-authored only).
-            unsignedStack <- persistence
-                .get(StoreKey.UnsignedStack(stackNum))
-                .flatMap(
-                  _.liftTo[IO](MissingState(s"UnsignedStack($stackNum) missing"))
-                )
-            lastBlockNum = unsignedStack.brief.lastBlockNum
-            defaultMap <- persistence
-                .get(StoreKey.EvacuationMap(lastBlockNum))
-                .flatMap(
-                  _.liftTo[IO](MissingState(s"EvacuationMap($lastBlockNum) missing"))
-                )
-            // SEC maps — every candidate SEC peers could vote for, keyed by its kzg
-            // commitment. The dispute resolution writes whichever wins into the treasury's
-            // Resolved.evacuationActive, so the EvacuationActor looks it up here at runtime.
-            secMaps <- RuleBasedActor
-                .allSecs(r.partitions)
-                .traverse { multiSec =>
-                    persistence
-                        .get(StoreKey.EvacuationMap(multiSec.commitment.blockNum))
-                        .flatMap(
-                          _.liftTo[IO](
-                            MissingState(
-                              s"EvacuationMap(${multiSec.commitment.blockNum})" +
-                                  " missing for candidate SEC"
-                            )
-                          )
+            // Base map — the `(versionMajor, 0)` commitment the treasury resolves to when every peer
+            // abstains (deposits with no minor to ratchet onto). Sourced from the last SETTLED
+            // major, NOT this fallback stack (whose own settlement was dropped — that is why its
+            // fallback executed).
+            base <- defaultVoteMap(versionMajor)
+            (defaultKzg, defaultMap) = base
+            // SEC maps — every VOTABLE minor SEC the dispute could ratchet onto for this major
+            // (across stacks, up to the previous major block; [[votableSecs]]), keyed by kzg. The
+            // resolution writes whichever wins into the treasury's Resolved.evacuationActive, so the
+            // candidate set must cover the base plus the full votable set.
+            votable <- votableSecs(versionMajor)
+            secMaps <- votable.traverse { multiSec =>
+                persistence
+                    .get(StoreKey.EvacuationMap(multiSec.commitment.blockNum))
+                    .flatMap(
+                      _.liftTo[IO](
+                        MissingState(
+                          s"EvacuationMap(${multiSec.commitment.blockNum})" +
+                              " missing for candidate SEC"
                         )
-                        .map(map => multiSec.commitment.kzgCommitment -> map)
-                }
+                      )
+                    )
+                    .map(map => multiSec.commitment.kzgCommitment -> map)
+            }
+            _ <- tracer.traceWith(
+              RuleBasedActorEvent.Evacuation.EvacuationAnchor(
+                anchorStack = s"$stackNum",
+                defaultMapBlock = s"base of settled major $versionMajor",
+                defaultKzg = s"$defaultKzg",
+                secs = votable.map(ms =>
+                    s"block=${ms.commitment.blockNum} kzg=${ms.commitment.kzgCommitment}"
+                )
+              )
+            )
         } yield EvacuationInputs(
-          candidateEvacMaps = ((defaultMap.kzgCommitment -> defaultMap) +: secMaps).toMap,
+          candidateEvacMaps = ((defaultKzg -> defaultMap) +: secMaps).toMap,
           fallbackTxHash = fallbackTx.tx.id
         )
+
+    /** The default-vote map for `versionMajor`: the base `(versionMajor, 0)` commitment the dispute
+      * resolves to when every peer abstains (deposits, with no minor to ratchet onto). It is the
+      * on-chain commitment of the LAST SETTLED major — carried by that major's settlement, not a
+      * SEC and not the fallback stack (whose own settlement never reached L1, which is why its
+      * fallback executed). Walk back to the stack whose settlement produced `versionMajor` and read
+      * its base commitment (the settlement's kzg) with its map.
+      */
+    private def defaultVoteMap(versionMajor: BigInt): IO[(KzgCommitment, EvacuationMap)] =
+        for {
+            markers <- Markers.derive(persistence.backend, config.ownPeerId)
+            latest <- markers.hardConfirmed.liftTo[IO](
+              MissingState("no hard-confirmed stack on disk")
+            )
+            result <- Monad[IO].tailRecM[StackNumber, (KzgCommitment, EvacuationMap)](latest) {
+                stack =>
+                    persistence
+                        .get(StoreKey.HardConfirmation(stack))
+                        .map(_.map(_.payload))
+                        .flatMap {
+                            case None =>
+                                IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                            case Some(_: StackEffects.HardConfirmed.Initial) =>
+                                IO.raiseError(
+                                  MissingState(
+                                    s"no settled major $versionMajor among hard-confirmed stacks"
+                                  )
+                                )
+                            case Some(r: StackEffects.HardConfirmed.Regular) =>
+                                RuleBasedActor.majorSettlementAt(r.partitions, versionMajor) match {
+                                    case None             => IO.pure(Left(stack.decrement))
+                                    case Some(settlement) =>
+                                        // TODO: `lastBlockNum` is the base `(major, 0)` block only when
+                                        // the major has no trailing minors (the deposits-only case).
+                                        // With trailing minors the base map lives at the earlier major
+                                        // block; load that block's map (still keyed by the settlement's
+                                        // kzg) instead.
+                                        persistence
+                                            .get(StoreKey.UnsignedStack(stack))
+                                            .flatMap(
+                                              _.liftTo[IO](
+                                                MissingState(s"UnsignedStack($stack) missing")
+                                              )
+                                            )
+                                            .flatMap { unsignedStack =>
+                                                val blockNum = unsignedStack.brief.lastBlockNum
+                                                persistence
+                                                    .get(StoreKey.EvacuationMap(blockNum))
+                                                    .flatMap(
+                                                      _.liftTo[IO](
+                                                        MissingState(
+                                                          s"EvacuationMap($blockNum) missing"
+                                                        )
+                                                      )
+                                                    )
+                                                    .map(map =>
+                                                        Right(settlement.kzgCommitment -> map)
+                                                    )
+                                            }
+                                }
+                        }
+            }
+        } yield result
 
     private object Dispute {
 
@@ -791,10 +869,11 @@ final case class RuleBasedActor(
           * left.
           */
         def handle(
-            regimeUtxo: RuleBasedRegimeUtxo
+            regimeUtxo: RuleBasedRegimeUtxo,
+            versionMajor: BigInt
         ): EitherT[IO, Error.RecoverableErrors, Unit] =
             for {
-                state <- loadEvacuationState
+                state <- loadEvacuationState(versionMajor)
                 (treasuryUtxo, toEvacuate) = state
                 _ <-
                     if toEvacuate.isEmpty
@@ -836,14 +915,15 @@ final case class RuleBasedActor(
           * utxo that disagrees with the map/history produces an [[EvacuationTx]] the ledger rejects
           * at script evaluation.
           */
-        def loadEvacuationState
-            : EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, EvacuationMap)] =
+        def loadEvacuationState(
+            versionMajor: BigInt
+        ): EitherT[IO, Error.RecoverableErrors, (RuleBasedTreasuryUtxo, EvacuationMap)] =
             for {
                 inputs <- EitherT.liftF[
                   IO,
                   Error.RecoverableErrors,
                   RuleBasedActor.EvacuationInputs
-                ](loadEvacuationInputs)
+                ](loadEvacuationInputs(versionMajor))
 
                 // The resolution tx is the last (oldest) tx after the fallback that spends the
                 // treasury; the preceding entries are withdrawal transactions, and the first
@@ -858,6 +938,9 @@ final case class RuleBasedActor(
                 // The treasury's current `evacuationActive` commits to the REMAINING map after
                 // past withdrawals; the original resolution-time map is committed by the oldest
                 // treasury tx's output datum, which is what `candidateEvacMaps` is keyed by.
+                _ <- EitherT.right[Error.RecoverableErrors](
+                  tracer.traceWith(RuleBasedActorEvent.Evacuation.ResolvedKzg(s"$resolutionKzg"))
+                )
                 evacuationMapAtResolution <- lookupMap(resolutionKzg, inputs.candidateEvacMaps)
 
                 previouslyEvacuated: Set[EvacuationKey] = pastEvacuateRedeemers.foldLeft(
@@ -1004,8 +1087,10 @@ final case class RuleBasedActor(
             _ <- treasuryUtxo.treasuryOutput.datum match {
                 case _: RuleBasedTreasuryDatum.Unresolved =>
                     getRegime.flatMap(Dispute.handle(treasuryUtxo, _))
-                case _: RuleBasedTreasuryDatum.Resolved =>
-                    getRegime.flatMap(Evacuation.handle(_))
+                case resolved: RuleBasedTreasuryDatum.Resolved =>
+                    // The dispute pins `sec.versionMajor` to the treasury's major, so evacuation's
+                    // votable candidate set is scoped to `resolved.version._1`.
+                    getRegime.flatMap(Evacuation.handle(_, resolved.version._1))
             }
         } yield ()
         et.value
@@ -1149,34 +1234,38 @@ object RuleBasedActor {
       */
     final case class MissingState(message: String) extends RuntimeException(message)
 
-    /** Walk the partitions in reverse and return the latest SEC whose `blockVersion.major` matches
-      * `versionMajor`. Major's SEC is optional (only present when the partition has trailing
-      * minors); Minor's SEC is mandatory. Both are candidates.
+    /** The SECs a stack's partitions carry for `versionMajor` (latest-first), and whether the stack
+      * also carries an **earlier**-major SEC — the signal that the votable range ends at this stack
+      * (the previous major block). A Major's SEC is optional (present only with trailing minors); a
+      * Minor's is mandatory; both count. Shared by [[votableSecs]], which both voting
+      * ([[loadAction]]) and evacuation ([[loadEvacuationInputs]]) draw from, so their SEC selection
+      * can never diverge.
       */
-    private def lastSecMatchingVersion(
+    private def secsAtVersion(
         partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]],
         versionMajor: BigInt
-    ): Option[StandaloneEvacuationCommitment.MultiSigned] =
-        partitions.toList.reverseIterator.collectFirst {
-            case PartitionEffects.Minor(sec, _)
-                if BigInt(sec.commitment.blockVersion.major: Int) == versionMajor =>
-                sec
-            case PartitionEffects.Major(_, _, _, _, Some(sec))
-                if BigInt(sec.commitment.blockVersion.major: Int) == versionMajor =>
-                sec
-        }
-
-    /** Every SEC carried by the partitions, in partition order — these are the candidates peers may
-      * tally onto and the dispute resolution may settle on.
-      */
-    // TODO: Truncate this to the actual votable SECs -- anything lower than the default vote won't work
-    private def allSecs(
-        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]]
-    ): List[StandaloneEvacuationCommitment.MultiSigned] =
-        partitions.toList.flatMap {
+    ): (List[StandaloneEvacuationCommitment.MultiSigned], Boolean) =
+        def major(sec: StandaloneEvacuationCommitment.MultiSigned): BigInt =
+            BigInt(sec.commitment.blockVersion.major: Int)
+        val secs = partitions.toList.reverse.flatMap {
             case PartitionEffects.Minor(sec, _)                => List(sec)
             case PartitionEffects.Major(_, _, _, _, Some(sec)) => List(sec)
             case _                                             => Nil
+        }
+        (secs.filter(major(_) == versionMajor), secs.exists(major(_) < versionMajor))
+
+    /** The settlement of the Major partition that produced `versionMajor`, if this stack carries
+      * it. Its `kzgCommitment` is the base `(versionMajor, 0)` commitment (the on-chain default
+      * vote) — see [[defaultVoteMap]].
+      */
+    private def majorSettlementAt(
+        partitions: NonEmptyList[PartitionEffects[StandaloneEvacuationCommitment.MultiSigned]],
+        versionMajor: BigInt
+    ): Option[SettlementTx] =
+        partitions.toList.collectFirst {
+            case PartitionEffects.Major(settlement, _, _, _, _)
+                if BigInt(settlement.majorVersionProduced: Int) == versionMajor =>
+                settlement
         }
 
     /** Walk the partitions in reverse and return the latest fallback tx. Only Major partitions

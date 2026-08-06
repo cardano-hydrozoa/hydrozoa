@@ -80,3 +80,7 @@ object RuleBasedActorEventFormat:
                 info("No more evacuations to be done. Staying alive in case of rollbacks")
             case Evacuation.PayoutsLeft(n) =>
                 info(s"$n payout obligations left")
+
+            // Diagnostic events carry no production rendering — a test-side diagnostic tracer
+            // (composed with `|+|`) formats them. Kept at trace so production stays silent.
+            case d: RuleBasedActorEvent.Diagnostic => trace(d.toString)
