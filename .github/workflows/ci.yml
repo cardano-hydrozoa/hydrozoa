@@ -9,15 +9,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The `build` job is a required status check (repository ruleset on `main`). It must ALWAYS run
+  # and report, or the ruleset blocks the merge — so we do NOT path-filter the workflow itself.
+  # Instead, a docs-only PR skips the expensive Nix/sbt steps and the check passes in ~1 min.
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # On a PR, decide whether anything outside docs/ changed. `code == 'false'` means docs-only.
+      - name: Detect non-docs changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - '!docs/**'
+
+      # Everything below runs for code changes and for manual (workflow_dispatch) runs; it is
+      # skipped only on a docs-only PR.
       - name: Install Nix
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: DeterminateSystems/nix-installer-action@main
 
       - name: Cache sbt / coursier / ivy
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -28,12 +45,19 @@ jobs:
           restore-keys: sbt-${{ runner.os }}-
 
       - name: Format / lint / nixfmt checks
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         run: nix develop --command just precommit
 
       - name: Unit tests
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         run: nix develop --command just test
 
       - name: Integration tests
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         env:
           JAVA_TOOL_OPTIONS: -Dlogback.configurationFile=classpath:logback-ci.xml
         run: nix develop --command just integration-fast
+
+      - name: Docs-only change — build/test skipped
+        if: github.event_name == 'pull_request' && steps.filter.outputs.code != 'true'
+        run: echo "Only docs/** changed — skipping Nix build, tests, and integration. The 'build' check passes."
