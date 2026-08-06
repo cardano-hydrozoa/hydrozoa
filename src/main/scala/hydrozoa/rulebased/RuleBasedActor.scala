@@ -439,62 +439,72 @@ final case class RuleBasedActor(
       * SEC and not the fallback stack (whose own settlement never reached L1, which is why its
       * fallback executed). Walk back to the stack whose settlement produced `versionMajor` and read
       * its base commitment (the settlement's kzg) with its map.
+      *
+      * Major 0 is the exception: it is the bootstrap (Initial) stack, whose base commitment is the
+      * initial evacuation map itself — no `Major` partition ever produces major 0. Fallback that
+      * fires before any Regular major settles (the first settlement dropped) resolves to this base.
       */
     private def defaultVoteMap(versionMajor: BigInt): IO[(KzgCommitment, EvacuationMap)] =
-        for {
-            markers <- Markers.derive(persistence.backend, config.ownPeerId)
-            latest <- markers.hardConfirmed.liftTo[IO](
-              MissingState("no hard-confirmed stack on disk")
-            )
-            result <- Monad[IO].tailRecM[StackNumber, (KzgCommitment, EvacuationMap)](latest) {
-                stack =>
-                    persistence
-                        .get(StoreKey.HardConfirmation(stack))
-                        .map(_.map(_.payload))
-                        .flatMap {
-                            case None =>
-                                IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
-                            case Some(_: StackEffects.HardConfirmed.Initial) =>
-                                IO.raiseError(
-                                  MissingState(
-                                    s"no settled major $versionMajor among hard-confirmed stacks"
-                                  )
-                                )
-                            case Some(r: StackEffects.HardConfirmed.Regular) =>
-                                RuleBasedActor.majorSettlementAt(r.partitions, versionMajor) match {
-                                    case None             => IO.pure(Left(stack.decrement))
-                                    case Some(settlement) =>
-                                        // TODO: `lastBlockNum` is the base `(major, 0)` block only when
-                                        // the major has no trailing minors (the deposits-only case).
-                                        // With trailing minors the base map lives at the earlier major
-                                        // block; load that block's map (still keyed by the settlement's
-                                        // kzg) instead.
-                                        persistence
-                                            .get(StoreKey.UnsignedStack(stack))
-                                            .flatMap(
-                                              _.liftTo[IO](
-                                                MissingState(s"UnsignedStack($stack) missing")
-                                              )
-                                            )
-                                            .flatMap { unsignedStack =>
-                                                val blockNum = unsignedStack.brief.lastBlockNum
-                                                persistence
-                                                    .get(StoreKey.EvacuationMap(blockNum))
-                                                    .flatMap(
-                                                      _.liftTo[IO](
-                                                        MissingState(
-                                                          s"EvacuationMap($blockNum) missing"
+        if versionMajor == 0 then
+            IO.pure(config.initialEvacuationMap.kzgCommitment -> config.initialEvacuationMap)
+        else
+            for {
+                markers <- Markers.derive(persistence.backend, config.ownPeerId)
+                latest <- markers.hardConfirmed.liftTo[IO](
+                  MissingState("no hard-confirmed stack on disk")
+                )
+                result <- Monad[IO].tailRecM[StackNumber, (KzgCommitment, EvacuationMap)](latest) {
+                    stack =>
+                        persistence
+                            .get(StoreKey.HardConfirmation(stack))
+                            .map(_.map(_.payload))
+                            .flatMap {
+                                case None =>
+                                    IO.raiseError(MissingState(s"HardConfirmation($stack) missing"))
+                                case Some(_: StackEffects.HardConfirmed.Initial) =>
+                                    IO.raiseError(
+                                      MissingState(
+                                        s"no settled major $versionMajor among hard-confirmed stacks"
+                                      )
+                                    )
+                                case Some(r: StackEffects.HardConfirmed.Regular) =>
+                                    RuleBasedActor.majorSettlementAt(
+                                      r.partitions,
+                                      versionMajor
+                                    ) match {
+                                        case None             => IO.pure(Left(stack.decrement))
+                                        case Some(settlement) =>
+                                            // TODO: `lastBlockNum` is the base `(major, 0)` block only when
+                                            // the major has no trailing minors (the deposits-only case).
+                                            // With trailing minors the base map lives at the earlier major
+                                            // block; load that block's map (still keyed by the settlement's
+                                            // kzg) instead.
+                                            persistence
+                                                .get(StoreKey.UnsignedStack(stack))
+                                                .flatMap(
+                                                  _.liftTo[IO](
+                                                    MissingState(s"UnsignedStack($stack) missing")
+                                                  )
+                                                )
+                                                .flatMap { unsignedStack =>
+                                                    val blockNum = unsignedStack.brief.lastBlockNum
+                                                    persistence
+                                                        .get(StoreKey.EvacuationMap(blockNum))
+                                                        .flatMap(
+                                                          _.liftTo[IO](
+                                                            MissingState(
+                                                              s"EvacuationMap($blockNum) missing"
+                                                            )
+                                                          )
                                                         )
-                                                      )
-                                                    )
-                                                    .map(map =>
-                                                        Right(settlement.kzgCommitment -> map)
-                                                    )
-                                            }
-                                }
-                        }
-            }
-        } yield result
+                                                        .map(map =>
+                                                            Right(settlement.kzgCommitment -> map)
+                                                        )
+                                                }
+                                    }
+                            }
+                }
+            } yield result
 
     private object Dispute {
 
