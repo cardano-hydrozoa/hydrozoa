@@ -11,6 +11,10 @@ description: >-
 
 theme: minima
 
+# Shown as a badge in the sidebar. Keep in sync with `version :=` in build.sbt
+# (the `inThisBuild` release version).
+hydrozoa_version: "0.1.1"
+
 # Project site served under the repository path. Update both if the repo is
 # renamed or a custom domain is configured.
 url: "https://cardano-hydrozoa.github.io"

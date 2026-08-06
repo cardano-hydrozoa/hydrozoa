@@ -15,7 +15,13 @@
 
     <div class="layout">
       <aside class="sidebar" aria-label="Documentation navigation">
-        <a class="brand" href="{{ '/' | relative_url }}">{{ site.title | default: "Documentation" | escape }}</a>
+        {%- comment -%} Fixed header: brand + version stay visible while the nav scrolls. {%- endcomment -%}
+        <div class="sidebar-head">
+          <a class="brand" href="{{ '/' | relative_url }}">{{ site.title | default: "Documentation" | escape }}</a>
+          {%- if site.hydrozoa_version -%}
+          <span class="version" title="Hydrozoa release">v{{ site.hydrozoa_version }}</span>
+          {%- endif -%}
+        </div>
         <nav class="site-nav">
           <a class="nav-item{% if page.url == '/' %} active{% endif %}" href="{{ '/' | relative_url }}">Home</a>
 
@@ -41,8 +47,6 @@
         </div>
       </main>
     </div>
-
-    {%- include footer.html -%}
 
   </body>
 
