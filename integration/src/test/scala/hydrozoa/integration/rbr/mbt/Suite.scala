@@ -18,7 +18,6 @@ import hydrozoa.multisig.consensus.peer.{HeadPeerNumber, PeerId}
 import hydrozoa.multisig.consensus.{CardanoLiaisonEvent, StackComposerEvent}
 import hydrozoa.multisig.ledger.block.BlockVersion
 import hydrozoa.multisig.ledger.eutxol2.toUtxos
-import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, genesisObligationDecoder}
 import hydrozoa.multisig.ledger.event.RequestNumber
 import hydrozoa.multisig.ledger.l1.tx.{
   EnrichedTx,
@@ -26,10 +25,8 @@ import hydrozoa.multisig.ledger.l1.tx.{
 }
 import hydrozoa.multisig.{CommonChildEvent, RuleBasedOnlyChildEvent}
 import hydrozoa.rulebased.RuleBasedActorEvent
-import io.bullet.borer.Cbor
 import org.scalacheck.commands.{ModelBasedSuite, ScenarioGen}
 import org.scalacheck.{Gen, Prop, PropertyM}
-import scala.collection.immutable.Queue
 import scala.concurrent.duration.*
 import scalus.cardano.address.ShelleyAddress
 import scalus.cardano.ledger.{TransactionInput, TransactionOutput, Utxos}
@@ -275,6 +272,8 @@ case class RbrMbtSuite(
     // so `beta` can bucket refunds directly rather than inferring them from addresses.
     override def beforeFinalize(lastState: Model.ModelState, sut: Sut): IO[Prop] =
         val depositUtxos = lastState.registeredDeposits.values.map(_.depositProduced).toSet
+        val initialMapSize =
+            lastState.params.multiNodeConfig.headConfig.initializationParameters.initialEvacuationMap.size
         for
             _ <- log.info(
               s"beforeFinalize: awaiting up to $depositCommitWindow for " +
@@ -289,32 +288,26 @@ case class RbrMbtSuite(
             // 2. Arm the firewall → the next settlement is dropped → fallback.
             _ <- sut.settlementFirewallArmed.set(true)
             _ <- sut.fallbackDispatched.get.timeout(scenarioTimeout)
-            // 3. Snapshot at fallback (before refunds/evacuation move things) to fix the committed
-            //    set: a deposit is committed iff a submitted settlement spent it AND it is now gone.
-            fallbackUtxos <- sut.harness.l1Snapshot
-            submittedInputs <- sut.submittedSettlementInputs.get
             _ <- sut.evacuationDone.get.timeout(scenarioTimeout)
             _ <- IO.sleep(quiescenceDelay)
             utxos <- sut.harness.l1Snapshot
             payouts <- sut.firstPayoutsLeft.get
             errors <- sut.harness.sutErrors.get
-            (initialObligations, depositedObligations) =
-                obligationBreakdown(lastState, submittedInputs, fallbackUtxos)
-            obligationCount = initialObligations + depositedObligations
-            alpha = alphaTerminal(obligationCount)
-            betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
-            // Diagnostic (non-breaking): the committed map size read straight from the peer traces.
-            // `M` is the last major settled on-chain; `N` is the size of the committed evacuation map
-            // at the max-minor block of that major — the map the head resolves to under fallback.
-            // On deposits-only this must equal `obligationCount`; verify before it replaces alpha.
+            // The committed evacuation-map size the head resolves to under fallback, read straight
+            // from the peer traces: `N` at the last on-chain-settled major `M` (see
+            // `observedCommittedSize`). With nothing settled yet the committed map is just the
+            // initial seed. Deposits that never committed are absent from `N` — matching what lands
+            // on L1 — so racing stragglers need no separate committed-set accounting.
             committedMaps <- sut.committedMaps.get
             settledMajors <- sut.settledMajors.get
-            observedN = observedCommittedSize(committedMaps, settledMajors)
+            obligationCount =
+                observedCommittedSize(committedMaps, settledMajors).getOrElse(initialMapSize)
+            alpha = alphaTerminal(obligationCount)
+            betaEither = ObservableMarking.beta(utxos)(using sut.harness.multiNodeConfig)
             _ <- log.info(
               s"beforeFinalize: firstPayoutsLeft=$payouts obligationCount=$obligationCount " +
-                  s"(initial=$initialObligations committed-deposits=$depositedObligations " +
-                  s"of ${depositUtxos.size} deposit(s))\n" +
-                  s"  observed N (traces): $observedN (M=${settledMajors.maxOption}, " +
+                  s"(M=${settledMajors.maxOption} initialMapSize=$initialMapSize " +
+                  s"${depositUtxos.size} deposit(s), " +
                   s"committedMaps=${committedMaps.sortBy((v, _) => (v.major: Int, v.minor: Int))})\n" +
                   s"  alpha (model): $alpha\n  beta  (L1):    $betaEither"
             )
@@ -348,26 +341,6 @@ case class RbrMbtSuite(
             yield ()
         if depositUtxos.isEmpty then IO.unit else loop
 
-    /** `(initial-map obligations, committed-deposit obligations)`. The initial evacuation map is
-      * the genesis L2 seed (always evacuated). A registered deposit contributes its obligations
-      * only if it was committed by fallback: a settlement the SUT submitted spent its L1 utxo
-      * (`submittedInputs`) AND that utxo is gone from the fallback snapshot (the settlement
-      * landed). Deposits failing either test were left pending and are refunded, not evacuated.
-      */
-    private def obligationBreakdown(
-        state: Model.ModelState,
-        submittedInputs: Set[TransactionInput],
-        fallbackUtxos: Utxos,
-    ): (Int, Int) =
-        val initial =
-            state.params.multiNodeConfig.headConfig.initializationParameters.initialEvacuationMap.size
-        val committed = state.registeredDeposits.values.filter(pd =>
-            submittedInputs.contains(pd.depositProduced) &&
-                !fallbackUtxos.contains(pd.depositProduced)
-        )
-        val deposited = committed.map(depositOutputCount).sum
-        (initial, deposited)
-
     /** The committed evacuation map size the head resolves to under fallback, read from the
       * `CommittedMap` peer traces. `M` is the last major that settled on-chain (`settledMajors`);
       * `N` is the size at the max-minor committed block of major `M`. Majors above `M` (e.g. the
@@ -385,9 +358,6 @@ case class RbrMbtSuite(
                 .maxByOption((v, _) => (v.minor: Int))
                 .map((_, size) => size)
         }
-
-    private def depositOutputCount(pd: Model.PendingDeposit): Int =
-        Cbor.decode(pd.l2Payload.bytes).to[Queue[GenesisObligation]].value.size
 
     /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with
       * `obligationCount` committed outputs and drive it through the dispute to full evacuation.
