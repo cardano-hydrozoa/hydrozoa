@@ -81,28 +81,44 @@ final case class DevKit(blockfrostApiBaseUri: String, yaciApiBaseUri: Uri) {
         Await.result(request, timeout)
     }
 
+    /** Fund `address` from the devnet faucet. The faucet returns a transient `500 "Topup failed"`
+      * while the devnet is still warming (the admin API and Blockfrost come up before the faucet is
+      * usable), so retry on any non-`200` before giving up — a single POST flakes on CI.
+      */
     def topup(
         address: ShelleyAddress,
         coins: Coin,
-        timeout: FiniteDuration = 30.seconds
+        timeout: FiniteDuration = 30.seconds,
+        maxAttempts: Int = 8,
+        retryDelay: FiniteDuration = 2.seconds,
     ): Unit = {
         val adaAmount = coins.value / 1_000_000.0
         val jsonBody = s"""{"address": "${address.toBech32.get}", "adaAmount": $adaAmount}"""
 
-        val request = basicRequest
-            .post(uri"$yaciApiBaseUri/addresses/topup")
-            .header("Content-Type", "application/json")
-            .body(jsonBody)
-            .send(backend)
-            .map(resp =>
-                if resp.code == StatusCode.Ok then ()
-                else
-                    throw new RuntimeException(
-                      s"Topup failed with status ${resp.code}: ${resp.body}"
-                    )
-            )
+        def attempt(): Either[String, Unit] =
+            val request = basicRequest
+                .post(uri"$yaciApiBaseUri/addresses/topup")
+                .header("Content-Type", "application/json")
+                .body(jsonBody)
+                .send(backend)
+                .map(resp =>
+                    if resp.code == StatusCode.Ok then Right(())
+                    else Left(s"status ${resp.code}: ${resp.body}")
+                )
+            try Await.result(request, timeout)
+            catch case e: Throwable => Left(s"request error: ${e.getMessage}")
 
-        Await.result(request, timeout)
+        @annotation.tailrec
+        def loop(attemptsLeft: Int): Unit =
+            attempt() match
+                case Right(()) => ()
+                case Left(_) if attemptsLeft > 1 =>
+                    Thread.sleep(retryDelay.toMillis)
+                    loop(attemptsLeft - 1)
+                case Left(err) =>
+                    throw new RuntimeException(s"Topup failed after $maxAttempts attempts: $err")
+
+        loop(maxAttempts)
     }
 }
 
