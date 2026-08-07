@@ -133,6 +133,20 @@ object MultiPeerHeadHarness:
         )
     }
 
+    /** Yaci-backend timing: [[fastTxTiming]] with a longer deposit-maturity window so the
+      * CardanoLiaison poll period can be slowed to ~1s without hammering the yaci-store. The CL
+      * period is capped at `depositMaturityDuration / 5`, so a 1s CL needs maturity >= 5s.
+      */
+    val yaciTxTiming: GenWithTestPeers[TxTiming] = ReaderT { (network: TestPeers) =>
+        fastTxTiming
+            .run(network)
+            .map(
+              _.copy(depositMaturityDuration =
+                  DepositMaturityDuration(6.seconds.quantize(network.slotConfig))
+              )
+            )
+    }
+
     /** Static fast voting deadline (5s `votingDuration`) so the deadline-gated tally path unblocks
       * within a wall-clock scenario budget — the default generator picks 1h..5d. Shared by the
       * dispute-flow tests via [[mkResource]]'s default.
@@ -684,11 +698,14 @@ object MultiPeerHeadHarness:
           */
         def yaciNetwork(
             devKit: DevKit = DevKit.localhost,
-            protocolParams: ProtocolParams = DevKit.yaciParams,
+            protocolParams: Option[ProtocolParams] = None,
         ): IO[CardanoNetwork.Custom] =
-            IO.blocking(devKit.devnetInfo()).map { info =>
+            for {
+                info <- IO.blocking(devKit.devnetInfo())
+                params <- protocolParams.fold(IO.blocking(devKit.protocolParams()))(IO.pure)
+            } yield {
                 val cardanoInfo = CardanoInfo(
-                  protocolParams = protocolParams,
+                  protocolParams = params,
                   network = Network.Testnet,
                   slotConfig = SlotConfig(
                     zeroTime = java.time.Instant.ofEpochSecond(info.startTime).toEpochMilli,

@@ -55,6 +55,10 @@ object YaciMultiPeerProbe extends MultiPeerDisputeProperties("Yaci MultiPeer"):
               testPeers = ready.testPeers,
               testPeerToUtxos = ready.genesisByPeer,
               takeoffOffset = 120.seconds,
+              // Longer deposit maturity so the CardanoLiaison poll can be slowed to 1s (the real
+              // yaci-store can't take the fast mock cadence) without tripping the
+              // `poll <= depositMaturity/5` config check — mirrors the RBR MBT Yaci path.
+              fastTxTiming = MultiPeerHeadHarness.yaciTxTiming,
               scriptReferenceUtxos = Some(ready.scriptReferenceUtxos),
               coilPeers = ready.testPeers.coilPeersConfig(hub = HeadPeerNumber(0)),
               coilQuorum = nCoilPeers,
