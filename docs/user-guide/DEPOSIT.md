@@ -9,8 +9,8 @@ deposit is two artifacts that travel together:
 
 The head screens the deposit, then you sign and submit the L1 tx yourself. The head never submits it.
 
-Background (the *why*, and the pin's role): [`../spec/l2-isomorphism.md`](../spec/l2-isomorphism.md)
-§ *Deposits: pinned to their L2 payload*. The packaged `hydrozoa submit-deposit` subcommand
+Background (the *why*, and the pin's role): *a deposit is pinned to its L2 payload*. The packaged
+`hydrozoa submit-deposit` subcommand
 (`src/main/scala/hydrozoa/app/cli/SubmitDeposit.scala`) is the runnable reference client, and
 [DEPLOYMENT.md](DEPLOYMENT.md) § *Deposit into the head* is the end-to-end walkthrough.
 
@@ -47,8 +47,7 @@ The deposit tx is an ordinary Cardano transaction with these head-specific requi
   `headAddress`, `headId`, and `submissionDurationSeconds` the other requirements here need.
 - **Validity (TTL)** — set `ValidityEndSlot` to the deposit **submission deadline**. The head
   derives the accept-by deadline from the TTL: `acceptBy = ttl − depositSubmissionDuration`. A
-  missing or malformed TTL is rejected. See [`../spec/l2-isomorphism.md`](../spec/l2-isomorphism.md)
-  § *Deposit timing*.
+  missing or malformed TTL is rejected.
 - **Metadata — the pin.** Under the head metadata label **`4937`** (the `HYDR` tag), nested by
   tx-type and head id:
 
@@ -78,7 +77,7 @@ deposit to guarantee this.
    Blockfrost). The head does not submit deposits.
 3. **Wait** for the deposit UTxO to appear on L1 and for the head to absorb it; the L2 UTxOs
    described by your `l2Payload` then appear in the L2 ledger. You can watch L2 state via
-   `GET /l2/cardano-eutxo/utxos/{address}` (see [`../spec/l2-query-endpoints.md`](../spec/l2-query-endpoints.md)).
+   `GET /l2/cardano-eutxo/utxos/{address}` (see the [API reference](../api/)).
 
 ## Worked example
 

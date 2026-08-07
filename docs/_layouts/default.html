@@ -6,12 +6,12 @@
   <body>
 
     {%- comment -%}
-      Group the content pages into the two doc sections for the left sidebar.
+      Group the how-to pages under the User guide section of the left sidebar.
       READMEs (their url ends in `/`, not `.html`) are the section landing pages,
-      linked from the section headers rather than listed as items.
+      linked from the section headers rather than listed as items. API reference is
+      a single full-screen Redoc page, linked straight from its section header.
     {%- endcomment -%}
     {%- assign guides = site.html_pages | where_exp: "p", "p.url contains '/user-guide/'" | where_exp: "p", "p.url contains '.html'" | sort: "title" -%}
-    {%- assign specs = site.html_pages | where_exp: "p", "p.url contains '/spec/'" | where_exp: "p", "p.url contains '.html'" | sort: "title" -%}
 
     <div class="layout">
       <aside class="sidebar" aria-label="Documentation navigation">
@@ -32,12 +32,7 @@
             {%- endfor -%}
           </ul>
 
-          <p class="nav-section"><a href="{{ '/spec/' | relative_url }}">Design &amp; reference</a></p>
-          <ul>
-            {%- for p in specs -%}
-            <li><a class="nav-item{% if p.url == page.url %} active{% endif %}" href="{{ p.url | relative_url }}">{{ p.title | escape }}</a></li>
-            {%- endfor -%}
-          </ul>
+          <p class="nav-section"><a href="{{ '/api/' | relative_url }}">API reference</a></p>
         </nav>
       </aside>
 

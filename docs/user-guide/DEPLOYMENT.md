@@ -80,8 +80,9 @@ process talking to Cardano L1 (a public testnet) via Blockfrost:
   - **L2 EUTXO queries** (EUTXO ledger only — a remote-ledger node serves neither):
     `GET /l2/cardano-eutxo/utxos/{address}`, `GET /l2/cardano-eutxo/transactions`.
 
-  Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is
-  [`docs/openapi.yaml`](../spec/openapi.yaml) (regenerated from the endpoint definitions).
+  Interactive **Swagger UI at `/docs`**; the authoritative machine-readable contract is published as
+  the [API reference](../api/) — Redoc over the OpenAPI documents, regenerated from the endpoint
+  definitions.
 
 ### Network matrix
 
