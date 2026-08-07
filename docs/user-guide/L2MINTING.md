@@ -5,9 +5,8 @@ only inside the head and can never reach L1. They ride on top of an ordinary L2 
 Cardano `mint` field plus a minting policy, and a metadata declaration that marks which minted tokens
 are transient.
 
-Read [L2TXS.md](L2TXS.md) first — a minting tx is a basic L2 tx with extra metadata. Background and
-the full design: [`../spec/transient-tokens.md`](../spec/transient-tokens.md). A complete worked
-example lives in [`examples/tutorials/transient-tokens.md`](https://github.com/cardano-hydrozoa/hydrozoa/blob/main/examples/tutorials/transient-tokens.md)
+Read [L2TXS.md](L2TXS.md) first — a minting tx is a basic L2 tx with extra metadata. A complete
+worked example lives in [`examples/tutorials/transient-tokens.md`](https://github.com/cardano-hydrozoa/hydrozoa/blob/main/examples/tutorials/transient-tokens.md)
 (driven by `examples/src/test/scala/hydrozoa/examples/transient/TransientTokenDemo.scala`).
 
 ## The model: two compartments
@@ -106,5 +105,4 @@ and declare only what remains (or `l2TransientTokens = {}` if none remains).
 There is currently **no finalization gate** that blocks closing a head while transient tokens are
 outstanding. If a head closes with a non-empty transient compartment, those tokens simply cease to
 exist — holders receive only the backing ADA of the UTxO, not the transient tokens. Burn transient
-tokens back before closing if their disappearance would matter. See
-[`../spec/transient-tokens.md`](../spec/transient-tokens.md) (§ Not implemented).
+tokens back before closing if their disappearance would matter.

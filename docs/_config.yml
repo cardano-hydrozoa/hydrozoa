@@ -19,3 +19,11 @@ hydrozoa_version: "0.1.1"
 # renamed or a custom domain is configured.
 url: "https://cardano-hydrozoa.github.io"
 baseurl: "/hydrozoa"
+
+# The design/reference docs under spec/ are internal working notes — kept in the
+# repo, but not polished for a public audience, so they are not published to the
+# site. Drop this exclusion (and restore the sidebar group in _layouts/default.html)
+# once they are ready. The API OpenAPI documents live under api/, not here, so the
+# API reference page keeps working.
+exclude:
+  - spec
