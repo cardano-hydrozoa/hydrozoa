@@ -24,7 +24,8 @@ type RBRHistogram = Histogram[RBRPlaceId, Utxo]
   *   - Treasury and vote UTxOs carry a distinctive policy token
   *   - Collateral UTxOs carry the datum sentinel `"collateral"`
   *   - Evacuation outputs carry the datum sentinel `"evacuation"`
-  *   - Withdrawal outputs (L2 outputs that exited to L1 pre-fallback) carry the sentinel `"withdrawal"`
+  *   - Withdrawal outputs (L2 outputs that exited to L1 pre-fallback) carry the sentinel
+  *     `"withdrawal"`
   *   - Script reference UTxOs are identified by their known
   *     [[scalus.cardano.ledger.TransactionInput]] keys
   *   - Everything else falls into the [[RBRPlaceId.Ambient]] default bucket

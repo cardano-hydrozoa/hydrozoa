@@ -116,7 +116,8 @@ object CommandGenerators:
 
     /** Per-output l1/l2 designation flags — one per output, in output order: `1` = l1-bound (a
       * withdrawal, exits L2 to L1), `2` = l2-bound (stays on L2). `RandomWithdrawals` mixes them;
-      * every other strategy keeps all outputs on L2. See `L2Tx.utxoPartition` for the consuming end.
+      * every other strategy keeps all outputs on L2. See `L2Tx.utxoPartition` for the consuming
+      * end.
       */
     private def genOutputFlags(numOutputs: Int, txStrategy: TxStrategy): Gen[List[Int]] =
         txStrategy match {
@@ -178,7 +179,8 @@ object CommandGenerators:
                   outputValues.zip(flags).map { (v, flag) =>
                       if flag == 1 then
                           withdrawalAddress match {
-                              case Some(a) => Gen.const(Babbage(a, v, datumOption = withdrawalDatum))
+                              case Some(a) =>
+                                  Gen.const(Babbage(a, v, datumOption = withdrawalDatum))
                               case None =>
                                   Gen.oneOf(l2AddressesInUse.toSeq)
                                       .map(a => Babbage(a, v, datumOption = withdrawalDatum))

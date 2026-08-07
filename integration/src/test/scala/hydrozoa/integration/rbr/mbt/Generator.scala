@@ -16,11 +16,12 @@ import scala.concurrent.duration.*
   * mix (including `RandomWithdrawals`), same absorption handling — with only RBR-specific stamping.
   *
   * Two distinct datum sentinels let `beta` bucket the two L1 fates apart: l2-bound (flag-2) outputs
-  * carry "evacuation" (they end up in the committed `EvacuationMap` `N` and evacuate under fallback),
-  * while withdrawal (flag-1) outputs carry "withdrawal" and are pinned to the script `payoutAddress`
-  * so they can't be re-spent as peer fee/collateral. Deposit validity is shortened so deposits
-  * absorb within the suite's commit window. Reusing stage4's picker means any new setup-phase path
-  * it grows (new strategies, new command types) flows into the RBR setup phase automatically.
+  * carry "evacuation" (they end up in the committed `EvacuationMap` `N` and evacuate under
+  * fallback), while withdrawal (flag-1) outputs carry "withdrawal" and are pinned to the script
+  * `payoutAddress` so they can't be re-spent as peer fee/collateral. Deposit validity is shortened
+  * so deposits absorb within the suite's commit window. Reusing stage4's picker means any new
+  * setup-phase path it grows (new strategies, new command types) flows into the RBR setup phase
+  * automatically.
   */
 object RbrMbtScenarioGen extends ScenarioGen[ModelState, Sut]:
 

@@ -255,9 +255,9 @@ case class RbrMbtSuite(
     /** Firewall observer over every outbound tx that clears the firewall (a `SubmittedTx`):
       *   - For a settlement: record its L1 inputs (`submittedSettlementInputs`) and produced major
       *     (`settledMajors`). Crossed against the L1 snapshot at fallback, the inputs distinguish a
-      *     deposit genuinely absorbed by a landed settlement from one whose deposit tx simply hasn't
-      *     surfaced yet; `settledMajors.max` is the last major that settled on-chain — the fallback
-      *     major `M` the head resolves against.
+      *     deposit genuinely absorbed by a landed settlement from one whose deposit tx simply
+      *     hasn't surfaced yet; `settledMajors.max` is the last major that settled on-chain — the
+      *     fallback major `M` the head resolves against.
       *   - For any accepted tx: record the L1 position of each `"withdrawal"`-stamped output
       *     (`withdrawnOutputRefs`). Withdrawal payouts ride on whichever settlement or rollout has
       *     room, so this is not settlement-specific; keying on the accepted (`Right`) result and
@@ -291,12 +291,23 @@ case class RbrMbtSuite(
             case _ => IO.unit
         }
 
-    // TODO: assert the refund path explicitly. Deposits still pending at fallback (not absorbed
-    // into a committed major) are excluded from `alpha` here and left to the cardano-liaison refund
-    // path, which this suite exercises but does not verify. Deliberately inject racing (arm the
-    // firewall while deposits are in flight) and assert each pending deposit's value reappears at
-    // the originating peer's L1 address — likely by stamping deposits with a refund sentinel datum
-    // so `beta` can bucket refunds directly rather than inferring them from addresses.
+    // TODO (BLOCKED on fund14): assert the refund path, mirroring the WithdrawalOutput accounting.
+    // A rejected/expired deposit (not absorbed into a committed major — absorb-XOR-refund is settled
+    // by `DepositsMap.Split`) is excluded from `alpha`'s `N` and should reappear as a refund output
+    // on L1. BLOCKER: refund-tx L1 submission is unimplemented — `partitionRefunds` collects the
+    // `RefundTx`s into `PartitionEffects` but nothing submits them
+    // (`CardanoLiaison.handleStackL1Effects` skips them, ~line 580; `StackEffectsBuilder` TODO
+    // fund14, ~line 328). So no refund output ever reaches L1 today; a refund check would be vacuous
+    // (`RefundOutput 0==0`) or falsify the moment a deposit is rejected. Once fund14 lands, the
+    // design is a small parallel of the withdrawal path:
+    //   - Deposit generator: pass a "refund" sentinel as `genRegisterDepositCommand`'s `refundDatum`
+    //     (arbitrary `Option[Data]`, stamped verbatim on the single refund output per deposit —
+    //     `RefundTx.scala` ~line 68); pin `refundAddress` to a script address for L1-count stability.
+    //   - Add a "refund" bucket to `RBRClassifier` + an inert `RefundOutput` place to `RBRHlNet` and
+    //     `ObservableMarking.countPlaces`, seeded with `R`.
+    //   - Observe `R` from the firewall (submitted refund txs are `SubmittedTx`-observable once
+    //     fund14 submits them), and force refunds by making some deposits outlast the commit window
+    //     (or arm-while-pending).
     override def beforeFinalize(lastState: Model.ModelState, sut: Sut): IO[Prop] =
         val depositUtxos = lastState.registeredDeposits.values.map(_.depositProduced).toSet
         val initialMapSize =
@@ -395,21 +406,22 @@ case class RbrMbtSuite(
 
     /** The model's all-evacuated terminal projection: instantiate `RBRHlNet` seeded with
       * `obligationCount` committed outputs (drained to `EvacuationOutput` by the dispute) and
-      * `withdrawalCount` inert `WithdrawalOutput` tokens (already on L1 pre-fallback), then drive it
-      * through the dispute to full evacuation.
+      * `withdrawalCount` inert `WithdrawalOutput` tokens (already on L1 pre-fallback), then drive
+      * it through the dispute to full evacuation.
       */
     private def alphaTerminal(obligationCount: Int, withdrawalCount: Int): ObservableMarking =
         val obligations: Map[BigInt, List[TransactionOutput]] =
             (1 to maxVersionMinor)
                 .map(v => BigInt(v) -> RbrSeed.committedOutputs(obligationCount))
                 .toMap
-        val seed = RBRHlNet(nHeadPeers, obligations, RbrSeed.withdrawnOutputs(withdrawalCount)) match
-            case Validated.Valid(net) => net
-            case Validated.Invalid(errs) =>
-                throw RuntimeException(
-                  s"RBRHlNet failed (nHeadPeers=$nHeadPeers, obligationCount=$obligationCount, " +
-                      s"versions=${obligations.keySet}): ${errs.toList.mkString("; ")}"
-                )
+        val seed =
+            RBRHlNet(nHeadPeers, obligations, RbrSeed.withdrawnOutputs(withdrawalCount)) match
+                case Validated.Valid(net) => net
+                case Validated.Invalid(errs) =>
+                    throw RuntimeException(
+                      s"RBRHlNet failed (nHeadPeers=$nHeadPeers, obligationCount=$obligationCount, " +
+                          s"versions=${obligations.keySet}): ${errs.toList.mkString("; ")}"
+                    )
         ObservableMarking.alpha(NetDriver.driveToEvacuated(seed))
 
     /** Completes `fallbackDispatched` on the first `FallbackToRuleBasedDispatched`, records the
