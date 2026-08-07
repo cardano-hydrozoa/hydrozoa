@@ -3,6 +3,7 @@ package hydrozoa.integration.stage4
 import cats.data.NonEmptyList
 import cats.effect.IO
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.RequestValidityEndTime
 import hydrozoa.integration.stage4.Commands.{*, given}
 import hydrozoa.integration.stage4.Model.{ModelState, given}
@@ -15,9 +16,7 @@ import hydrozoa.lib.cardano.scalus.txbuilder.DiffHandler.prebalancedLovelaceDiff
 import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, TransactionRequestBody}
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
-import hydrozoa.multisig.ledger.eutxol2.tx.GenesisObligation
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
-import hydrozoa.multisig.ledger.eutxol2.tx.L2Metadata
+import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Metadata}
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
 import org.scalacheck.commands.{AnyCommand, ScenarioGen, noOp}
 import org.scalacheck.util.Pretty

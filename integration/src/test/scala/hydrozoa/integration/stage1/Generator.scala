@@ -6,6 +6,7 @@ import cats.syntax.contravariant.*
 import cats.syntax.flatMap.*
 import com.bloxbean.cardano.client.util.HexUtil
 import hydrozoa.config.head.initialization.CappedValueGen.{ensureMinAdaLenient, generateCappedValue}
+import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.config.head.multisig.timing.TxTiming
 import hydrozoa.config.head.multisig.timing.TxTiming.BlockTimes.{BlockCreationEndTime, BlockCreationStartTime, FallbackTxStartTime}
 import hydrozoa.config.head.multisig.timing.TxTiming.RequestTimes.*
@@ -27,7 +28,6 @@ import hydrozoa.multisig.consensus.UserRequestBody.{DepositRequestBody, Transact
 import hydrozoa.multisig.consensus.peer.HeadPeerNumber
 import hydrozoa.multisig.consensus.{UserRequest, UserRequestWithId}
 import hydrozoa.multisig.ledger.block.BlockNumber
-import hydrozoa.config.head.initialization.InitializationParameters.HeadId
 import hydrozoa.multisig.ledger.eutxol2.tx.{GenesisObligation, L2Metadata}
 import hydrozoa.multisig.ledger.event.RequestId
 import hydrozoa.multisig.ledger.l1.txseq.DepositRefundTxSeq
